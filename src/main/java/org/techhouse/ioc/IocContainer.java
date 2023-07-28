@@ -1,26 +1,39 @@
 package org.techhouse.ioc;
 
 import org.techhouse.ex.DependencyNotFoundException;
-import org.techhouse.fs.FileSystem;
 
-import java.util.HashSet;
-import java.util.Set;
+import java.lang.reflect.InvocationTargetException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 
 public class IocContainer {
 
     private final static IocContainer instance = new IocContainer();
 
-    private final Set<Object> dependencies = new HashSet<>();
+    private final Map<String, Object> dependencies = new ConcurrentHashMap<>();
 
     private IocContainer() {
-        registerDependencies();
-    }
-
-    private void registerDependencies() {
-        dependencies.add(new FileSystem());
     }
 
     public static <T> T get(Class<?> clazz) {
-        return (T) IocContainer.instance.dependencies.stream().filter(x -> x.getClass().getTypeName().equals(clazz.getTypeName())).findFirst().orElseThrow(() -> new DependencyNotFoundException(clazz.getName()));
+        T targetedDependency;
+        Object found = IocContainer.instance.dependencies.get(clazz.getName());
+        if (found == null) {
+            try {
+                final var constructor = clazz.getConstructor();
+                targetedDependency = (T) constructor.newInstance();
+                if (!IocContainer.instance.dependencies.containsKey(clazz.getName())) {
+                    IocContainer.instance.dependencies.put(clazz.getName(), targetedDependency);
+                } else {
+                    targetedDependency = (T) IocContainer.instance.dependencies.get(clazz.getName());
+                }
+            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException | IllegalAccessException ignored) {
+                throw new DependencyNotFoundException(clazz.getName());
+            }
+        } else {
+            targetedDependency = (T) found;
+        }
+        return targetedDependency;
     }
 }
