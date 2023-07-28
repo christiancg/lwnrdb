@@ -6,6 +6,8 @@ import org.techhouse.data.IndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 
 import java.io.*;
+import java.nio.file.Files;
+import java.util.List;
 
 public class FileSystem {
     private static final int BUFFER_SIZE = 32768;
@@ -126,5 +128,10 @@ public class FileSystem {
         writer.writeUTF("\n");
         writer.setLength(totalFileLength - lineLength + strIndexEntry.length() + 1);
         writer.close();
+    }
+
+    public List<IndexEntry> readWholeIndexFile(String dbName, String collectionName, String indexName) throws IOException {
+        final var indexFile = getIndexFile(dbName, collectionName, indexName);
+        return Files.readAllLines(indexFile.toPath()).stream().map(s -> IndexEntry.fromIndexFileEntry(dbName, collectionName, s)).toList();
     }
 }
