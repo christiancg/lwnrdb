@@ -6,8 +6,12 @@ import org.techhouse.data.IndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class FileSystem {
     private static final int BUFFER_SIZE = 32768;
@@ -37,101 +41,121 @@ public class FileSystem {
     }
 
     private File getCollectionFile(String dbName, String collectionName) {
-        return new File(dbPath + "/" + dbName + '/' + collectionName + DB_FILE_EXTENSION);
+        return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + DB_FILE_EXTENSION);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
-        final var dbFile = getCollectionFile(dbName, collectionName);
-        if (!dbFile.exists()) {
-            return dbFile.createNewFile();
+        final var collectionFile = getCollectionFile(dbName, collectionName);
+        final var collectionFolder = new File(collectionFile.getParent());
+        if (!collectionFolder.exists()) {
+            if (collectionFolder.mkdir()) {
+                return collectionFile.createNewFile();
+            } else {
+                return false;
+            }
+        } else {
+            if (!collectionFile.exists()) {
+                return collectionFile.createNewFile();
+            }
+            return true;
         }
-        return true;
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName) {
-        return new File(dbPath + "/" + dbName + '/' + collectionName + "-" + indexName + INDEX_FILE_EXTENSION);
+        return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + "-" + indexName + INDEX_FILE_EXTENSION);
     }
 
-    public boolean createDatabaseIndexFile(String dbName, String collectionName, String indexName) throws IOException {
-        final var dbIndexFile = getIndexFile(dbName, collectionName, indexName);
-        if (!dbIndexFile.exists()) {
-            return dbIndexFile.createNewFile();
-        }
-        return true;
-    }
-
-    public String insertIntoCollection(DbEntry entry) throws IOException {
+    public IndexEntry insertIntoCollection(DbEntry entry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
-        final var writer = new BufferedWriter(new FileWriter(file), BUFFER_SIZE);
+        final var writer = new BufferedWriter(new FileWriter(file, true), BUFFER_SIZE);
         final var strData = entry.toFileEntry();
         final var length = strData.length();
         final var totalFileLength = file.length();
         writer.append(strData);
         writer.flush();
         writer.close();
-        indexNewValue(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entry.get_id(), totalFileLength, length);
-        return entry.get_id();
+        return indexNewValue(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entry.get_id(), totalFileLength, length);
     }
 
-    private void indexNewValue(String dbName, String collectionName, String indexedField, String value, long position, int length) throws IOException {
+    private IndexEntry indexNewValue(String dbName, String collectionName, String indexedField, String value, long position, int length) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexedField);
-        final var writer = new BufferedWriter(new FileWriter(indexFile), BUFFER_SIZE);
+        final var writer = new BufferedWriter(new FileWriter(indexFile, true), BUFFER_SIZE);
         final var indexEntry = new IndexEntry(dbName, collectionName, value, position, length);
         writer.append(indexEntry.toFileEntry());
         writer.newLine();
         writer.flush();
         writer.close();
+        return indexEntry;
     }
 
-    public void updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
+    public IndexEntry updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
+        final int totalFileLength = (int) file.length();
         final var writer = new RandomAccessFile(file, "rwd");
         writer.seek(idIndexEntry.getPosition() + idIndexEntry.getLength());
-        final var restOfFile = writer.readUTF();
+        final int otherEntriesLength = (int) (totalFileLength - idIndexEntry.getPosition() - idIndexEntry.getLength());
+        byte[] buffer = new byte[otherEntriesLength];
+        writer.readFully(buffer, 0, otherEntriesLength);
         writer.seek(idIndexEntry.getPosition());
-        writer.writeUTF(restOfFile);
-        final var totalFileLength = file.length();
-        writer.seek(file.length() - idIndexEntry.getLength());
+        writer.write(buffer, 0, otherEntriesLength);
+        writer.seek(totalFileLength - idIndexEntry.getLength());
         final var strData = entry.toFileEntry();
         final var length = strData.length();
-        writer.writeUTF(strData);
+        writer.write(strData.getBytes(StandardCharsets.UTF_8),0, length);
         writer.setLength(totalFileLength - idIndexEntry.getLength() + strData.length());
         writer.close();
-        updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entry.get_id(), totalFileLength, length);
+        return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entry.get_id(), totalFileLength, length);
     }
 
-    private void updateIndexValues(String dbName, String collectionName, String indexName, String value, long position, int length) throws IOException {
+    private IndexEntry updateIndexValues(String dbName, String collectionName, String indexName, String value, long position, int length) throws IOException {
+        final var newIndexEntry = new IndexEntry(dbName, collectionName, value, position, length);
         final var indexFile = getIndexFile(dbName, collectionName, indexName);
         final var writer = new RandomAccessFile(indexFile, "rwd");
-        final var wholeFile = writer.readUTF();
+        final int oldFileLength = (int) indexFile.length();
+        byte[] buffer = new byte[oldFileLength];
+        writer.readFully(buffer, 0, oldFileLength);
+        final var wholeFile = new String(buffer);
         final var lines = wholeFile.split("\\n");
-        final var totalFileLength = wholeFile.length();
         var totalLengthBefore = 0;
-        var lineLength = 0;
-        for (String line : lines) {
-            final var parts = line.split("\\|");
+        var indexLine = 0;
+        var oldIndexLine = "";
+        for (int i=0; i < lines.length; i++) {
+            final var parts = lines[i].split("\\|");
             if (parts[0].equals(value)) {
-                lineLength = line.length();
+                indexLine = i;
+                oldIndexLine = lines[i];
                 break;
             } else {
-                totalLengthBefore += line.length() + 1; // +1 -> the newline character
+                totalLengthBefore += lines[i].length() + 1; // +1 -> the newline character
             }
         }
-        writer.seek(totalLengthBefore + lineLength + 1);// +1 -> the newline character
-        final var restOfFile = writer.readUTF();
-        writer.seek(totalLengthBefore + 1);// +1 -> the newline character
-        writer.writeUTF(restOfFile);
-        writer.seek(totalFileLength - lineLength);
-        final var newIndexEntry = new IndexEntry(dbName, collectionName, value, position, length);
-        final var strIndexEntry = newIndexEntry.toFileEntry();
-        writer.writeUTF(strIndexEntry);
-        writer.writeUTF("\n");
-        writer.setLength(totalFileLength - lineLength + strIndexEntry.length() + 1);
+        final var reIndexedEntries = reindex(oldIndexLine, newIndexEntry, Arrays.stream(lines).skip(indexLine + 1).toList(), dbName, collectionName);
+        final var reIndexedToWrite = reIndexedEntries.stream().map(IndexEntry::toFileEntry).collect(Collectors.joining("\n"));
+        writer.seek(totalLengthBefore);
+        writer.write(reIndexedToWrite.getBytes(StandardCharsets.UTF_8), 0, reIndexedToWrite.length());
+        writer.write('\n');
+        writer.setLength(totalLengthBefore + reIndexedToWrite.length() + 1);
         writer.close();
+        return newIndexEntry;
+    }
+
+    private List<IndexEntry> reindex(String oldIndexEntryStr, IndexEntry newIndexEntry, List<String> restOfIndexesStr, String dbName, String collectionName) {
+        final var oldIndexEntry = IndexEntry.fromIndexFileEntry(dbName, collectionName, oldIndexEntryStr);
+        final var restOfIndexes = restOfIndexesStr.stream().map(x -> IndexEntry.fromIndexFileEntry(dbName, collectionName, x)).collect(Collectors.toList());
+        for (var index: restOfIndexes) {
+            index.setPosition(index.getPosition() - oldIndexEntry.getLength());
+        }
+        newIndexEntry.setPosition(newIndexEntry.getPosition() - oldIndexEntry.getLength());
+        restOfIndexes.add(newIndexEntry);
+        return restOfIndexes;
     }
 
     public List<IndexEntry> readWholeIndexFile(String dbName, String collectionName, String indexName) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexName);
-        return Files.readAllLines(indexFile.toPath()).stream().map(s -> IndexEntry.fromIndexFileEntry(dbName, collectionName, s)).toList();
+        if (indexFile.exists()) {
+            return Files.readAllLines(indexFile.toPath()).stream().map(s -> IndexEntry.fromIndexFileEntry(dbName, collectionName, s)).collect(Collectors.toList());
+        } else {
+            return new ArrayList<>();
+        }
     }
 }

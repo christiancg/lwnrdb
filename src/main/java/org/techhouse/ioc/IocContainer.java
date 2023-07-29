@@ -1,6 +1,6 @@
 package org.techhouse.ioc;
 
-import org.techhouse.ex.DependencyNotFoundException;
+import org.techhouse.ex.DependencyInjectionFailed;
 
 import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
@@ -28,8 +28,8 @@ public class IocContainer {
                 } else {
                     targetedDependency = (T) IocContainer.instance.dependencies.get(clazz.getName());
                 }
-            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException | IllegalAccessException ignored) {
-                throw new DependencyNotFoundException(clazz.getName());
+            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException | IllegalAccessException exception) {
+                throw new DependencyInjectionFailed(exception);
             }
         } else {
             targetedDependency = (T) found;
