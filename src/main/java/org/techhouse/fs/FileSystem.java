@@ -10,10 +10,7 @@ import org.techhouse.ex.DirectoryNotFoundException;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 public class FileSystem {
@@ -96,14 +93,16 @@ public class FileSystem {
             final var totalFileLength = file.length();
             writer.append(strData);
             writer.flush();
-            return indexNewValue(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entry.get_id(), totalFileLength, length);
+            final var entryId = entry.get_id();
+            return indexNewValue(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entryId, entryId,
+                    totalFileLength, length);
         }
     }
 
-    private IndexEntry indexNewValue(String dbName, String collectionName, String indexedField, String value, long position, int length) throws IOException {
+    private IndexEntry indexNewValue(String dbName, String collectionName, String indexedField, String value, String entryId, long position, int length) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexedField);
         try (final var writer = new BufferedWriter(new FileWriter(indexFile, true), BUFFER_SIZE)) {
-            final var indexEntry = new IndexEntry(dbName, collectionName, value, position, length);
+            final var indexEntry = new IndexEntry(dbName, collectionName, value, Set.of(entryId), position, length);
             writer.append(indexEntry.toFileEntry());
             writer.newLine();
             return indexEntry;
@@ -148,7 +147,7 @@ public class FileSystem {
     }
 
     private IndexEntry updateIndexValues(String dbName, String collectionName, String indexName, String value, long position, int length) throws IOException {
-        final var newIndexEntry = new IndexEntry(dbName, collectionName, value, position, length);
+        final var newIndexEntry = new IndexEntry(dbName, collectionName, value, Set.of(value), position, length);
         internalUpdateIndex(dbName, collectionName, indexName, value, newIndexEntry);
         return newIndexEntry;
     }
