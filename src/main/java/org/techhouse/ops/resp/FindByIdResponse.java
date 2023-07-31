@@ -9,9 +9,9 @@ import java.util.List;
 
 @Getter
 @Setter
-public class FindResponse extends OperationResponse {
+public class FindByIdResponse extends OperationResponse {
     public List<String> results;
-    public FindResponse(OperationStatus status, String message) {
-        super(OperationType.FIND, status, message);
+    public FindByIdResponse(OperationStatus status, String message) {
+        super(OperationType.FIND_BY_ID, status, message);
     }
 }

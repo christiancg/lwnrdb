@@ -17,7 +17,7 @@ public class RequestParser {
                     }
                     yield parsed;
                 }
-                case FIND -> gson.fromJson(message, FindRequest.class);
+                case FIND_BY_ID -> gson.fromJson(message, FindByIdRequest.class);
                 case AGGREGATE -> gson.fromJson(message, AggregateRequest.class);
                 case DELETE -> gson.fromJson(message, DeleteRequest.class);
                 case CREATE_DATABASE -> gson.fromJson(message, CreateDatabaseRequest.class);

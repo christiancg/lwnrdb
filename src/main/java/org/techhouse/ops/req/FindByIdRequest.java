@@ -7,9 +7,9 @@ import org.techhouse.ops.OperationType;
 
 @Getter
 @Setter
-public class FindRequest extends OperationRequest {
+public class FindByIdRequest extends OperationRequest {
     public JsonObject query;
-    public FindRequest(String databaseName, String collectionName) {
-        super(OperationType.FIND, databaseName, collectionName);
+    public FindByIdRequest(String databaseName, String collectionName) {
+        super(OperationType.FIND_BY_ID, databaseName, collectionName);
     }
 }

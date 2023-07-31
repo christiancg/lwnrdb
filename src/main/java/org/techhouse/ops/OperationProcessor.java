@@ -20,7 +20,7 @@ public class OperationProcessor {
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return switch (operationRequest.getType()) {
             case SAVE -> processSaveOperation((SaveRequest) operationRequest);
-            case FIND -> processFindOperation((FindRequest) operationRequest);
+            case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest);
             case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest);
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest);
@@ -63,8 +63,8 @@ public class OperationProcessor {
         }
     }
 
-    private FindResponse processFindOperation(FindRequest findRequest) {
-        return new FindResponse(OperationStatus.OK, "dummy");
+    private FindByIdResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
+        return new FindByIdResponse(OperationStatus.OK, "dummy");
     }
 
     private AggregateResponse processAggregateOperation(AggregateRequest aggregateRequest) {
