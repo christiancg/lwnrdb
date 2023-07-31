@@ -31,8 +31,12 @@ public class OperationProcessor {
         };
     }
 
+    private String getCollectionIdentifier(String dbName, String collName) {
+        return dbName + '|' + collName;
+    }
+
     private List<IndexEntry> getIdIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
-        final var fieldMapName = dbName + '|' + collName;
+        final var fieldMapName = getCollectionIdentifier(dbName, collName);
         var indexedFields = indexMap.get(fieldMapName);
         List<IndexEntry> primaryKeyIndex;
         if (indexedFields != null) {
@@ -70,6 +74,13 @@ public class OperationProcessor {
             }
             primaryKeyIndex.add(savedIndexEntry);
             primaryKeyIndex.sort(Comparator.comparing(IndexEntry::getValue));
+            final var collId = getCollectionIdentifier(dbName, collName);
+            var coll = collectionMap.get(collId);
+            if (coll == null) {
+                coll = new ConcurrentHashMap<>();
+                collectionMap.put(collId, coll);
+            }
+            coll.put(entry.get_id(), entry);
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedIndexEntry.getValue());
         } catch (Exception exception) {
             return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
@@ -86,7 +97,7 @@ public class OperationProcessor {
             if (foundIndexEntry >= 0) {
                 final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
                 final var primaryKey = primaryKeyIndexEntry.getValue();
-                final var collectionMapName = dbName + '|' + collName;
+                final var collectionMapName = getCollectionIdentifier(dbName, collName);
                 final var coll = collectionMap.computeIfAbsent(collectionMapName, k -> new ConcurrentHashMap<>());
                 var entry = coll.get(primaryKey);
                 if (entry == null) {
@@ -117,7 +128,7 @@ public class OperationProcessor {
                 primaryKeyIndex.sort(Comparator.comparing(IndexEntry::getValue));
                 return new DeleteResponse(OperationStatus.OK, "Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
-                return new DeleteResponse(OperationStatus.ERROR, "Entry with id " + deleteRequest.get_id() + " not found");
+                return new DeleteResponse(OperationStatus.NOT_FOUND, "Entry with id " + deleteRequest.get_id() + " not found");
             }
         } catch (Exception exception) {
             return new DeleteResponse(OperationStatus.ERROR, "Error while deleting entry with id: " + deleteRequest.get_id() + ". Error message: " + exception.getMessage());
