@@ -6,6 +6,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.ioc.IocContainer;
 
 import java.io.*;
 import java.nio.channels.FileChannel;
@@ -20,7 +21,7 @@ public class FileSystem {
     private static final String DB_FILE_EXTENSION = ".dat";
     private static final String INDEX_FILE_EXTENSION = ".idx";
     private static final String ID_FIELD_NAME = "_id";
-    private static final Gson gson = new Gson();
+    private final Gson gson = IocContainer.get(Gson.class);
 
     private String dbPath;
 

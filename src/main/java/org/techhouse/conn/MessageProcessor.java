@@ -11,7 +11,7 @@ import java.io.*;
 import java.net.Socket;
 
 public class MessageProcessor extends Thread {
-    private final Gson gson = new Gson();
+    private final Gson gson = IocContainer.get(Gson.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final Socket socket;
 

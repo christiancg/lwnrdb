@@ -2,9 +2,10 @@ package org.techhouse.ops.req;
 
 import com.google.gson.Gson;
 import org.techhouse.ex.InvalidCommandException;
+import org.techhouse.ioc.IocContainer;
 
 public class RequestParser {
-    private static final Gson gson = new Gson();
+    private static final Gson gson = IocContainer.get(Gson.class);
 
     public static OperationRequest parseRequest(String message) throws InvalidCommandException {
         try {
