@@ -8,6 +8,8 @@ import org.techhouse.data.IndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 
 import java.io.*;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
@@ -112,7 +114,9 @@ public class FileSystem {
     public void deleteFromCollection(IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName());
         final int totalFileLength = (int) file.length();
-        try (final var writer = new RandomAccessFile(file, "rwd")) {
+        try (final var writer = new RandomAccessFile(file, "rwd");
+             FileChannel channel = writer.getChannel();
+             FileLock lock = channel.lock()) {
             shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - idIndexEntry.getLength());
         }
@@ -135,7 +139,9 @@ public class FileSystem {
     public IndexEntry updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
         final int totalFileLength = (int) file.length();
-        try (final var writer = new RandomAccessFile(file, "rwd")) {
+        try (final var writer = new RandomAccessFile(file, "rwd");
+             FileChannel channel = writer.getChannel();
+             FileLock lock = channel.lock()) {
             shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
             writer.seek(totalFileLength - idIndexEntry.getLength());
             final var strData = entry.toFileEntry();
@@ -154,7 +160,9 @@ public class FileSystem {
 
     private void internalUpdateIndex(String dbName, String collectionName, String indexName, String value, IndexEntry newIndexEntry) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexName);
-        try (final var writer = new RandomAccessFile(indexFile, "rwd")) {
+        try (final var writer = new RandomAccessFile(indexFile, "rwd");
+             FileChannel channel = writer.getChannel();
+             FileLock lock = channel.lock()) {
             final int oldFileLength = (int) indexFile.length();
             byte[] buffer = new byte[oldFileLength];
             writer.readFully(buffer, 0, oldFileLength);
