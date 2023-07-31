@@ -7,6 +7,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
 import org.techhouse.ops.resp.*;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,26 +29,31 @@ public class OperationProcessor {
         };
     }
 
+    private List<IndexEntry> getIdIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
+        final var fieldMapName = dbName + '|' + collName;
+        var indexedFields = indexMap.get(fieldMapName);
+        List<IndexEntry> primaryKeyIndex;
+        if (indexedFields != null) {
+            primaryKeyIndex = indexedFields.get(PRIMARY_KEY_FIELD_NAME);
+            if (primaryKeyIndex == null) {
+                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PRIMARY_KEY_FIELD_NAME);
+                indexedFields.put(PRIMARY_KEY_FIELD_NAME, primaryKeyIndex);
+            }
+        } else {
+            primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PRIMARY_KEY_FIELD_NAME);
+            indexedFields = new ConcurrentHashMap<>();
+            indexedFields.put(PRIMARY_KEY_FIELD_NAME, primaryKeyIndex);
+            indexMap.put(fieldMapName, indexedFields);
+        }
+        return primaryKeyIndex;
+    }
+
     private SaveResponse processSaveOperation(SaveRequest saveRequest) {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         try {
-            final var fieldMapName = dbName + '|' + collName;
-            var indexedFields = indexMap.get(fieldMapName);
-            List<IndexEntry> primaryKeyIndex;
-            if (indexedFields != null) {
-                primaryKeyIndex = indexedFields.get(PRIMARY_KEY_FIELD_NAME);
-                if (primaryKeyIndex == null) {
-                    primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PRIMARY_KEY_FIELD_NAME);
-                    indexedFields.put(PRIMARY_KEY_FIELD_NAME, primaryKeyIndex);
-                }
-            } else {
-                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PRIMARY_KEY_FIELD_NAME);
-                indexedFields = new ConcurrentHashMap<>();
-                indexedFields.put(PRIMARY_KEY_FIELD_NAME, primaryKeyIndex);
-                indexMap.put(fieldMapName, indexedFields);
-            }
+            final var primaryKeyIndex = getIdIndexAndLoadIfNecessary(saveRequest.getDatabaseName(), saveRequest.getCollectionName());
             final var foundIndexEntry = primaryKeyIndex.stream().filter(indexEntry -> indexEntry.getValue().equals(saveRequest.get_id())).findFirst();
             IndexEntry savedIndexEntry;
             if (foundIndexEntry.isPresent()) {
@@ -72,7 +78,20 @@ public class OperationProcessor {
     }
 
     private DeleteResponse processDeleteOperation(DeleteRequest deleteRequest) {
-        return new DeleteResponse(OperationStatus.OK, "dummy");
+        try {
+            final var primaryKeyIndex = getIdIndexAndLoadIfNecessary(deleteRequest.getDatabaseName(), deleteRequest.getCollectionName());
+            final var foundIndexEntry = primaryKeyIndex.stream().filter(indexEntry -> indexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
+            if (foundIndexEntry.isPresent()) {
+                final var idxEntry = foundIndexEntry.get();
+                fs.deleteFromCollection(idxEntry);
+                primaryKeyIndex.remove(idxEntry);
+                return new DeleteResponse(OperationStatus.OK, "Entry with id " + deleteRequest.get_id() + " deleted successfully");
+            } else {
+                return new DeleteResponse(OperationStatus.ERROR, "Entry with id " + deleteRequest.get_id() + " not found");
+            }
+        } catch (Exception exception) {
+            return new DeleteResponse(OperationStatus.ERROR, "Error while deleting entry with id: " + deleteRequest.get_id() + ". Error message: " + exception.getMessage());
+        }
     }
 
     private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest) {

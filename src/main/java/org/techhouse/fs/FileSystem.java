@@ -88,16 +88,35 @@ public class FileSystem {
         return indexEntry;
     }
 
-    public IndexEntry updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
-        final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
+    public void deleteFromCollection(IndexEntry idIndexEntry) throws IOException {
+        final var file = getCollectionFile(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName());
         final int totalFileLength = (int) file.length();
         final var writer = new RandomAccessFile(file, "rwd");
+        shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
+        writer.setLength(totalFileLength - idIndexEntry.getLength());
+        writer.close();
+        deleteIndexValue(idIndexEntry);
+    }
+
+    private void deleteIndexValue(IndexEntry idIndexEntry) throws IOException {
+        internalUpdateIndex(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName(), ID_FIELD_NAME, idIndexEntry.getValue(), null);
+    }
+
+    private void shiftOtherEntriesToStart(RandomAccessFile writer, IndexEntry idIndexEntry, int totalFileLength) throws IOException {
         writer.seek(idIndexEntry.getPosition() + idIndexEntry.getLength());
         final int otherEntriesLength = (int) (totalFileLength - idIndexEntry.getPosition() - idIndexEntry.getLength());
         byte[] buffer = new byte[otherEntriesLength];
         writer.readFully(buffer, 0, otherEntriesLength);
         writer.seek(idIndexEntry.getPosition());
         writer.write(buffer, 0, otherEntriesLength);
+    }
+
+
+    public IndexEntry updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
+        final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
+        final int totalFileLength = (int) file.length();
+        final var writer = new RandomAccessFile(file, "rwd");
+        shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
         writer.seek(totalFileLength - idIndexEntry.getLength());
         final var strData = entry.toFileEntry();
         final var length = strData.length();
@@ -109,6 +128,11 @@ public class FileSystem {
 
     private IndexEntry updateIndexValues(String dbName, String collectionName, String indexName, String value, long position, int length) throws IOException {
         final var newIndexEntry = new IndexEntry(dbName, collectionName, value, position, length);
+        internalUpdateIndex(dbName, collectionName, indexName, value, newIndexEntry);
+        return newIndexEntry;
+    }
+
+    private void internalUpdateIndex(String dbName, String collectionName, String indexName, String value, IndexEntry newIndexEntry) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexName);
         final var writer = new RandomAccessFile(indexFile, "rwd");
         final int oldFileLength = (int) indexFile.length();
@@ -136,7 +160,6 @@ public class FileSystem {
         writer.write('\n');
         writer.setLength(totalLengthBefore + reIndexedToWrite.length() + 1);
         writer.close();
-        return newIndexEntry;
     }
 
     private List<IndexEntry> reindex(String oldIndexEntryStr, IndexEntry newIndexEntry, List<String> restOfIndexesStr, String dbName, String collectionName) {
@@ -145,8 +168,10 @@ public class FileSystem {
         for (var index: restOfIndexes) {
             index.setPosition(index.getPosition() - oldIndexEntry.getLength());
         }
-        newIndexEntry.setPosition(newIndexEntry.getPosition() - oldIndexEntry.getLength());
-        restOfIndexes.add(newIndexEntry);
+        if (newIndexEntry != null) {
+            newIndexEntry.setPosition(newIndexEntry.getPosition() - oldIndexEntry.getLength());
+            restOfIndexes.add(newIndexEntry);
+        }
         return restOfIndexes;
     }
 
