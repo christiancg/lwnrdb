@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class OperationProcessor {
-    private static final String PRIMARY_KEY_FIELD_NAME = "_id";
+    private static final String PK_FIELD_NAME = "_id";
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Map<String, Map<String, List<IndexEntry>>> indexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
@@ -36,15 +36,15 @@ public class OperationProcessor {
         var indexedFields = indexMap.get(fieldMapName);
         List<IndexEntry> primaryKeyIndex;
         if (indexedFields != null) {
-            primaryKeyIndex = indexedFields.get(PRIMARY_KEY_FIELD_NAME);
+            primaryKeyIndex = indexedFields.get(PK_FIELD_NAME);
             if (primaryKeyIndex == null) {
-                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PRIMARY_KEY_FIELD_NAME);
-                indexedFields.put(PRIMARY_KEY_FIELD_NAME, primaryKeyIndex);
+                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PK_FIELD_NAME);
+                indexedFields.put(PK_FIELD_NAME, primaryKeyIndex);
             }
         } else {
-            primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PRIMARY_KEY_FIELD_NAME);
+            primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PK_FIELD_NAME);
             indexedFields = new ConcurrentHashMap<>();
-            indexedFields.put(PRIMARY_KEY_FIELD_NAME, primaryKeyIndex);
+            indexedFields.put(PK_FIELD_NAME, primaryKeyIndex);
             indexMap.put(fieldMapName, indexedFields);
         }
         return primaryKeyIndex;
