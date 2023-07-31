@@ -28,6 +28,7 @@ public class OperationProcessor {
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest);
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
+            case CLOSE_CONNECTION -> new CloseConnectionResponse();
         };
     }
 

@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.RequestParser;
 
 import java.io.*;
@@ -28,32 +29,25 @@ public class MessageProcessor extends Thread {
             writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             var close = false;
             var message = "";
-            while(!close) {
+            while (!close) {
                 message = reader.readLine();
                 if (message != null && !message.isBlank()) {
-                    if (message.equalsIgnoreCase("close")) {
-                        System.out.println("Closing connection");
-                        writer.write("Bye!");
-                        writer.close();
-                        close = true;
-                    } else {
-                        var response = "";
-                        try {
-                            final var parsedMessage = RequestParser.parseRequest(message);
-                            final var responseObj = operationProcessor.processMessage(parsedMessage);
-                            response = gson.toJson(responseObj);
-                        } catch (InvalidCommandException exception) {
-                            response = exception.getMessage();
+                    var response = "";
+                    try {
+                        final var parsedMessage = RequestParser.parseRequest(message);
+                        final var responseObj = operationProcessor.processMessage(parsedMessage);
+                        if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
+                            close = true;
                         }
-                        writer.write(response);
-                        writer.flush();
+                        response = gson.toJson(responseObj);
+                    } catch (InvalidCommandException exception) {
+                        response = exception.getMessage();
                     }
-                } else {
-                    System.out.println("Empty message");
-                    writer.write("Empty message");
+                    writer.write(response);
                     writer.flush();
                 }
             }
+            writer.close();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

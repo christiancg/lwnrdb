@@ -22,6 +22,7 @@ public class RequestParser {
                 case DELETE -> gson.fromJson(message, DeleteRequest.class);
                 case CREATE_DATABASE -> gson.fromJson(message, CreateDatabaseRequest.class);
                 case CREATE_COLLECTION -> gson.fromJson(message, CreateCollectionRequest.class);
+                case CLOSE_CONNECTION -> gson.fromJson(message, CloseConnectionRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
