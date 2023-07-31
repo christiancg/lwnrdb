@@ -8,6 +8,8 @@ import org.techhouse.ops.req.*;
 import org.techhouse.ops.resp.*;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -16,7 +18,7 @@ public class OperationProcessor {
     private static final String PRIMARY_KEY_FIELD_NAME = "_id";
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Map<String, Map<String, List<IndexEntry>>> indexMap = new ConcurrentHashMap<>();
-    private final Map<String, List<DbEntry>> collectionMap = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return switch (operationRequest.getType()) {
@@ -54,15 +56,20 @@ public class OperationProcessor {
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         try {
             final var primaryKeyIndex = getIdIndexAndLoadIfNecessary(saveRequest.getDatabaseName(), saveRequest.getCollectionName());
-            final var foundIndexEntry = primaryKeyIndex.stream().filter(indexEntry -> indexEntry.getValue().equals(saveRequest.get_id())).findFirst();
+            var foundIndexEntry = -1;
+            if (saveRequest.get_id() != null) {
+                foundIndexEntry = Collections.binarySearch(primaryKeyIndex, saveRequest.get_id());
+            }
             IndexEntry savedIndexEntry;
-            if (foundIndexEntry.isPresent()) {
-                savedIndexEntry = fs.updateFromCollection(entry, foundIndexEntry.get());
-                primaryKeyIndex.remove(foundIndexEntry.get());
+            if (foundIndexEntry >= 0) {
+                final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
+                savedIndexEntry = fs.updateFromCollection(entry, idxEntry);
+                primaryKeyIndex.remove(idxEntry);
             } else {
                 savedIndexEntry = fs.insertIntoCollection(entry);
             }
             primaryKeyIndex.add(savedIndexEntry);
+            primaryKeyIndex.sort(Comparator.comparing(IndexEntry::getValue));
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedIndexEntry.getValue());
         } catch (Exception exception) {
             return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
@@ -70,7 +77,29 @@ public class OperationProcessor {
     }
 
     private FindByIdResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
-        return new FindByIdResponse(OperationStatus.OK, "dummy");
+        final var dbName = findbyIdRequest.getDatabaseName();
+        final var collName = findbyIdRequest.getCollectionName();
+        final var id = findbyIdRequest.get_id();
+        try {
+            final var primaryKeyIndex = getIdIndexAndLoadIfNecessary(dbName, collName);
+            final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
+            if (foundIndexEntry >= 0) {
+                final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
+                final var primaryKey = primaryKeyIndexEntry.getValue();
+                final var collectionMapName = dbName + '|' + collName;
+                final var coll = collectionMap.computeIfAbsent(collectionMapName, k -> new ConcurrentHashMap<>());
+                var entry = coll.get(primaryKey);
+                if (entry == null) {
+                    entry = fs.getById(primaryKeyIndexEntry);
+                    coll.put(primaryKey, entry);
+                }
+                return new FindByIdResponse(OperationStatus.OK, "Ok", entry.getData());
+            } else {
+                return new FindByIdResponse(OperationStatus.NOT_FOUND, "Not found", null);
+            }
+        } catch (Exception exception) {
+            return new FindByIdResponse(OperationStatus.ERROR, "Error while retrieving entry: " + exception.getMessage(), null);
+        }
     }
 
     private AggregateResponse processAggregateOperation(AggregateRequest aggregateRequest) {
@@ -85,6 +114,7 @@ public class OperationProcessor {
                 final var idxEntry = foundIndexEntry.get();
                 fs.deleteFromCollection(idxEntry);
                 primaryKeyIndex.remove(idxEntry);
+                primaryKeyIndex.sort(Comparator.comparing(IndexEntry::getValue));
                 return new DeleteResponse(OperationStatus.OK, "Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
                 return new DeleteResponse(OperationStatus.ERROR, "Entry with id " + deleteRequest.get_id() + " not found");

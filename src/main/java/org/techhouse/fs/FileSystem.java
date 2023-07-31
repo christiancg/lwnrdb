@@ -1,5 +1,7 @@
 package org.techhouse.fs;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
@@ -10,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -18,6 +21,7 @@ public class FileSystem {
     private static final String DB_FILE_EXTENSION = ".dat";
     private static final String INDEX_FILE_EXTENSION = ".idx";
     private static final String ID_FIELD_NAME = "_id";
+    private static final Gson gson = new Gson();
 
     private String dbPath;
 
@@ -63,6 +67,25 @@ public class FileSystem {
 
     private File getIndexFile(String dbName, String collectionName, String indexName) {
         return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + "-" + indexName + INDEX_FILE_EXTENSION);
+    }
+
+    public DbEntry getById(IndexEntry indexEntry) throws IOException {
+        final var file = getCollectionFile(indexEntry.getDatabaseName(), indexEntry.getCollectionName());
+        final var reader = new RandomAccessFile(file, "r");
+        reader.seek(indexEntry.getPosition());
+        final var entryLength = (int)indexEntry.getLength();
+        byte[] buffer = new byte[entryLength];
+        reader.readFully(buffer, 0, entryLength);
+        final var strEntry = new String(buffer);
+        final var jsonObject = gson.fromJson(strEntry, JsonObject.class);
+        final var entry = new DbEntry();
+        entry.setDatabaseName(indexEntry.getDatabaseName());
+        entry.setCollectionName(indexEntry.getCollectionName());
+        entry.set_id(indexEntry.getValue());
+        jsonObject.remove(ID_FIELD_NAME);
+        entry.setData(jsonObject);
+        reader.close();
+        return entry;
     }
 
     public IndexEntry insertIntoCollection(DbEntry entry) throws IOException {
@@ -178,7 +201,8 @@ public class FileSystem {
     public List<IndexEntry> readWholeIndexFile(String dbName, String collectionName, String indexName) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexName);
         if (indexFile.exists()) {
-            return Files.readAllLines(indexFile.toPath()).stream().map(s -> IndexEntry.fromIndexFileEntry(dbName, collectionName, s)).collect(Collectors.toList());
+            return Files.readAllLines(indexFile.toPath()).stream().map(s -> IndexEntry.fromIndexFileEntry(dbName, collectionName, s))
+                    .sorted(Comparator.comparing(IndexEntry::getValue)).collect(Collectors.toList());
         } else {
             return new ArrayList<>();
         }
