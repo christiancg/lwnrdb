@@ -11,7 +11,6 @@ public class Main {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
 
     public static void main(String[] args) {
-        config.load();
         fs.createBaseDbPath();
         var port = 0;
         if (args.length > 0) {

@@ -8,23 +8,28 @@ public class Configuration {
 
     private int port;
     private int maxConnections;
+    private int maxFsThreads;
     private String filePath;
 
     private Configuration() {
     }
 
-    public void load() {
+    private void load() {
         final var configs = ConfigReader.loadConfiguration();
         for (var config: configs.entrySet()) {
             switch (config.getKey()) {
                 case "port" -> port = Integer.parseInt(config.getValue());
                 case "maxConnections" -> maxConnections = Integer.parseInt(config.getValue());
+                case "maxFsThreads" -> maxFsThreads = Integer.parseInt(config.getValue());
                 case "filePath" -> filePath = config.getValue();
             }
         }
     }
 
     public static Configuration getInstance() {
+        if (config.port == 0) {
+            config.load();
+        }
         return config;
     }
 }

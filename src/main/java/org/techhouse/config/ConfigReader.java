@@ -14,6 +14,7 @@ public class ConfigReader {
         {
             add("port");
             add("maxConnections");
+            add("maxFsThreads");
             add("filePath");
         }
     };
