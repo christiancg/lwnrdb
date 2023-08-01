@@ -14,6 +14,9 @@ import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public class FileSystem {
@@ -22,7 +25,7 @@ public class FileSystem {
     private static final String INDEX_FILE_EXTENSION = ".idx";
     private static final String ID_FIELD_NAME = "_id";
     private final Gson gson = IocContainer.get(Gson.class);
-
+    private final ExecutorService pool = Executors.newFixedThreadPool(Configuration.getInstance().getMaxFsThreads());
     private String dbPath;
 
     public void createBaseDbPath() {
@@ -36,7 +39,12 @@ public class FileSystem {
         }
     }
 
-    public boolean createDatabaseFolder(String dbName) {
+    public boolean createDatabaseFolder(String dbName) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalCreateDatabaseFolder(dbName));
+        return future.get();
+    }
+
+    private boolean internalCreateDatabaseFolder(String dbName) {
         final var dbFolder = new File(dbPath + "/" + dbName);
         if (!dbFolder.exists()) {
             return dbFolder.mkdir();
@@ -48,7 +56,12 @@ public class FileSystem {
         return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + DB_FILE_EXTENSION);
     }
 
-    public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
+    public boolean createCollectionFile(String dbName, String collectionName) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalCreateCollectionFile(dbName, collectionName));
+        return future.get();
+    }
+
+    private boolean internalCreateCollectionFile(String dbName, String collectionName) throws IOException {
         final var collectionFile = getCollectionFile(dbName, collectionName);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
@@ -69,7 +82,12 @@ public class FileSystem {
         return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + "-" + indexName + INDEX_FILE_EXTENSION);
     }
 
-    public DbEntry getById(IndexEntry indexEntry) throws IOException {
+    public DbEntry getById(IndexEntry indexEntry) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalGetById(indexEntry));
+        return future.get();
+    }
+
+    private DbEntry internalGetById(IndexEntry indexEntry) throws IOException {
         final var file = getCollectionFile(indexEntry.getDatabaseName(), indexEntry.getCollectionName());
         try (final var reader = new RandomAccessFile(file, "r")){
             reader.seek(indexEntry.getPosition());
@@ -88,7 +106,12 @@ public class FileSystem {
         }
     }
 
-    public IndexEntry insertIntoCollection(DbEntry entry) throws IOException {
+    public IndexEntry insertIntoCollection(DbEntry entry) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalInsertIntoCollection(entry));
+        return future.get();
+    }
+
+    private IndexEntry internalInsertIntoCollection(DbEntry entry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
         try (final var writer = new BufferedWriter(new FileWriter(file, true), BUFFER_SIZE)) {
             final var strData = entry.toFileEntry();
@@ -112,7 +135,17 @@ public class FileSystem {
         }
     }
 
-    public void deleteFromCollection(IndexEntry idIndexEntry) throws IOException {
+    public void deleteFromCollection(IndexEntry idIndexEntry) {
+        pool.execute(() -> {
+            try {
+                internalDeleteFromCollection(idIndexEntry);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    private void internalDeleteFromCollection(IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName());
         final int totalFileLength = (int) file.length();
         try (final var writer = new RandomAccessFile(file, "rwd");
@@ -120,8 +153,8 @@ public class FileSystem {
              FileLock lock = channel.lock()) {
             shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - idIndexEntry.getLength());
+            deleteIndexValue(idIndexEntry);
         }
-        deleteIndexValue(idIndexEntry);
     }
 
     private void deleteIndexValue(IndexEntry idIndexEntry) throws IOException {
@@ -137,7 +170,12 @@ public class FileSystem {
         writer.write(buffer, 0, otherEntriesLength);
     }
 
-    public IndexEntry updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
+    public IndexEntry updateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalUpdateFromCollection(entry, idIndexEntry));
+        return future.get();
+    }
+
+    private IndexEntry internalUpdateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
         final int totalFileLength = (int) file.length();
         try (final var writer = new RandomAccessFile(file, "rwd");
@@ -204,7 +242,12 @@ public class FileSystem {
         return restOfIndexes;
     }
 
-    public List<IndexEntry> readWholeIndexFile(String dbName, String collectionName, String indexName) throws IOException {
+    public List<IndexEntry> readWholeIndexFile(String dbName, String collectionName, String indexName) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalReadWholeIndexFile(dbName, collectionName, indexName));
+        return future.get();
+    }
+
+    private List<IndexEntry> internalReadWholeIndexFile(String dbName, String collectionName, String indexName) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, indexName);
         if (indexFile.exists()) {
             return Files.readAllLines(indexFile.toPath()).stream().map(s -> IndexEntry.fromIndexFileEntry(dbName, collectionName, s))

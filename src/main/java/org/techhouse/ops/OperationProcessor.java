@@ -7,12 +7,12 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
 import org.techhouse.ops.resp.*;
 
-import java.io.IOException;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 
 public class OperationProcessor {
     private static final String PK_FIELD_NAME = "_id";
@@ -36,7 +36,7 @@ public class OperationProcessor {
         return dbName + '|' + collName;
     }
 
-    private List<IndexEntry> getIdIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
+    private List<IndexEntry> getIdIndexAndLoadIfNecessary(String dbName, String collName) throws ExecutionException, InterruptedException {
         final var fieldMapName = getCollectionIdentifier(dbName, collName);
         var indexedFields = indexMap.get(fieldMapName);
         List<IndexEntry> primaryKeyIndex;
@@ -137,11 +137,15 @@ public class OperationProcessor {
     }
 
     private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest) {
-        final var result = fs.createDatabaseFolder(createDatabaseRequest.getDatabaseName());
-        if (result) {
-            return new CreateDatabaseResponse(OperationStatus.OK, "Database created successfully");
+        try {
+            final var result = fs.createDatabaseFolder(createDatabaseRequest.getDatabaseName());
+            if (result) {
+                return new CreateDatabaseResponse(OperationStatus.OK, "Database created successfully");
+            }
+            return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
+        } catch (Exception exception) {
+            return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
         }
-        return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
     }
 
     private CreateCollectionResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
