@@ -256,4 +256,20 @@ public class FileSystem {
             return new ArrayList<>();
         }
     }
+
+    public Map<String, DbEntry> readWholeCollection(String collectionIdentifier) throws ExecutionException, InterruptedException {
+        final var parts = collectionIdentifier.split("\\|");
+        final var future = pool.submit(() -> internalReadWholeCollectionFile(parts[0], parts[1]));
+        return future.get();
+    }
+
+    private Map<String, DbEntry> internalReadWholeCollectionFile(String dbName, String collectionName) throws IOException {
+        final var indexFile = getCollectionFile(dbName, collectionName);
+        if (indexFile.exists()) {
+            return Arrays.stream(Files.readString(indexFile.toPath()).split("(?=\\{)|(?=>})")).map(s -> DbEntry.fromString(dbName, collectionName, s))
+                    .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry));
+        } else {
+            return new HashMap<>();
+        }
+    }
 }

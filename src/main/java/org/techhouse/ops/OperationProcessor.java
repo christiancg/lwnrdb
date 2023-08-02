@@ -32,7 +32,7 @@ public class OperationProcessor {
         };
     }
 
-    private String getCollectionIdentifier(String dbName, String collName) {
+    public static String getCollectionIdentifier(String dbName, String collName) {
         return dbName + '|' + collName;
     }
 
@@ -115,7 +115,14 @@ public class OperationProcessor {
     }
 
     private AggregateResponse processAggregateOperation(AggregateRequest aggregateRequest) {
-        return new AggregateResponse(OperationStatus.OK, "dummy");
+        try {
+            final var results = AggregationOperationHelper.processAggregation(aggregateRequest, indexMap, collectionMap);
+            return results.isEmpty() ?
+                    new AggregateResponse(OperationStatus.NOT_FOUND, "No results", null) :
+                    new AggregateResponse(OperationStatus.OK, "Ok", results);
+        } catch (Exception e) {
+            return new AggregateResponse(OperationStatus.ERROR, "An error occurred while processing the aggregation: " + e.getMessage(), null);
+        }
     }
 
     private DeleteResponse processDeleteOperation(DeleteRequest deleteRequest) {

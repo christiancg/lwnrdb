@@ -1,5 +1,6 @@
 package org.techhouse.ops.resp;
 
+import com.google.gson.JsonObject;
 import lombok.Getter;
 import lombok.Setter;
 import org.techhouse.ops.OperationStatus;
@@ -10,8 +11,9 @@ import java.util.List;
 @Getter
 @Setter
 public class AggregateResponse extends OperationResponse {
-    public List<String> results;
-    public AggregateResponse(OperationStatus status, String message) {
+    public List<JsonObject> results;
+    public AggregateResponse(OperationStatus status, String message, List<JsonObject> results) {
         super(OperationType.AGGREGATE, status, message);
+        this.results = results;
     }
 }
