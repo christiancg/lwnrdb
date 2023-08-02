@@ -6,6 +6,7 @@ import org.techhouse.data.IndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.conjunction.BaseConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.field.*;
 
@@ -17,6 +18,7 @@ import java.util.stream.Stream;
 
 public class OperatorHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
+
     public static Stream<JsonObject> processOperator(BaseOperator operator,
                                                      Stream<JsonObject> resultStream,
                                                      Map<String, Map<String, List<IndexEntry>>> indexMap,
@@ -45,33 +47,12 @@ public class OperatorHelper {
                                                            Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                            Map<String, Map<String, DbEntry>> collectionMap,
                                                            String collectionIdentifier) throws ExecutionException, InterruptedException {
-        resultStream = switch (operator.getFieldOperatorType()) {
-            case EQUALS -> equalsOperator((EqualsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case NOT_EQUALS -> notEqualsOperator((NotEqualsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case GREATER_THAN -> greaterThanOperator((GreaterThanOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case GREATER_THAN_EQUALS -> greaterThanEqualsOperator((GreaterThanEqualsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case SMALLER_THAN -> smallerThanOperator((SmallerThanOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case SMALLER_THAN_EQUALS -> smallerThanEqualsOperator((SmallerThanEqualsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case IN -> inOperator((InOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case NOT_IN -> notInOperator((NotInOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-            case CONTAINS -> containsOperator((ContainsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-        };
-        return resultStream;
+
+        final var tester = getTester(operator, operator.getFieldOperatorType());
+        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
     }
 
-    enum Operation {
-        EQUALS,
-        NOT_EQUALS,
-        GRATER_THAN,
-        GREATER_THAN_EQUALS,
-        SMALLER_THAN,
-        SMALLER_THAN_EQUALS,
-        IN,
-        NOT_IN,
-        CONTAINS
-    }
-
-    private static BiPredicate<JsonObject, String> getTester(BaseFieldOperator operator, Operation operation) {
+    private static BiPredicate<JsonObject, String> getTester(BaseFieldOperator operator, FieldOperatorType operation) {
         return (JsonObject toTest, String fieldName) -> {
             final var operatorElement = operator.getValue();
             if (toTest.has(fieldName)) {
@@ -81,9 +62,9 @@ public class OperatorHelper {
                         final var operatorPrimitive = operatorElement.getAsJsonPrimitive();
                         final var toTestPrimitive = toTestElement.getAsJsonPrimitive();
                         if (operatorPrimitive.isBoolean() && toTestPrimitive.isBoolean()) {
-                            if (operation == Operation.EQUALS) {
+                            if (operation == FieldOperatorType.EQUALS) {
                                 return operatorPrimitive.getAsBoolean() == toTestPrimitive.getAsBoolean();
-                            } else if (operation == Operation.NOT_EQUALS) {
+                            } else if (operation == FieldOperatorType.NOT_EQUALS) {
                                 return operatorPrimitive.getAsBoolean() != toTestPrimitive.getAsBoolean();
                             }
                             return false;
@@ -91,18 +72,24 @@ public class OperatorHelper {
                             return switch (operation) {
                                 case EQUALS -> operatorPrimitive.getAsDouble() == toTestPrimitive.getAsDouble();
                                 case NOT_EQUALS -> operatorPrimitive.getAsDouble() != toTestPrimitive.getAsDouble();
-                                case GRATER_THAN -> operatorPrimitive.getAsDouble() < toTestPrimitive.getAsDouble();
-                                case GREATER_THAN_EQUALS -> operatorPrimitive.getAsDouble() <= toTestPrimitive.getAsDouble();
+                                case GREATER_THAN -> operatorPrimitive.getAsDouble() < toTestPrimitive.getAsDouble();
+                                case GREATER_THAN_EQUALS ->
+                                        operatorPrimitive.getAsDouble() <= toTestPrimitive.getAsDouble();
                                 case SMALLER_THAN -> operatorPrimitive.getAsDouble() > toTestPrimitive.getAsDouble();
-                                case SMALLER_THAN_EQUALS -> operatorPrimitive.getAsDouble() >= toTestPrimitive.getAsDouble();
+                                case SMALLER_THAN_EQUALS ->
+                                        operatorPrimitive.getAsDouble() >= toTestPrimitive.getAsDouble();
                                 case IN, NOT_IN, CONTAINS -> false;
                             };
                         } else if (operatorPrimitive.isString() && toTestPrimitive.isString()) {
                             return switch (operation) {
-                                case EQUALS -> operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
-                                case NOT_EQUALS -> !operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
-                                case CONTAINS -> toTestPrimitive.getAsString().contains(operatorPrimitive.getAsString());
-                                case GRATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN -> false;
+                                case EQUALS ->
+                                        operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
+                                case NOT_EQUALS ->
+                                        !operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
+                                case CONTAINS ->
+                                        toTestPrimitive.getAsString().contains(operatorPrimitive.getAsString());
+                                case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN ->
+                                        false;
                             };
                         } else return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
                     }
@@ -110,93 +97,12 @@ public class OperatorHelper {
                     if (toTestElement.isJsonPrimitive()) {
                         final var jsonArray = operatorElement.getAsJsonArray();
                         final var result = jsonArray.contains(toTestElement.getAsJsonPrimitive());
-                        return (operation == Operation.IN) == result;
+                        return (operation == FieldOperatorType.IN) == result;
                     }
                 }
             }
             return false;
         };
-    }
-
-    private static Stream<JsonObject> equalsOperator(EqualsOperator operator,
-                                                     Stream<JsonObject> resultStream,
-                                                     Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                     Map<String, Map<String, DbEntry>> collectionMap,
-                                                     String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.EQUALS);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> notEqualsOperator(NotEqualsOperator operator,
-                                                        Stream<JsonObject> resultStream,
-                                                        Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                        Map<String, Map<String, DbEntry>> collectionMap,
-                                                        String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.NOT_EQUALS);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> greaterThanOperator(GreaterThanOperator operator,
-                                                          Stream<JsonObject> resultStream,
-                                                          Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                          Map<String, Map<String, DbEntry>> collectionMap,
-                                                          String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.GRATER_THAN);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> greaterThanEqualsOperator(GreaterThanEqualsOperator operator,
-                                                                Stream<JsonObject> resultStream,
-                                                                Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                                Map<String, Map<String, DbEntry>> collectionMap,
-                                                                String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.GREATER_THAN_EQUALS);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> smallerThanOperator(SmallerThanOperator operator,
-                                                          Stream<JsonObject> resultStream,
-                                                          Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                          Map<String, Map<String, DbEntry>> collectionMap,
-                                                          String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.SMALLER_THAN);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> smallerThanEqualsOperator(SmallerThanEqualsOperator operator,
-                                                                Stream<JsonObject> resultStream,
-                                                                Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                                Map<String, Map<String, DbEntry>> collectionMap,
-                                                                String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.SMALLER_THAN_EQUALS);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> inOperator(InOperator operator,
-                                                 Stream<JsonObject> resultStream,
-                                                 Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                 Map<String, Map<String, DbEntry>> collectionMap,
-                                                 String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.IN);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> notInOperator(NotInOperator operator,
-                                                 Stream<JsonObject> resultStream,
-                                                 Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                 Map<String, Map<String, DbEntry>> collectionMap,
-                                                 String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.NOT_IN);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
-    }
-
-    private static Stream<JsonObject> containsOperator(ContainsOperator operator,
-                                                    Stream<JsonObject> resultStream,
-                                                    Map<String, Map<String, List<IndexEntry>>> indexMap,
-                                                    Map<String, Map<String, DbEntry>> collectionMap,
-                                                    String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.CONTAINS);
-        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
     }
 
     private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test,
