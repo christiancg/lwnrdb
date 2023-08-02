@@ -5,9 +5,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.agg.AggregationStepType;
-import org.techhouse.ops.req.agg.BaseAggregationStep;
-import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.*;
+import org.techhouse.ops.req.agg.operators.conjunction.*;
 import org.techhouse.ops.req.agg.operators.field.*;
 import org.techhouse.ops.req.agg.step.*;
 
@@ -70,11 +69,16 @@ public class RequestParser {
 
     private static BaseAggregationStep parseFilterStep(JsonObject obj) {
         final var operator = obj.get("operator").getAsJsonObject();
+        return new FilterAggregationStep(recursiveParse(operator));
+    }
+
+    private static BaseOperator recursiveParse(JsonObject operator) {
+        BaseOperator parsedOperator;
         if (operator.has("fieldOperatorType")) {
             final var fieldName = operator.get("field").getAsString();
             final var fieldValue = operator.get("value");
             final var operatorType = gson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
-            final var parsedOperator = switch (operatorType) {
+            parsedOperator = switch (operatorType) {
                 case EQUALS -> new EqualsOperator(fieldName, fieldValue);
                 case NOT_EQUALS -> new NotEqualsOperator(fieldName, fieldValue);
                 case GREATER_THAN -> new GreaterThanOperator(fieldName, fieldValue);
@@ -85,10 +89,17 @@ public class RequestParser {
                 case NOT_IN -> new NotInOperator(fieldName, fieldValue);
                 case CONTAINS -> new ContainsOperator(fieldName, fieldValue);
             };
-            return new FilterAggregationStep(parsedOperator);
         } else {
-
+            final var conjunctionType = gson.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);
+            final var operators = operator.get("operators").getAsJsonArray().asList().stream().map(element -> recursiveParse(element.getAsJsonObject())).toList();
+            parsedOperator = switch (conjunctionType) {
+                case AND -> new AndOperator(operators);
+                case OR -> new OrOperator(operators);
+                case NOR -> new NorOperator(operators);
+                case XOR -> new XorOperator(operators);
+                case NAND -> new NandOperator(operators);
+            };
         }
-        return gson.fromJson(obj, FilterAggregationStep.class);
+        return parsedOperator;
     }
 }

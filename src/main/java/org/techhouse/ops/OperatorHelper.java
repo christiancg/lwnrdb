@@ -7,13 +7,17 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.conjunction.BaseConjunctionOperator;
-import org.techhouse.ops.req.agg.operators.field.*;
+import org.techhouse.ops.req.agg.operators.field.BaseFieldOperator;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.function.BiPredicate;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class OperatorHelper {
@@ -38,8 +42,28 @@ public class OperatorHelper {
                                                                  Stream<JsonObject> resultStream,
                                                                  Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                                  Map<String, Map<String, DbEntry>> collectionMap,
-                                                                 String collectionIdentifier) {
-        return Stream.empty();
+                                                                 String collectionIdentifier) throws ExecutionException, InterruptedException {
+        List<Stream<JsonObject>> combinationResult = new ArrayList<>();
+        for(var step : operator.getOperators()) {
+            Stream<JsonObject> partialResults;
+            if (step.getType() == OperatorType.CONJUNCTION) {
+                partialResults = processConjunctionOperator((BaseConjunctionOperator) step, resultStream, indexMap, collectionMap, collectionIdentifier);
+            } else {
+                partialResults = processFieldOperator((BaseFieldOperator) step, resultStream, indexMap, collectionMap, collectionIdentifier);
+            }
+            combinationResult.add(partialResults);
+        }
+        return switch (operator.getConjunctionType()) {
+            case AND -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+                    .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
+                    .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == operator.getOperators().size())
+                    .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
+                    .distinct();
+            case OR -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
+            case NOR -> Stream.empty();
+            case XOR -> Stream.empty();
+            case NAND -> Stream.empty();
+        };
     }
 
     private static Stream<JsonObject> processFieldOperator(BaseFieldOperator operator,
@@ -111,16 +135,31 @@ public class OperatorHelper {
                                                             Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                             Map<String, Map<String, DbEntry>> collectionMap,
                                                             String collectionIdentifier) throws ExecutionException, InterruptedException {
+        final var fieldName = operator.getField();
         if (resultStream != null) {
-            resultStream = resultStream.filter(jsonObject -> test.test(jsonObject, operator.getField()));
+            resultStream = resultStream.filter(jsonObject -> test.test(jsonObject, fieldName));
         } else {
             var coll = collectionMap.get(collectionIdentifier);
             if (coll == null) {
                 coll = fs.readWholeCollection(collectionIdentifier);
                 collectionMap.put(collectionIdentifier, coll);
             }
+            List<IndexEntry> fieldIndexEntries;
+            var index = indexMap.get(collectionIdentifier);
+            if (index == null) {
+                fieldIndexEntries = fs.readWholeIndexFile(collectionIdentifier, fieldName);
+                final var indexesMap = new ConcurrentHashMap<String, List<IndexEntry>>();
+                indexesMap.put(fieldName, fieldIndexEntries);
+                indexMap.put(collectionIdentifier, indexesMap);
+            } else {
+                fieldIndexEntries = index.get(fieldName);
+                if (fieldIndexEntries == null) {
+                    fieldIndexEntries = fs.readWholeIndexFile(collectionIdentifier, fieldName);
+                    index.put(collectionIdentifier, fieldIndexEntries);
+                }
+            }
             resultStream = coll.values().stream().map(DbEntry::getData)
-                    .filter(data -> test.test(data, operator.getField()));
+                    .filter(data -> test.test(data, fieldName));
         }
         return resultStream;
     }

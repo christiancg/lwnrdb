@@ -242,6 +242,12 @@ public class FileSystem {
         return restOfIndexes;
     }
 
+    public List<IndexEntry> readWholeIndexFile(String collectionIdentifier, String indexName) throws ExecutionException, InterruptedException {
+        final var parts = collectionIdentifier.split("\\|");
+        final var future = pool.submit(() -> internalReadWholeIndexFile(parts[0], parts[1], indexName));
+        return future.get();
+    }
+
     public List<IndexEntry> readWholeIndexFile(String dbName, String collectionName, String indexName) throws ExecutionException, InterruptedException {
         final var future = pool.submit(() -> internalReadWholeIndexFile(dbName, collectionName, indexName));
         return future.get();
