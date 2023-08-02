@@ -8,5 +8,6 @@ public enum FieldOperatorType {
     SMALLER_THAN,
     SMALLER_THAN_EQUALS,
     IN,
-    NOT_IN
+    NOT_IN,
+    CONTAINS
 }

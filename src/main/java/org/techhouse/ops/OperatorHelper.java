@@ -54,6 +54,7 @@ public class OperatorHelper {
             case SMALLER_THAN_EQUALS -> smallerThanEqualsOperator((SmallerThanEqualsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
             case IN -> inOperator((InOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
             case NOT_IN -> notInOperator((NotInOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
+            case CONTAINS -> containsOperator((ContainsOperator) operator, resultStream, indexMap, collectionMap, collectionIdentifier);
         };
         return resultStream;
     }
@@ -66,7 +67,8 @@ public class OperatorHelper {
         SMALLER_THAN,
         SMALLER_THAN_EQUALS,
         IN,
-        NOT_IN
+        NOT_IN,
+        CONTAINS
     }
 
     private static BiPredicate<JsonObject, String> getTester(BaseFieldOperator operator, Operation operation) {
@@ -93,12 +95,13 @@ public class OperatorHelper {
                                 case GREATER_THAN_EQUALS -> operatorPrimitive.getAsDouble() <= toTestPrimitive.getAsDouble();
                                 case SMALLER_THAN -> operatorPrimitive.getAsDouble() > toTestPrimitive.getAsDouble();
                                 case SMALLER_THAN_EQUALS -> operatorPrimitive.getAsDouble() >= toTestPrimitive.getAsDouble();
-                                case IN, NOT_IN -> false;
+                                case IN, NOT_IN, CONTAINS -> false;
                             };
                         } else if (operatorPrimitive.isString() && toTestPrimitive.isString()) {
                             return switch (operation) {
                                 case EQUALS -> operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
                                 case NOT_EQUALS -> !operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
+                                case CONTAINS -> toTestPrimitive.getAsString().contains(operatorPrimitive.getAsString());
                                 case GRATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN -> false;
                             };
                         } else return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
@@ -184,6 +187,15 @@ public class OperatorHelper {
                                                  Map<String, Map<String, DbEntry>> collectionMap,
                                                  String collectionIdentifier) throws ExecutionException, InterruptedException {
         final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.NOT_IN);
+        return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
+    }
+
+    private static Stream<JsonObject> containsOperator(ContainsOperator operator,
+                                                    Stream<JsonObject> resultStream,
+                                                    Map<String, Map<String, List<IndexEntry>>> indexMap,
+                                                    Map<String, Map<String, DbEntry>> collectionMap,
+                                                    String collectionIdentifier) throws ExecutionException, InterruptedException {
+        final BiPredicate<JsonObject, String> tester = getTester(operator, Operation.CONTAINS);
         return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
     }
 

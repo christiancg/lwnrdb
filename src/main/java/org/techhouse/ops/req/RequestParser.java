@@ -83,6 +83,7 @@ public class RequestParser {
                 case SMALLER_THAN_EQUALS -> new SmallerThanEqualsOperator(fieldName, fieldValue);
                 case IN -> new InOperator(fieldName, fieldValue);
                 case NOT_IN -> new NotInOperator(fieldName, fieldValue);
+                case CONTAINS -> new ContainsOperator(fieldName, fieldValue);
             };
             return new FilterAggregationStep(parsedOperator);
         } else {
