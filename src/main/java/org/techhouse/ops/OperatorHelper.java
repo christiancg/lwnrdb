@@ -54,30 +54,30 @@ public class OperatorHelper {
             combinationResult.add(partialResults);
         }
         return switch (operator.getConjunctionType()) {
-            case AND -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                    .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
-                    .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == operator.getOperators().size())
-                    .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
-                    .distinct();
-            case OR -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
-            case XOR -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                    .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
-                    .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
-                    .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
-                    .distinct();
+            case AND -> andXorConjunction(combinationResult, operator.getOperators().size());
+            case OR -> orConjunction(combinationResult);
+            case XOR -> andXorConjunction(combinationResult, 1);
             case NOR -> {
-                final var combined = combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
+                final var combined = orConjunction(combinationResult);
                 yield norNandAllStreamAggregation(combined, resultStream, collectionMap, collectionIdentifier);
             }
             case NAND -> {
-                final var combined = combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                        .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
-                        .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == operator.getOperators().size())
-                        .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
-                        .distinct();
+                final var combined = andXorConjunction(combinationResult, operator.getOperators().size());
                 yield norNandAllStreamAggregation(combined, resultStream, collectionMap, collectionIdentifier);
             }
         };
+    }
+
+    private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
+        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
+                .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
+                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
+                .distinct();
+    }
+
+    private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
+        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
     }
 
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
@@ -184,6 +184,7 @@ public class OperatorHelper {
                     index.put(collectionIdentifier, fieldIndexEntries);
                 }
             }
+            // TODO: implement index usage
             resultStream = coll.values().stream().map(DbEntry::getData)
                     .filter(data -> test.test(data, fieldName));
         }
