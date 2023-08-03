@@ -8,8 +8,8 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
-import org.techhouse.ops.req.agg.operators.conjunction.BaseConjunctionOperator;
-import org.techhouse.ops.req.agg.operators.field.BaseFieldOperator;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,15 +30,15 @@ public class OperatorHelper {
                                                      String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = switch (operator.getType()) {
             case CONJUNCTION ->
-                    processConjunctionOperator((BaseConjunctionOperator) operator, resultStream, indexMap, collectionMap,
+                    processConjunctionOperator((ConjunctionOperator) operator, resultStream, indexMap, collectionMap,
                             collectionIdentifier);
-            case FIELD -> processFieldOperator((BaseFieldOperator) operator, resultStream, indexMap, collectionMap,
+            case FIELD -> processFieldOperator((FieldOperator) operator, resultStream, indexMap, collectionMap,
                     collectionIdentifier);
         };
         return resultStream;
     }
 
-    private static Stream<JsonObject> processConjunctionOperator(BaseConjunctionOperator operator,
+    private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
                                                                  Stream<JsonObject> resultStream,
                                                                  Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                                  Map<String, Map<String, DbEntry>> collectionMap,
@@ -47,9 +47,9 @@ public class OperatorHelper {
         for(var step : operator.getOperators()) {
             Stream<JsonObject> partialResults;
             if (step.getType() == OperatorType.CONJUNCTION) {
-                partialResults = processConjunctionOperator((BaseConjunctionOperator) step, resultStream, indexMap, collectionMap, collectionIdentifier);
+                partialResults = processConjunctionOperator((ConjunctionOperator) step, resultStream, indexMap, collectionMap, collectionIdentifier);
             } else {
-                partialResults = processFieldOperator((BaseFieldOperator) step, resultStream, indexMap, collectionMap, collectionIdentifier);
+                partialResults = processFieldOperator((FieldOperator) step, resultStream, indexMap, collectionMap, collectionIdentifier);
             }
             combinationResult.add(partialResults);
         }
@@ -66,7 +66,7 @@ public class OperatorHelper {
         };
     }
 
-    private static Stream<JsonObject> processFieldOperator(BaseFieldOperator operator,
+    private static Stream<JsonObject> processFieldOperator(FieldOperator operator,
                                                            Stream<JsonObject> resultStream,
                                                            Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                            Map<String, Map<String, DbEntry>> collectionMap,
@@ -76,7 +76,7 @@ public class OperatorHelper {
         return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
     }
 
-    private static BiPredicate<JsonObject, String> getTester(BaseFieldOperator operator, FieldOperatorType operation) {
+    private static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
         return (JsonObject toTest, String fieldName) -> {
             final var operatorElement = operator.getValue();
             if (toTest.has(fieldName)) {
@@ -130,7 +130,7 @@ public class OperatorHelper {
     }
 
     private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test,
-                                                            BaseFieldOperator operator,
+                                                            FieldOperator operator,
                                                             Stream<JsonObject> resultStream,
                                                             Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                             Map<String, Map<String, DbEntry>> collectionMap,

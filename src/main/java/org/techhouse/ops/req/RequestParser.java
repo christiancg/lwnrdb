@@ -6,8 +6,8 @@ import com.google.gson.JsonObject;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.*;
-import org.techhouse.ops.req.agg.operators.conjunction.*;
-import org.techhouse.ops.req.agg.operators.field.*;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.*;
 
 import java.util.ArrayList;
@@ -78,27 +78,11 @@ public class RequestParser {
             final var fieldName = operator.get("field").getAsString();
             final var fieldValue = operator.get("value");
             final var operatorType = gson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
-            parsedOperator = switch (operatorType) {
-                case EQUALS -> new EqualsOperator(fieldName, fieldValue);
-                case NOT_EQUALS -> new NotEqualsOperator(fieldName, fieldValue);
-                case GREATER_THAN -> new GreaterThanOperator(fieldName, fieldValue);
-                case GREATER_THAN_EQUALS -> new GreaterThanEqualsOperator(fieldName, fieldValue);
-                case SMALLER_THAN -> new SmallerThanOperator(fieldName, fieldValue);
-                case SMALLER_THAN_EQUALS -> new SmallerThanEqualsOperator(fieldName, fieldValue);
-                case IN -> new InOperator(fieldName, fieldValue);
-                case NOT_IN -> new NotInOperator(fieldName, fieldValue);
-                case CONTAINS -> new ContainsOperator(fieldName, fieldValue);
-            };
+            parsedOperator = new FieldOperator(operatorType, fieldName, fieldValue);
         } else {
             final var conjunctionType = gson.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);
             final var operators = operator.get("operators").getAsJsonArray().asList().stream().map(element -> recursiveParse(element.getAsJsonObject())).toList();
-            parsedOperator = switch (conjunctionType) {
-                case AND -> new AndOperator(operators);
-                case OR -> new OrOperator(operators);
-                case NOR -> new NorOperator(operators);
-                case XOR -> new XorOperator(operators);
-                case NAND -> new NandOperator(operators);
-            };
+            parsedOperator = new ConjunctionOperator(conjunctionType, operators);
         }
         return parsedOperator;
     }

@@ -1,4 +1,4 @@
-package org.techhouse.ops.req.agg.operators.conjunction;
+package org.techhouse.ops.req.agg.operators;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -10,10 +10,10 @@ import java.util.List;
 
 @Getter
 @Setter
-public abstract class BaseConjunctionOperator extends BaseOperator {
+public class ConjunctionOperator extends BaseOperator {
     private ConjunctionOperatorType conjunctionType;
     private List<BaseOperator> operators;
-    public BaseConjunctionOperator(ConjunctionOperatorType conjunctionType, List<BaseOperator> operators) {
+    public ConjunctionOperator(ConjunctionOperatorType conjunctionType, List<BaseOperator> operators) {
         super(OperatorType.CONJUNCTION);
         this.conjunctionType = conjunctionType;
         this.operators = operators;
