@@ -1,8 +1,11 @@
 package org.techhouse.ops;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.*;
@@ -11,9 +14,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class AggregationOperationHelper {
+    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+
     public static List<JsonObject> processAggregation(AggregateRequest request,
                                                       Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                       Map<String, Map<String, DbEntry>> collectionMap) throws ExecutionException, InterruptedException {
@@ -33,6 +39,15 @@ public class AggregationOperationHelper {
             };
         }
         return resultStream != null ? resultStream.toList() : new ArrayList<>();
+    }
+
+    private static Map<String, DbEntry> getAndLoadCollectionIfNecessary(Map<String, Map<String, DbEntry>> collectionMap, String collectionIdentifier) throws ExecutionException, InterruptedException {
+        var coll = collectionMap.get(collectionIdentifier);
+        if (coll == null) {
+            coll = fs.readWholeCollection(collectionIdentifier);
+            collectionMap.put(collectionIdentifier, coll);
+        }
+        return coll;
     }
 
     private static Stream<JsonObject> processFilterStep(BaseAggregationStep baseFilterStep,
@@ -60,10 +75,23 @@ public class AggregationOperationHelper {
                                                          Stream<JsonObject> resultStream,
                                                          Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                          Map<String, Map<String, DbEntry>> collectionMap,
-                                                         String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                         String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = resultStream != null ?
+                resultStream :
+                getAndLoadCollectionIfNecessary(collectionMap, collectionIdentifier).values().stream().map(DbEntry::getData);
         final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
-        return Stream.empty();
+        return resultStream.filter(jsonObject -> jsonObject.has(groupByStep.getFieldName()))
+                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(groupByStep.getFieldName())))
+                .entrySet().stream().map(jsonElementListEntry -> {
+                    final var groupedEntry = new JsonObject();
+                    groupedEntry.add(groupByStep.getFieldName(), jsonElementListEntry.getKey());
+                    final var values = jsonElementListEntry.getValue().stream().reduce(new JsonArray(), (jsonArray, jsonObject) -> {
+                        jsonArray.add(jsonObject);
+                        return jsonArray;
+                    }, (jsonArray, jsonArray2) -> jsonArray);
+                    groupedEntry.add("group", values);
+                    return groupedEntry;
+                });
     }
 
     private static Stream<JsonObject> processJoinStep(BaseAggregationStep baseJoinStep,
