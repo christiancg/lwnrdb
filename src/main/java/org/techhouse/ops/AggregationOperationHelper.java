@@ -135,7 +135,7 @@ public class AggregationOperationHelper {
                                                        String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var limitStep = (LimitAggregationStep) baseLimitStep;
-        return Stream.empty();
+        return resultStream.limit(limitStep.getLimit());
     }
 
     private static Stream<JsonObject> processSkipStep(BaseAggregationStep baseSkipStep,
