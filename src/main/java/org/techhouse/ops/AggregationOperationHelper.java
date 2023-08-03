@@ -41,13 +41,19 @@ public class AggregationOperationHelper {
         return resultStream != null ? resultStream.toList() : new ArrayList<>();
     }
 
-    private static Map<String, DbEntry> getAndLoadCollectionIfNecessary(Map<String, Map<String, DbEntry>> collectionMap, String collectionIdentifier) throws ExecutionException, InterruptedException {
-        var coll = collectionMap.get(collectionIdentifier);
-        if (coll == null) {
-            coll = fs.readWholeCollection(collectionIdentifier);
-            collectionMap.put(collectionIdentifier, coll);
+    private static Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream,
+                                                                    Map<String, Map<String, DbEntry>> collectionMap,
+                                                                    String collectionIdentifier) throws ExecutionException, InterruptedException {
+        if (resultStream != null) {
+            return resultStream;
+        } else {
+            var coll = collectionMap.get(collectionIdentifier);
+            if (coll == null) {
+                coll = fs.readWholeCollection(collectionIdentifier);
+                collectionMap.put(collectionIdentifier, coll);
+            }
+            return coll.values().stream().map(DbEntry::getData);
         }
-        return coll;
     }
 
     private static Stream<JsonObject> processFilterStep(BaseAggregationStep baseFilterStep,
@@ -76,9 +82,7 @@ public class AggregationOperationHelper {
                                                          Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                          Map<String, Map<String, DbEntry>> collectionMap,
                                                          String collectionIdentifier) throws ExecutionException, InterruptedException {
-        resultStream = resultStream != null ?
-                resultStream :
-                getAndLoadCollectionIfNecessary(collectionMap, collectionIdentifier).values().stream().map(DbEntry::getData);
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
         return resultStream.filter(jsonObject -> jsonObject.has(groupByStep.getFieldName()))
                 .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(groupByStep.getFieldName())))
@@ -98,8 +102,8 @@ public class AggregationOperationHelper {
                                                       Stream<JsonObject> resultStream,
                                                       Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                       Map<String, Map<String, DbEntry>> collectionMap,
-                                                      String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                      String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var joinStep = (JoinAggregationStep) baseJoinStep;
         return Stream.empty();
     }
@@ -108,8 +112,8 @@ public class AggregationOperationHelper {
                                                        Stream<JsonObject> resultStream,
                                                        Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                        Map<String, Map<String, DbEntry>> collectionMap,
-                                                       String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                       String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var countStep = (CountAggregationStep) baseCountStep;
         return Stream.empty();
     }
@@ -118,8 +122,8 @@ public class AggregationOperationHelper {
                                                           Stream<JsonObject> resultStream,
                                                           Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                           Map<String, Map<String, DbEntry>> collectionMap,
-                                                          String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                          String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var distinctStep = (DistinctAggregationStep) baseDistinctStep;
         return Stream.empty();
     }
@@ -128,8 +132,8 @@ public class AggregationOperationHelper {
                                                        Stream<JsonObject> resultStream,
                                                        Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                        Map<String, Map<String, DbEntry>> collectionMap,
-                                                       String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                       String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var limitStep = (LimitAggregationStep) baseLimitStep;
         return Stream.empty();
     }
@@ -138,8 +142,8 @@ public class AggregationOperationHelper {
                                                       Stream<JsonObject> resultStream,
                                                       Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                       Map<String, Map<String, DbEntry>> collectionMap,
-                                                      String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                      String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var skipStep = (SkipAggregationStep) baseSkipStep;
         return Stream.empty();
     }
@@ -148,8 +152,8 @@ public class AggregationOperationHelper {
                                                       Stream<JsonObject> resultStream,
                                                       Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                       Map<String, Map<String, DbEntry>> collectionMap,
-                                                      String collectionIdentifier) {
-        resultStream = resultStream != null ? resultStream : Stream.empty();
+                                                      String collectionIdentifier) throws ExecutionException, InterruptedException {
+        resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var sortStep = (SortAggregationStep) baseSortStep;
         return Stream.empty();
     }
