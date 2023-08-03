@@ -60,10 +60,36 @@ public class OperatorHelper {
                     .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
                     .distinct();
             case OR -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
-            case NOR -> Stream.empty();
-            case XOR -> Stream.empty();
-            case NAND -> Stream.empty();
+            case XOR -> combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+                    .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
+                    .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
+                    .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
+                    .distinct();
+            case NOR -> {
+                final var combined = combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
+                yield norNandAllStreamAggregation(combined, resultStream, collectionMap, collectionIdentifier);
+            }
+            case NAND -> {
+                final var combined = combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+                        .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
+                        .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == operator.getOperators().size())
+                        .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
+                        .distinct();
+                yield norNandAllStreamAggregation(combined, resultStream, collectionMap, collectionIdentifier);
+            }
         };
+    }
+
+    private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
+                                                                  Stream<JsonObject> resultStream,
+                                                                  Map<String, Map<String, DbEntry>> collectionMap,
+                                                                  String collectionIdentifier) {
+        if (resultStream == null) {
+            resultStream = collectionMap.get(collectionIdentifier).values().stream().map(DbEntry::getData);
+        }
+        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id")))
+                .entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
+                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator,
