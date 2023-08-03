@@ -1,9 +1,9 @@
 package org.techhouse.config;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.net.URISyntaxException;
-import java.net.URL;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
@@ -52,14 +52,14 @@ public class ConfigReader {
     }
 
     private static Map<String, String> loadDefaultConfig() {
-        final URL url = ConfigReader.class.getResource(DEFAULT_CONFIG_PATH);
-        if (url != null) {
-            try {
-                var file = new File(url.toURI());
-                final var allLines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+        try(final var inputStream = ConfigReader.class.getResourceAsStream(DEFAULT_CONFIG_PATH)) {
+            if (inputStream != null) {
+                final var allLines =
+                        new BufferedReader(new InputStreamReader(inputStream,
+                                StandardCharsets.UTF_8)).lines().toList();
                 return processFromLines(allLines);
-            } catch (URISyntaxException | IOException ignored) {
             }
+        } catch (IOException ignored) {
         }
         System.out.println("Error while loading " + DEFAULT_CONFIG_PATH);
         return null;
