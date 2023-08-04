@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import com.google.gson.JsonObject;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
 import org.techhouse.fs.FileSystem;
@@ -71,7 +72,7 @@ public class OperatorHelper {
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id"))).entrySet().stream()
+                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
                 .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
                 .distinct();
@@ -88,7 +89,7 @@ public class OperatorHelper {
         if (resultStream == null) {
             resultStream = collectionMap.get(collectionIdentifier).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> jsonObject.get("_id")))
+        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD)))
                 .entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
     }

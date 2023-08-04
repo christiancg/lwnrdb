@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
@@ -20,10 +21,6 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public class FileSystem {
-    private static final int BUFFER_SIZE = 32768;
-    private static final String DB_FILE_EXTENSION = ".dat";
-    private static final String INDEX_FILE_EXTENSION = ".idx";
-    private static final String ID_FIELD_NAME = "_id";
     private final Gson gson = IocContainer.get(Gson.class);
     private final ExecutorService pool = Executors.newFixedThreadPool(Configuration.getInstance().getMaxFsThreads());
     private String dbPath;
@@ -53,7 +50,7 @@ public class FileSystem {
     }
 
     private File getCollectionFile(String dbName, String collectionName) {
-        return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + DB_FILE_EXTENSION);
+        return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + Globals.DB_FILE_EXTENSION);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws ExecutionException, InterruptedException {
@@ -79,7 +76,8 @@ public class FileSystem {
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName) {
-        return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + "-" + indexName + INDEX_FILE_EXTENSION);
+        return new File(dbPath + '/' + dbName + '/' + collectionName + '/' + collectionName + '-' +
+                indexName + Globals.INDEX_FILE_EXTENSION);
     }
 
     public DbEntry getById(IndexEntry indexEntry) throws ExecutionException, InterruptedException {
@@ -100,7 +98,7 @@ public class FileSystem {
             entry.setDatabaseName(indexEntry.getDatabaseName());
             entry.setCollectionName(indexEntry.getCollectionName());
             entry.set_id(indexEntry.getValue());
-            jsonObject.remove(ID_FIELD_NAME);
+            jsonObject.remove(Globals.PK_FIELD);
             entry.setData(jsonObject);
             return entry;
         }
@@ -113,21 +111,20 @@ public class FileSystem {
 
     private IndexEntry internalInsertIntoCollection(DbEntry entry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
-        try (final var writer = new BufferedWriter(new FileWriter(file, true), BUFFER_SIZE)) {
+        try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
             final var strData = entry.toFileEntry();
             final var length = strData.length();
             final var totalFileLength = file.length();
             writer.append(strData);
             writer.flush();
             final var entryId = entry.get_id();
-            return indexNewValue(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entryId, entryId,
-                    totalFileLength, length);
+            return indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId, entryId, totalFileLength, length);
         }
     }
 
-    private IndexEntry indexNewValue(String dbName, String collectionName, String indexedField, String value, String entryId, long position, int length) throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, indexedField);
-        try (final var writer = new BufferedWriter(new FileWriter(indexFile, true), BUFFER_SIZE)) {
+    private IndexEntry indexNewPKValue(String dbName, String collectionName, String value, String entryId, long position, int length) throws IOException {
+        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD);
+        try (final var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
             final var indexEntry = new IndexEntry(dbName, collectionName, value, Set.of(entryId), position, length);
             writer.append(indexEntry.toFileEntry());
             writer.newLine();
@@ -158,7 +155,7 @@ public class FileSystem {
     }
 
     private void deleteIndexValue(IndexEntry idIndexEntry) throws IOException {
-        internalUpdateIndex(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName(), ID_FIELD_NAME, idIndexEntry.getValue(), null);
+        internalUpdatePKIndex(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName(), idIndexEntry.getValue(), null);
     }
 
     private void shiftOtherEntriesToStart(RandomAccessFile writer, IndexEntry idIndexEntry, int totalFileLength) throws IOException {
@@ -187,18 +184,18 @@ public class FileSystem {
             final var length = strData.length();
             writer.write(strData.getBytes(StandardCharsets.UTF_8),0, length);
             writer.setLength(totalFileLength - idIndexEntry.getLength() + strData.length());
-            return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), ID_FIELD_NAME, entry.get_id(), totalFileLength, length);
+            return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(), totalFileLength, length);
         }
     }
 
-    private IndexEntry updateIndexValues(String dbName, String collectionName, String indexName, String value, long position, int length) throws IOException {
+    private IndexEntry updateIndexValues(String dbName, String collectionName, String value, long position, int length) throws IOException {
         final var newIndexEntry = new IndexEntry(dbName, collectionName, value, Set.of(value), position, length);
-        internalUpdateIndex(dbName, collectionName, indexName, value, newIndexEntry);
+        internalUpdatePKIndex(dbName, collectionName, value, newIndexEntry);
         return newIndexEntry;
     }
 
-    private void internalUpdateIndex(String dbName, String collectionName, String indexName, String value, IndexEntry newIndexEntry) throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, indexName);
+    private void internalUpdatePKIndex(String dbName, String collectionName, String value, IndexEntry newIndexEntry) throws IOException {
+        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD);
         try (final var writer = new RandomAccessFile(indexFile, "rwd");
              FileChannel channel = writer.getChannel();
              FileLock lock = channel.lock()) {
@@ -211,7 +208,7 @@ public class FileSystem {
             var indexLine = 0;
             var oldIndexLine = "";
             for (int i=0; i < lines.length; i++) {
-                final var parts = lines[i].split("\\|");
+                final var parts = lines[i].split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
                 if (parts[0].equals(value)) {
                     indexLine = i;
                     oldIndexLine = lines[i];
@@ -243,7 +240,7 @@ public class FileSystem {
     }
 
     public List<IndexEntry> readWholeIndexFile(String collectionIdentifier, String indexName) throws ExecutionException, InterruptedException {
-        final var parts = collectionIdentifier.split("\\|");
+        final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
         final var future = pool.submit(() -> internalReadWholeIndexFile(parts[0], parts[1], indexName));
         return future.get();
     }
@@ -264,7 +261,7 @@ public class FileSystem {
     }
 
     public Map<String, DbEntry> readWholeCollection(String collectionIdentifier) throws ExecutionException, InterruptedException {
-        final var parts = collectionIdentifier.split("\\|");
+        final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
         final var future = pool.submit(() -> internalReadWholeCollectionFile(parts[0], parts[1]));
         return future.get();
     }

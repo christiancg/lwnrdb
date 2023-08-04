@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
 import org.techhouse.fs.FileSystem;
@@ -127,8 +128,8 @@ public class AggregationOperationHelper {
         if (fieldName == null || fieldName.isEmpty() || fieldName.trim().isEmpty()) {
             return resultStream.map(jsonObject -> {
                 final var result = jsonObject.deepCopy();
-                if (result.has("_id")) {
-                    result.remove("_id");
+                if (result.has(Globals.PK_FIELD)) {
+                    result.remove(Globals.PK_FIELD);
                 }
                 return result;
             }).distinct();

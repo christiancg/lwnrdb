@@ -3,6 +3,7 @@ package org.techhouse.data;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import lombok.Data;
+import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 
 import java.util.UUID;
@@ -20,7 +21,7 @@ public class DbEntry {
         entry.setDatabaseName(databaseName);
         entry.setCollectionName(collectionName);
         entry.setData(jsonObject);
-        entry.set_id(jsonObject.has("_id") ? jsonObject.get("_id").getAsString() : null);
+        entry.set_id(jsonObject.has(Globals.PK_FIELD) ? jsonObject.get(Globals.PK_FIELD).getAsString() : null);
         return entry;
     }
 
@@ -30,7 +31,7 @@ public class DbEntry {
         entry.setCollectionName(collectionName);
         final var data = gson.fromJson(wholeEntryFromFile, JsonObject.class);
         entry.setData(data);
-        entry.set_id(data.has("_id") ? data.get("_id").getAsString() : null);
+        entry.set_id(data.has(Globals.PK_FIELD) ? data.get(Globals.PK_FIELD).getAsString() : null);
         return entry;
     }
 
@@ -38,7 +39,7 @@ public class DbEntry {
         if (_id == null) {
             _id = UUID.randomUUID().toString();
         }
-        data.addProperty("_id", _id);
+        data.addProperty(Globals.PK_FIELD, _id);
         return data.toString();
     }
 }

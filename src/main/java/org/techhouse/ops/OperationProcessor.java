@@ -1,5 +1,6 @@
 package org.techhouse.ops;
 
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexEntry;
 import org.techhouse.fs.FileSystem;
@@ -15,7 +16,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 
 public class OperationProcessor {
-    private static final String PK_FIELD_NAME = "_id";
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Map<String, Map<String, List<IndexEntry>>> indexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
@@ -33,7 +33,7 @@ public class OperationProcessor {
     }
 
     public static String getCollectionIdentifier(String dbName, String collName) {
-        return dbName + '|' + collName;
+        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
     }
 
     private List<IndexEntry> getIdIndexAndLoadIfNecessary(String dbName, String collName) throws ExecutionException, InterruptedException {
@@ -41,15 +41,15 @@ public class OperationProcessor {
         var indexedFields = indexMap.get(fieldMapName);
         List<IndexEntry> primaryKeyIndex;
         if (indexedFields != null) {
-            primaryKeyIndex = indexedFields.get(PK_FIELD_NAME);
+            primaryKeyIndex = indexedFields.get(Globals.PK_FIELD);
             if (primaryKeyIndex == null) {
-                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PK_FIELD_NAME);
-                indexedFields.put(PK_FIELD_NAME, primaryKeyIndex);
+                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, Globals.PK_FIELD);
+                indexedFields.put(Globals.PK_FIELD, primaryKeyIndex);
             }
         } else {
-            primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, PK_FIELD_NAME);
+            primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, Globals.PK_FIELD);
             indexedFields = new ConcurrentHashMap<>();
-            indexedFields.put(PK_FIELD_NAME, primaryKeyIndex);
+            indexedFields.put(Globals.PK_FIELD, primaryKeyIndex);
             indexMap.put(fieldMapName, indexedFields);
         }
         return primaryKeyIndex;

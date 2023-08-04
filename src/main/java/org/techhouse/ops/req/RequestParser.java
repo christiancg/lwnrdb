@@ -3,6 +3,7 @@ package org.techhouse.ops.req;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import org.techhouse.config.Globals;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.*;
@@ -21,8 +22,8 @@ public class RequestParser {
             return switch (baseReq.getType()) {
                 case SAVE -> {
                     final var parsed = gson.fromJson(message, SaveRequest.class);
-                    if(parsed.getObject().has("_id")) {
-                        parsed.set_id(parsed.getObject().get("_id").getAsString());
+                    if(parsed.getObject().has(Globals.PK_FIELD)) {
+                        parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).getAsString());
                     }
                     yield parsed;
                 }

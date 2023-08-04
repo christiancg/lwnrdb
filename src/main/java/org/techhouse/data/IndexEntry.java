@@ -2,6 +2,7 @@ package org.techhouse.data;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import org.techhouse.config.Globals;
 
 import java.util.Set;
 
@@ -16,11 +17,12 @@ public class IndexEntry implements Comparable<String> {
     private long length;
 
     public String toFileEntry() {
-        return value + '|' + String.join(";", ids) + '|' + position + '|' + length;
+        return value + Globals.INDEX_ENTRY_SEPARATOR + String.join(";", ids) + Globals.INDEX_ENTRY_SEPARATOR +
+                position + Globals.INDEX_ENTRY_SEPARATOR + length;
     }
 
     public static IndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
-        final var parts = line.split("\\|");
+        final var parts = line.split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
         return new IndexEntry(databaseName, collectionName, parts[0], Set.of(parts[1].split(";")),
                 Long.parseLong(parts[2]), Long.parseLong(parts[3]));
     }
