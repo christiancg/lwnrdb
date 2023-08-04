@@ -20,6 +20,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class AggregationOperationHelper {
+    private static final String GROUP_FIELD_NAME = "group";
+    private static final String COUNT_FIELD_NAME = "count";
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
 
     public static List<JsonObject> processAggregation(AggregateRequest request,
@@ -85,6 +87,7 @@ public class AggregationOperationHelper {
                                                          String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
+        // TODO: use indexes
         return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, groupByStep.getFieldName()))
                 .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, groupByStep.getFieldName())))
                 .entrySet().stream().map(jsonElementListEntry -> {
@@ -94,7 +97,7 @@ public class AggregationOperationHelper {
                         jsonArray.add(jsonObject);
                         return jsonArray;
                     }, (jsonArray, jsonArray2) -> jsonArray);
-                    groupedEntry.add("group", values);
+                    groupedEntry.add(GROUP_FIELD_NAME, values);
                     return groupedEntry;
                 });
     }
@@ -114,7 +117,7 @@ public class AggregationOperationHelper {
                                                        String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var result = new JsonObject();
-        result.addProperty("count", resultStream.count());
+        result.addProperty(COUNT_FIELD_NAME, resultStream.count());
         return Stream.of(result);
     }
 
