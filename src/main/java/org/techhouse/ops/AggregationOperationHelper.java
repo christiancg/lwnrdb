@@ -84,8 +84,8 @@ public class AggregationOperationHelper {
                                                          String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
-        return resultStream.filter(jsonObject -> jsonObject.has(groupByStep.getFieldName()))
-                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(groupByStep.getFieldName())))
+        return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, groupByStep.getFieldName()))
+                .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, groupByStep.getFieldName())))
                 .entrySet().stream().map(jsonElementListEntry -> {
                     final var groupedEntry = new JsonObject();
                     groupedEntry.add(groupByStep.getFieldName(), jsonElementListEntry.getKey());
@@ -133,9 +133,9 @@ public class AggregationOperationHelper {
                 return result;
             }).distinct();
         } else {
-            return resultStream.filter(jsonObject -> jsonObject.has(fieldName)).map(jsonObject -> {
+            return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
                 final var json = new JsonObject();
-                json.add(fieldName, jsonObject.get(fieldName));
+                json.add(fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
                 return json;
             }).distinct();
         }

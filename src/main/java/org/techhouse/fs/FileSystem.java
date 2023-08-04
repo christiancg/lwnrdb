@@ -270,9 +270,9 @@ public class FileSystem {
     }
 
     private Map<String, DbEntry> internalReadWholeCollectionFile(String dbName, String collectionName) throws IOException {
-        final var indexFile = getCollectionFile(dbName, collectionName);
-        if (indexFile.exists()) {
-            return Arrays.stream(Files.readString(indexFile.toPath()).split("(?=\\{)|(?=>})")).map(s -> DbEntry.fromString(dbName, collectionName, s))
+        final var collectionFile = getCollectionFile(dbName, collectionName);
+        if (collectionFile.exists()) {
+            return Arrays.stream(Files.readString(collectionFile.toPath()).split("(?=(?<!:)\\{)")).map(s -> DbEntry.fromString(dbName, collectionName, s))
                     .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry));
         } else {
             return new HashMap<>();

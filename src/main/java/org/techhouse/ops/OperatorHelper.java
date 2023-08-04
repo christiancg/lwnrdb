@@ -10,6 +10,7 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.JsonUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -105,10 +106,10 @@ public class OperatorHelper {
     private static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
         return (JsonObject toTest, String fieldName) -> {
             final var operatorElement = operator.getValue();
-            if (toTest.has(fieldName)) {
-                final var toTestElement = toTest.get(fieldName);
+            if (JsonUtils.hasInPath(toTest, fieldName)) {
+                final var toTestElement = JsonUtils.getFromPath(toTest, fieldName);
                 if (operatorElement.isJsonPrimitive()) {
-                    if (toTestElement.isJsonPrimitive()) {
+                    if (toTestElement != null && toTestElement.isJsonPrimitive()) {
                         final var operatorPrimitive = operatorElement.getAsJsonPrimitive();
                         final var toTestPrimitive = toTestElement.getAsJsonPrimitive();
                         if (operatorPrimitive.isBoolean() && toTestPrimitive.isBoolean()) {
@@ -144,7 +145,7 @@ public class OperatorHelper {
                         } else return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
                     }
                 } else if (operatorElement.isJsonArray()) {
-                    if (toTestElement.isJsonPrimitive()) {
+                    if (toTestElement != null && toTestElement.isJsonPrimitive()) {
                         final var jsonArray = operatorElement.getAsJsonArray();
                         final var result = jsonArray.contains(toTestElement.getAsJsonPrimitive());
                         return (operation == FieldOperatorType.IN) == result;
