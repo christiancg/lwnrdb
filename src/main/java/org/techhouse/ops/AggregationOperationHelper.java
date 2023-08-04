@@ -9,6 +9,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.*;
+import org.techhouse.utils.JsonUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -165,6 +166,11 @@ public class AggregationOperationHelper {
                                                       String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var sortStep = (SortAggregationStep) baseSortStep;
-        return Stream.empty();
+        // TODO: use indexes
+        if (sortStep.isAscending()) {
+            return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionAscending(o1,o2, sortStep.getFieldName()));
+        } else {
+            return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionDescending(o1,o2, sortStep.getFieldName()));
+        }
     }
 }
