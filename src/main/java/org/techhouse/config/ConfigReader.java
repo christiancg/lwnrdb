@@ -1,5 +1,7 @@
 package org.techhouse.config;
 
+import org.techhouse.fs.FileSystem;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
@@ -18,7 +20,7 @@ public class ConfigReader {
             add("filePath");
         }
     };
-    private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
+    private static final String DEFAULT_CONFIG_PATH = FileSystem.FILE_SEPARATOR + "default.cfg";
     private static final String FILE_CONFIG_NAME = "lwnrdb.cfg";
 
     public static Map<String, String> loadConfiguration() {
@@ -37,7 +39,7 @@ public class ConfigReader {
     }
 
     private static Map<String, String> loadFromFile() {
-        var file = new File(Paths.get(".").toAbsolutePath().normalize() + "/" + FILE_CONFIG_NAME);
+        var file = new File(Paths.get(".").toAbsolutePath().normalize() + FileSystem.FILE_SEPARATOR + FILE_CONFIG_NAME);
         if (file.exists()) {
             try {
                 final var allLines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);

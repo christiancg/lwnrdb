@@ -13,6 +13,7 @@ import java.io.*;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -21,6 +22,8 @@ import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 public class FileSystem {
+    public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
+    private static final String RW_PERMISSIONS = "rwd";
     private final Gson gson = IocContainer.get(Gson.class);
     private final ExecutorService pool = Executors.newFixedThreadPool(Configuration.getInstance().getMaxFsThreads());
     private String dbPath;
@@ -42,7 +45,7 @@ public class FileSystem {
     }
 
     private boolean internalCreateDatabaseFolder(String dbName) {
-        final var dbFolder = new File(dbPath + "/" + dbName);
+        final var dbFolder = new File(dbPath + FILE_SEPARATOR + dbName);
         if (!dbFolder.exists()) {
             return dbFolder.mkdir();
         }
@@ -50,7 +53,8 @@ public class FileSystem {
     }
 
     private File getCollectionFile(String dbName, String collectionName) {
-        return new File(dbPath + "/" + dbName + '/' + collectionName + '/' + collectionName + Globals.DB_FILE_EXTENSION);
+        return new File(dbPath + FILE_SEPARATOR + dbName + FILE_SEPARATOR + collectionName + FILE_SEPARATOR
+                + collectionName + Globals.DB_FILE_EXTENSION);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws ExecutionException, InterruptedException {
@@ -76,8 +80,8 @@ public class FileSystem {
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName) {
-        return new File(dbPath + '/' + dbName + '/' + collectionName + '/' + collectionName + '-' +
-                indexName + Globals.INDEX_FILE_EXTENSION);
+        return new File(dbPath + FILE_SEPARATOR + dbName + FILE_SEPARATOR + collectionName + FILE_SEPARATOR
+                + collectionName + '-' + indexName + Globals.INDEX_FILE_EXTENSION);
     }
 
     public DbEntry getById(IndexEntry indexEntry) throws ExecutionException, InterruptedException {
@@ -145,7 +149,7 @@ public class FileSystem {
     private void internalDeleteFromCollection(IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(idIndexEntry.getDatabaseName(), idIndexEntry.getCollectionName());
         final int totalFileLength = (int) file.length();
-        try (final var writer = new RandomAccessFile(file, "rwd");
+        try (final var writer = new RandomAccessFile(file, RW_PERMISSIONS);
              FileChannel channel = writer.getChannel();
              FileLock lock = channel.lock()) {
             shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
@@ -175,7 +179,7 @@ public class FileSystem {
     private IndexEntry internalUpdateFromCollection(DbEntry entry, IndexEntry idIndexEntry) throws IOException {
         final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
         final int totalFileLength = (int) file.length();
-        try (final var writer = new RandomAccessFile(file, "rwd");
+        try (final var writer = new RandomAccessFile(file, RW_PERMISSIONS);
              FileChannel channel = writer.getChannel();
              FileLock lock = channel.lock()) {
             shiftOtherEntriesToStart(writer, idIndexEntry, totalFileLength);
@@ -196,7 +200,7 @@ public class FileSystem {
 
     private void internalUpdatePKIndex(String dbName, String collectionName, String value, IndexEntry newIndexEntry) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD);
-        try (final var writer = new RandomAccessFile(indexFile, "rwd");
+        try (final var writer = new RandomAccessFile(indexFile, RW_PERMISSIONS);
              FileChannel channel = writer.getChannel();
              FileLock lock = channel.lock()) {
             final int oldFileLength = (int) indexFile.length();
