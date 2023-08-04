@@ -35,8 +35,8 @@ public class JsonUtils {
     }
 
     public static boolean matchesType(JsonObject o1, JsonObject o2, String fieldName) {
-        final var o1Field = o1.get(fieldName);
-        final var o2Field = o2.get(fieldName);
+        final var o1Field = getFromPath(o1, fieldName);
+        final var o2Field = getFromPath(o2, fieldName);
         if (o1Field != null && o2Field != null) {
             if (o1Field.isJsonPrimitive()) {
                 if (o2.isJsonPrimitive()) {
