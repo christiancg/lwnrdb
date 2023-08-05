@@ -2,6 +2,7 @@ package org.techhouse;
 
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.ex.InvalidPortException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
@@ -10,19 +11,21 @@ public class Main {
 
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
 
-    public static void main(String[] args) {
-        fs.createBaseDbPath();
-        var port = 0;
+    private static int getPort(String[] args) {
         if (args.length > 0) {
             try {
-                port = Integer.parseInt(args[0]);
+                return Integer.parseInt(args[0]);
             } catch (Exception e) {
-                System.out.println("Port must be an integer");
-                return;
+                throw new InvalidPortException(args[0], e);
             }
         } else {
-            port = config.getPort();
+            return config.getPort();
         }
+    }
+
+    public static void main(String[] args) {
+        fs.createBaseDbPath();
+        var port = getPort(args);
         var server = new SocketServer(port);
         server.serve();
     }
