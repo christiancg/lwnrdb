@@ -264,6 +264,11 @@ public class FileSystem {
         }
     }
 
+    public Map<String, DbEntry> readWholeCollection(String dbName, String collectionName) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalReadWholeCollectionFile(dbName, collectionName));
+        return future.get();
+    }
+
     public Map<String, DbEntry> readWholeCollection(String collectionIdentifier) throws ExecutionException, InterruptedException {
         final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
         final var future = pool.submit(() -> internalReadWholeCollectionFile(parts[0], parts[1]));

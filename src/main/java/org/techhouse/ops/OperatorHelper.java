@@ -110,7 +110,7 @@ public class OperatorHelper {
             if (JsonUtils.hasInPath(toTest, fieldName)) {
                 final var toTestElement = JsonUtils.getFromPath(toTest, fieldName);
                 if (operatorElement.isJsonPrimitive()) {
-                    if (toTestElement != null && toTestElement.isJsonPrimitive()) {
+                    if (toTestElement.isJsonPrimitive()) {
                         final var operatorPrimitive = operatorElement.getAsJsonPrimitive();
                         final var toTestPrimitive = toTestElement.getAsJsonPrimitive();
                         if (operatorPrimitive.isBoolean() && toTestPrimitive.isBoolean()) {

@@ -13,6 +13,7 @@ import org.techhouse.ops.req.agg.step.*;
 import org.techhouse.utils.JsonUtils;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -109,7 +110,37 @@ public class AggregationOperationHelper {
                                                       String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var joinStep = (JoinAggregationStep) baseJoinStep;
-        return Stream.empty();
+        final var joinCollectionName = joinStep.getJoinCollection();
+        final var joinCollectionLocalField = joinStep.getLocalField();
+        final var joinCollectionRemoteField = joinStep.getRemoteField();
+        final var as = joinStep.getAsField();
+        var joinCollectionMap = collectionMap.get(joinCollectionName);
+        if (joinCollectionMap == null) {
+            final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+            final var dbName = parts[0];
+            joinCollectionMap = fs.readWholeCollection(dbName, joinCollectionName);
+            final var joinCollectionIdentifier = OperationProcessor.getCollectionIdentifier(dbName, joinCollectionName);
+            collectionMap.put(joinCollectionIdentifier, joinCollectionMap);
+        }
+        // TODO: use indexes
+        final var joinedCollection = joinCollectionMap.values().stream()
+                .map(DbEntry::getData)
+                .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, joinCollectionRemoteField))
+                .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, joinCollectionRemoteField),
+                        HashMap::new, Collectors.collectingAndThen(Collectors.toList(), jsonObjects -> {
+                            final var jsonArray = new JsonArray();
+                            jsonObjects.forEach(jsonArray::add);
+                            return jsonArray;
+                        })));
+        return resultStream.map(jsonObject -> {
+            if (JsonUtils.hasInPath(jsonObject, joinCollectionLocalField)) {
+                final var copy = jsonObject.deepCopy();
+                final var found = joinedCollection.get(JsonUtils.getFromPath(copy, joinCollectionLocalField));
+                copy.add(as, found);
+                return copy;
+            }
+            return jsonObject;
+        });
     }
 
     private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream,
