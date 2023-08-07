@@ -7,16 +7,21 @@ import org.techhouse.config.Globals;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.*;
+import org.techhouse.ops.req.agg.mid_operators.*;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.*;
+import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
+import org.techhouse.ops.req.agg.step.map.MapOperator;
+import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 
 import java.util.ArrayList;
+import java.util.List;
 
 public class RequestParser {
     private static final Gson gson = IocContainer.get(Gson.class);
 
-    public static OperationRequest parseRequest(String message) throws InvalidCommandException {
+    public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         try {
             final var baseReq = gson.fromJson(message, OperationRequest.class);
             return switch (baseReq.getType()) {
@@ -39,7 +44,7 @@ public class RequestParser {
         }
     }
 
-    private static OperationRequest parseAggregationRequest(String message) {
+    private static OperationRequest parseAggregationRequest(final String message) {
         final var aggRequest = gson.fromJson(message, AggregateRequest.class);
         final var steps = new ArrayList<BaseAggregationStep>();
         final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
@@ -53,11 +58,11 @@ public class RequestParser {
         return aggRequest;
     }
 
-    private static BaseAggregationStep parseAggregationStep(AggregationStepType type, JsonArray jsonArray, int index) {
+    private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray, final int index) {
         final var obj = jsonArray.get(index).getAsJsonObject();
         return switch (type) {
             case FILTER -> parseFilterStep(obj);
-            case MAP -> gson.fromJson(obj, MapAggregationStep.class);
+            case MAP -> parseMapStep(obj);
             case GROUP_BY -> gson.fromJson(obj, GroupByAggregationStep.class);
             case JOIN -> gson.fromJson(obj, JoinAggregationStep.class);
             case COUNT -> gson.fromJson(obj, CountAggregationStep.class);
@@ -68,12 +73,50 @@ public class RequestParser {
         };
     }
 
-    private static BaseAggregationStep parseFilterStep(JsonObject obj) {
+    private static BaseAggregationStep parseMapStep(final JsonObject obj) {
+        final var operators = obj.get("operators").getAsJsonArray();
+        return new MapAggregationStep(parseMapOperators(operators));
+    }
+
+    private static List<MapOperator> parseMapOperators(final JsonArray arr) {
+        final var mapOperators = new ArrayList<MapOperator>();
+        for (var mapStep : arr.asList()) {
+            final var mapStepObj = mapStep.getAsJsonObject();
+            final var condition = mapStepObj.get("condition");
+            BaseOperator parsedCondition = null;
+            if (condition != null && !condition.isJsonNull()) {
+                parsedCondition = recursiveParse(condition.getAsJsonObject());
+            }
+            final var fieldName = mapStepObj.get("fieldName").getAsString();
+            final var operator = mapStepObj.get("operator");
+            MapOperator parsed;
+            if (operator != null) {
+                final var operatorObj = operator.getAsJsonObject();
+                parsed = new AddFieldMapOperator(fieldName, parsedCondition, parseMidOperator(operatorObj));
+            } else {
+                parsed = new RemoveFieldMapOperator(fieldName, parsedCondition);
+            }
+            mapOperators.add(parsed);
+        }
+        return mapOperators;
+    }
+
+    private static BaseMidOperator parseMidOperator(final JsonObject obj) {
+        final var midOperationType = gson.fromJson(obj.get("type"), MidOperationType.class);
+        return switch (midOperationType) {
+            case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT ->
+                    new ArrayParamMidOperator(midOperationType, obj.get("operands").getAsJsonArray());
+            case ABS, MOD, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").getAsString());
+            case CAST -> new CastMidOperator(obj.get("fieldName").getAsString(), gson.fromJson(obj.get("toType"), CastToType.class));
+        };
+    }
+
+    private static BaseAggregationStep parseFilterStep(final JsonObject obj) {
         final var operator = obj.get("operator").getAsJsonObject();
         return new FilterAggregationStep(recursiveParse(operator));
     }
 
-    private static BaseOperator recursiveParse(JsonObject operator) {
+    private static BaseOperator recursiveParse(final JsonObject operator) {
         BaseOperator parsedOperator;
         if (operator.has("fieldOperatorType")) {
             final var fieldName = operator.get("field").getAsString();
