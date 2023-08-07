@@ -33,7 +33,7 @@ public class AggregationOperationHelper {
         for (var step : request.getAggregationSteps()) {
             resultStream = switch (step.getType()) {
                 case FILTER -> processFilterStep(step, resultStream, indexMap, collectionMap, collectionIdentifier);
-                case MAP -> processMapStep(step, resultStream, indexMap, collectionMap, collectionIdentifier);
+                case MAP -> processMapStep(step, resultStream, collectionMap, collectionIdentifier);
                 case GROUP_BY -> processGroupByStep(step, resultStream, collectionMap, collectionIdentifier);
                 case JOIN -> processJoinStep(step, resultStream, indexMap, collectionMap, collectionIdentifier);
                 case COUNT -> processCountStep(resultStream, collectionMap, collectionIdentifier);
@@ -68,18 +68,23 @@ public class AggregationOperationHelper {
                                                         String collectionIdentifier) throws ExecutionException, InterruptedException {
         final var filterStep = (FilterAggregationStep) baseFilterStep;
         final var filterOperator = filterStep.getOperator();
-        return OperatorHelper.processOperator(filterOperator, resultStream, indexMap, collectionMap,
+        return FilterOperatorHelper.processOperator(filterOperator, resultStream, indexMap, collectionMap,
                 collectionIdentifier);
     }
 
     private static Stream<JsonObject> processMapStep(BaseAggregationStep baseMapStep,
                                                      Stream<JsonObject> resultStream,
-                                                     Map<String, Map<String, List<IndexEntry>>> indexMap,
                                                      Map<String, Map<String, DbEntry>> collectionMap,
                                                      String collectionIdentifier) throws ExecutionException, InterruptedException {
         resultStream = initializeStreamIfNecessary(resultStream, collectionMap, collectionIdentifier);
         final var mapStep = (MapAggregationStep) baseMapStep;
-        return Stream.empty();
+        for(var step : mapStep.getOperators()) {
+            resultStream = resultStream.map(jsonObject -> {
+                final var copy = jsonObject.deepCopy();
+                return MapOperatorHelper.processOperator(step, copy);
+            });
+        }
+        return resultStream;
     }
 
     private static Stream<JsonObject> processGroupByStep(BaseAggregationStep baseGroupByStep,

@@ -12,7 +12,6 @@ public enum MidOperationType {
     POW, // -> Array
     ROOT, // -> Array
     ABS, // -> One param
-    MOD, // -> One param
     // Array / String operators
     SIZE, // -> One param
     CONCAT, // -> Array

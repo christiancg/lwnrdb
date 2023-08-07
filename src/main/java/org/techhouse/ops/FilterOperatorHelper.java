@@ -22,7 +22,7 @@ import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class OperatorHelper {
+public class FilterOperatorHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
 
     public static Stream<JsonObject> processOperator(BaseOperator operator,
@@ -104,7 +104,7 @@ public class OperatorHelper {
         return internalBaseFiltering(tester, operator, resultStream, indexMap, collectionMap, collectionIdentifier);
     }
 
-    private static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
+    public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
         return (JsonObject toTest, String fieldName) -> {
             final var operatorElement = operator.getValue();
             if (JsonUtils.hasInPath(toTest, fieldName)) {

@@ -106,7 +106,7 @@ public class RequestParser {
         return switch (midOperationType) {
             case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT ->
                     new ArrayParamMidOperator(midOperationType, obj.get("operands").getAsJsonArray());
-            case ABS, MOD, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").getAsString());
+            case ABS, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").getAsString());
             case CAST -> new CastMidOperator(obj.get("fieldName").getAsString(), gson.fromJson(obj.get("toType"), CastToType.class));
         };
     }
