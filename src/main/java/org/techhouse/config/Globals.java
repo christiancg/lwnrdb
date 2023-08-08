@@ -9,4 +9,5 @@ public class Globals {
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final String INDEX_ENTRY_SEPARATOR = "|";
     public static final String INDEX_ENTRY_SEPARATOR_REGEX = "\\|";
+    public static final String STRING_LITERAL_PREFIX = "-";
 }

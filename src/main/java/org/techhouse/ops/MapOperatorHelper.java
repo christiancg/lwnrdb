@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import com.google.gson.JsonObject;
+import org.techhouse.config.Globals;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
@@ -98,8 +99,8 @@ public class MapOperatorHelper {
             case POW -> pow((ArrayParamMidOperator) midOperator, addFieldName, toMap);
             case ROOT -> root((ArrayParamMidOperator) midOperator, addFieldName, toMap);
             case ABS -> abs((OneParamMidOperator) midOperator, addFieldName, toMap);
-            case SIZE -> toMap;
-            case CONCAT -> toMap;
+            case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
+            case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap);
             case CAST -> toMap;
         };
     }
@@ -239,6 +240,62 @@ public class MapOperatorHelper {
             }
         }
         obj.addProperty(addFieldName, absValue);
+        return obj;
+    }
+
+    private static JsonObject size(OneParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+        final var operand = midOperator.getOperand();
+        final var element = JsonUtils.getFromPath(obj, operand);
+        Integer size = null;
+        if (element.isJsonPrimitive()) {
+            final var primitive = element.getAsJsonPrimitive();
+            if (primitive.isString()) {
+                final var stringValue = primitive.getAsString();
+                size = stringValue.length();
+            }
+        } else if (element.isJsonArray()) {
+            final var arrayValue = element.getAsJsonArray();
+            size = arrayValue.size();
+        }
+        obj.addProperty(addFieldName, size);
+        return obj;
+    }
+
+    private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+        final var operands = midOperator.getOperands();
+        StringBuilder result = new StringBuilder();
+        for (var concatStep : operands) {
+            if (concatStep.isJsonPrimitive()) {
+                final var primitive = concatStep.getAsJsonPrimitive();
+                if (primitive.isString()) {
+                    final var primitiveString = primitive.getAsString();
+                    var toAdd = "";
+                    if (primitiveString.startsWith(Globals.STRING_LITERAL_PREFIX)) {
+                        toAdd = primitiveString.replaceFirst("-", "");
+                    } else {
+                        final var fieldName = primitive.getAsString();
+                        final var element = JsonUtils.getFromPath(obj, fieldName);
+                        if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
+                            toAdd = element.getAsJsonPrimitive().getAsString();
+                        } else {
+                            toAdd = element.toString();
+                        }
+                    }
+                    result.append(toAdd);
+                } else {
+                    result.append(concatStep);
+                }
+            } else if (concatStep.isJsonArray()) {
+                for (var arrayElement : concatStep.getAsJsonArray()) {
+                    if (arrayElement.isJsonPrimitive()) {
+                        result.append(arrayElement);
+                    }
+                }
+            } else if (concatStep.isJsonNull()) {
+                result.append(concatStep);
+            }
+        }
+        obj.addProperty(addFieldName, result.toString());
         return obj;
     }
 }
