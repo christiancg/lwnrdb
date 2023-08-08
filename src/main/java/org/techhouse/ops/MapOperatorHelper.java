@@ -1,10 +1,14 @@
 package org.techhouse.ops;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import org.techhouse.config.Globals;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -101,7 +105,7 @@ public class MapOperatorHelper {
             case ABS -> abs((OneParamMidOperator) midOperator, addFieldName, toMap);
             case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
             case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap);
-            case CAST -> toMap;
+            case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap);
         };
     }
 
@@ -296,6 +300,42 @@ public class MapOperatorHelper {
             }
         }
         obj.addProperty(addFieldName, result.toString());
+        return obj;
+    }
+
+    private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
+        final var fieldName = midOperator.getFieldName();
+        final var type = midOperator.getToType();
+        final var field = JsonUtils.getFromPath(obj, fieldName);
+        JsonElement casted = JsonNull.INSTANCE;
+        if (!field.isJsonNull() && field.isJsonPrimitive()) {
+            final var primitive = field.getAsJsonPrimitive();
+            casted = switch (type) {
+                case NUMBER -> {
+                    if (primitive.isString()) {
+                        try {
+                            yield new JsonPrimitive(Double.parseDouble(primitive.getAsString()));
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    yield JsonNull.INSTANCE;
+                }
+                case STRING -> new JsonPrimitive(primitive.toString());
+                case BOOLEAN -> {
+                    if (primitive.isString()) {
+                        try {
+                            yield new JsonPrimitive(Boolean.parseBoolean(primitive.getAsString()));
+                        } catch (Exception ignored) {
+                        }
+                    } else if (primitive.isNumber()) {
+                        final var number = primitive.getAsDouble();
+                        yield new JsonPrimitive(number != 0);
+                    }
+                    yield JsonNull.INSTANCE;
+                }
+            };
+        }
+        obj.add(addFieldName, casted);
         return obj;
     }
 }
