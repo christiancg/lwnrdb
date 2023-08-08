@@ -25,8 +25,8 @@ public class Main {
 
     public static void main(String[] args) {
         fs.createBaseDbPath();
-        var port = getPort(args);
-        var server = new SocketServer(port);
+        final var port = getPort(args);
+        final var server = new SocketServer(port);
         server.serve();
     }
 }
