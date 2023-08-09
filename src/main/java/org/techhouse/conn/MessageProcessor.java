@@ -10,7 +10,7 @@ import org.techhouse.ops.req.RequestParser;
 import java.io.*;
 import java.net.Socket;
 
-public class MessageProcessor extends Thread {
+public class MessageProcessor implements Runnable {
     private final Gson gson = IocContainer.get(Gson.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final Socket socket;

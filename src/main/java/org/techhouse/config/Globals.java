@@ -10,4 +10,5 @@ public class Globals {
     public static final String INDEX_ENTRY_SEPARATOR = "|";
     public static final String INDEX_ENTRY_SEPARATOR_REGEX = "\\|";
     public static final String STRING_LITERAL_PREFIX = "-";
+    public static final String FILE_CONFIG_NAME = "lwnrdb.cfg";
 }

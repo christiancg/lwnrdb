@@ -36,7 +36,9 @@ public class RequestParser {
                 case AGGREGATE -> parseAggregationRequest(message);
                 case DELETE -> gson.fromJson(message, DeleteRequest.class);
                 case CREATE_DATABASE -> gson.fromJson(message, CreateDatabaseRequest.class);
+                case DROP_DATABASE -> gson.fromJson(message, DropDatabaseRequest.class);
                 case CREATE_COLLECTION -> gson.fromJson(message, CreateCollectionRequest.class);
+                case DROP_COLLECTION -> gson.fromJson(message, DropCollectionRequest.class);
                 case CLOSE_CONNECTION -> gson.fromJson(message, CloseConnectionRequest.class);
             };
         } catch (Exception e) {

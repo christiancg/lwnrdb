@@ -6,6 +6,8 @@ public enum OperationType {
     AGGREGATE,
     DELETE,
     CREATE_DATABASE,
+    DROP_DATABASE,
     CREATE_COLLECTION,
+    DROP_COLLECTION,
     CLOSE_CONNECTION
 }

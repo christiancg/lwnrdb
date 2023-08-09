@@ -10,6 +10,7 @@ public class Configuration {
     private int maxConnections;
     private int maxFsThreads;
     private String filePath;
+    private int backgroundProcessingThreads;
 
     private Configuration() {
     }
@@ -22,6 +23,7 @@ public class Configuration {
                 case "maxConnections" -> maxConnections = Integer.parseInt(config.getValue());
                 case "maxFsThreads" -> maxFsThreads = Integer.parseInt(config.getValue());
                 case "filePath" -> filePath = config.getValue();
+                case "backgroundProcessingThreads" -> backgroundProcessingThreads = Integer.parseInt(config.getValue());
             }
         }
     }

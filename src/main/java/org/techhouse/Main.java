@@ -1,5 +1,6 @@
 package org.techhouse;
 
+import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ex.InvalidPortException;
@@ -26,6 +27,8 @@ public class Main {
     public static void main(String[] args) {
         fs.createBaseDbPath();
         final var port = getPort(args);
+        final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
+        backgroundTaskManager.startBackgroundWorkers();
         final var server = new SocketServer(port);
         server.serve();
     }

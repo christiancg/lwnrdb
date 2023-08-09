@@ -18,10 +18,10 @@ public class ConfigReader {
             add("maxConnections");
             add("maxFsThreads");
             add("filePath");
+            add("backgroundProcessingThreads");
         }
     };
     private static final String DEFAULT_CONFIG_PATH = FileSystem.FILE_SEPARATOR + "default.cfg";
-    private static final String FILE_CONFIG_NAME = "lwnrdb.cfg";
 
     public static Map<String, String> loadConfiguration() {
         final var defaultConfigs = loadDefaultConfig();
@@ -30,7 +30,8 @@ public class ConfigReader {
             if (fromFile != null) {
                 final var missingConfigs = configKeys.stream().filter(x -> !fromFile.containsKey(x)).toList();
                 if (!missingConfigs.isEmpty()) {
-                    System.out.println("Warning! The following configs are missing and will be using defaults: " + String.join(",", missingConfigs));
+                    System.out.println("Warning! The following configs are missing and will be using defaults: " +
+                            String.join(",", missingConfigs));
                 }
                 defaultConfigs.putAll(fromFile);
             }
@@ -39,14 +40,15 @@ public class ConfigReader {
     }
 
     private static Map<String, String> loadFromFile() {
-        var file = new File(Paths.get(".").toAbsolutePath().normalize() + FileSystem.FILE_SEPARATOR + FILE_CONFIG_NAME);
+        var file = new File(Paths.get(".").toAbsolutePath().normalize() + FileSystem.FILE_SEPARATOR +
+                Globals.FILE_CONFIG_NAME);
         if (file.exists()) {
             try {
                 final var allLines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
                 return processFromLines(allLines);
             } catch (IOException ignored) {
             }
-            System.out.println("Error while loading " + FILE_CONFIG_NAME);
+            System.out.println("Error while loading " + Globals.FILE_CONFIG_NAME);
         } else {
             System.out.println("Warning: could not load configs, using defaults");
         }

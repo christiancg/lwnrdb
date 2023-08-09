@@ -44,12 +44,33 @@ public class FileSystem {
         return future.get();
     }
 
+    public boolean deleteDatabase(String dbName) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalDeleteDatabase(dbName));
+        return future.get();
+    }
+
     private boolean internalCreateDatabaseFolder(String dbName) {
         final var dbFolder = new File(dbPath + FILE_SEPARATOR + dbName);
         if (!dbFolder.exists()) {
             return dbFolder.mkdir();
         }
         return true;
+    }
+
+    private boolean internalDeleteDatabase(String dbName) {
+        final var dbFolder = new File(dbPath + FILE_SEPARATOR + dbName);
+        final var fileDeletionResult = new ArrayList<Boolean>();
+        if (dbFolder.exists()) {
+            for(var collFolder : Objects.requireNonNull(dbFolder.listFiles())) {
+                for (var file : Objects.requireNonNull(collFolder.listFiles())) {
+                    fileDeletionResult.add(file.delete());
+                }
+                fileDeletionResult.add(collFolder.delete());
+            }
+            fileDeletionResult.add(dbFolder.delete());
+            return fileDeletionResult.stream().allMatch(aBoolean -> aBoolean);
+        }
+        return false;
     }
 
     private File getCollectionFile(String dbName, String collectionName) {
@@ -59,6 +80,11 @@ public class FileSystem {
 
     public boolean createCollectionFile(String dbName, String collectionName) throws ExecutionException, InterruptedException {
         final var future = pool.submit(() -> internalCreateCollectionFile(dbName, collectionName));
+        return future.get();
+    }
+
+    public boolean deleteCollectionFiles(String dbName, String collectionName) throws ExecutionException, InterruptedException {
+        final var future = pool.submit(() -> internalDropCollection(dbName, collectionName));
         return future.get();
     }
 
@@ -77,6 +103,20 @@ public class FileSystem {
             }
             return true;
         }
+    }
+
+    private boolean internalDropCollection(String dbName, String collectionName) {
+        final var collectionFile = getCollectionFile(dbName, collectionName);
+        final var collectionFolder = new File(collectionFile.getParent());
+        final var fileDeletionResult = new ArrayList<Boolean>();
+        if (collectionFolder.exists()) {
+            for (var file : Objects.requireNonNull(collectionFolder.listFiles())) {
+                fileDeletionResult.add(file.delete());
+            }
+            fileDeletionResult.add(collectionFolder.delete());
+            return fileDeletionResult.stream().allMatch(aBoolean -> aBoolean);
+        }
+        return false;
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName) {
