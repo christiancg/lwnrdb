@@ -61,11 +61,17 @@ public class FileSystem {
         final var dbFolder = new File(dbPath + FILE_SEPARATOR + dbName);
         final var fileDeletionResult = new ArrayList<Boolean>();
         if (dbFolder.exists()) {
-            for(var collFolder : Objects.requireNonNull(dbFolder.listFiles())) {
-                for (var file : Objects.requireNonNull(collFolder.listFiles())) {
-                    fileDeletionResult.add(file.delete());
+            final var dbFolders = dbFolder.listFiles();
+            if (dbFolders != null) {
+                for(var collFolder : dbFolders) {
+                    final var collFiles = collFolder.listFiles();
+                    if (collFiles != null) {
+                        for (var file : collFiles) {
+                            fileDeletionResult.add(file.delete());
+                        }
+                        fileDeletionResult.add(collFolder.delete());
+                    }
                 }
-                fileDeletionResult.add(collFolder.delete());
             }
             fileDeletionResult.add(dbFolder.delete());
             return fileDeletionResult.stream().allMatch(aBoolean -> aBoolean);
