@@ -9,5 +9,7 @@ public enum OperationType {
     DROP_DATABASE,
     CREATE_COLLECTION,
     DROP_COLLECTION,
+    CREATE_INDEX,
+    DROP_INDEX,
     CLOSE_CONNECTION
 }

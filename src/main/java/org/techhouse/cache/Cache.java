@@ -3,7 +3,8 @@ package org.techhouse.cache;
 import com.google.gson.JsonObject;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
-import org.techhouse.data.IndexEntry;
+import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
@@ -15,30 +16,49 @@ import java.util.stream.Stream;
 
 public class Cache {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
-    private final Map<String, Map<String, List<IndexEntry>>> indexMap = new ConcurrentHashMap<>();
+    private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
 
     public static String getCollectionIdentifier(String dbName, String collName) {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
     }
 
-    public List<IndexEntry> getIdIndexAndLoadIfNecessary(String dbName, String collName) throws ExecutionException, InterruptedException {
-        final var fieldMapName = getCollectionIdentifier(dbName, collName);
-        var indexedFields = indexMap.get(fieldMapName);
-        List<IndexEntry> primaryKeyIndex;
-        if (indexedFields != null) {
-            primaryKeyIndex = indexedFields.get(Globals.PK_FIELD);
-            if (primaryKeyIndex == null) {
-                primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, Globals.PK_FIELD);
-                indexedFields.put(Globals.PK_FIELD, primaryKeyIndex);
-            }
-        } else {
-            primaryKeyIndex = fs.readWholeIndexFile(dbName, collName, Globals.PK_FIELD);
-            indexedFields = new ConcurrentHashMap<>();
-            indexedFields.put(Globals.PK_FIELD, primaryKeyIndex);
-            indexMap.put(fieldMapName, indexedFields);
+    public static String getIndexIdentifier(String fieldName, String fieldType) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldType;
+    }
+
+    public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName)
+            throws ExecutionException, InterruptedException {
+        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
+        if (primaryKeyIndex == null) {
+            primaryKeyIndex = fs.readWholePkIndexFile(dbName, collName);
+            pkIndexMap.put(collectionIdentifier, primaryKeyIndex);
         }
         return primaryKeyIndex;
+    }
+
+    public List<FieldIndexEntry<?>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
+                                                                                 String fieldName, String indexType)
+            throws ExecutionException, InterruptedException {
+        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        final var indexIdentifier = getIndexIdentifier(fieldName, indexType);
+        var index = fieldIndexMap.get(collectionIdentifier);
+        List<FieldIndexEntry<?>> indexEntries;
+        if (index == null || index.keySet().stream().noneMatch(string ->
+                string.contains(FileSystem.INDEX_FILE_NAME_SEPARATOR + fieldName + FileSystem.INDEX_FILE_NAME_SEPARATOR))
+        ) {
+            indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
+            if (index == null) {
+                index = new ConcurrentHashMap<>();
+            }
+            index.put(indexIdentifier, indexEntries);
+            fieldIndexMap.put(collectionIdentifier, index);
+        } else {
+            indexEntries = index.get(indexIdentifier);
+        }
+        return indexEntries;
     }
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
@@ -51,7 +71,7 @@ public class Cache {
         coll.put(entry.get_id(), entry);
     }
 
-    public DbEntry getById(String dbName, String collName, IndexEntry idxEntry) throws ExecutionException, InterruptedException {
+    public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws ExecutionException, InterruptedException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var coll = collectionMap.computeIfAbsent(collectionIdentifier, k -> new ConcurrentHashMap<>());
         final var pk = idxEntry.getValue();
@@ -85,19 +105,19 @@ public class Cache {
     public void evictDatabase(String dbName) {
         final var toRemove = collectionMap.keySet().stream().filter(s -> s.startsWith(dbName)).toList();
         for (var entryKeyToRemove : toRemove) {
-            indexMap.remove(entryKeyToRemove);
+            pkIndexMap.remove(entryKeyToRemove);
             collectionMap.remove(entryKeyToRemove);
         }
     }
 
     public void evictCollection(String dbName, String collName) {
         final var collIdentifier = getCollectionIdentifier(dbName, collName);
-        indexMap.remove(collIdentifier);
+        pkIndexMap.remove(collIdentifier);
         collectionMap.remove(collIdentifier);
     }
 
-    public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName,
-                                                                 String collName) throws ExecutionException, InterruptedException {
+    public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName, String collName)
+            throws ExecutionException, InterruptedException {
         if (resultStream != null) {
             return resultStream;
         } else {

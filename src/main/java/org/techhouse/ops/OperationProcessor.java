@@ -7,7 +7,7 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.DbEntry;
-import org.techhouse.data.IndexEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
@@ -31,6 +31,8 @@ public class OperationProcessor {
             case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
             case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest);
+            case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
+            case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
         };
     }
@@ -40,24 +42,24 @@ public class OperationProcessor {
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         try {
-            final var primaryKeyIndex = cache.getIdIndexAndLoadIfNecessary(saveRequest.getDatabaseName(), saveRequest.getCollectionName());
+            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(saveRequest.getDatabaseName(), saveRequest.getCollectionName());
             var foundIndexEntry = -1;
             if (saveRequest.get_id() != null) {
                 foundIndexEntry = Collections.binarySearch(primaryKeyIndex, saveRequest.get_id());
             }
-            IndexEntry savedIndexEntry;
+            PkIndexEntry savedPkIndexEntry;
             if (foundIndexEntry >= 0) {
                 final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
-                savedIndexEntry = fs.updateFromCollection(entry, idxEntry);
+                savedPkIndexEntry = fs.updateFromCollection(entry, idxEntry);
                 primaryKeyIndex.remove(idxEntry);
             } else {
-                savedIndexEntry = fs.insertIntoCollection(entry);
+                savedPkIndexEntry = fs.insertIntoCollection(entry);
             }
-            primaryKeyIndex.add(savedIndexEntry);
-            primaryKeyIndex.sort(Comparator.comparing(IndexEntry::getValue));
+            primaryKeyIndex.add(savedPkIndexEntry);
+            primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
             cache.addEntryToCache(dbName, collName, entry);
             taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED_UPDATED, dbName, collName, entry));
-            return new SaveResponse(OperationStatus.OK, "Successfully saved", savedIndexEntry.getValue());
+            return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
             return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
         }
@@ -68,7 +70,7 @@ public class OperationProcessor {
         final var collName = findbyIdRequest.getCollectionName();
         final var id = findbyIdRequest.get_id();
         try {
-            final var primaryKeyIndex = cache.getIdIndexAndLoadIfNecessary(dbName, collName);
+            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
             if (foundIndexEntry >= 0) {
                 final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
@@ -97,14 +99,14 @@ public class OperationProcessor {
         try {
             final var dbName = deleteRequest.getDatabaseName();
             final var collName = deleteRequest.getCollectionName();
-            final var primaryKeyIndex = cache.getIdIndexAndLoadIfNecessary(dbName, collName);
-            final var foundIndexEntry = primaryKeyIndex.stream().filter(indexEntry -> indexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
+            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            final var foundIndexEntry = primaryKeyIndex.stream().filter(pkIndexEntry -> pkIndexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
             if (foundIndexEntry.isPresent()) {
                 final var idxEntry = foundIndexEntry.get();
                 final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
                 fs.deleteFromCollection(idxEntry);
                 primaryKeyIndex.remove(idxEntry);
-                primaryKeyIndex.sort(Comparator.comparing(IndexEntry::getValue));
+                primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
                 cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
                 taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
                 return new DeleteResponse(OperationStatus.OK, "Entry with id " + deleteRequest.get_id() + " deleted successfully");
@@ -173,6 +175,34 @@ public class OperationProcessor {
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection");
         } catch (Exception e) {
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection: " + e.getMessage());
+        }
+    }
+
+    private CreateIndexResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
+        try {
+            final var dbName = createIndexRequest.getDatabaseName();
+            final var collName = createIndexRequest.getCollectionName();
+            final var fieldName = createIndexRequest.getFieldName();
+            IndexHelper.createIndex(dbName, collName, fieldName);
+            return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
+        } catch (Exception e) {
+            return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());
+        }
+    }
+
+    private DropIndexResponse processDropIndex(DropIndexRequest dropIndexRequest) {
+        try {
+            final var dbName = dropIndexRequest.getDatabaseName();
+            final var collName = dropIndexRequest.getCollectionName();
+            final var fieldName = dropIndexRequest.getFieldName();
+            final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
+            if (result) {
+                return new DropIndexResponse(OperationStatus.OK, "Successfully dropped index: " + fieldName);
+            } else {
+                return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + fieldName);
+            }
+        } catch (Exception e) {
+            return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + e.getMessage());
         }
     }
 }

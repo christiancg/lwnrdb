@@ -2,6 +2,7 @@ package org.techhouse.config;
 
 public class Globals {
     public static final String PK_FIELD = "_id";
+    public static final String PK_FIELD_TYPE = "String";
     public static final int BUFFER_SIZE = 32768;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String INDEX_FILE_EXTENSION = ".idx";

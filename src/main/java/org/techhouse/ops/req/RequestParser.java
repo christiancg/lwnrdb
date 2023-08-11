@@ -39,6 +39,8 @@ public class RequestParser {
                 case DROP_DATABASE -> gson.fromJson(message, DropDatabaseRequest.class);
                 case CREATE_COLLECTION -> gson.fromJson(message, CreateCollectionRequest.class);
                 case DROP_COLLECTION -> gson.fromJson(message, DropCollectionRequest.class);
+                case CREATE_INDEX -> gson.fromJson(message, CreateIndexRequest.class);
+                case DROP_INDEX -> gson.fromJson(message, DropIndexRequest.class);
                 case CLOSE_CONNECTION -> gson.fromJson(message, CloseConnectionRequest.class);
             };
         } catch (Exception e) {
