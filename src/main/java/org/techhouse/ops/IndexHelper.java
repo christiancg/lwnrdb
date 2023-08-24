@@ -37,11 +37,6 @@ public class IndexHelper {
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
     }
 
-    public static List<FieldIndexEntry<?>> getIndexFile(String dbName, String collName, String fieldName, String indexType)
-            throws ExecutionException, InterruptedException {
-        return cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
-    }
-
     public static boolean dropIndex(String dbName, String collName, String fieldName)
             throws ExecutionException, InterruptedException {
         return fs.dropIndex(dbName, collName, fieldName);

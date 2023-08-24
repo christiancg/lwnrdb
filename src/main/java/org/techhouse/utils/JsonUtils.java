@@ -35,50 +35,14 @@ public class JsonUtils {
         return result;
     }
 
-    public static boolean matchesTypeAndValue(JsonObject o1, JsonObject o2, String fieldName1, String fieldName2) {
-        final var o1Field = getFromPath(o1, fieldName1);
-        final var o2Field = getFromPath(o2, fieldName2);
-        if (o1Field != JsonNull.INSTANCE && o2Field != JsonNull.INSTANCE) {
-            if (o1Field.isJsonPrimitive()) {
-                if (o2Field.isJsonPrimitive()) {
-                    final var o1Primitive = o1Field.getAsJsonPrimitive();
-                    final var o2Primitive = o2Field.getAsJsonPrimitive();
-                    return (o1Primitive.isString() && o2Primitive.isString() && o1Primitive.getAsString().equalsIgnoreCase(o2Primitive.getAsString())) ||
-                            (o1Primitive.isNumber() && o2Primitive.isNumber() && o1Primitive.getAsDouble() == o2Primitive.getAsDouble())||
-                            (o1Primitive.isBoolean() && o2Primitive.isBoolean() && o1Primitive.getAsBoolean() == o2Primitive.getAsBoolean());
-                }
-            } else if (o1Field.isJsonArray()) {
-                return o2.isJsonArray() && o1.getAsJsonArray().equals(o2.getAsJsonArray());
-            } else if (o1Field.isJsonObject()) {
-                return o2.isJsonObject() && o1.equals(o2.getAsJsonObject());
-            } else if (o1Field.isJsonNull()) {
-                return o2.isJsonNull();
-            }
+    public static String classAsString(Class<?> tClass) {
+        if (tClass == Double.class) {
+            return "Double";
+        } else if (tClass == Boolean.class) {
+            return "Boolean";
+        } else {
+            return "String";
         }
-        return false;
-    }
-
-    public static boolean matchesType(JsonObject o1, JsonObject o2, String fieldName1, String fieldName2) {
-        final var o1Field = getFromPath(o1, fieldName1);
-        final var o2Field = getFromPath(o2, fieldName2);
-        if (o1Field != JsonNull.INSTANCE && o2Field != JsonNull.INSTANCE) {
-            if (o1Field.isJsonPrimitive()) {
-                if (o2.isJsonPrimitive()) {
-                    final var o1Primitive = o1Field.getAsJsonPrimitive();
-                    final var o2Primitive = o2Field.getAsJsonPrimitive();
-                    return (o1Primitive.isString() && o2Primitive.isString()) ||
-                            (o1Primitive.isNumber() && o2Primitive.isNumber()) ||
-                            (o1Primitive.isBoolean() && o2Primitive.isBoolean());
-                }
-            } else if (o1Field.isJsonArray()) {
-                return o2.isJsonArray();
-            } else if (o1Field.isJsonObject()) {
-                return o2.isJsonObject();
-            } else if (o1Field.isJsonNull()) {
-                return o2.isJsonNull();
-            }
-        }
-        return false;
     }
 
     public static int sortFunctionAscending(JsonObject o1, JsonObject o2, String fieldName) {

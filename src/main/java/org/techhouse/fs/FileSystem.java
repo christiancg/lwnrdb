@@ -9,6 +9,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.utils.JsonUtils;
 
 import java.io.*;
 import java.nio.channels.FileChannel;
@@ -20,6 +21,7 @@ import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 public class FileSystem {
@@ -337,24 +339,23 @@ public class FileSystem {
         return false;
     }
 
-    public List<FieldIndexEntry<?>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName, String indexType)
+    public <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName, Class<T> indexType)
             throws ExecutionException, InterruptedException {
-        final var future = pool.submit(() -> internalReadWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
+        final Future<List<FieldIndexEntry<T>>> future = pool.submit(() -> internalReadWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
         return future.get();
     }
 
-    private List<FieldIndexEntry<?>> internalReadWholeFieldIndexFiles(String dbName, String collectionName,
-                                                                      String fieldName, String indexType)
+    private <T> List<FieldIndexEntry<T>> internalReadWholeFieldIndexFiles(String dbName, String collectionName,
+                                                                      String fieldName, Class<T> indexType)
             throws IOException {
         final var collectionFolder = getCollectionFolder(dbName, collectionName);
         if (collectionFolder.exists()) {
-            final var indexFile = getIndexFile(dbName, collectionName, fieldName, indexType);
+            final var strIndexType = JsonUtils.classAsString(indexType);
+            final var indexFile = getIndexFile(dbName, collectionName, fieldName, strIndexType);
             if (indexFile.exists()) {
-                return Files.readAllLines(indexFile.toPath()).stream().map(s -> switch (indexType) {
-                    case "Double" -> FieldIndexEntry.fromIndexFileEntry(dbName, collectionName, s, Double.class);
-                    case "Boolean" -> FieldIndexEntry.fromIndexFileEntry(dbName, collectionName, s, Boolean.class);
-                    default -> FieldIndexEntry.fromIndexFileEntry(dbName, collectionName, s, String.class);
-                }).sorted((o1, o2) -> switch (o1.getValue()) {
+                return Files.readAllLines(indexFile.toPath()).stream().map(s ->
+                        FieldIndexEntry.fromIndexFileEntry(dbName, collectionName, s, indexType))
+                        .sorted((o1, o2) -> switch (o1.getValue()) {
                     case Double d -> Double.compare(d, (Double) o2.getValue());
                     case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
                     default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());

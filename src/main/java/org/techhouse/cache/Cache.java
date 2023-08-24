@@ -1,5 +1,7 @@
 package org.techhouse.cache;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -7,9 +9,12 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.SearchUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Stream;
@@ -24,8 +29,9 @@ public class Cache {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
     }
 
-    public static String getIndexIdentifier(String fieldName, String fieldType) {
-        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldType;
+    public static String getIndexIdentifier(String fieldName, Class<?> fieldType) {
+        final var parts = fieldType.getName().split("\\.");
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + parts[parts.length - 1];
     }
 
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName)
@@ -39,26 +45,94 @@ public class Cache {
         return primaryKeyIndex;
     }
 
-    public List<FieldIndexEntry<?>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
-                                                                                 String fieldName, String indexType)
+    public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
+                                                                        String fieldName, Class<T> indexType)
             throws ExecutionException, InterruptedException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var indexIdentifier = getIndexIdentifier(fieldName, indexType);
         var index = fieldIndexMap.get(collectionIdentifier);
-        List<FieldIndexEntry<?>> indexEntries;
+        List<FieldIndexEntry<T>> indexEntries;
         if (index == null || index.keySet().stream().noneMatch(string ->
                 string.contains(FileSystem.INDEX_FILE_NAME_SEPARATOR + fieldName + FileSystem.INDEX_FILE_NAME_SEPARATOR))
         ) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
-            if (index == null) {
+            if (indexEntries == null) {
+                return null;
+            } else if (index == null) {
                 index = new ConcurrentHashMap<>();
             }
-            index.put(indexIdentifier, indexEntries);
+            index.put(indexIdentifier, (List) indexEntries);
             fieldIndexMap.put(collectionIdentifier, index);
         } else {
-            indexEntries = index.get(indexIdentifier);
+            indexEntries = (List) index.get(indexIdentifier);
         }
         return indexEntries;
+    }
+
+    public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
+            throws ExecutionException, InterruptedException {
+        return switch (value) {
+            case Double d -> {
+                final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
+                if (doubleIndex != null) {
+                    yield SearchUtils.findingByOperator(doubleIndex, operator.getFieldOperatorType(), d);
+                } else {
+                    yield null;
+                }
+            }
+            case Boolean b -> {
+                final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class);
+                if (booleanIndex != null) {
+                    yield SearchUtils.findingByOperator(booleanIndex, operator.getFieldOperatorType(), b);
+                } else {
+                    yield null;
+                }
+            }
+            case String s -> {
+                final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
+                if (stringIndex != null) {
+                    yield SearchUtils.findingByOperator(stringIndex, operator.getFieldOperatorType(), s);
+                } else {
+                    yield null;
+                }
+            }
+            case JsonArray arr -> {
+                final var firstElement = arr.get(0);
+                if (firstElement.isJsonPrimitive()) {
+                    final var prim = firstElement.getAsJsonPrimitive();
+                    final var listStream = arr.asList().stream();
+                    if (prim.isString()) {
+                        final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
+                        if (stringIndex != null) {
+                            final var strList = listStream.map(JsonElement::getAsString).toList();
+                            yield SearchUtils.findingInNotIn(stringIndex, operator.getFieldOperatorType(), strList);
+                        } else {
+                            yield null;
+                        }
+                    } else if (prim.isNumber()) {
+                        final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
+                        if (doubleIndex != null) {
+                            final var doubleList = listStream.map(JsonElement::getAsDouble).toList();
+                            yield SearchUtils.findingInNotIn(doubleIndex, operator.getFieldOperatorType(), doubleList);
+                        } else {
+                            yield null;
+                        }
+                    } else if (prim.isBoolean()) {
+                        final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class);
+                        if (booleanIndex != null) {
+                            final var booleanList = listStream.map(JsonElement::getAsBoolean).toList();
+                            yield SearchUtils.findingInNotIn(booleanIndex, operator.getFieldOperatorType(), booleanList);
+                        } else {
+                            yield null;
+                        }
+                    }
+                    yield null;
+                } else {
+                    yield null;
+                }
+            }
+            default -> throw new IllegalStateException("Unexpected value: " + value);
+        };
     }
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {

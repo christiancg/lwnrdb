@@ -14,6 +14,8 @@ import org.techhouse.utils.JsonUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -22,7 +24,8 @@ public class FilterOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
-                                                     String dbName, String collName) {
+                                                     String dbName, String collName)
+            throws ExecutionException, InterruptedException {
         resultStream = switch (operator.getType()) {
             case CONJUNCTION ->
                     processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
@@ -32,9 +35,10 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator, Stream<JsonObject> resultStream,
-                                                                 String dbName, String collName) {
+                                                                 String dbName, String collName)
+            throws ExecutionException, InterruptedException {
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
-        for(var step : operator.getOperators()) {
+        for (var step : operator.getOperators()) {
             Stream<JsonObject> partialResults;
             if (step.getType() == OperatorType.CONJUNCTION) {
                 partialResults = processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName);
@@ -81,7 +85,7 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
-                                                           String dbName, String collName) {
+                                                           String dbName, String collName) throws ExecutionException, InterruptedException {
 
         final var tester = getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
@@ -141,13 +145,37 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test, FieldOperator operator,
-                                                            Stream<JsonObject> resultStream, String dbName, String collName) {
+                                                            Stream<JsonObject> resultStream, String dbName, String collName)
+            throws ExecutionException, InterruptedException {
         final var fieldName = operator.getField();
-        if (resultStream != null) {
-            resultStream = resultStream.filter(jsonObject -> test.test(jsonObject, fieldName));
+        final var value = operator.getValue();
+        Set<String> matchingValues = null;
+        if (value.isJsonPrimitive() || value.isJsonArray()) {
+            if (value.isJsonArray()) {
+                matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsJsonArray());
+            } else {
+                final var primitive = value.getAsJsonPrimitive();
+                if (primitive.isBoolean()) {
+                    matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsBoolean());
+                } else if (primitive.isNumber()) {
+                    matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsDouble());
+                } else if (primitive.isString()) {
+                    matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsString());
+                }
+            }
+        }
+        final var coll = cache.getWholeCollection(dbName, collName);
+        if (matchingValues != null) {
+            final var partialList = new ArrayList<JsonObject>();
+            for (var match : matchingValues) {
+                partialList.add(coll.get(match).getData());
+            }
+            if (resultStream == null) {
+                resultStream = partialList.stream();
+            } else {
+                resultStream = resultStream.filter(partialList::contains);
+            }
         } else {
-            final var coll = cache.getWholeCollection(dbName, collName);
-            // TODO: implement index usage
             resultStream = coll.values().stream().map(DbEntry::getData)
                     .filter(data -> test.test(data, fieldName));
         }

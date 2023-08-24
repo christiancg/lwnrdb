@@ -44,7 +44,10 @@ public class AggregationOperationHelper {
     }
 
     private static Stream<JsonObject> processFilterStep(BaseAggregationStep baseFilterStep, Stream<JsonObject> resultStream,
-                                                        String dbName, String collName) {
+                                                        String dbName, String collName)
+            throws ExecutionException, InterruptedException {
+
+
         final var filterStep = (FilterAggregationStep) baseFilterStep;
         final var filterOperator = filterStep.getOperator();
         return FilterOperatorHelper.processOperator(filterOperator, resultStream, dbName, collName);

@@ -26,12 +26,12 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         Object value;
         if (tClass == Double.class) {
             value = Double.parseDouble(strValue);
-        } else if (strValue.equalsIgnoreCase("true") || strValue.equalsIgnoreCase("false")) {
+        } else if (tClass == Boolean.class) {
             value = Boolean.parseBoolean(strValue);
         } else {
             value = strValue;
         }
-        return new FieldIndexEntry<>(databaseName, collectionName, (T) value, Arrays.stream(parts[1].split(";")).collect(Collectors.toSet()));
+        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(parts[1].split(";")).collect(Collectors.toSet()));
     }
 
     @Override
