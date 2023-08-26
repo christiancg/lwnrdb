@@ -43,6 +43,13 @@ public class FileSystem {
         }
     }
 
+    public void createAdminDatabase()
+            throws ExecutionException, InterruptedException {
+        createDatabaseFolder(Globals.ADMIN_DB_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+    }
+
     public boolean createDatabaseFolder(String dbName) throws ExecutionException, InterruptedException {
         final var future = pool.submit(() -> internalCreateDatabaseFolder(dbName));
         return future.get();
@@ -266,7 +273,7 @@ public class FileSystem {
             var indexLine = 0;
             var oldIndexLine = "";
             for (int i = 0; i < lines.length; i++) {
-                final var parts = lines[i].split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+                final var parts = lines[i].split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
                 if (parts[0].equals(value)) {
                     indexLine = i;
                     oldIndexLine = lines[i];
@@ -279,8 +286,14 @@ public class FileSystem {
             final var reIndexedToWrite = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).collect(Collectors.joining("\n"));
             writer.seek(totalLengthBefore);
             writer.write(reIndexedToWrite.getBytes(StandardCharsets.UTF_8), 0, reIndexedToWrite.length());
-            writer.write('\n');
-            writer.setLength(totalLengthBefore + reIndexedToWrite.length() + 1);
+            var newFileSize = 0;
+            if (!reIndexedEntries.isEmpty()) {
+                writer.write('\n');
+                newFileSize = totalLengthBefore + reIndexedToWrite.length() + 1;
+            } else {
+                newFileSize = totalLengthBefore + reIndexedToWrite.length();
+            }
+            writer.setLength(newFileSize);
         }
     }
 
@@ -362,7 +375,7 @@ public class FileSystem {
                 }).collect(Collectors.toList());
             }
         }
-        return new ArrayList<>();
+        return null;
     }
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws ExecutionException, InterruptedException {

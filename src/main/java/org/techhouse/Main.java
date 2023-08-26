@@ -1,16 +1,19 @@
 package org.techhouse;
 
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
-public class Main {
-    private final static Configuration config = Configuration.getInstance();
+import java.util.concurrent.ExecutionException;
 
+public class Main {
+    private static final Configuration config = Configuration.getInstance();
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final Cache cache = IocContainer.get(Cache.class);
 
     private static int getPort(String[] args) {
         if (args.length > 0) {
@@ -24,8 +27,11 @@ public class Main {
         }
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args)
+            throws ExecutionException, InterruptedException {
         fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        cache.loadAdminData();
         final var port = getPort(args);
         final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
         backgroundTaskManager.startBackgroundWorkers();

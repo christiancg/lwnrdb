@@ -8,8 +8,11 @@ public class Globals {
     public static final String INDEX_FILE_EXTENSION = ".idx";
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
-    public static final String INDEX_ENTRY_SEPARATOR = "|";
-    public static final String INDEX_ENTRY_SEPARATOR_REGEX = "\\|";
+    public static final String INDEX_ENTRY_SEPARATOR = "<|>";
+    public static final String INDEX_ENTRY_SEPARATOR_REGEX = "<\\|>";
     public static final String STRING_LITERAL_PREFIX = "-";
     public static final String FILE_CONFIG_NAME = "lwnrdb.cfg";
+    public static final String ADMIN_DB_NAME = "admin";
+    public static final String ADMIN_DATABASES_COLLECTION_NAME = "databases";
+    public static final String ADMIN_COLLECTIONS_COLLECTION_NAME = "collections";
 }

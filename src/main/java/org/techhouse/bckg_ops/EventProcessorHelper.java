@@ -1,12 +1,15 @@
 package org.techhouse.bckg_ops;
 
-import org.techhouse.bckg_ops.events.CollectionEvent;
-import org.techhouse.bckg_ops.events.DatabaseEvent;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.bckg_ops.events.*;
+import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ops.AdminOperationHelper;
+
+import java.util.concurrent.ExecutionException;
 
 public class EventProcessorHelper {
-    public static void processEvent(Event event) {
+    public static void processEvent(Event event)
+            throws ExecutionException, InterruptedException {
         switch (event) {
             case DatabaseEvent databaseEvent -> processDatabaseEvent(databaseEvent);
             case CollectionEvent collectionEvent -> processCollectionEvent(collectionEvent);
@@ -15,12 +18,33 @@ public class EventProcessorHelper {
         }
     }
 
-    private static void processDatabaseEvent(DatabaseEvent event) {
-        System.out.println("Database " + event.getDbName() + " has been " + event.getType());
+    private static void processDatabaseEvent(DatabaseEvent event)
+            throws ExecutionException, InterruptedException {
+        final var dbName = event.getDbName();
+        if (event.getType() == EventType.CREATED_UPDATED) {
+            final var existingDbEntry = AdminOperationHelper.getDatabaseEntry(dbName);
+            if (existingDbEntry == null) {
+                final var newAdminDbEntry = new AdminDbEntry(dbName);
+                AdminOperationHelper.saveDatabaseEntry(newAdminDbEntry);
+            }
+        } else {
+            AdminOperationHelper.deleteDatabaseEntry(dbName);
+        }
     }
 
-    private static void processCollectionEvent(CollectionEvent event) {
-        System.out.println("Collection " + event.getCollName() + " has been " + event.getType());
+    private static void processCollectionEvent(CollectionEvent event)
+            throws ExecutionException, InterruptedException {
+        final var dbName = event.getDbName();
+        final var collName = event.getCollName();
+        if (event.getType() == EventType.CREATED_UPDATED) {
+            final var existingCollEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
+            if (existingCollEntry == null) {
+                final var newAdminCollEntry = new AdminCollEntry(dbName, collName);
+                AdminOperationHelper.saveCollectionEntry(newAdminCollEntry);
+            }
+        } else {
+            AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+        }
     }
 
     private static void processEntityEvent(EntityEvent event) {

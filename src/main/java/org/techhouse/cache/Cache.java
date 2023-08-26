@@ -7,16 +7,20 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.SearchUtils;
 
+import java.util.AbstractMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Cache {
@@ -24,6 +28,42 @@ public class Cache {
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
+    private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
+    private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> databasesPkIndex = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
+
+    public void loadAdminData()
+            throws ExecutionException, InterruptedException {
+        final var pkIndexAdminDbEntries =
+                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
+        databasesPkIndex.putAll(pkIndexAdminDbEntriesMap);
+        final var pkIndexAdminCollEntries =
+                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        final var pkIndexAdminCollEntriesMap = pkIndexAdminCollEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
+        collectionsPkIndex.putAll(pkIndexAdminCollEntriesMap);
+        if (!pkIndexAdminDbEntriesMap.isEmpty()) {
+            final var adminDatabasesColl =
+                    fs.readWholeCollection(getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME));
+            final var adminDatabasesCollMap = adminDatabasesColl.entrySet().stream()
+                    .map(stringDbEntryEntry -> new AbstractMap.SimpleEntry<>(stringDbEntryEntry.getKey(),
+                            AdminDbEntry.fromJsonObject(stringDbEntryEntry.getValue().getData())))
+                    .collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
+            databases.putAll(adminDatabasesCollMap);
+        }
+        if (!pkIndexAdminCollEntries.isEmpty()) {
+            final var adminCollectionsColl =
+                    fs.readWholeCollection(getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME));
+            final var adminCollectionsCollMap = adminCollectionsColl.entrySet().stream()
+                    .map(stringDbEntryEntry -> new AbstractMap.SimpleEntry<>(stringDbEntryEntry.getKey(),
+                            AdminCollEntry.fromJsonObject(stringDbEntryEntry.getValue().getData())))
+                    .collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
+            collections.putAll(adminCollectionsCollMap);
+        }
+    }
 
     public static String getCollectionIdentifier(String dbName, String collName) {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName;
@@ -166,6 +206,47 @@ public class Cache {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
+        return databasesPkIndex.get(dbName);
+    }
+
+    public void putPkIndexAdminDbEntry(PkIndexEntry adminPkIndexAdminDbEntry) {
+        databasesPkIndex.put(adminPkIndexAdminDbEntry.getValue(), adminPkIndexAdminDbEntry);
+    }
+
+    public AdminDbEntry getAdminDbEntry(String dbName) {
+        return databases.get(dbName);
+    }
+
+    public PkIndexEntry getPkIndexAdminCollEntry(String collIdentifier) {
+        return collectionsPkIndex.get(collIdentifier);
+    }
+
+    public AdminCollEntry getAdminCollectionEntry(String dbName, String collName) {
+        return collections.get(getCollectionIdentifier(dbName, collName));
+    }
+
+    public void putAdminDbEntry(AdminDbEntry dbEntry, PkIndexEntry indexEntry) {
+        databases.put(dbEntry.get_id(), dbEntry);
+        databasesPkIndex.put(dbEntry.get_id(), indexEntry);
+    }
+
+    public void removeAdminDbEntry(String dbName) {
+        databases.remove(dbName);
+        databasesPkIndex.remove(dbName);
+    }
+
+    public void putAdminCollectionEntry(AdminCollEntry dbEntry, PkIndexEntry indexEntry) {
+        final var collIdentifier = dbEntry.get_id();
+        collections.put(collIdentifier, dbEntry);
+        collectionsPkIndex.put(collIdentifier, indexEntry);
+    }
+
+    public void removeAdminCollEntry(String collIdentifier) {
+        collections.remove(collIdentifier);
+        collectionsPkIndex.remove(collIdentifier);
     }
 
     public void evictEntry(String dbName, String collName, String pk) {
