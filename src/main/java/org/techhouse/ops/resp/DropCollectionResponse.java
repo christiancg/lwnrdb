@@ -9,6 +9,6 @@ import org.techhouse.ops.OperationType;
 @Setter
 public class DropCollectionResponse extends OperationResponse {
     public DropCollectionResponse(OperationStatus status, String message) {
-        super(OperationType.CREATE_COLLECTION, status, message);
+        super(OperationType.DROP_COLLECTION, status, message);
     }
 }

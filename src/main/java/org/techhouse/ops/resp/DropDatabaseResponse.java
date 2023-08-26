@@ -9,6 +9,6 @@ import org.techhouse.ops.OperationType;
 @Setter
 public class DropDatabaseResponse extends OperationResponse {
     public DropDatabaseResponse(OperationStatus status, String message) {
-        super(OperationType.CREATE_DATABASE, status, message);
+        super(OperationType.DROP_DATABASE, status, message);
     }
 }
