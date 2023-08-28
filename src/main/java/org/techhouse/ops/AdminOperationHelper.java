@@ -6,6 +6,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
+import java.util.ArrayList;
 import java.util.concurrent.ExecutionException;
 
 public class AdminOperationHelper {
@@ -24,9 +25,20 @@ public class AdminOperationHelper {
         }
     }
 
-    public static void deleteDatabaseEntry(String dbName) {
+    public static void deleteDatabaseEntry(String dbName)
+            throws ExecutionException, InterruptedException {
         var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
         if (adminIndexPkDbEntry != null) {
+            final var adminDbEntry = cache.getAdminDbEntry(dbName);
+            // we need to create a new list to avoid concurrent modification exception
+            //      as the array is also being modified inside the method deleteCollectionEntry
+            final var collections = new ArrayList<>(adminDbEntry.getCollections());
+            for (var collection : collections) {
+                deleteCollectionEntry(dbName, collection);
+            }
+            // we need to reload this variable as the removal of collections
+            //      will change the database entry
+            adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
             fs.deleteFromCollection(adminIndexPkDbEntry);
             cache.removeAdminDbEntry(dbName);
         }
