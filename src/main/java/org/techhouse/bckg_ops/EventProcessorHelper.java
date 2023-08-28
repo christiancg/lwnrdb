@@ -14,6 +14,7 @@ public class EventProcessorHelper {
             case DatabaseEvent databaseEvent -> processDatabaseEvent(databaseEvent);
             case CollectionEvent collectionEvent -> processCollectionEvent(collectionEvent);
             case EntityEvent entityEvent -> processEntityEvent(entityEvent);
+            case IndexEvent indexEvent -> processIndexEvent(indexEvent);
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }
@@ -49,5 +50,19 @@ public class EventProcessorHelper {
 
     private static void processEntityEvent(EntityEvent event) {
         System.out.println("Entity " + event.getDbEntry().get_id() + " has been " + event.getType());
+    }
+
+    private static void processIndexEvent(IndexEvent event)
+            throws ExecutionException, InterruptedException {
+        final var dbName = event.getDbName();
+        final var collName = event.getCollName();
+        final var fieldName = event.getFieldName();
+        if (event.getType() == EventType.CREATED_UPDATED) {
+            if (!AdminOperationHelper.hasIndexEntry(dbName, collName, fieldName)) {
+                AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
+            }
+        } else {
+            AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
+        }
     }
 }

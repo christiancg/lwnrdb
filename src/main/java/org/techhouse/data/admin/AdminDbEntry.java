@@ -17,6 +17,8 @@ public class AdminDbEntry extends DbEntry {
     private List<String> collections;
 
     private AdminDbEntry() {
+        super.setDatabaseName(Globals.ADMIN_DB_NAME);
+        super.setCollectionName(Globals.ADMIN_DATABASES_COLLECTION_NAME);
     }
 
     public AdminDbEntry(String dbName) {

@@ -88,4 +88,37 @@ public class AdminOperationHelper {
     public static AdminCollEntry getCollectionEntry(String dbName, String collName) {
         return cache.getAdminCollectionEntry(dbName, collName);
     }
+
+    public static boolean hasIndexEntry(String dbName, String collName, String fieldName) {
+        return cache.hasIndex(dbName, collName, fieldName);
+    }
+
+    public static void saveNewIndex(String dbName, String collName, String fieldName)
+            throws ExecutionException, InterruptedException {
+        internalUpdateAdminColl(dbName, collName, fieldName, true);
+    }
+
+    public static void deleteIndex(String dbName, String collName, String fieldName)
+            throws ExecutionException, InterruptedException {
+        internalUpdateAdminColl(dbName, collName, fieldName, false);
+    }
+
+    private static void internalUpdateAdminColl(String dbName, String collName, String fieldName, boolean add)
+            throws ExecutionException, InterruptedException {
+        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
+        if (adminIndexPkCollEntry != null) {
+            var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
+            final var indexes = new ArrayList<>(adminCollEntry.getIndexes()); // indexes is not a mutable list
+            if (add) {
+                indexes.add(fieldName);
+            } else {
+                indexes.remove(fieldName);
+            }
+            adminCollEntry.setIndexes(indexes);
+            adminIndexPkCollEntry = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
+            cache.putAdminCollectionEntry(adminCollEntry, adminIndexPkCollEntry);
+            cache.putPkIndexAdminCollEntry(adminIndexPkCollEntry);
+        }
+    }
 }

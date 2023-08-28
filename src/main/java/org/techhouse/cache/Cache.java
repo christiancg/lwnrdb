@@ -224,6 +224,10 @@ public class Cache {
         return collectionsPkIndex.get(collIdentifier);
     }
 
+    public void putPkIndexAdminCollEntry(PkIndexEntry adminPkIndexAdminCollEntry) {
+        collectionsPkIndex.put(adminPkIndexAdminCollEntry.getValue(), adminPkIndexAdminCollEntry);
+    }
+
     public AdminCollEntry getAdminCollectionEntry(String dbName, String collName) {
         return collections.get(getCollectionIdentifier(dbName, collName));
     }
@@ -284,5 +288,13 @@ public class Cache {
             }
             return coll.values().stream().map(DbEntry::getData);
         }
+    }
+
+    public boolean hasIndex(String dbName, String collName, String fieldName) {
+        final var fieldIndexes = fieldIndexMap.get(getCollectionIdentifier(dbName, collName));
+        if (fieldIndexes != null) {
+            return fieldIndexes.containsKey(fieldName);
+        }
+        return false;
     }
 }

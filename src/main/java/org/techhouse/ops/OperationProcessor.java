@@ -1,10 +1,7 @@
 package org.techhouse.ops;
 
 import org.techhouse.bckg_ops.BackgroundTaskManager;
-import org.techhouse.bckg_ops.events.CollectionEvent;
-import org.techhouse.bckg_ops.events.DatabaseEvent;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.bckg_ops.events.*;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
@@ -184,6 +181,7 @@ public class OperationProcessor {
             final var collName = createIndexRequest.getCollectionName();
             final var fieldName = createIndexRequest.getFieldName();
             IndexHelper.createIndex(dbName, collName, fieldName);
+            taskManager.submitBackgroundTask(new IndexEvent(EventType.CREATED_UPDATED, dbName, collName, fieldName));
             return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
         } catch (Exception e) {
             return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());
@@ -197,6 +195,7 @@ public class OperationProcessor {
             final var fieldName = dropIndexRequest.getFieldName();
             final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
             if (result) {
+                taskManager.submitBackgroundTask(new IndexEvent(EventType.DELETED, dbName, collName, fieldName));
                 return new DropIndexResponse(OperationStatus.OK, "Successfully dropped index: " + fieldName);
             } else {
                 return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + fieldName);

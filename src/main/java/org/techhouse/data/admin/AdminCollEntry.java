@@ -20,6 +20,8 @@ public class AdminCollEntry extends DbEntry {
     private int entryCount;
 
     private AdminCollEntry() {
+        super.setDatabaseName(Globals.ADMIN_DB_NAME);
+        super.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
     }
 
     public AdminCollEntry(String dbName, String collName) {
