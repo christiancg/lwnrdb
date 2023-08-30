@@ -7,6 +7,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.concurrent.ExecutionException;
 
 public class AdminOperationHelper {
@@ -109,7 +110,7 @@ public class AdminOperationHelper {
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
         if (adminIndexPkCollEntry != null) {
             var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
-            final var indexes = new ArrayList<>(adminCollEntry.getIndexes()); // indexes is not a mutable list
+            final var indexes = new HashSet<>(adminCollEntry.getIndexes()); // indexes is not a mutable list
             if (add) {
                 indexes.add(fieldName);
             } else {

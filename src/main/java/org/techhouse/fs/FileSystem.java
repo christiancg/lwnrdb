@@ -282,7 +282,7 @@ public class FileSystem {
                     totalLengthBefore += lines[i].length() + 1; // +1 -> the newline character
                 }
             }
-            final var reIndexedEntries = reindex(oldIndexLine, newPkIndexEntry, Arrays.stream(lines).skip(indexLine + 1).toList(), dbName, collectionName);
+            final var reIndexedEntries = reindexPks(oldIndexLine, newPkIndexEntry, Arrays.stream(lines).skip(indexLine + 1).toList(), dbName, collectionName);
             final var reIndexedToWrite = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).collect(Collectors.joining("\n"));
             writer.seek(totalLengthBefore);
             writer.write(reIndexedToWrite.getBytes(StandardCharsets.UTF_8), 0, reIndexedToWrite.length());
@@ -297,7 +297,8 @@ public class FileSystem {
         }
     }
 
-    private List<PkIndexEntry> reindex(String oldIndexEntryStr, PkIndexEntry newPkIndexEntry, List<String> restOfIndexesStr, String dbName, String collectionName) {
+    private List<PkIndexEntry> reindexPks(String oldIndexEntryStr, PkIndexEntry newPkIndexEntry,
+                                       List<String> restOfIndexesStr, String dbName, String collectionName) {
         final var oldIndexEntry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, oldIndexEntryStr);
         final var restOfIndexes = restOfIndexesStr.stream().map(x -> PkIndexEntry.fromIndexFileEntry(dbName, collectionName, x)).collect(Collectors.toList());
         for (var index : restOfIndexes) {
@@ -322,13 +323,98 @@ public class FileSystem {
             final var actualType = parts[parts.length - 1];
             final var indexFile = getIndexFile(dbName, collName, fieldName, actualType);
             try (final var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-                final var strData = indexTypeList.getValue().stream().map(FieldIndexEntry::toFileEntry).collect(Collectors.joining("\n"));
+                var strData = indexTypeList.getValue().stream().map(FieldIndexEntry::toFileEntry).collect(Collectors.joining("\n"));
+                strData += "\n";
                 writer.append(strData);
                 writer.flush();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         }
+    }
+
+    public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
+                                    FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry) {
+        pool.execute(() -> {
+            try {
+                internalUpdateIndex(dbName, collName, fieldName, insertedEntry, removedEntry);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    private <T, K> void internalUpdateIndex(String dbName, String collName, String fieldName,
+                                     FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry)
+            throws IOException {
+        if (removedEntry != null) {
+            final var clazz = removedEntry.getValue().getClass();
+            final var strIndexType = JsonUtils.classAsString(clazz);
+            final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
+            try (final var writer = new RandomAccessFile(indexFile, RW_PERMISSIONS)) {
+                final var strWholeFile = readFully(writer);
+                final var indexOfExisting = strWholeFile.indexOf(removedEntry.getValue().toString() + Globals.INDEX_ENTRY_SEPARATOR);
+                if (indexOfExisting >= 0) {
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    if (!removedEntry.getIds().isEmpty()) {
+                        final var toWriteLine = removedEntry.toFileEntry().getBytes(StandardCharsets.UTF_8);
+                        writer.write(toWriteLine);
+                        writer.write('\n');
+                    }
+                }
+            }
+        }
+        if (insertedEntry != null) {
+            final var clazz = insertedEntry.getValue().getClass();
+            final var strIndexType = JsonUtils.classAsString(clazz);
+            final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
+            try (final var writer = new RandomAccessFile(indexFile, RW_PERMISSIONS)) {
+                final var strWholeFile = readFully(writer);
+                final var indexOfExisting = strWholeFile.indexOf(insertedEntry.getValue().toString() + Globals.INDEX_ENTRY_SEPARATOR);
+                final var toWriteLine = insertedEntry.toFileEntry().getBytes(StandardCharsets.UTF_8);
+                if (indexOfExisting >= 0) {
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    writer.write(toWriteLine);
+                    writer.write('\n');
+                } else {
+                    writer.seek(strWholeFile.length());
+                    writer.write(toWriteLine);
+                    writer.write('\n');
+                }
+            }
+        }
+    }
+
+    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting) throws IOException {
+        final var newlineIndex = strWholeFile.indexOf('\n', indexOfExisting);
+        var otherEntries = strWholeFile.substring(newlineIndex);
+        var charsToRemove = -1;
+        if (otherEntries.startsWith("\n")) {
+            otherEntries = otherEntries.substring(1);
+            charsToRemove++;
+        }
+        if (otherEntries.endsWith("\n")) {
+            otherEntries = otherEntries.substring(0, otherEntries.length() - 1);
+            charsToRemove++;
+        }
+        if (!otherEntries.isEmpty()) {
+            writer.seek(indexOfExisting);
+            var newNewLineIndex = strWholeFile.length() - (newlineIndex - indexOfExisting) - charsToRemove;
+            writer.write(otherEntries.getBytes(StandardCharsets.UTF_8));
+            writer.write('\n');
+            writer.seek(newNewLineIndex);
+            writer.setLength(newNewLineIndex);
+        } else {
+            writer.seek(indexOfExisting);
+            writer.setLength(indexOfExisting);
+        }
+    }
+
+    private String readFully(RandomAccessFile writer) throws IOException {
+        final var fileLength = (int) writer.length();
+        byte[] buffer = new byte[fileLength];
+        writer.readFully(buffer, 0, fileLength);
+        return new String(buffer);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) throws ExecutionException, InterruptedException {

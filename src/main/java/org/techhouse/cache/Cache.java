@@ -297,4 +297,9 @@ public class Cache {
         }
         return false;
     }
+
+    public Set<String> getIndexesForCollection(String dbName, String collName) {
+        final var collection = collections.get(getCollectionIdentifier(dbName, collName));
+        return collection.getIndexes();
+    }
 }

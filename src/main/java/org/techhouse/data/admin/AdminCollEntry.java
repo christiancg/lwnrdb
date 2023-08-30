@@ -8,15 +8,16 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @EqualsAndHashCode(callSuper = true)
 @Data
 public class AdminCollEntry extends DbEntry {
     private static final String INDEXES_FIELD_NAME = "indexes";
     private static final String ENTRY_COUNT_FIELD_NAME = "entryCount";
-    private List<String> indexes;
+    private Set<String> indexes;
     private int entryCount;
 
     private AdminCollEntry() {
@@ -25,10 +26,10 @@ public class AdminCollEntry extends DbEntry {
     }
 
     public AdminCollEntry(String dbName, String collName) {
-        this(dbName, collName, new ArrayList<>(), 0);
+        this(dbName, collName, new HashSet<>(), 0);
     }
 
-    public AdminCollEntry(String dbName, String collName, List<String> indexes, int entryCount) {
+    public AdminCollEntry(String dbName, String collName, Set<String> indexes, int entryCount) {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
         super.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         this.set_id(Cache.getCollectionIdentifier(dbName, collName));
@@ -48,14 +49,15 @@ public class AdminCollEntry extends DbEntry {
         final var id = object.get(Globals.PK_FIELD).getAsString();
         result.set_id(id);
         final var collections = object.get(INDEXES_FIELD_NAME).getAsJsonArray().asList()
-                .stream().map(element -> element.getAsJsonPrimitive().getAsString()).toList();
+                .stream().map(element -> element.getAsJsonPrimitive().getAsString())
+                .collect(Collectors.toSet());
         result.setIndexes(collections);
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         return result;
     }
 
-    public void setIndexes(List<String> indexes) {
+    public void setIndexes(Set<String> indexes) {
         this.indexes = indexes;
         final var data = getData();
         final var arr = new JsonArray();

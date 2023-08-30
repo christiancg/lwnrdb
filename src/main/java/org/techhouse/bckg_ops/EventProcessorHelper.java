@@ -4,6 +4,7 @@ import org.techhouse.bckg_ops.events.*;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.IndexHelper;
 
 import java.util.concurrent.ExecutionException;
 
@@ -48,7 +49,13 @@ public class EventProcessorHelper {
         }
     }
 
-    private static void processEntityEvent(EntityEvent event) {
+    private static void processEntityEvent(EntityEvent event)
+            throws ExecutionException, InterruptedException {
+        final var dbName = event.getDbName();
+        final var collName = event.getCollName();
+        final var dbEntry = event.getDbEntry();
+        final var type = event.getType();
+        IndexHelper.updateIndexes(dbName, collName, dbEntry, type);
         System.out.println("Entity " + event.getDbEntry().get_id() + " has been " + event.getType());
     }
 
