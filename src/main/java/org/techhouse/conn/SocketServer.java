@@ -1,8 +1,6 @@
 package org.techhouse.conn;
 
-import org.techhouse.config.Configuration;
-
-import java.io.*;
+import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
@@ -14,7 +12,7 @@ public class SocketServer {
 
     public SocketServer(int port) {
         this.port = port;
-        this.pool = Executors.newFixedThreadPool(Configuration.getInstance().getMaxConnections());
+        this.pool = Executors.newVirtualThreadPerTaskExecutor();
     }
 
     public void serve() {
