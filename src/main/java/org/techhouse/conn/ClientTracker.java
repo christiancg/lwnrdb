@@ -4,6 +4,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
 
 import java.net.Socket;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -22,5 +23,12 @@ public class ClientTracker {
 
     public void removeById(UUID clientId) {
         clients.remove(clientId);
+    }
+
+    public void updateLastCommandTime(UUID clientId) {
+        final var client = clients.get(clientId);
+        if (client != null) {
+            client.setLastCommandTime(LocalDateTime.now());
+        }
     }
 }

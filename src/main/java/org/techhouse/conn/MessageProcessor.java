@@ -51,6 +51,7 @@ public class MessageProcessor implements Runnable {
                         } catch (InvalidCommandException exception) {
                             response = exception.getMessage();
                         }
+                        clientTracker.updateLastCommandTime(clientId);
                         writer.write(response);
                         writer.flush();
                     }

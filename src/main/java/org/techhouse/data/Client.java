@@ -1,4 +1,12 @@
 package org.techhouse.data;
 
-public record Client(String address) {
+import lombok.Data;
+
+import java.time.LocalDateTime;
+
+@Data
+public class Client {
+    private final String address;
+    private final LocalDateTime connectionTime = LocalDateTime.now();
+    private LocalDateTime lastCommandTime;
 }
