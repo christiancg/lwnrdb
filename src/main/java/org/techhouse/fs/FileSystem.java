@@ -29,7 +29,7 @@ public class FileSystem {
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     private static final String RW_PERMISSIONS = "rwd";
     private final Gson gson = IocContainer.get(Gson.class);
-    private final ExecutorService pool = Executors.newFixedThreadPool(Configuration.getInstance().getMaxFsThreads());
+    private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     private String dbPath;
 
     public void createBaseDbPath() {

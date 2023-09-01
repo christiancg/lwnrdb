@@ -9,14 +9,15 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 public class BackgroundTaskManager {
     private static final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
-    private final ExecutorService pool = Executors.newFixedThreadPool(Configuration.getInstance().getBackgroundProcessingThreads());
+    private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+
     public void submitBackgroundTask(Event op) {
         queue.add(op);
     }
 
     public void startBackgroundWorkers() {
         final var threadCount = Configuration.getInstance().getBackgroundProcessingThreads();
-        for (int i = 0; i<threadCount; i++) {
+        for (int i = 0; i < threadCount; i++) {
             final var thread = new BackgroundProcessorThread(queue);
             pool.execute(thread);
         }
