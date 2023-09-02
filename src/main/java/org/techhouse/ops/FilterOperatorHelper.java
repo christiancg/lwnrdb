@@ -173,11 +173,14 @@ public class FilterOperatorHelper {
             if (resultStream == null) {
                 resultStream = partialList.stream();
             } else {
+                final var idSet = partialList.stream()
+                        .filter(jsonObject -> jsonObject.has(Globals.PK_FIELD))
+                        .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).getAsString())
+                        .collect(Collectors.toSet());
                 resultStream = resultStream.filter(jsonObject -> {
                     if (jsonObject.has(Globals.PK_FIELD)) {
                         final var id = jsonObject.get(Globals.PK_FIELD).getAsString();
-                        return partialList.stream().anyMatch(jsonObject1 -> jsonObject1.has(Globals.PK_FIELD) &&
-                                jsonObject1.get(Globals.PK_FIELD).getAsString().equals(id));
+                        return idSet.contains(id);
                     }
                     return false;
                 });
