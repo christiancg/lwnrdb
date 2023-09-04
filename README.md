@@ -27,7 +27,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - All numbers are treated as a double (just for simplicity)
 - Disk space is cheap: there's no compressing of special codification of files to save space
 - Database and collection names must follow the next rules:
-  - Between 3 and 64 characteds
+  - Between 3 and 64 characters
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
@@ -45,8 +45,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Better file locks
 - [ ] Unit tests everywhere
 - [ ] Request validation
-- [ ] Iterative read depending of available memory and document count
-- [ ] - [ ] Collection and index eviction from cache depending memory usage and query history (using LFU algorithm)
+- [ ] Iterative read depending on available memory and document count
+- [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
 
 ## Q&A
 
