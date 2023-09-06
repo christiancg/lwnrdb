@@ -14,6 +14,24 @@ public class AdminOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
 
+    public static void updateEntryCount(String dbName, String collName)
+            throws ExecutionException, InterruptedException {
+        final var entryCount = cache.getEntryCountForCollection(dbName, collName);
+        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        final var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
+        if (adminIndexPkCollEntry != null) {
+            final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
+            adminCollEntry.setEntryCount(entryCount);
+            fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
+            cache.putAdminCollectionEntry(adminCollEntry, adminIndexPkCollEntry);
+        } else {
+            final var adminCollEntry = new AdminCollEntry(dbName, collName);
+            adminCollEntry.setEntryCount(entryCount);
+            final var pkIndexEntry = fs.insertIntoCollection(adminCollEntry);
+            cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
+        }
+    }
+
     public static void saveDatabaseEntry(AdminDbEntry dbEntry)
             throws ExecutionException, InterruptedException {
         var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbEntry.get_id());

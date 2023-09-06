@@ -197,6 +197,11 @@ public class Cache {
         return entry;
     }
 
+    public int getEntryCountForCollection(String dbName, String collName)
+            throws ExecutionException, InterruptedException {
+        return getPkIndexAndLoadIfNecessary(dbName, collName).size();
+    }
+
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         return collectionMap.computeIfAbsent(collectionIdentifier, k -> {

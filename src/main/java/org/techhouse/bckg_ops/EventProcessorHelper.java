@@ -56,7 +56,7 @@ public class EventProcessorHelper {
         final var dbEntry = event.getDbEntry();
         final var type = event.getType();
         IndexHelper.updateIndexes(dbName, collName, dbEntry, type);
-        System.out.println("Entity " + event.getDbEntry().get_id() + " has been " + event.getType());
+        AdminOperationHelper.updateEntryCount(dbName, collName);
     }
 
     private static void processIndexEvent(IndexEvent event)
