@@ -118,11 +118,14 @@ public class AggregationOperationHelper {
         });
     }
 
-    private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName, String collName)
-            throws ExecutionException, InterruptedException {
-        resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
+    private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName, String collName) {
         final var result = new JsonObject();
-        result.addProperty(COUNT_FIELD_NAME, resultStream.count());
+        if (resultStream != null) {
+            result.addProperty(COUNT_FIELD_NAME, resultStream.count());
+        } else {
+            final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
+            result.addProperty(COUNT_FIELD_NAME, adminCollEntry.getEntryCount());
+        }
         return Stream.of(result);
     }
 
