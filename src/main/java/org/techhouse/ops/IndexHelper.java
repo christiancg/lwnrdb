@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import com.google.gson.JsonNull;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.fs.FileSystem;
@@ -28,7 +29,7 @@ public class IndexHelper {
             final var key = jsonElementListEntry.getKey();
             final var primitive = key.getAsJsonPrimitive();
             final var ids = jsonElementListEntry.getValue().stream()
-                    .map(jsonObject -> jsonObject.get("_id").getAsString()).collect(Collectors.toSet());
+                    .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).getAsString()).collect(Collectors.toSet());
             if (primitive.isNumber()) {
                 return new FieldIndexEntry<>(dbName, collName, primitive.getAsDouble(), ids);
             } else if (primitive.isBoolean()) {

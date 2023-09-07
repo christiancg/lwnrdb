@@ -15,7 +15,6 @@ import java.io.*;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.ExecutionException;
@@ -25,7 +24,6 @@ import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 public class FileSystem {
-    public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     private static final String RW_PERMISSIONS = "rwd";
     private final Gson gson = IocContainer.get(Gson.class);
@@ -61,7 +59,7 @@ public class FileSystem {
     }
 
     private boolean internalCreateDatabaseFolder(String dbName) {
-        final var dbFolder = new File(dbPath + FILE_SEPARATOR + dbName);
+        final var dbFolder = new File(dbPath + Globals.FILE_SEPARATOR + dbName);
         if (!dbFolder.exists()) {
             return dbFolder.mkdir();
         }
@@ -69,7 +67,7 @@ public class FileSystem {
     }
 
     private boolean internalDeleteDatabase(String dbName) {
-        final var dbFolder = new File(dbPath + FILE_SEPARATOR + dbName);
+        final var dbFolder = new File(dbPath + Globals.FILE_SEPARATOR + dbName);
         final var fileDeletionResult = new ArrayList<Boolean>();
         if (dbFolder.exists()) {
             final var dbFolders = dbFolder.listFiles();
@@ -91,12 +89,12 @@ public class FileSystem {
     }
 
     private File getCollectionFolder(String dbName, String collectionName) {
-        return new File(dbPath + FILE_SEPARATOR + dbName + FILE_SEPARATOR + collectionName);
+        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName);
     }
 
     private File getCollectionFile(String dbName, String collectionName) {
-        return new File(dbPath + FILE_SEPARATOR + dbName + FILE_SEPARATOR + collectionName + FILE_SEPARATOR
-                + collectionName + Globals.DB_FILE_EXTENSION);
+        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName +
+                Globals.FILE_SEPARATOR + collectionName + Globals.DB_FILE_EXTENSION);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws ExecutionException, InterruptedException {
@@ -141,8 +139,9 @@ public class FileSystem {
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName, String indexType) {
-        return new File(dbPath + FILE_SEPARATOR + dbName + FILE_SEPARATOR + collectionName + FILE_SEPARATOR
-                + collectionName + INDEX_FILE_NAME_SEPARATOR + indexName + INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
+        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName +
+                Globals.FILE_SEPARATOR + collectionName + INDEX_FILE_NAME_SEPARATOR + indexName +
+                INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws ExecutionException, InterruptedException {

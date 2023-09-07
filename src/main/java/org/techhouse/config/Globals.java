@@ -1,5 +1,7 @@
 package org.techhouse.config;
 
+import java.nio.file.FileSystems;
+
 public class Globals {
     public static final String PK_FIELD = "_id";
     public static final String PK_FIELD_TYPE = "String";
@@ -15,4 +17,7 @@ public class Globals {
     public static final String ADMIN_DB_NAME = "admin";
     public static final String ADMIN_DATABASES_COLLECTION_NAME = "databases";
     public static final String ADMIN_COLLECTIONS_COLLECTION_NAME = "collections";
+    public static final String LOG_FILE_EXTENSION = ".log";
+    public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
+    public static final String NEWLINE = System.lineSeparator();
 }

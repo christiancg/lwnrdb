@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
@@ -77,7 +78,7 @@ public class AdminOperationHelper {
             final var pkIndexEntry = fs.insertIntoCollection(dbEntry);
             cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
         }
-        final var split = dbEntry.get_id().split("\\|");
+        final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
         final var adminDbEntry = cache.getAdminDbEntry(split[0]);
         var adminDbPkIndexEntry = cache.getPkIndexAdminDbEntry(split[0]);
         final var colls = adminDbEntry.getCollections();

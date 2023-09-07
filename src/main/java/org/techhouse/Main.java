@@ -7,7 +7,9 @@ import org.techhouse.conn.SocketServer;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.LogWriter;
 
+import java.io.IOException;
 import java.util.concurrent.ExecutionException;
 
 public class Main {
@@ -28,7 +30,8 @@ public class Main {
     }
 
     public static void main(String[] args)
-            throws ExecutionException, InterruptedException {
+            throws ExecutionException, InterruptedException, IOException {
+        LogWriter.createLogPathAndRemoveOldFiles();
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         cache.loadAdminData();

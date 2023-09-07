@@ -10,6 +10,8 @@ public class Configuration {
     private int maxConnections;
     private String filePath;
     private int backgroundProcessingThreads;
+    private String logPath;
+    private int maxLogFiles;
 
     private Configuration() {
     }
@@ -22,6 +24,8 @@ public class Configuration {
                 case "maxConnections" -> maxConnections = Integer.parseInt(config.getValue());
                 case "filePath" -> filePath = config.getValue();
                 case "backgroundProcessingThreads" -> backgroundProcessingThreads = Integer.parseInt(config.getValue());
+                case "logPath" -> logPath = config.getValue();
+                case "maxLogFiles" -> maxLogFiles = Integer.parseInt(config.getValue());
             }
         }
     }

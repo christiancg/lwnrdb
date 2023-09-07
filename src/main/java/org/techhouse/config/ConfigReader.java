@@ -1,6 +1,6 @@
 package org.techhouse.config;
 
-import org.techhouse.fs.FileSystem;
+import org.techhouse.log.Logger;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -18,9 +18,12 @@ public class ConfigReader {
             add("maxConnections");
             add("filePath");
             add("backgroundProcessingThreads");
+            add("logPath");
+            add("maxLogFiles");
         }
     };
-    private static final String DEFAULT_CONFIG_PATH = FileSystem.FILE_SEPARATOR + "default.cfg";
+    private static final String DEFAULT_CONFIG_PATH = Globals.FILE_SEPARATOR + "default.cfg";
+    private static final Logger logger = Logger.logFor(ConfigReader.class);
 
     public static Map<String, String> loadConfiguration() {
         final var defaultConfigs = loadDefaultConfig();
@@ -29,7 +32,7 @@ public class ConfigReader {
             if (fromFile != null) {
                 final var missingConfigs = configKeys.stream().filter(x -> !fromFile.containsKey(x)).toList();
                 if (!missingConfigs.isEmpty()) {
-                    System.out.println("Warning! The following configs are missing and will be using defaults: " +
+                    logger.warning("The following configs are missing and will be using defaults: " +
                             String.join(",", missingConfigs));
                 }
                 defaultConfigs.putAll(fromFile);
@@ -39,17 +42,17 @@ public class ConfigReader {
     }
 
     private static Map<String, String> loadFromFile() {
-        var file = new File(Paths.get(".").toAbsolutePath().normalize() + FileSystem.FILE_SEPARATOR +
+        var file = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR +
                 Globals.FILE_CONFIG_NAME);
         if (file.exists()) {
             try {
                 final var allLines = Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
                 return processFromLines(allLines);
-            } catch (IOException ignored) {
+            } catch (IOException exception) {
+                logger.error("Error while loading " + Globals.FILE_CONFIG_NAME, exception);
             }
-            System.out.println("Error while loading " + Globals.FILE_CONFIG_NAME);
         } else {
-            System.out.println("Warning: could not load configs, using defaults");
+            logger.warning("Could not load configs, using defaults");
         }
         return null;
     }
@@ -62,9 +65,9 @@ public class ConfigReader {
                                 StandardCharsets.UTF_8)).lines().toList();
                 return processFromLines(allLines);
             }
-        } catch (IOException ignored) {
+        } catch (IOException exception) {
+            logger.error("Error while loading " + DEFAULT_CONFIG_PATH, exception);
         }
-        System.out.println("Error while loading " + DEFAULT_CONFIG_PATH);
         return null;
     }
 
@@ -77,7 +80,7 @@ public class ConfigReader {
                 final var value = parts[1].trim();
                 config.put(key,value);
             } else {
-                System.out.println("Not a valid property: " + line);
+                logger.warning("Not a valid property: " + line);
             }
         }
         return config;
