@@ -7,16 +7,16 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.concurrent.ExecutionException;
 
 public class AdminOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
 
     public static void updateEntryCount(String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var entryCount = cache.getEntryCountForCollection(dbName, collName);
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
@@ -34,7 +34,7 @@ public class AdminOperationHelper {
     }
 
     public static void saveDatabaseEntry(AdminDbEntry dbEntry)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbEntry.get_id());
         if (adminIndexPkDbEntry != null) {
             fs.updateFromCollection(dbEntry, adminIndexPkDbEntry);
@@ -46,7 +46,7 @@ public class AdminOperationHelper {
     }
 
     public static void deleteDatabaseEntry(String dbName)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
         if (adminIndexPkDbEntry != null) {
             final var adminDbEntry = cache.getAdminDbEntry(dbName);
@@ -69,7 +69,7 @@ public class AdminOperationHelper {
     }
 
     public static void saveCollectionEntry(AdminCollEntry dbEntry)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(dbEntry.get_id());
         if (adminIndexPkCollEntry != null) {
             fs.updateFromCollection(dbEntry, adminIndexPkCollEntry);
@@ -89,7 +89,7 @@ public class AdminOperationHelper {
     }
 
     public static void deleteCollectionEntry(String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
         if (adminIndexPkCollEntry != null) {
@@ -114,17 +114,17 @@ public class AdminOperationHelper {
     }
 
     public static void saveNewIndex(String dbName, String collName, String fieldName)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         internalUpdateAdminColl(dbName, collName, fieldName, true);
     }
 
     public static void deleteIndex(String dbName, String collName, String fieldName)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         internalUpdateAdminColl(dbName, collName, fieldName, false);
     }
 
     private static void internalUpdateAdminColl(String dbName, String collName, String fieldName, boolean add)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
         if (adminIndexPkCollEntry != null) {

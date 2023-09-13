@@ -11,10 +11,10 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.*;
 import org.techhouse.utils.JsonUtils;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -23,7 +23,7 @@ public class AggregationOperationHelper {
     private static final String COUNT_FIELD_NAME = "count";
     private static final Cache cache = IocContainer.get(Cache.class);
 
-    public static List<JsonObject> processAggregation(AggregateRequest request) throws ExecutionException, InterruptedException {
+    public static List<JsonObject> processAggregation(AggregateRequest request) throws IOException {
         Stream<JsonObject> resultStream = null;
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
@@ -45,9 +45,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processFilterStep(BaseAggregationStep baseFilterStep, Stream<JsonObject> resultStream,
                                                         String dbName, String collName)
-            throws ExecutionException, InterruptedException {
-
-
+            throws IOException {
         final var filterStep = (FilterAggregationStep) baseFilterStep;
         final var filterOperator = filterStep.getOperator();
         return FilterOperatorHelper.processOperator(filterOperator, resultStream, dbName, collName);
@@ -55,7 +53,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processMapStep(BaseAggregationStep baseMapStep, Stream<JsonObject> resultStream,
                                                      String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var mapStep = (MapAggregationStep) baseMapStep;
         for(var step : mapStep.getOperators()) {
@@ -69,7 +67,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processGroupByStep(BaseAggregationStep baseGroupByStep, Stream<JsonObject> resultStream,
                                                          String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
         // TODO: use indexes
@@ -89,7 +87,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processJoinStep(BaseAggregationStep baseJoinStep, Stream<JsonObject> resultStream,
                                                       String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var joinStep = (JoinAggregationStep) baseJoinStep;
         final var joinCollectionName = joinStep.getJoinCollection();
@@ -131,7 +129,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processDistinctStep(BaseAggregationStep baseDistinctStep, Stream<JsonObject> resultStream,
                                                           String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var distinctStep = (DistinctAggregationStep) baseDistinctStep;
         final var fieldName = distinctStep.getFieldName();
@@ -154,7 +152,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processLimitStep(BaseAggregationStep baseLimitStep, Stream<JsonObject> resultStream,
                                                        String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var limitStep = (LimitAggregationStep) baseLimitStep;
         return resultStream.limit(limitStep.getLimit());
@@ -162,7 +160,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processSkipStep(BaseAggregationStep baseSkipStep, Stream<JsonObject> resultStream,
                                                       String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var skipStep = (SkipAggregationStep) baseSkipStep;
         return resultStream.skip(skipStep.getSkip());
@@ -170,7 +168,7 @@ public class AggregationOperationHelper {
 
     private static Stream<JsonObject> processSortStep(BaseAggregationStep baseSortStep, Stream<JsonObject> resultStream,
                                                       String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var sortStep = (SortAggregationStep) baseSortStep;
         // TODO: use indexes

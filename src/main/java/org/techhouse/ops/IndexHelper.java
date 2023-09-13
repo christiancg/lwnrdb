@@ -10,10 +10,10 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.JsonUtils;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
 public class IndexHelper {
@@ -41,13 +41,12 @@ public class IndexHelper {
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
     }
 
-    public static boolean dropIndex(String dbName, String collName, String fieldName)
-            throws ExecutionException, InterruptedException {
+    public static boolean dropIndex(String dbName, String collName, String fieldName) {
         return fs.dropIndex(dbName, collName, fieldName);
     }
 
     public static void updateIndexes(String dbName, String collName, DbEntry entry, EventType type)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
         final var data = entry.getData();
         for (var fieldName : existingIndexes) {
@@ -70,7 +69,7 @@ public class IndexHelper {
 
     private static <T> void internalUpdateIndex(String dbName, String collName, String fieldName,
                                                 String entryId, T value, EventType type, Class<T> tClass)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         FieldIndexEntry<Boolean> toRemoveBoolean = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, Boolean.class);
         FieldIndexEntry<Double> toRemoveDouble = null;
         FieldIndexEntry<String> toRemoveString = null;
@@ -97,7 +96,7 @@ public class IndexHelper {
 
     private static <T> FieldIndexEntry<T> findMatchingEntry(String dbName, String collName, String fieldName,
                                                             T value, Class<T> tClass)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, tClass);
         if (indexEntries != null) {
             return indexEntries.stream()
@@ -112,7 +111,7 @@ public class IndexHelper {
                                             FieldIndexEntry<Boolean> toRemoveBoolean,
                                             FieldIndexEntry<Double> toRemoveDouble,
                                             FieldIndexEntry<String> toRemoveString,
-                                            FieldIndexEntry<T> indexEntry) {
+                                            FieldIndexEntry<T> indexEntry) throws IOException {
         if (toRemoveBoolean != null) {
             fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveBoolean);
         } else if (toRemoveDouble != null) {
@@ -124,7 +123,7 @@ public class IndexHelper {
 
     private static <T> FieldIndexEntry<T> getExistingFieldIndexEntry(
             String dbName, String collName, String fieldName, String entityId, Class<T> tClass
-    ) throws ExecutionException, InterruptedException {
+    ) throws IOException {
         final var fieldIndexEntry = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, tClass);
         if (fieldIndexEntry != null) {
             return fieldIndexEntry.stream()

@@ -14,12 +14,12 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.SearchUtils;
 
+import java.io.IOException;
 import java.util.AbstractMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -33,8 +33,7 @@ public class Cache {
     private final Map<String, PkIndexEntry> databasesPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
 
-    public void loadAdminData()
-            throws ExecutionException, InterruptedException {
+    public void loadAdminData() throws IOException {
         final var pkIndexAdminDbEntries =
                 fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -75,7 +74,7 @@ public class Cache {
     }
 
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
@@ -87,7 +86,7 @@ public class Cache {
 
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
                                                                         String fieldName, Class<T> indexType)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var indexIdentifier = getIndexIdentifier(fieldName, indexType);
         var index = fieldIndexMap.get(collectionIdentifier);
@@ -110,7 +109,7 @@ public class Cache {
     }
 
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         return switch (value) {
             case Double d -> {
                 final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -185,7 +184,7 @@ public class Cache {
         coll.put(entry.get_id(), entry);
     }
 
-    public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws ExecutionException, InterruptedException {
+    public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws IOException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var coll = collectionMap.computeIfAbsent(collectionIdentifier, k -> new ConcurrentHashMap<>());
         final var pk = idxEntry.getValue();
@@ -197,8 +196,7 @@ public class Cache {
         return entry;
     }
 
-    public int getEntryCountForCollection(String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+    public int getEntryCountForCollection(String dbName, String collName) throws IOException {
         return getPkIndexAndLoadIfNecessary(dbName, collName).size();
     }
 
@@ -207,7 +205,7 @@ public class Cache {
         return collectionMap.computeIfAbsent(collectionIdentifier, k -> {
             try {
                 return fs.readWholeCollection(dbName, collName);
-            } catch (ExecutionException | InterruptedException e) {
+            } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         });
@@ -281,7 +279,7 @@ public class Cache {
     }
 
     public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         if (resultStream != null) {
             return resultStream;
         } else {

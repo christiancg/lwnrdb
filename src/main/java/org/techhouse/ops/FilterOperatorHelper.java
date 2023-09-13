@@ -12,10 +12,10 @@ import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ExecutionException;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -25,7 +25,7 @@ public class FilterOperatorHelper {
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
                                                      String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         resultStream = switch (operator.getType()) {
             case CONJUNCTION ->
                     processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
@@ -36,7 +36,7 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator, Stream<JsonObject> resultStream,
                                                                  String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             Stream<JsonObject> partialResults;
@@ -85,7 +85,7 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
-                                                           String dbName, String collName) throws ExecutionException, InterruptedException {
+                                                           String dbName, String collName) throws IOException {
 
         final var tester = getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
@@ -146,7 +146,7 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test, FieldOperator operator,
                                                             Stream<JsonObject> resultStream, String dbName, String collName)
-            throws ExecutionException, InterruptedException {
+            throws IOException {
         final var fieldName = operator.getField();
         final var value = operator.getValue();
         Set<String> matchingValues = null;

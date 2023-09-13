@@ -6,11 +6,11 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
-import java.util.concurrent.ExecutionException;
+import java.io.IOException;
 
 public class EventProcessorHelper {
     public static void processEvent(Event event)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         switch (event) {
             case DatabaseEvent databaseEvent -> processDatabaseEvent(databaseEvent);
             case CollectionEvent collectionEvent -> processCollectionEvent(collectionEvent);
@@ -21,7 +21,7 @@ public class EventProcessorHelper {
     }
 
     private static void processDatabaseEvent(DatabaseEvent event)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         if (event.getType() == EventType.CREATED_UPDATED) {
             final var existingDbEntry = AdminOperationHelper.getDatabaseEntry(dbName);
@@ -35,7 +35,7 @@ public class EventProcessorHelper {
     }
 
     private static void processCollectionEvent(CollectionEvent event)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         if (event.getType() == EventType.CREATED_UPDATED) {
@@ -50,7 +50,7 @@ public class EventProcessorHelper {
     }
 
     private static void processEntityEvent(EntityEvent event)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         final var dbEntry = event.getDbEntry();
@@ -60,7 +60,7 @@ public class EventProcessorHelper {
     }
 
     private static void processIndexEvent(IndexEvent event)
-            throws ExecutionException, InterruptedException {
+            throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         final var fieldName = event.getFieldName();
