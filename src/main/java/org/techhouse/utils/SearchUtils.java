@@ -3,7 +3,6 @@ package org.techhouse.utils;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -33,10 +32,11 @@ public class SearchUtils {
         final var indexIndex = Collections.binarySearch(entries, value);
         Stream<FieldIndexEntry<T>> resultStream;
         if (indexIndex >= 0) {
-            final var indexCopy = new ArrayList<FieldIndexEntry<T>>();
-            Collections.copy(indexCopy, entries);
-            indexCopy.remove(indexIndex);
-            resultStream = indexCopy.stream();
+            final var auxList = entries.subList(0, indexIndex);
+            if (indexIndex <= entries.size() + 1) {
+                auxList.addAll(entries.subList(indexIndex + 1, entries.size()));
+            }
+            resultStream = auxList.stream();
         } else {
             resultStream = entries.stream();
         }
