@@ -69,15 +69,17 @@ public class LogWriter {
     }
 
     public static void writeLogEntry(String logEntry) {
-        final var file = currentLogFile();
-        try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
-            if (file.length() > 0) {
-                writer.write(Globals.NEWLINE);
+        try {
+            final var file = currentLogFile();
+            try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+                if (file.length() > 0) {
+                    writer.write(Globals.NEWLINE);
+                }
+                writer.append(logEntry);
+                System.out.println(logEntry);
             }
-            writer.append(logEntry);
-            System.out.println(logEntry);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        } catch (Exception e) {
+            System.out.println("Warning: could not write log entry -> " + logEntry);
         }
     }
 }

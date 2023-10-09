@@ -10,7 +10,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.LogWriter;
 
 import java.io.IOException;
-import java.util.concurrent.ExecutionException;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -30,7 +29,7 @@ public class Main {
     }
 
     public static void main(String[] args)
-            throws ExecutionException, InterruptedException, IOException {
+            throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         fs.createBaseDbPath();
         fs.createAdminDatabase();
