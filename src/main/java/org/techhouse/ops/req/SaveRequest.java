@@ -1,8 +1,8 @@
 package org.techhouse.ops.req;
 
-import com.google.gson.JsonObject;
 import lombok.Getter;
 import lombok.Setter;
+import org.techhouse.ejson.JsonObject;
 import org.techhouse.ops.OperationType;
 
 @Getter

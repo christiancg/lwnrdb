@@ -1,9 +1,9 @@
 package org.techhouse.ops.req;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.JsonArray;
+import org.techhouse.ejson.JsonObject;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.*;
@@ -19,29 +19,29 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class RequestParser {
-    private static final Gson gson = IocContainer.get(Gson.class);
+    private static final EJson eJson = IocContainer.get(EJson.class);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         try {
-            final var baseReq = gson.fromJson(message, OperationRequest.class);
+            final var baseReq = eJson.fromJson(message, OperationRequest.class);
             return switch (baseReq.getType()) {
                 case SAVE -> {
-                    final var parsed = gson.fromJson(message, SaveRequest.class);
+                    final var parsed = eJson.fromJson(message, SaveRequest.class);
                     if(parsed.getObject().has(Globals.PK_FIELD)) {
                         parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).getAsString());
                     }
                     yield parsed;
                 }
-                case FIND_BY_ID -> gson.fromJson(message, FindByIdRequest.class);
+                case FIND_BY_ID -> eJson.fromJson(message, FindByIdRequest.class);
                 case AGGREGATE -> parseAggregationRequest(message);
-                case DELETE -> gson.fromJson(message, DeleteRequest.class);
-                case CREATE_DATABASE -> gson.fromJson(message, CreateDatabaseRequest.class);
-                case DROP_DATABASE -> gson.fromJson(message, DropDatabaseRequest.class);
-                case CREATE_COLLECTION -> gson.fromJson(message, CreateCollectionRequest.class);
-                case DROP_COLLECTION -> gson.fromJson(message, DropCollectionRequest.class);
-                case CREATE_INDEX -> gson.fromJson(message, CreateIndexRequest.class);
-                case DROP_INDEX -> gson.fromJson(message, DropIndexRequest.class);
-                case CLOSE_CONNECTION -> gson.fromJson(message, CloseConnectionRequest.class);
+                case DELETE -> eJson.fromJson(message, DeleteRequest.class);
+                case CREATE_DATABASE -> eJson.fromJson(message, CreateDatabaseRequest.class);
+                case DROP_DATABASE -> eJson.fromJson(message, DropDatabaseRequest.class);
+                case CREATE_COLLECTION -> eJson.fromJson(message, CreateCollectionRequest.class);
+                case DROP_COLLECTION -> eJson.fromJson(message, DropCollectionRequest.class);
+                case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
+                case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
+                case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -49,10 +49,10 @@ public class RequestParser {
     }
 
     private static OperationRequest parseAggregationRequest(final String message) {
-        final var aggRequest = gson.fromJson(message, AggregateRequest.class);
+        final var aggRequest = eJson.fromJson(message, AggregateRequest.class);
         final var steps = new ArrayList<BaseAggregationStep>();
         final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
-        final var crudeArrayElements = gson.fromJson(message, JsonObject.class);
+        final var crudeArrayElements = eJson.fromJson(message, JsonObject.class);
         final var jsonArray = crudeArrayElements.get("aggregationSteps").getAsJsonArray();
         for (var i=0; i < roughlyParsedAggSteps.size(); i++) {
             final var type = roughlyParsedAggSteps.get(i).getType();
@@ -67,13 +67,13 @@ public class RequestParser {
         return switch (type) {
             case FILTER -> parseFilterStep(obj);
             case MAP -> parseMapStep(obj);
-            case GROUP_BY -> gson.fromJson(obj, GroupByAggregationStep.class);
-            case JOIN -> gson.fromJson(obj, JoinAggregationStep.class);
-            case COUNT -> gson.fromJson(obj, CountAggregationStep.class);
-            case DISTINCT -> gson.fromJson(obj, DistinctAggregationStep.class);
-            case LIMIT -> gson.fromJson(obj, LimitAggregationStep.class);
-            case SKIP -> gson.fromJson(obj, SkipAggregationStep.class);
-            case SORT -> gson.fromJson(obj, SortAggregationStep.class);
+            case GROUP_BY -> eJson.fromJson(obj, GroupByAggregationStep.class);
+            case JOIN -> eJson.fromJson(obj, JoinAggregationStep.class);
+            case COUNT -> eJson.fromJson(obj, CountAggregationStep.class);
+            case DISTINCT -> eJson.fromJson(obj, DistinctAggregationStep.class);
+            case LIMIT -> eJson.fromJson(obj, LimitAggregationStep.class);
+            case SKIP -> eJson.fromJson(obj, SkipAggregationStep.class);
+            case SORT -> eJson.fromJson(obj, SortAggregationStep.class);
         };
     }
 
@@ -106,12 +106,12 @@ public class RequestParser {
     }
 
     private static BaseMidOperator parseMidOperator(final JsonObject obj) {
-        final var midOperationType = gson.fromJson(obj.get("type"), MidOperationType.class);
+        final var midOperationType = eJson.fromJson(obj.get("type"), MidOperationType.class);
         return switch (midOperationType) {
             case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT ->
                     new ArrayParamMidOperator(midOperationType, obj.get("operands").getAsJsonArray());
             case ABS, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").getAsString());
-            case CAST -> new CastMidOperator(obj.get("fieldName").getAsString(), gson.fromJson(obj.get("toType"), CastToType.class));
+            case CAST -> new CastMidOperator(obj.get("fieldName").getAsString(), eJson.fromJson(obj.get("toType"), CastToType.class));
         };
     }
 
@@ -125,10 +125,10 @@ public class RequestParser {
         if (operator.has("fieldOperatorType")) {
             final var fieldName = operator.get("field").getAsString();
             final var fieldValue = operator.get("value");
-            final var operatorType = gson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
+            final var operatorType = eJson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
             parsedOperator = new FieldOperator(operatorType, fieldName, fieldValue);
         } else {
-            final var conjunctionType = gson.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);
+            final var conjunctionType = eJson.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);
             final var operators = operator.get("operators").getAsJsonArray().asList().stream().map(element -> recursiveParse(element.getAsJsonObject())).toList();
             parsedOperator = new ConjunctionOperator(conjunctionType, operators);
         }

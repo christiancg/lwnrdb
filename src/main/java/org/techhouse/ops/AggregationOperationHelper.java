@@ -1,10 +1,10 @@
 package org.techhouse.ops;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.JsonArray;
+import org.techhouse.ejson.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;

@@ -1,10 +1,10 @@
 package org.techhouse.ops;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonNull;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.JsonElement;
+import org.techhouse.ejson.JsonNull;
+import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.JsonPrimitive;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;

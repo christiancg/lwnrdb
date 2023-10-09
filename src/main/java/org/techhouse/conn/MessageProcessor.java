@@ -1,6 +1,6 @@
 package org.techhouse.conn;
 
-import com.google.gson.Gson;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -15,7 +15,7 @@ import java.net.Socket;
 import java.util.UUID;
 
 public class MessageProcessor implements Runnable {
-    private final Gson gson = IocContainer.get(Gson.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(MessageProcessor.class);
@@ -48,7 +48,7 @@ public class MessageProcessor implements Runnable {
                                 close = true;
                                 clientTracker.removeById(clientId);
                             }
-                            response = gson.toJson(responseObj);
+                            response = eJson.toJson(responseObj);
                         } catch (InvalidCommandException exception) {
                             response = exception.getMessage();
                         }
@@ -60,7 +60,7 @@ public class MessageProcessor implements Runnable {
             } else {
                 final var responseObj = new OperationResponse(OperationType.CLOSE_CONNECTION, OperationStatus.ERROR,
                         "Max number of connections reached");
-                writer.write(gson.toJson(responseObj));
+                writer.write(eJson.toJson(responseObj));
                 writer.flush();
             }
             writer.close();

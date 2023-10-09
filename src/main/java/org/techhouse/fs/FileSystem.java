@@ -1,13 +1,13 @@
 package org.techhouse.fs;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.JsonUtils;
@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 public class FileSystem {
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     private static final String RW_PERMISSIONS = "rwd";
-    private final Gson gson = IocContainer.get(Gson.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private final Map<String, Semaphore> locks = new ConcurrentHashMap<>();
     private String dbPath;
 
@@ -167,7 +167,7 @@ public class FileSystem {
             byte[] buffer = new byte[entryLength];
             reader.readFully(buffer, 0, entryLength);
             final var strEntry = new String(buffer);
-            final var jsonObject = gson.fromJson(strEntry, JsonObject.class);
+            final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
             final var entry = new DbEntry();
             entry.setDatabaseName(pkIndexEntry.getDatabaseName());
             entry.setCollectionName(pkIndexEntry.getCollectionName());

@@ -1,11 +1,11 @@
 package org.techhouse.data.admin;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonObject;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.JsonArray;
+import org.techhouse.ejson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.List;

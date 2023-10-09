@@ -1,8 +1,8 @@
 package org.techhouse.utils;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonNull;
-import com.google.gson.JsonObject;
+import org.techhouse.ejson.JsonElement;
+import org.techhouse.ejson.JsonNull;
+import org.techhouse.ejson.JsonObject;
 
 public class JsonUtils {
     public static boolean hasInPath(JsonObject obj, String path) {

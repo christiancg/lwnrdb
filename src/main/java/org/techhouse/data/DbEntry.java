@@ -1,16 +1,16 @@
 package org.techhouse.data;
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import lombok.Data;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.JsonObject;
 import org.techhouse.ioc.IocContainer;
 
 import java.util.UUID;
 
 @Data
 public class DbEntry {
-    private static final Gson gson = IocContainer.get(Gson.class);
+    private static final EJson eJson = IocContainer.get(EJson.class);
     private String _id;
     private String databaseName;
     private String collectionName;
@@ -29,7 +29,7 @@ public class DbEntry {
         final var entry = new DbEntry();
         entry.setDatabaseName(databaseName);
         entry.setCollectionName(collectionName);
-        final var data = gson.fromJson(wholeEntryFromFile, JsonObject.class);
+        final var data = eJson.fromJson(wholeEntryFromFile, JsonObject.class);
         entry.setData(data);
         entry.set_id(data.has(Globals.PK_FIELD) ? data.get(Globals.PK_FIELD).getAsString() : null);
         return entry;

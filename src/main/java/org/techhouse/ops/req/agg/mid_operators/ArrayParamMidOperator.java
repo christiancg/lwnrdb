@@ -1,8 +1,8 @@
 package org.techhouse.ops.req.agg.mid_operators;
 
-import com.google.gson.JsonArray;
 import lombok.Getter;
 import lombok.Setter;
+import org.techhouse.ejson.JsonArray;
 
 @Getter
 @Setter
