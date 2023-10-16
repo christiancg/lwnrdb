@@ -22,7 +22,7 @@ public class ConfigReader {
             add("maxLogFiles");
         }
     };
-    private static final String DEFAULT_CONFIG_PATH = Globals.FILE_SEPARATOR + "default.cfg";
+    private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
     private static final Logger logger = Logger.logFor(ConfigReader.class);
 
     public static Map<String, String> loadConfiguration() {
