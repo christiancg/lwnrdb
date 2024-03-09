@@ -20,10 +20,13 @@ import java.util.List;
 
 public class RequestParser {
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final org.techhouse.ejson2.EJson eJsonNew = IocContainer.get(org.techhouse.ejson2.EJson.class);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         try {
             final var baseReq = eJson.fromJson(message, OperationRequest.class);
+            final var parsedResponse = eJsonNew.fromJson(message, OperationRequest.class);
+            System.out.println(parsedResponse);
             return switch (baseReq.getType()) {
                 case SAVE -> {
                     final var parsed = eJson.fromJson(message, SaveRequest.class);
