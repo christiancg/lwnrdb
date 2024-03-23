@@ -55,7 +55,7 @@ public class Lexer {
             final var ld = lexNumber(ss);
             if (ld != null) {
                 tokens.add(ld);
-                i += ld.getStrLength();
+                i += ld.getStrLength() - 1;
                 continue;
             }
             final var lb = lexBoolean(ss);
