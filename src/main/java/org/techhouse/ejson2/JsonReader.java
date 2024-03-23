@@ -2,7 +2,6 @@ package org.techhouse.ejson2;
 
 import org.techhouse.ejson2.elements.*;
 import org.techhouse.ejson2.exceptions.MalformedJsonException;
-import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 
 public class JsonReader {
@@ -10,7 +9,7 @@ public class JsonReader {
     private record ParseTokenResult(JsonBaseElement element, int tokensToSkip) {
     }
 
-    public <T> T fromJson(String input, Class<T> tClass) throws InstantiationException, IllegalAccessException, InvocationTargetException {
+    public <T> T fromJson(String input, Class<T> tClass) throws Exception {
         final var tokens = Lexer.lex(input);
         final var parsed = internalParse(tokens, true);
         final var newInstance = Assigner.assign(parsed.element(), tClass);

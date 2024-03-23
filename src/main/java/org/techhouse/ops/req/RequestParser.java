@@ -26,10 +26,12 @@ public class RequestParser {
         try {
             final var baseReq = eJson.fromJson(message, OperationRequest.class);
             final var parsedResponse = eJsonNew.fromJson(message, OperationRequest.class);
-            System.out.println(parsedResponse);
+            System.out.println(eJsonNew.toJson(parsedResponse));
             return switch (baseReq.getType()) {
                 case SAVE -> {
                     final var parsed = eJson.fromJson(message, SaveRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, SaveRequest.class);
+                    System.out.println(eJsonNew.toJson(toTest));
                     if(parsed.getObject().has(Globals.PK_FIELD)) {
                         parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).getAsString());
                     }
