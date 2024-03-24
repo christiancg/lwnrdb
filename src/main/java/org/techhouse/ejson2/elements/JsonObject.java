@@ -1,6 +1,6 @@
 package org.techhouse.ejson2.elements;
 
-import org.techhouse.ejson2.LinkedTreeMap;
+import org.techhouse.ejson2.internal.LinkedTreeMap;
 
 import java.util.Map;
 import java.util.Set;

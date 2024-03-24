@@ -1,5 +1,8 @@
 package org.techhouse.ejson2;
 
+import org.techhouse.ejson2.internal.JsonReader;
+import org.techhouse.ejson2.internal.JsonWriter;
+
 public class EJson {
     private final JsonReader reader = new JsonReader();
     private final JsonWriter writer = new JsonWriter();

@@ -1,4 +1,4 @@
-package org.techhouse.ejson2;
+package org.techhouse.ejson2.internal;
 
 import org.techhouse.ejson2.elements.*;
 import org.techhouse.ejson2.exceptions.NoConstructorException;
