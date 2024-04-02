@@ -12,7 +12,7 @@ public class JsonReader {
     public <T> T fromJson(String input, Class<T> tClass) throws Exception {
         final var tokens = Lexer.lex(input);
         final var parsed = internalParse(tokens, true);
-        final var newInstance = Assigner.assign(parsed.element(), tClass);
+        final var newInstance = Assigner.assign(parsed.element().asJsonObject(), tClass);
         return tClass.cast(newInstance);
     }
 

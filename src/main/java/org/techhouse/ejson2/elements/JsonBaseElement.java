@@ -27,4 +27,28 @@ public abstract class JsonBaseElement {
             default -> throw new IllegalStateException("Unexpected value: " + object);
         };
     }
+
+    public JsonObject asJsonObject() {
+        return (JsonObject) this;
+    }
+
+    public JsonArray asJsonArray() {
+        return (JsonArray) this;
+    }
+
+    public JsonDouble asJsonDouble() {
+        return (JsonDouble) this;
+    }
+
+    public JsonString asJsonString() {
+        return (JsonString) this;
+    }
+
+    public JsonBoolean asJsonBoolean() {
+        return (JsonBoolean) this;
+    }
+
+    public JsonNull asJsonNull() {
+        return (JsonNull) this;
+    }
 }

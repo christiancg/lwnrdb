@@ -1,53 +1,44 @@
 package org.techhouse.ejson2.internal;
 
 import org.techhouse.ejson2.elements.*;
+import org.techhouse.ejson2.exceptions.MalformedJsonException;
 import org.techhouse.ejson2.exceptions.NoConstructorException;
 
 import java.lang.reflect.*;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
+import java.util.*;
 
 public class Assigner {
-    public static <T> T assign(JsonBaseElement parsed, Class<T> tClass) throws Exception {
+    public static <T> T assign(JsonObject parsed, Class<T> tClass) throws Exception {
         final var newInstance = createInstance(tClass, parsed);
-        final var type = parsed.getJsonType();
         final var fields = getFields(tClass);
-        final var methods = tClass.getDeclaredMethods();
         for (var field : fields) {
-            final var fieldValue = getFieldValue(field, newInstance);
-            if (fieldValue == null) {
-                final var fieldType = field.getType();
-                final var fieldName = field.getName();
-                if (type == JsonBaseElement.JsonType.OBJECT) {
-                    final var jsonObj = (JsonObject) parsed;
-                    if (jsonObj.has(fieldName)) {
-                        final var jsonObjFieldValue = jsonObj.get(fieldName);
-                        var objField = getFieldValue(field, newInstance);
-                        if (objField == null) {
-                            if (isSameType(field.getType(), jsonObjFieldValue)) {
-                                objField = jsonObjFieldValue;
-                            } else {
-                                objField = assign(jsonObjFieldValue, fieldType);
-                            }
-                        }
-                        field.set(newInstance, objField);
-                    }
-                } else if (type == JsonBaseElement.JsonType.ARRAY) {
-                    final var arr = (JsonArray) parsed;
-                    for (var item : arr) {
-                        // TODO: assign items to collection
-                    }
-                } else {
-                    findMethodAndAssign(methods, fieldName, newInstance, parsed);
-                }
+            final var fieldName = field.getName();
+            if (parsed.has(fieldName)) {
+                assignValueToField(field, newInstance, parsed.get(fieldName));
             }
         }
         return tClass.cast(newInstance);
     }
 
-    private static <T, U> boolean isSameType(Class<T> obj1, U obj2) {
-        return obj1.equals(obj2.getClass());
+    private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
+        final var fieldValue = getFieldValue(field, obj);
+        if (fieldValue == null) {
+            final var jsonType = parsed.getJsonType();
+            final var value = switch (jsonType) {
+                case OBJECT -> parsed.asJsonObject();
+                case ARRAY -> parsed.asJsonArray();
+                case NULL -> null; // Actually this is the value needed
+                case DOUBLE -> parsed.asJsonDouble().getValue();
+                case STRING -> parsed.asJsonString().getValue();
+                case BOOLEAN -> parsed.asJsonBoolean().getValue();
+                case SYNTAX -> throw new MalformedJsonException("Shouldn't ever enter here");
+            };
+            if (value != null) {
+                field.setAccessible(true);
+                final var casted = cast(field.getType(), parsed);
+                field.set(obj, casted);
+            }
+        }
     }
 
     private static <T> Field[] getFields(Class<T> tClass) {
@@ -72,20 +63,6 @@ public class Assigner {
             }
         }
         return null;
-    }
-
-    private static <T> void findMethodAndAssign(Method[] methods, String fieldName, T obj, JsonBaseElement element) throws InvocationTargetException, IllegalAccessException {
-        final var foundMethod = Arrays.stream(methods).filter(x -> x.getName().equalsIgnoreCase("set" + fieldName)).findFirst();
-        if (foundMethod.isPresent()) {
-            var value = switch (element.getJsonType()) {
-                case BOOLEAN -> ((JsonBoolean) element).getValue();
-                case NULL -> null;
-                case STRING -> ((JsonString) element).getValue();
-                case DOUBLE -> ((JsonDouble) element).getValue();
-                default -> null; // Should never enter here
-            };
-            foundMethod.get().invoke(obj, value);
-        }
     }
 
     private static <T> T createInstance(Class<T> tClass, JsonBaseElement parsed) throws Exception {
@@ -130,22 +107,52 @@ public class Assigner {
     }
 
     private static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue) throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
-        final var jsonValue = switch (fieldValue.getJsonType()) {
-            case ARRAY -> null; // TODO: implement array init here
-            case OBJECT -> null; // TODO: implement object init here
-            case BOOLEAN -> ((JsonBoolean) fieldValue).getValue();
+        final var jsonType = fieldValue.getJsonType();
+        final var jsonValue = switch (jsonType) {
+            case ARRAY -> fieldValue.asJsonArray();
+            case OBJECT -> fieldValue.asJsonObject();
+            case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
             case NULL -> null;
-            case STRING -> ((JsonString) fieldValue).getValue();
-            case DOUBLE -> ((JsonDouble) fieldValue).getValue();
+            case STRING -> fieldValue.asJsonString().getValue();
+            case DOUBLE -> fieldValue.asJsonDouble().getValue();
             case SYNTAX -> null; // should never come here
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
             Method valueOf = parameterType.getMethod("valueOf", String.class);
             Object value = valueOf.invoke(null, jsonValue);
             return parameterType.cast(value);
-        } else if (parameterType.equals(String.class)) {
-            return (T) jsonValue;
+        } else if (parameterType == org.techhouse.ejson.JsonObject.class && jsonType == JsonBaseElement.JsonType.OBJECT) {
+            final var valueObject = (JsonObject)jsonValue;
+            return (T) toOldJsonObject(valueObject);
         }
-        return null;
+        return (T) jsonValue;
+    }
+
+    // TODO: remove this as it is just for testing
+    private static org.techhouse.ejson.JsonObject toOldJsonObject(JsonObject jsonObject) {
+        final var oldObject = new org.techhouse.ejson.JsonObject();
+        for (var field : jsonObject.entrySet()) {
+            oldObject.add(field.getKey(), toJsonElement(field.getValue()));
+        }
+        return oldObject;
+    }
+
+    // TODO: remove this as it is just for testing
+    private static org.techhouse.ejson.JsonElement toJsonElement(JsonBaseElement jsonBaseElement) {
+        return switch (jsonBaseElement) {
+            case JsonBoolean jsonBoolean -> new org.techhouse.ejson.JsonPrimitive(jsonBoolean.getValue());
+            case JsonDouble jsonDouble -> new org.techhouse.ejson.JsonPrimitive(jsonDouble.getValue());
+            case JsonNull ignored -> org.techhouse.ejson.JsonNull.INSTANCE;
+            case JsonString jsonString -> new org.techhouse.ejson.JsonPrimitive(jsonString.getValue());
+            case JsonArray jsonArray -> {
+                final var arr = new org.techhouse.ejson.JsonArray();
+                for (var item : jsonArray) {
+                    arr.add(toJsonElement(item));
+                }
+                yield arr;
+            }
+            case JsonObject jsonObject1 -> toOldJsonObject(jsonObject1);
+            default -> null;
+        };
     }
 }
