@@ -32,6 +32,7 @@ public class RequestParser {
                     final var parsed = eJson.fromJson(message, SaveRequest.class);
                     final var toTest = eJsonNew.fromJson(message, SaveRequest.class);
                     System.out.println(eJsonNew.toJson(toTest));
+                    System.out.println(eJson.toJson(parsed));
                     if(parsed.getObject().has(Globals.PK_FIELD)) {
                         parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).getAsString());
                     }
