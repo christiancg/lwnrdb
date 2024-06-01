@@ -1,9 +1,11 @@
 package org.techhouse.ops.req;
 
 import org.techhouse.config.Globals;
-import org.techhouse.ejson.EJson;
-import org.techhouse.ejson.JsonArray;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.*;
+import org.techhouse.ejson2.elements.JsonBaseElement;
+import org.techhouse.ejson2.elements.JsonBoolean;
+import org.techhouse.ejson2.elements.JsonDouble;
+import org.techhouse.ejson2.elements.JsonString;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.*;
@@ -39,7 +41,11 @@ public class RequestParser {
                     yield parsed;
                 }
                 case FIND_BY_ID -> eJson.fromJson(message, FindByIdRequest.class);
-                case AGGREGATE -> parseAggregationRequest(message);
+                case AGGREGATE -> {
+                    final var newAggregationRequest = newParseAggregationRequest(message);
+                    System.out.println(eJsonNew.toJson(newAggregationRequest));
+                    yield parseAggregationRequest(message);
+                }
                 case DELETE -> eJson.fromJson(message, DeleteRequest.class);
                 case CREATE_DATABASE -> eJson.fromJson(message, CreateDatabaseRequest.class);
                 case DROP_DATABASE -> eJson.fromJson(message, DropDatabaseRequest.class);
@@ -68,6 +74,24 @@ public class RequestParser {
         return aggRequest;
     }
 
+    private static OperationRequest newParseAggregationRequest(final String message) {
+        try {
+            final var aggRequest = eJsonNew.fromJson(message, AggregateRequest.class);
+            final var steps = new ArrayList<BaseAggregationStep>();
+            final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
+            final var baseObject = eJsonNew.fromJson(message, org.techhouse.ejson2.elements.JsonObject.class);
+            final var jsonArray = baseObject.get("aggregationSteps").asJsonArray();
+            for (var i=0; i < roughlyParsedAggSteps.size(); i++) {
+                final var type = roughlyParsedAggSteps.get(i).getType();
+                steps.add(newParseAggregationStep(type, jsonArray, i));
+            }
+            aggRequest.setAggregationSteps(steps);
+            return aggRequest;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray, final int index) {
         final var obj = jsonArray.get(index).getAsJsonObject();
         return switch (type) {
@@ -83,9 +107,52 @@ public class RequestParser {
         };
     }
 
+    private static BaseAggregationStep newParseAggregationStep(final AggregationStepType type, final org.techhouse.ejson2.elements.JsonArray jsonArray, final int index) throws Exception {
+        final var obj = jsonArray.get(index).asJsonObject();
+        return switch (type) {
+            case FILTER -> newParseFilterStep(obj);
+            case MAP -> newParseMapStep(obj);
+            case GROUP_BY -> eJsonNew.fromJson(obj, GroupByAggregationStep.class);
+            case JOIN -> eJsonNew.fromJson(obj, JoinAggregationStep.class);
+            case COUNT -> eJsonNew.fromJson(obj, CountAggregationStep.class);
+            case DISTINCT -> eJsonNew.fromJson(obj, DistinctAggregationStep.class);
+            case LIMIT -> eJsonNew.fromJson(obj, LimitAggregationStep.class);
+            case SKIP -> eJsonNew.fromJson(obj, SkipAggregationStep.class);
+            case SORT -> eJsonNew.fromJson(obj, SortAggregationStep.class);
+        };
+    }
+
+    private static BaseAggregationStep newParseMapStep(final org.techhouse.ejson2.elements.JsonObject obj) throws Exception {
+        final var operators = obj.get("operators").asJsonArray();
+        return new MapAggregationStep(newParseMapOperators(operators));
+    }
+
     private static BaseAggregationStep parseMapStep(final JsonObject obj) {
         final var operators = obj.get("operators").getAsJsonArray();
         return new MapAggregationStep(parseMapOperators(operators));
+    }
+
+    private static List<MapOperator> newParseMapOperators(final org.techhouse.ejson2.elements.JsonArray arr) throws Exception {
+        final var mapOperators = new ArrayList<MapOperator>();
+        for (var mapStep : arr.asList()) {
+            final var mapStepObj = mapStep.asJsonObject();
+            final var condition = mapStepObj.get("condition");
+            BaseOperator parsedCondition = null;
+            if (condition != null && condition.getJsonType() != JsonBaseElement.JsonType.NULL) {
+                parsedCondition = newRecursiveParse(condition.asJsonObject());
+            }
+            final var fieldName = mapStepObj.get("fieldName").asJsonString().getValue();
+            final var operator = mapStepObj.get("operator");
+            MapOperator parsed;
+            if (operator != null) {
+                final var operatorObj = operator.asJsonObject();
+                parsed = new AddFieldMapOperator(fieldName, parsedCondition, newParseMidOperator(operatorObj));
+            } else {
+                parsed = new RemoveFieldMapOperator(fieldName, parsedCondition);
+            }
+            mapOperators.add(parsed);
+        }
+        return mapOperators;
     }
 
     private static List<MapOperator> parseMapOperators(final JsonArray arr) {
@@ -111,6 +178,21 @@ public class RequestParser {
         return mapOperators;
     }
 
+    private static BaseMidOperator newParseMidOperator(final org.techhouse.ejson2.elements.JsonObject obj) throws Exception {
+        final var midOperationType = eJsonNew.fromJson(obj.get("type"), MidOperationType.class);
+        return switch (midOperationType) {
+            case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT -> {
+                // TODO: remove next lines when old EJson is removed, just here to cast to old JsonElement class
+                final var newEjsonArray = obj.get("operands").asJsonArray();
+                final var str = eJsonNew.toJson(newEjsonArray);
+                final var oldJsonArr = eJson.fromJson(str, JsonArray.class);
+                yield new ArrayParamMidOperator(midOperationType, oldJsonArr);
+            }
+            case ABS, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").asJsonString().getValue());
+            case CAST -> new CastMidOperator(obj.get("fieldName").asJsonString().getValue(), eJsonNew.fromJson(obj.get("toType"), CastToType.class));
+        };
+    }
+
     private static BaseMidOperator parseMidOperator(final JsonObject obj) {
         final var midOperationType = eJson.fromJson(obj.get("type"), MidOperationType.class);
         return switch (midOperationType) {
@@ -121,9 +203,42 @@ public class RequestParser {
         };
     }
 
+    private static BaseAggregationStep newParseFilterStep(final org.techhouse.ejson2.elements.JsonObject obj) throws Exception {
+        final var operator = obj.get("operator").asJsonObject();
+        return new FilterAggregationStep(newRecursiveParse(operator));
+    }
+
     private static BaseAggregationStep parseFilterStep(final JsonObject obj) {
         final var operator = obj.get("operator").getAsJsonObject();
         return new FilterAggregationStep(recursiveParse(operator));
+    }
+
+    private static BaseOperator newRecursiveParse(final org.techhouse.ejson2.elements.JsonObject operator) throws Exception {
+        BaseOperator parsedOperator;
+        if (operator.has("fieldOperatorType")) {
+            final var fieldName = operator.get("field").asJsonString().getValue();
+            final var fieldValue = operator.get("value");
+            final var operatorType = eJsonNew.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
+            // TODO: remove next line when old EJson is removed, just here to cast to old JsonElement class
+            final var oldJsonElement = switch (fieldValue) {
+                case JsonString string -> new JsonPrimitive(string.getValue());
+                case JsonDouble d -> new JsonPrimitive(d.getValue());
+                case JsonBoolean b -> new JsonPrimitive(b.getValue());
+                default -> throw new IllegalStateException("Unexpected value: " + fieldValue);
+            };
+            parsedOperator = new FieldOperator(operatorType, fieldName, oldJsonElement);
+        } else {
+            final var conjunctionType = eJsonNew.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);
+            final var operators = operator.get("operators").asJsonArray().asList().stream().map(element -> {
+                try {
+                    return newRecursiveParse(element.asJsonObject());
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }).toList();
+            parsedOperator = new ConjunctionOperator(conjunctionType, operators);
+        }
+        return parsedOperator;
     }
 
     private static BaseOperator recursiveParse(final JsonObject operator) {

@@ -86,7 +86,7 @@ public class ReflectionUtils {
                         break;
                     } else {
                         final var fieldValue = parsedObject.get(finalField.getName());
-                        final var actualValue = cast(parameter.getType(), fieldValue);
+                        final var actualValue = cast(parameter.getType(), fieldValue, null);
                         parameterValues[i] = actualValue;
                     }
                 }
@@ -100,7 +100,7 @@ public class ReflectionUtils {
         }
     }
 
-    public static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue) throws NoSuchMethodException, InvocationTargetException, IllegalAccessException {
+    public static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue, Type genericType) throws Exception {
         final var jsonType = fieldValue.getJsonType();
         final var jsonValue = switch (jsonType) {
             case ARRAY -> fieldValue.asJsonArray();
@@ -115,6 +115,20 @@ public class ReflectionUtils {
             Method valueOf = parameterType.getMethod("valueOf", String.class);
             Object value = valueOf.invoke(null, jsonValue.toString());
             return parameterType.cast(value);
+        } else if (genericType != null && parameterType.isAssignableFrom(List.class)) {
+            final var typeArguments = ((ParameterizedType)genericType).getActualTypeArguments();
+            if (typeArguments.length == 1) {
+                final var actualType = typeArguments[0];
+                final var actualClass = Class.forName(actualType.getTypeName());
+                List<Object> listInstance = new ArrayList<>();
+                fieldValue.asJsonArray().forEach((arrItem) -> {
+                    final var obj = arrItem.asJsonObject();
+                    final var item = Assigner.assign(obj, actualClass);
+                    listInstance.add(item);
+                });
+                return parameterType.cast(listInstance);
+            }
+            return null;
         } else if (parameterType == org.techhouse.ejson.JsonObject.class && jsonType == JsonBaseElement.JsonType.OBJECT) {
             // TODO: remove this as it is just for having both EJson libraries
             final var valueObject = (JsonObject)jsonValue;

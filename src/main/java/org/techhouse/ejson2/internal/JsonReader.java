@@ -82,13 +82,17 @@ public class JsonReader {
         while (true) {
             final var parsed = internalParse(tokens, false);
             arr.add(parsed.element());
+            tokensToSkip += parsed.tokensToSkip();
             tokens = skipTokens(tokens, parsed);
             firstToken = tokens.getFirst();
             if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACKET)) {
                 tokensToSkip++;
-                return new ParseTokenResult(arr, parsed.tokensToSkip() + tokensToSkip);
-            } else if (firstToken.equals(JsonSyntaxToken.COMMA)) {
+                return new ParseTokenResult(arr, tokensToSkip);
+            } else if (!firstToken.equals(JsonSyntaxToken.COMMA)) {
                 throw new MalformedJsonException("Expected comma after object in array");
+            } else {
+                tokensToSkip++;
+                tokens = skipOneToken(tokens);
             }
         }
     }

@@ -9,6 +9,7 @@ import org.techhouse.ejson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @EqualsAndHashCode(callSuper = true)
 @Data
@@ -43,7 +44,8 @@ public class AdminDbEntry extends DbEntry {
         final var id = object.get(Globals.PK_FIELD).getAsString();
         result.set_id(id);
         final var collections = object.get(COLLECTIONS_FIELD_NAME).getAsJsonArray().asList()
-                .stream().map(element -> element.getAsJsonPrimitive().getAsString()).toList();
+                .stream().map(element -> element.getAsJsonPrimitive().getAsString())
+                .collect(Collectors.toList());
         result.setCollections(collections);
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -60,7 +62,10 @@ public class AdminDbEntry extends DbEntry {
     }
 
     @Override
-    public void setDatabaseName(String value) {}
+    public void setDatabaseName(String value) {
+    }
+
     @Override
-    public void setCollectionName(String value) {}
+    public void setCollectionName(String value) {
+    }
 }

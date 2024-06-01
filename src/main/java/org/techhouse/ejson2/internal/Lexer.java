@@ -61,13 +61,13 @@ public class Lexer {
             final var lb = lexBoolean(ss);
             if (lb != null) {
                 tokens.add(lb);
-                i += lb.getValue() ? TRUE_LEN : FALSE_LEN;
+                i += (lb.getValue() ? TRUE_LEN : FALSE_LEN) - 1;
                 continue;
             }
             final var ln = lexNull(ss);
             if (ln != null) {
                 tokens.add(ln);
-                i += NULL_LEN;
+                i += NULL_LEN - 1;
                 continue;
             }
             final var c = input.charAt(i);

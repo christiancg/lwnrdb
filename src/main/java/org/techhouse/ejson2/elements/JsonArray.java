@@ -2,6 +2,7 @@ package org.techhouse.ejson2.elements;
 
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.List;
 
 public class JsonArray extends JsonBaseElement implements Iterable<JsonBaseElement> {
     private final ArrayList<JsonBaseElement> elements = new ArrayList<>();
@@ -43,6 +44,10 @@ public class JsonArray extends JsonBaseElement implements Iterable<JsonBaseEleme
 
     public JsonBaseElement get(int i) {
         return elements.get(i);
+    }
+
+    public List<JsonBaseElement> asList() {
+        return elements;
     }
 
     @Override
