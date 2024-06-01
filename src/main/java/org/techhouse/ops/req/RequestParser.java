@@ -224,6 +224,7 @@ public class RequestParser {
                 case JsonString string -> new JsonPrimitive(string.getValue());
                 case JsonDouble d -> new JsonPrimitive(d.getValue());
                 case JsonBoolean b -> new JsonPrimitive(b.getValue());
+                case org.techhouse.ejson2.elements.JsonArray a -> eJson.fromJson(eJsonNew.toJson(a), JsonArray.class);
                 default -> throw new IllegalStateException("Unexpected value: " + fieldValue);
             };
             parsedOperator = new FieldOperator(operatorType, fieldName, oldJsonElement);

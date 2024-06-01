@@ -46,9 +46,11 @@ public class EJson {
         TypeAdapterFactory.registerTypeAdapter(JsonDouble.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonNull.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonString.class, jsonBaseElementTypeAdapter);
-        TypeAdapterFactory.registerTypeAdapter(JsonArray.class, jsonBaseElementTypeAdapter);
+        TypeAdapterFactory.registerTypeAdapter(JsonBaseElement.class, jsonBaseElementTypeAdapter);
         // JsonObject type
         TypeAdapterFactory.registerTypeAdapter(JsonObject.class, new JsonObjectTypeAdapter());
+        // JsonArray type
+        TypeAdapterFactory.registerTypeAdapter(JsonArray.class, new JsonArrayTypeAdapter());
         // TODO: remove this Old Json Object adapter
         TypeAdapterFactory.registerTypeAdapter(org.techhouse.ejson.JsonObject.class, new OldJsonObjectTypeAdapter());
         // TODO: remove this Old Json Element adapter

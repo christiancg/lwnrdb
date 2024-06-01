@@ -1,5 +1,6 @@
 package org.techhouse.ejson2.type_adapters.impl;
 
+import org.techhouse.ejson2.elements.JsonArray;
 import org.techhouse.ejson2.elements.JsonBaseElement;
 import org.techhouse.ejson2.elements.JsonObject;
 import org.techhouse.ejson2.type_adapters.TypeAdapter;
@@ -13,9 +14,9 @@ public class JsonBaseElementTypeAdapter implements TypeAdapter<JsonBaseElement> 
         return switch (value.getJsonType()) {
             case NULL -> "null";
             case BOOLEAN -> value.asJsonBoolean().getValue().toString();
-            case STRING -> value.asJsonString().getValue();
+            case STRING -> '"' + value.asJsonString().getValue() + '"';
             case DOUBLE -> value.asJsonDouble().getValue().toString();
-            case ARRAY -> Objects.requireNonNull(TypeAdapterFactory.getAdapter(Iterable.class)).toJson(value.asJsonArray());
+            case ARRAY -> Objects.requireNonNull(TypeAdapterFactory.getAdapter(JsonArray.class)).toJson(value.asJsonArray());
             case OBJECT -> Objects.requireNonNull(TypeAdapterFactory.getAdapter(JsonObject.class)).toJson(value.asJsonObject());
             case null, default -> throw new IllegalStateException("Unexpected value: " + value.getJsonType());
         };
