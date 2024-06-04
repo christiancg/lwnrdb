@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
@@ -20,29 +21,30 @@ public class AdminOperationHelper {
         final var entryCount = cache.getEntryCountForCollection(dbName, collName);
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
+        AdminCollEntry adminCollEntry;
+        PkIndexEntry pkIndexEntry;
         if (adminIndexPkCollEntry != null) {
-            final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
+            adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
             adminCollEntry.setEntryCount(entryCount);
-            fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
-            cache.putAdminCollectionEntry(adminCollEntry, adminIndexPkCollEntry);
+            pkIndexEntry = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
         } else {
-            final var adminCollEntry = new AdminCollEntry(dbName, collName);
+            adminCollEntry = new AdminCollEntry(dbName, collName);
             adminCollEntry.setEntryCount(entryCount);
-            final var pkIndexEntry = fs.insertIntoCollection(adminCollEntry);
-            cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
+            pkIndexEntry = fs.insertIntoCollection(adminCollEntry);
         }
+        cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
     }
 
     public static void saveDatabaseEntry(AdminDbEntry dbEntry)
             throws IOException, InterruptedException {
         var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbEntry.get_id());
+        PkIndexEntry adminDbEntry;
         if (adminIndexPkDbEntry != null) {
-            fs.updateFromCollection(dbEntry, adminIndexPkDbEntry);
-            cache.putAdminDbEntry(dbEntry, adminIndexPkDbEntry);
+            adminDbEntry = fs.updateFromCollection(dbEntry, adminIndexPkDbEntry);
         } else {
-            final var pkIndexEntry = fs.insertIntoCollection(dbEntry);
-            cache.putAdminDbEntry(dbEntry, pkIndexEntry);
+            adminDbEntry = fs.insertIntoCollection(dbEntry);
         }
+        cache.putAdminDbEntry(dbEntry, adminDbEntry);
     }
 
     public static void deleteDatabaseEntry(String dbName)
@@ -71,13 +73,13 @@ public class AdminOperationHelper {
     public static void saveCollectionEntry(AdminCollEntry dbEntry)
             throws IOException, InterruptedException {
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(dbEntry.get_id());
+        PkIndexEntry pkIndexEntry;
         if (adminIndexPkCollEntry != null) {
-            fs.updateFromCollection(dbEntry, adminIndexPkCollEntry);
-            cache.putAdminCollectionEntry(dbEntry, adminIndexPkCollEntry);
+            pkIndexEntry = fs.updateFromCollection(dbEntry, adminIndexPkCollEntry);
         } else {
-            final var pkIndexEntry = fs.insertIntoCollection(dbEntry);
-            cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
+            pkIndexEntry = fs.insertIntoCollection(dbEntry);
         }
+        cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
         final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
         final var adminDbEntry = cache.getAdminDbEntry(split[0]);
         var adminDbPkIndexEntry = cache.getPkIndexAdminDbEntry(split[0]);
