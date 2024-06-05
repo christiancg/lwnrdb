@@ -13,9 +13,9 @@ public class JsonBaseElementTypeAdapter implements TypeAdapter<JsonBaseElement> 
     public String toJson(JsonBaseElement value) {
         return switch (value.getJsonType()) {
             case NULL -> "null";
-            case BOOLEAN -> value.asJsonBoolean().getValue().toString();
-            case STRING -> '"' + value.asJsonString().getValue() + '"';
-            case DOUBLE -> value.asJsonDouble().getValue().toString();
+            case BOOLEAN -> TypeAdapterFactory.getAdapter(Boolean.class).toJson(value.asJsonBoolean().getValue());
+            case STRING -> TypeAdapterFactory.getAdapter(String.class).toJson(value.asJsonString().getValue());
+            case DOUBLE -> TypeAdapterFactory.getAdapter(Double.class).toJson(value.asJsonDouble().getValue());
             case ARRAY -> Objects.requireNonNull(TypeAdapterFactory.getAdapter(JsonArray.class)).toJson(value.asJsonArray());
             case OBJECT -> Objects.requireNonNull(TypeAdapterFactory.getAdapter(JsonObject.class)).toJson(value.asJsonObject());
             case null, default -> throw new IllegalStateException("Unexpected value: " + value.getJsonType());

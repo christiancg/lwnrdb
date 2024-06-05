@@ -172,7 +172,7 @@ public class AggregationOperationHelper {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var sortStep = (SortAggregationStep) baseSortStep;
         // TODO: use indexes
-        if (sortStep.isAscending()) {
+        if (sortStep.getAscending()) {
             return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionAscending(o1,o2, sortStep.getFieldName()));
         } else {
             return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionDescending(o1,o2, sortStep.getFieldName()));

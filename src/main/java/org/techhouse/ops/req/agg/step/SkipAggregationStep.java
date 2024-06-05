@@ -8,8 +8,8 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 @Getter
 @Setter
 public class SkipAggregationStep extends BaseAggregationStep {
-    private int skip;
-    public SkipAggregationStep(final int skip) {
+    private Integer skip;
+    public SkipAggregationStep(final Integer skip) {
         super(AggregationStepType.SKIP);
         this.skip = skip;
     }

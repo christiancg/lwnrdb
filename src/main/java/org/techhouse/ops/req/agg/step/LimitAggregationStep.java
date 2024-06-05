@@ -8,7 +8,7 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 @Getter
 @Setter
 public class LimitAggregationStep extends BaseAggregationStep {
-    private int limit;
+    private Integer limit;
     public LimitAggregationStep(final int limit) {
         super(AggregationStepType.LIMIT);
         this.limit = limit;

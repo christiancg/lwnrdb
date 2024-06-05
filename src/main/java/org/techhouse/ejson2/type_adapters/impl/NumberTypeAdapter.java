@@ -6,7 +6,7 @@ import org.techhouse.ejson2.type_adapters.TypeAdapter;
 public class NumberTypeAdapter implements TypeAdapter<Number> {
     @Override
     public String toJson(Number value) {
-        return value.toString();
+        return value.doubleValue() % 1 != 0 ? value.toString() : String.valueOf(value.longValue());
     }
 
     @Override

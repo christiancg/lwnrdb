@@ -47,6 +47,7 @@ public class EJson {
         TypeAdapterFactory.registerTypeAdapter(JsonNull.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonString.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonBaseElement.class, jsonBaseElementTypeAdapter);
+        TypeAdapterFactory.registerTypeAdapter(JsonPrimitive.class, jsonBaseElementTypeAdapter);
         // JsonObject type
         TypeAdapterFactory.registerTypeAdapter(JsonObject.class, new JsonObjectTypeAdapter());
         // JsonArray type

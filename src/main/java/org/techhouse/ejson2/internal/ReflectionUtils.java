@@ -79,10 +79,12 @@ public class ReflectionUtils {
             final var parameters = constructor.getParameters();
             if (parameters.length == finalFields.size()) {
                 final var parameterValues = new Object[parameters.length];
+                var shouldContinue = true;
                 for (int i = 0; i < parameters.length; i++) {
                     final var parameter = parameters[i];
                     final var finalField = finalFields.get(i);
                     if (parameter.getType() != finalField.getType() || !parsedObject.has(finalField.getName())) {
+                        shouldContinue = false;
                         break;
                     } else {
                         final var fieldValue = parsedObject.get(finalField.getName());
@@ -90,7 +92,9 @@ public class ReflectionUtils {
                         parameterValues[i] = actualValue;
                     }
                 }
-                return tClass.cast(constructor.newInstance(parameterValues));
+                if (shouldContinue) {
+                    return tClass.cast(constructor.newInstance(parameterValues));
+                }
             }
         }
         try {
@@ -133,6 +137,16 @@ public class ReflectionUtils {
             // TODO: remove this as it is just for having both EJson libraries
             final var valueObject = (JsonObject)jsonValue;
             return parameterType.cast(toOldJsonObject(valueObject));
+        } else if (jsonValue != null && !parameterType.isAssignableFrom(jsonValue.getClass()) && Number.class.isAssignableFrom(parameterType)) {
+            if (parameterType == Integer.class) {
+                return parameterType.cast(((Number)jsonValue).intValue());
+            } else if (parameterType == Double.class) {
+                return parameterType.cast(((Number)jsonValue).doubleValue());
+            } else if (parameterType == Float.class) {
+                return parameterType.cast(((Number)jsonValue).floatValue());
+            } else if (parameterType == Long.class) {
+                return parameterType.cast(((Number)jsonValue).longValue());
+            }
         }
         return parameterType.cast(jsonValue);
     }
