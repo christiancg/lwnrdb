@@ -27,33 +27,87 @@ public class RequestParser {
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         try {
             final var baseReq = eJson.fromJson(message, OperationRequest.class);
-            final var parsedResponse = eJsonNew.fromJson(message, OperationRequest.class);
-            System.out.println(eJsonNew.toJson(parsedResponse));
             return switch (baseReq.getType()) {
                 case SAVE -> {
                     final var parsed = eJson.fromJson(message, SaveRequest.class);
                     final var toTest = eJsonNew.fromJson(message, SaveRequest.class);
-                    System.out.println(eJsonNew.toJson(toTest));
-                    System.out.println(eJson.toJson(parsed));
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
                     if(parsed.getObject().has(Globals.PK_FIELD)) {
                         parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).getAsString());
                     }
                     yield parsed;
                 }
-                case FIND_BY_ID -> eJson.fromJson(message, FindByIdRequest.class);
-                case AGGREGATE -> {
-                    final var newAggregationRequest = newParseAggregationRequest(message);
-                    System.out.println(eJsonNew.toJson(newAggregationRequest));
-                    yield parseAggregationRequest(message);
+                case FIND_BY_ID -> {
+                    final var parsed = eJson.fromJson(message, FindByIdRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, FindByIdRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
                 }
-                case DELETE -> eJson.fromJson(message, DeleteRequest.class);
-                case CREATE_DATABASE -> eJson.fromJson(message, CreateDatabaseRequest.class);
-                case DROP_DATABASE -> eJson.fromJson(message, DropDatabaseRequest.class);
-                case CREATE_COLLECTION -> eJson.fromJson(message, CreateCollectionRequest.class);
-                case DROP_COLLECTION -> eJson.fromJson(message, DropCollectionRequest.class);
-                case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
-                case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
-                case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
+                case AGGREGATE -> {
+                    final var parsed = parseAggregationRequest(message);
+                    final var newAggregationRequest = newParseAggregationRequest(message);
+                    System.out.println("new: " + eJsonNew.toJson(newAggregationRequest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case DELETE -> {
+                    final var parsed = eJson.fromJson(message, DeleteRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, DeleteRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case CREATE_DATABASE -> {
+                    final var parsed = eJson.fromJson(message, CreateDatabaseRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, CreateDatabaseRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case DROP_DATABASE -> {
+                    final var parsed = eJson.fromJson(message, DropDatabaseRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, DropDatabaseRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case CREATE_COLLECTION -> {
+                    final var parsed = eJson.fromJson(message, CreateCollectionRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, CreateCollectionRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case DROP_COLLECTION -> {
+                    final var parsed = eJson.fromJson(message, DropCollectionRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, DropCollectionRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case CREATE_INDEX -> {
+                    final var parsed = eJson.fromJson(message, CreateIndexRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, CreateIndexRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case DROP_INDEX -> {
+                    final var parsed = eJson.fromJson(message, DropIndexRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, DropIndexRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
+                case CLOSE_CONNECTION -> {
+                    final var parsed = eJson.fromJson(message, CloseConnectionRequest.class);
+                    final var toTest = eJsonNew.fromJson(message, CloseConnectionRequest.class);
+                    System.out.println("new: " + eJsonNew.toJson(toTest));
+                    System.out.println("old: " + eJson.toJson(parsed));
+                    yield parsed;
+                }
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -74,22 +128,18 @@ public class RequestParser {
         return aggRequest;
     }
 
-    private static OperationRequest newParseAggregationRequest(final String message) {
-        try {
-            final var aggRequest = eJsonNew.fromJson(message, AggregateRequest.class);
-            final var steps = new ArrayList<BaseAggregationStep>();
-            final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
-            final var baseObject = eJsonNew.fromJson(message, org.techhouse.ejson2.elements.JsonObject.class);
-            final var jsonArray = baseObject.get("aggregationSteps").asJsonArray();
-            for (var i=0; i < roughlyParsedAggSteps.size(); i++) {
-                final var type = roughlyParsedAggSteps.get(i).getType();
-                steps.add(newParseAggregationStep(type, jsonArray, i));
-            }
-            aggRequest.setAggregationSteps(steps);
-            return aggRequest;
-        } catch (Exception e) {
-            return null;
+    private static OperationRequest newParseAggregationRequest(final String message) throws Exception {
+        final var aggRequest = eJsonNew.fromJson(message, AggregateRequest.class);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
+        final var baseObject = eJsonNew.fromJson(message, org.techhouse.ejson2.elements.JsonObject.class);
+        final var jsonArray = baseObject.get("aggregationSteps").asJsonArray();
+        for (var i=0; i < roughlyParsedAggSteps.size(); i++) {
+            final var type = roughlyParsedAggSteps.get(i).getType();
+            steps.add(newParseAggregationStep(type, jsonArray, i));
         }
+        aggRequest.setAggregationSteps(steps);
+        return aggRequest;
     }
 
     private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray, final int index) {
