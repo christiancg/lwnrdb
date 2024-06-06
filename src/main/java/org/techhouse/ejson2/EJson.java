@@ -56,6 +56,8 @@ public class EJson {
         TypeAdapterFactory.registerTypeAdapter(org.techhouse.ejson.JsonObject.class, new OldJsonObjectTypeAdapter());
         // TODO: remove this Old Json Element adapter
         TypeAdapterFactory.registerTypeAdapter(org.techhouse.ejson.JsonElement.class, new OldJsonElementTypeAdapter());
+        // TODO: remove this Old Json Array adapter
+        TypeAdapterFactory.registerTypeAdapter(org.techhouse.ejson.JsonArray.class, new OldJsonArrayTypeAdapter());
     }
 
     public <T> T fromJson(String jsonString, Class<T> tClass)
@@ -69,6 +71,7 @@ public class EJson {
         return adapter.fromJson(jsonObject);
     }
 
+    @SuppressWarnings("unchecked")
     public <T> String toJson(T obj) {
         final Class<T> clazz = (Class<T>) obj.getClass();
         return writer.toJson(obj, clazz);
