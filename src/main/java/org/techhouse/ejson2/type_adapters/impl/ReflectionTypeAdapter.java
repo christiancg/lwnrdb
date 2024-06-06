@@ -81,7 +81,11 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         } else {
             adapter = TypeAdapterFactory.getAdapter(pClass);
         }
-        return adapter.toJson(casted);
+        if (adapter != null) {
+            return adapter.toJson(casted);
+        } else {
+            return null;
+        }
     }
 
     private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
@@ -93,10 +97,12 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             } else {
                 typeAdapter = TypeAdapterFactory.getAdapter(field.getType());
             }
-            final var value = typeAdapter.fromJson(parsed);
-            if (value != null) {
-                final var casted = ReflectionUtils.cast(field.getType(), parsed, field.getGenericType());
-                ReflectionUtils.setFieldValue(field, obj, casted);
+            if (typeAdapter != null) {
+                final var value = typeAdapter.fromJson(parsed);
+                if (value != null) {
+                    final var casted = ReflectionUtils.cast(field.getType(), parsed, field.getGenericType());
+                    ReflectionUtils.setFieldValue(field, obj, casted);
+                }
             }
         }
     }

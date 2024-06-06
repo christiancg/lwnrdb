@@ -138,14 +138,15 @@ public class ReflectionUtils {
             final var valueObject = (JsonObject)jsonValue;
             return parameterType.cast(toOldJsonObject(valueObject));
         } else if (jsonValue != null && !parameterType.isAssignableFrom(jsonValue.getClass()) && Number.class.isAssignableFrom(parameterType)) {
+            final var numberClass = Number.class;
             if (parameterType == Integer.class) {
-                return parameterType.cast(((Number)jsonValue).intValue());
+                return parameterType.cast(numberClass.cast(jsonValue).intValue());
             } else if (parameterType == Double.class) {
-                return parameterType.cast(((Number)jsonValue).doubleValue());
+                return parameterType.cast(numberClass.cast(jsonValue).doubleValue());
             } else if (parameterType == Float.class) {
-                return parameterType.cast(((Number)jsonValue).floatValue());
+                return parameterType.cast(numberClass.cast(jsonValue).floatValue());
             } else if (parameterType == Long.class) {
-                return parameterType.cast(((Number)jsonValue).longValue());
+                return parameterType.cast(numberClass.cast(jsonValue).longValue());
             }
         }
         return parameterType.cast(jsonValue);
