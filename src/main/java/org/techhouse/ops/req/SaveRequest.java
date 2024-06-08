@@ -2,7 +2,7 @@ package org.techhouse.ops.req;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationType;
 
 @Getter

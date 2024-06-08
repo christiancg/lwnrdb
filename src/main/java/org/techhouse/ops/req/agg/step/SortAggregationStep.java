@@ -9,7 +9,7 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 @Setter
 public class SortAggregationStep extends BaseAggregationStep {
     private String fieldName;
-    private boolean ascending;
+    private Boolean ascending;
     public SortAggregationStep(final String fieldName, final boolean ascending) {
         super(AggregationStepType.SORT);
         this.fieldName = fieldName;

@@ -47,6 +47,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Request validation
 - [ ] Iterative read depending on available memory and document count
 - [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
+- [ ] Numerical values that are integers shouldn't be printed with ".0" 
 
 ## Q&A
 

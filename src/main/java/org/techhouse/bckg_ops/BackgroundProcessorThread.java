@@ -18,7 +18,7 @@ public class BackgroundProcessorThread implements Runnable {
                 final var event = queue.take();
                 EventProcessorHelper.processEvent(event);
             } catch (Exception e) {
-                logger.error("Error while processing background task", e);
+                logger.error("Error while processing background task: ", e);
             }
         }
     }

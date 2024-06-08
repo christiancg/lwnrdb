@@ -2,7 +2,7 @@ package org.techhouse.ops.req.agg.operators;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.techhouse.ejson.JsonElement;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
@@ -12,8 +12,8 @@ import org.techhouse.ops.req.agg.OperatorType;
 public class FieldOperator extends BaseOperator {
     private FieldOperatorType fieldOperatorType;
     private String field;
-    private JsonElement value;
-    public FieldOperator(FieldOperatorType operatorType, String field, JsonElement value) {
+    private JsonBaseElement value;
+    public FieldOperator(FieldOperatorType operatorType, String field, JsonBaseElement value) {
         super(OperatorType.FIELD);
         this.fieldOperatorType = operatorType;
         this.field = field;

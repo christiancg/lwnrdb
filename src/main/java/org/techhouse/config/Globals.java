@@ -20,4 +20,5 @@ public class Globals {
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String NEWLINE = System.lineSeparator();
+    public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
 }

@@ -5,7 +5,10 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
-import org.techhouse.ejson.JsonNull;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonDouble;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.JsonUtils;
@@ -27,16 +30,15 @@ public class IndexHelper {
                 .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
         final Map<Class<?>, List<FieldIndexEntry<?>>> indexes = entriesToBeIndexed.entrySet().stream().map(jsonElementListEntry -> {
             final var key = jsonElementListEntry.getKey();
-            final var primitive = key.getAsJsonPrimitive();
+            final var primitive = key.asJsonPrimitive();
             final var ids = jsonElementListEntry.getValue().stream()
-                    .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).getAsString()).collect(Collectors.toSet());
-            if (primitive.isNumber()) {
-                return new FieldIndexEntry<>(dbName, collName, primitive.getAsDouble(), ids);
-            } else if (primitive.isBoolean()) {
-                return new FieldIndexEntry<>(dbName, collName, primitive.getAsBoolean(), ids);
-            } else {
-                return new FieldIndexEntry<>(dbName, collName, primitive.getAsString(), ids);
-            }
+                    .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue()).collect(Collectors.toSet());
+            return switch (primitive) {
+                case JsonDouble jsonDouble -> new FieldIndexEntry<>(dbName, collName, jsonDouble.getValue(), ids);
+                case JsonString jsonString -> new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
+                case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
+                default -> throw new IllegalStateException("Unexpected value: " + primitive);
+            };
         }).collect(Collectors.groupingBy(fieldIndexEntry -> fieldIndexEntry.getValue().getClass()));
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
     }
@@ -52,16 +54,12 @@ public class IndexHelper {
         for (var fieldName : existingIndexes) {
             final var element = JsonUtils.getFromPath(data, fieldName);
             if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
-                final var primitive = element.getAsJsonPrimitive();
-                if (primitive.isNumber()) {
-                    final var value = primitive.getAsDouble();
-                    internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), value, type, Double.class);
-                } else if (primitive.isBoolean()) {
-                    final var value = primitive.getAsBoolean();
-                    internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), value, type, Boolean.class);
-                } else {
-                    final var value = primitive.getAsString();
-                    internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), value, type, String.class);
+                final var primitive = element.asJsonPrimitive();
+                switch (primitive) {
+                    case JsonDouble jsonDouble -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonDouble.getValue(), type, Double.class);
+                    case JsonString jsonString -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonString.getValue(), type, String.class);
+                    case JsonBoolean jsonBoolean -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonBoolean.getValue(), type, Boolean.class);
+                    default -> throw new IllegalStateException("Unexpected value: " + primitive);
                 }
             }
         }

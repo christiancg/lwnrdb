@@ -1,5 +1,4 @@
 package org.techhouse.ejson.internal;
-
 import java.io.ObjectInputStream;
 import java.io.ObjectStreamClass;
 import java.lang.reflect.Field;
@@ -13,18 +12,6 @@ import java.lang.reflect.Method;
  */
 public abstract class UnsafeAllocator {
   public abstract <T> T newInstance(Class<T> c) throws Exception;
-
-  /**
-   * Asserts that the class is instantiable. This check should have already occurred
-   * in {@link ConstructorConstructor}; this check here acts as safeguard since trying
-   * to use Unsafe for non-instantiable classes might crash the JVM on some devices.
-   */
-  private static void assertInstantiable(Class<?> c) {
-    String exceptionMessage = ConstructorConstructor.checkInstantiable(c);
-    if (exceptionMessage != null) {
-      throw new AssertionError("UnsafeAllocator is used for non-instantiable type: " + exceptionMessage);
-    }
-  }
 
   public static final UnsafeAllocator INSTANCE = create();
 
@@ -43,7 +30,6 @@ public abstract class UnsafeAllocator {
         @Override
         @SuppressWarnings("unchecked")
         public <T> T newInstance(Class<T> c) throws Exception {
-          assertInstantiable(c);
           return (T) allocateInstance.invoke(unsafe, c);
         }
       };
@@ -68,7 +54,6 @@ public abstract class UnsafeAllocator {
         @Override
         @SuppressWarnings("unchecked")
         public <T> T newInstance(Class<T> c) throws Exception {
-          assertInstantiable(c);
           return (T) newInstance.invoke(null, c, constructorId);
         }
       };
@@ -89,7 +74,6 @@ public abstract class UnsafeAllocator {
         @Override
         @SuppressWarnings("unchecked")
         public <T> T newInstance(Class<T> c) throws Exception {
-          assertInstantiable(c);
           return (T) newInstance.invoke(null, c, Object.class);
         }
       };
