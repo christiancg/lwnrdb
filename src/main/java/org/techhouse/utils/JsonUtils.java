@@ -1,8 +1,8 @@
 package org.techhouse.utils;
 
-import org.techhouse.ejson.JsonElement;
-import org.techhouse.ejson.JsonNull;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonObject;
 
 public class JsonUtils {
     public static boolean hasInPath(JsonObject obj, String path) {
@@ -13,14 +13,14 @@ public class JsonUtils {
             if (step == null) {
                 return false;
             } else if (step.isJsonObject()) {
-                currentPart = step.getAsJsonObject();
+                currentPart = step.asJsonObject();
             }
         }
         return true;
     }
 
-    public static JsonElement getFromPath(JsonObject obj, String path) {
-        JsonElement result = JsonNull.INSTANCE;
+    public static JsonBaseElement getFromPath(JsonObject obj, String path) {
+        JsonBaseElement result = JsonNull.INSTANCE;
         var currentPart = obj;
         final var parts = path.split("\\.");
         for (String part : parts) {
@@ -28,7 +28,7 @@ public class JsonUtils {
             if (step == null) {
                 return JsonNull.INSTANCE;
             } else if (step.isJsonObject()) {
-                currentPart = step.getAsJsonObject();
+                currentPart = step.asJsonObject();
             }
             result = step;
         }
@@ -57,14 +57,14 @@ public class JsonUtils {
         } else {
             if (o1Field.isJsonPrimitive()) {
                 if (o2Field.isJsonPrimitive()) {
-                    final var o1Primitive = o1Field.getAsJsonPrimitive();
-                    final var o2Primitive = o2Field.getAsJsonPrimitive();
-                    if (o1Primitive.isString() && o2Primitive.isString()) {
-                        return o1Primitive.getAsString().compareTo(o2Primitive.getAsString());
-                    } else if (o1Primitive.isNumber() && o2Primitive.isNumber()) {
-                        return Double.compare(o1Primitive.getAsDouble(), o2Primitive.getAsDouble());
-                    } else if (o1Primitive.isBoolean() && o2Primitive.isBoolean()) {
-                        return o1Primitive.getAsBoolean() ? -1 : 1;
+                    final var o1Primitive = o1Field.asJsonPrimitive();
+                    final var o2Primitive = o2Field.asJsonPrimitive();
+                    if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
+                        return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
+                    } else if (o1Primitive.isJsonDouble() && o2Primitive.isJsonDouble()) {
+                        return Double.compare(o1Primitive.asJsonDouble().getValue(), o2Primitive.asJsonDouble().getValue());
+                    } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
+                        return o1Primitive.asJsonBoolean().getValue() ? -1 : 1;
                     }
                     return 1;
                 } else {
@@ -88,14 +88,14 @@ public class JsonUtils {
         } else {
             if (o1Field.isJsonPrimitive()) {
                 if (o2Field.isJsonPrimitive()) {
-                    final var o1Primitive = o1Field.getAsJsonPrimitive();
-                    final var o2Primitive = o2Field.getAsJsonPrimitive();
-                    if (o1Primitive.isString() && o2Primitive.isString()) {
-                        return o2Primitive.getAsString().compareTo(o1Primitive.getAsString());
-                    } else if (o1Primitive.isNumber() && o2Primitive.isNumber()) {
-                        return Double.compare(o2Primitive.getAsDouble(), o1Primitive.getAsDouble());
-                    } else if (o1Primitive.isBoolean() && o2Primitive.isBoolean()) {
-                        return o2Primitive.getAsBoolean() ? 1 : -1;
+                    final var o1Primitive = o1Field.asJsonPrimitive();
+                    final var o2Primitive = o2Field.asJsonPrimitive();
+                    if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
+                        return o2Primitive.asJsonString().getValue().compareTo(o1Primitive.asJsonString().getValue());
+                    } else if (o1Primitive.isJsonDouble() && o2Primitive.isJsonDouble()) {
+                        return Double.compare(o2Primitive.asJsonDouble().getValue(), o1Primitive.asJsonDouble().getValue());
+                    } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
+                        return o2Primitive.asJsonBoolean().getValue() ? 1 : -1;
                     }
                     return 1;
                 } else {

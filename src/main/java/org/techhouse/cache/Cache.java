@@ -6,9 +6,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
-import org.techhouse.ejson.JsonArray;
-import org.techhouse.ejson.JsonElement;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.*;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -138,34 +136,40 @@ public class Cache {
             case JsonArray arr -> {
                 final var firstElement = arr.get(0);
                 if (firstElement.isJsonPrimitive()) {
-                    final var prim = firstElement.getAsJsonPrimitive();
+                    final var prim = firstElement.asJsonPrimitive();
                     final var listStream = arr.asList().stream();
-                    if (prim.isString()) {
-                        final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
-                        if (stringIndex != null) {
-                            final var strList = listStream.map(JsonElement::getAsString).toList();
-                            yield SearchUtils.findingInNotIn(stringIndex, operator.getFieldOperatorType(), strList);
-                        } else {
-                            yield null;
+                    switch (prim) {
+                        case JsonString ignored -> {
+                            final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
+                            if (stringIndex != null) {
+                                final var strList = listStream.map(x -> x.asJsonString().getValue()).toList();
+                                yield SearchUtils.findingInNotIn(stringIndex, operator.getFieldOperatorType(), strList);
+                            } else {
+                                yield null;
+                            }
                         }
-                    } else if (prim.isNumber()) {
-                        final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
-                        if (doubleIndex != null) {
-                            final var doubleList = listStream.map(JsonElement::getAsDouble).toList();
-                            yield SearchUtils.findingInNotIn(doubleIndex, operator.getFieldOperatorType(), doubleList);
-                        } else {
-                            yield null;
+                        case JsonDouble ignored -> {
+                            final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
+                            if (doubleIndex != null) {
+                                final var doubleList = listStream.map(x -> x.asJsonDouble().getValue()).toList();
+                                yield SearchUtils.findingInNotIn(doubleIndex, operator.getFieldOperatorType(), doubleList);
+                            } else {
+                                yield null;
+                            }
                         }
-                    } else if (prim.isBoolean()) {
-                        final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class);
-                        if (booleanIndex != null) {
-                            final var booleanList = listStream.map(JsonElement::getAsBoolean).toList();
-                            yield SearchUtils.findingInNotIn(booleanIndex, operator.getFieldOperatorType(), booleanList);
-                        } else {
+                        case JsonBoolean ignored -> {
+                            final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class);
+                            if (booleanIndex != null) {
+                                final var booleanList = listStream.map(x -> x.asJsonBoolean().getValue()).toList();
+                                yield SearchUtils.findingInNotIn(booleanIndex, operator.getFieldOperatorType(), booleanList);
+                            } else {
+                                yield null;
+                            }
+                        }
+                        default -> {
                             yield null;
                         }
                     }
-                    yield null;
                 } else {
                     yield null;
                 }
@@ -176,15 +180,11 @@ public class Cache {
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
         final var collId = getCollectionIdentifier(dbName, collName);
-        var coll = collectionMap.get(collId);
-        if (coll == null) {
-            coll = new ConcurrentHashMap<>();
-            collectionMap.put(collId, coll);
-        }
+        var coll = collectionMap.computeIfAbsent(collId, k -> new ConcurrentHashMap<>());
         coll.put(entry.get_id(), entry);
     }
 
-    public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws IOException {
+    public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var coll = collectionMap.computeIfAbsent(collectionIdentifier, k -> new ConcurrentHashMap<>());
         final var pk = idxEntry.getValue();
@@ -202,13 +202,16 @@ public class Cache {
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
-        return collectionMap.computeIfAbsent(collectionIdentifier, k -> {
+        final var collData = collections.get(collectionIdentifier);
+        final var wholeCollection = collectionMap.get(collectionIdentifier);
+        if (wholeCollection == null || wholeCollection.isEmpty() || wholeCollection.size() < collData.getEntryCount()) {
             try {
                 return fs.readWholeCollection(dbName, collName);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
-        });
+        }
+        return wholeCollection;
     }
 
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {

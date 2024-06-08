@@ -2,7 +2,7 @@ package org.techhouse.ops.req.agg.mid_operators;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.techhouse.ejson.JsonArray;
+import org.techhouse.ejson.elements.JsonArray;
 
 @Getter
 @Setter

@@ -5,8 +5,8 @@ import lombok.EqualsAndHashCode;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.JsonArray;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonObject;
 
 import java.util.HashSet;
 import java.util.Set;
@@ -46,13 +46,13 @@ public class AdminCollEntry extends DbEntry {
     public static AdminCollEntry fromJsonObject(JsonObject object) {
         final var result = new AdminCollEntry();
         result.setData(object);
-        final var id = object.get(Globals.PK_FIELD).getAsString();
+        final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
         result.set_id(id);
-        final var collections = object.get(INDEXES_FIELD_NAME).getAsJsonArray().asList()
-                .stream().map(element -> element.getAsJsonPrimitive().getAsString())
+        final var collections = object.get(INDEXES_FIELD_NAME).asJsonArray().asList()
+                .stream().map(element -> element.asJsonString().getValue())
                 .collect(Collectors.toSet());
         result.setIndexes(collections);
-        final var entryCount = object.get(ENTRY_COUNT_FIELD_NAME).getAsInt();
+        final var entryCount = object.get(ENTRY_COUNT_FIELD_NAME).asJsonDouble().asInteger();
         result.setEntryCount(entryCount);
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);

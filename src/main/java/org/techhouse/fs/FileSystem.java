@@ -7,7 +7,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.JsonUtils;
@@ -159,7 +159,7 @@ public class FileSystem {
                 INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
     }
 
-    public DbEntry getById(PkIndexEntry pkIndexEntry) throws IOException {
+    public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
         final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName());
         try (final var reader = new RandomAccessFile(file, "r")) {
             reader.seek(pkIndexEntry.getPosition());
@@ -457,7 +457,13 @@ public class FileSystem {
     public Map<String, DbEntry> readWholeCollection(String dbName, String collectionName) throws IOException {
         final var collectionFile = getCollectionFile(dbName, collectionName);
         if (collectionFile.exists()) {
-            return Arrays.stream(Files.readString(collectionFile.toPath()).split("(?=(?<!:)\\{)")).map(s -> DbEntry.fromString(dbName, collectionName, s))
+            return Arrays.stream(Files.readString(collectionFile.toPath()).split("(?=(?<!:)\\{)")).map(s -> {
+                        try {
+                            return DbEntry.fromString(dbName, collectionName, s);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
                     .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry));
         } else {
             return new HashMap<>();
