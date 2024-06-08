@@ -1,10 +1,8 @@
 package org.techhouse.ops;
 
 import org.techhouse.config.Globals;
-import org.techhouse.ejson.JsonElement;
-import org.techhouse.ejson.JsonNull;
-import org.techhouse.ejson.JsonObject;
-import org.techhouse.ejson.JsonPrimitive;
+import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
@@ -123,22 +121,18 @@ public class MapOperatorHelper {
         double result = startNumber;
         for (var maxStep : operands) {
             if (maxStep.isJsonPrimitive()) {
-                final var primitive = maxStep.getAsJsonPrimitive();
-                if (primitive.isNumber()) {
-                    final var primitiveAsDouble = primitive.getAsDouble();
+                if (maxStep.isJsonDouble()) {
+                    final var primitiveAsDouble = maxStep.asJsonDouble().getValue();
                     result = onNumber.apply(result, primitiveAsDouble);
-                } else if (primitive.isString()) {
-                    final var fieldName = primitive.getAsString();
+                } else if (maxStep.isJsonString()) {
+                    final var fieldName = maxStep.asJsonString().getValue();
                     final var foundElement = JsonUtils.getFromPath(obj, fieldName);
-                    if (!foundElement.isJsonNull() && foundElement.isJsonPrimitive()) {
-                        final var foundPrimitive = foundElement.getAsJsonPrimitive();
-                        if (foundPrimitive.isNumber()) {
-                            final var foundPrimitiveAsDouble = foundPrimitive.getAsDouble();
-                            if (onString != null) {
-                                result = onString.apply(result, foundPrimitiveAsDouble);
-                            } else {
-                                result = onNumber.apply(result, foundPrimitiveAsDouble);
-                            }
+                    if (!foundElement.isJsonNull() && foundElement.isJsonDouble()) {
+                        final var foundPrimitiveAsDouble = foundElement.asJsonDouble().getValue();
+                        if (onString != null) {
+                            result = onString.apply(result, foundPrimitiveAsDouble);
+                        } else {
+                            result = onNumber.apply(result, foundPrimitiveAsDouble);
                         }
                     }
                 }
@@ -200,19 +194,15 @@ public class MapOperatorHelper {
         double result = 0;
         for (var avgStep : operands) {
             if (avgStep.isJsonPrimitive()) {
-                final var primitive = avgStep.getAsJsonPrimitive();
-                if (primitive.isNumber()) {
-                    result += primitive.getAsDouble();
+                if (avgStep.isJsonDouble()) {
+                    result += avgStep.asJsonDouble().getValue();
                     validSteps++;
-                } else if (primitive.isString()) {
-                    final var fieldName = primitive.getAsString();
+                } else if (avgStep.isJsonString()) {
+                    final var fieldName = avgStep.asJsonString().getValue();
                     final var foundElement = JsonUtils.getFromPath(obj, fieldName);
-                    if (!foundElement.isJsonNull() && foundElement.isJsonPrimitive()) {
-                        final var foundPrimitive = foundElement.getAsJsonPrimitive();
-                        if (foundPrimitive.isNumber()) {
-                            result += foundPrimitive.getAsDouble();
-                            validSteps++;
-                        }
+                    if (!foundElement.isJsonNull() && foundElement.isJsonDouble()) {
+                        result += foundElement.asJsonDouble().getValue();
+                        validSteps++;
                     }
                 }
             }
@@ -236,12 +226,9 @@ public class MapOperatorHelper {
         final var operand = midOperator.getOperand();
         final var element = JsonUtils.getFromPath(obj, operand);
         Double absValue = null;
-        if (element.isJsonPrimitive()) {
-            final var primitive = element.getAsJsonPrimitive();
-            if (primitive.isNumber()) {
-                final var doubleValue = primitive.getAsDouble();
-                absValue = Math.abs(doubleValue);
-            }
+        if (element.isJsonDouble()) {
+            final var doubleValue = element.asJsonDouble().getValue();
+            absValue = Math.abs(doubleValue);
         }
         obj.addProperty(addFieldName, absValue);
         return obj;
@@ -251,14 +238,11 @@ public class MapOperatorHelper {
         final var operand = midOperator.getOperand();
         final var element = JsonUtils.getFromPath(obj, operand);
         Integer size = null;
-        if (element.isJsonPrimitive()) {
-            final var primitive = element.getAsJsonPrimitive();
-            if (primitive.isString()) {
-                final var stringValue = primitive.getAsString();
-                size = stringValue.length();
-            }
+        if (element.isJsonString()) {
+            final var stringValue = element.asJsonString().getValue();
+            size = stringValue.length();
         } else if (element.isJsonArray()) {
-            final var arrayValue = element.getAsJsonArray();
+            final var arrayValue = element.asJsonArray();
             size = arrayValue.size();
         }
         obj.addProperty(addFieldName, size);
@@ -270,27 +254,27 @@ public class MapOperatorHelper {
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
             if (concatStep.isJsonPrimitive()) {
-                final var primitive = concatStep.getAsJsonPrimitive();
-                if (primitive.isString()) {
-                    final var primitiveString = primitive.getAsString();
+                final var primitive = concatStep.asJsonPrimitive();
+                if (primitive.isJsonString()) {
+                    final var primitiveString = primitive.asJsonString().getValue();
                     var toAdd = "";
                     if (primitiveString.startsWith(Globals.STRING_LITERAL_PREFIX)) {
                         toAdd = primitiveString.replaceFirst("-", "");
                     } else {
-                        final var fieldName = primitive.getAsString();
+                        final var fieldName = primitive.asJsonString().getValue();
                         final var element = JsonUtils.getFromPath(obj, fieldName);
-                        if (element.isJsonPrimitive() && element.getAsJsonPrimitive().isString()) {
-                            toAdd = element.getAsJsonPrimitive().getAsString();
+                        if (element.isJsonString()) {
+                            toAdd = element.asJsonString().getValue();
                         } else {
-                            toAdd = element.toString();
+                            toAdd = TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(element);
                         }
                     }
                     result.append(toAdd);
                 } else {
-                    result.append(concatStep);
+                    result.append(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(concatStep));
                 }
             } else if (concatStep.isJsonArray()) {
-                for (var arrayElement : concatStep.getAsJsonArray()) {
+                for (var arrayElement : concatStep.asJsonArray()) {
                     if (arrayElement.isJsonPrimitive()) {
                         result.append(arrayElement);
                     }
@@ -307,29 +291,43 @@ public class MapOperatorHelper {
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
         final var field = JsonUtils.getFromPath(obj, fieldName);
-        JsonElement casted = JsonNull.INSTANCE;
+        JsonBaseElement casted = JsonNull.INSTANCE;
         if (!field.isJsonNull() && field.isJsonPrimitive()) {
-            final var primitive = field.getAsJsonPrimitive();
+            final var primitive = field.asJsonPrimitive();
             casted = switch (type) {
                 case NUMBER -> {
-                    if (primitive.isString()) {
+                    if (primitive.isJsonDouble()) {
+                        yield primitive;
+                    } else if (primitive.isJsonString()) {
                         try {
-                            yield new JsonPrimitive(Double.parseDouble(primitive.getAsString()));
+                            yield new JsonDouble(Double.parseDouble(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
                         }
                     }
                     yield JsonNull.INSTANCE;
                 }
-                case STRING -> new JsonPrimitive(primitive.toString());
+                case STRING -> {
+                    if (primitive.isJsonString()) {
+                        yield primitive;
+                    } else if (primitive.isJsonDouble()) {
+                        final var value = primitive.asJsonDouble().getValue();
+                        yield new JsonString(value % 1 == 0 ? Integer.toString(value.intValue()) : Double.toString(value));
+                    } else if (primitive.isJsonBoolean()) {
+                        yield new JsonString(Boolean.toString(primitive.asJsonBoolean().getValue()));
+                    }
+                    yield JsonNull.INSTANCE;
+                }
                 case BOOLEAN -> {
-                    if (primitive.isString()) {
+                    if (primitive.isJsonBoolean()) {
+                        yield primitive;
+                    } else if (primitive.isJsonString()) {
                         try {
-                            yield new JsonPrimitive(Boolean.parseBoolean(primitive.getAsString()));
+                            yield new JsonBoolean(Boolean.parseBoolean(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
                         }
-                    } else if (primitive.isNumber()) {
-                        final var number = primitive.getAsDouble();
-                        yield new JsonPrimitive(number != 0);
+                    } else if (primitive.isJsonDouble()) {
+                        final var number = primitive.asJsonDouble().getValue();
+                        yield new JsonBoolean(number != 0);
                     }
                     yield JsonNull.INSTANCE;
                 }

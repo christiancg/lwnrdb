@@ -3,7 +3,7 @@ package org.techhouse.ops;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.*;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -15,6 +15,7 @@ import org.techhouse.utils.JsonUtils;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
@@ -98,35 +99,34 @@ public class FilterOperatorHelper {
                 final var toTestElement = JsonUtils.getFromPath(toTest, fieldName);
                 if (operatorElement.isJsonPrimitive()) {
                     if (toTestElement.isJsonPrimitive()) {
-                        final var operatorPrimitive = operatorElement.getAsJsonPrimitive();
-                        final var toTestPrimitive = toTestElement.getAsJsonPrimitive();
-                        if (operatorPrimitive.isBoolean() && toTestPrimitive.isBoolean()) {
+                        final var operatorPrimitive = operatorElement.asJsonPrimitive();
+                        final var toTestPrimitive = toTestElement.asJsonPrimitive();
+                        if (operatorPrimitive.isJsonBoolean() && toTestPrimitive.isJsonBoolean()) {
                             if (operation == FieldOperatorType.EQUALS) {
-                                return operatorPrimitive.getAsBoolean() == toTestPrimitive.getAsBoolean();
+                                return operatorPrimitive.asJsonBoolean().getValue() == toTestPrimitive.asJsonBoolean().getValue();
                             } else if (operation == FieldOperatorType.NOT_EQUALS) {
-                                return operatorPrimitive.getAsBoolean() != toTestPrimitive.getAsBoolean();
+                                return operatorPrimitive.asJsonBoolean().getValue() != toTestPrimitive.asJsonBoolean().getValue();
                             }
                             return false;
-                        } else if (operatorPrimitive.isNumber() && toTestPrimitive.isNumber()) {
+                        } else if (operatorPrimitive.isJsonDouble() && toTestPrimitive.isJsonDouble()) {
+                            final var operatorDouble = operatorElement.asJsonDouble().getValue();
+                            final var toTestDouble = toTestElement.asJsonDouble().getValue();
                             return switch (operation) {
-                                case EQUALS -> operatorPrimitive.getAsDouble() == toTestPrimitive.getAsDouble();
-                                case NOT_EQUALS -> operatorPrimitive.getAsDouble() != toTestPrimitive.getAsDouble();
-                                case GREATER_THAN -> operatorPrimitive.getAsDouble() < toTestPrimitive.getAsDouble();
-                                case GREATER_THAN_EQUALS ->
-                                        operatorPrimitive.getAsDouble() <= toTestPrimitive.getAsDouble();
-                                case SMALLER_THAN -> operatorPrimitive.getAsDouble() > toTestPrimitive.getAsDouble();
-                                case SMALLER_THAN_EQUALS ->
-                                        operatorPrimitive.getAsDouble() >= toTestPrimitive.getAsDouble();
+                                case EQUALS -> Objects.equals(operatorDouble, toTestDouble);
+                                case NOT_EQUALS -> !Objects.equals(operatorDouble, toTestDouble);
+                                case GREATER_THAN -> operatorDouble < toTestDouble;
+                                case GREATER_THAN_EQUALS -> operatorDouble <= toTestDouble;
+                                case SMALLER_THAN -> operatorDouble > toTestDouble;
+                                case SMALLER_THAN_EQUALS -> operatorDouble >= toTestDouble;
                                 case IN, NOT_IN, CONTAINS -> false;
                             };
-                        } else if (operatorPrimitive.isString() && toTestPrimitive.isString()) {
+                        } else if (operatorPrimitive.isJsonString() && toTestPrimitive.isJsonString()) {
+                            final var operatorString = operatorElement.asJsonString().getValue();
+                            final var toTestString = toTestElement.asJsonString().getValue();
                             return switch (operation) {
-                                case EQUALS ->
-                                        operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
-                                case NOT_EQUALS ->
-                                        !operatorPrimitive.getAsString().equalsIgnoreCase(toTestPrimitive.getAsString());
-                                case CONTAINS ->
-                                        toTestPrimitive.getAsString().contains(operatorPrimitive.getAsString());
+                                case EQUALS -> operatorString.equalsIgnoreCase(toTestString);
+                                case NOT_EQUALS -> !operatorString.equalsIgnoreCase(toTestString);
+                                case CONTAINS -> toTestString.contains(operatorString);
                                 case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN ->
                                         false;
                             };
@@ -134,8 +134,8 @@ public class FilterOperatorHelper {
                     }
                 } else if (operatorElement.isJsonArray()) {
                     if (toTestElement != null && toTestElement.isJsonPrimitive()) {
-                        final var jsonArray = operatorElement.getAsJsonArray();
-                        final var result = jsonArray.contains(toTestElement.getAsJsonPrimitive());
+                        final var jsonArray = operatorElement.asJsonArray();
+                        final var result = jsonArray.contains(toTestElement);
                         return (operation == FieldOperatorType.IN) == result;
                     }
                 }
@@ -149,21 +149,14 @@ public class FilterOperatorHelper {
             throws IOException {
         final var fieldName = operator.getField();
         final var value = operator.getValue();
-        Set<String> matchingValues = null;
-        if (value.isJsonPrimitive() || value.isJsonArray()) {
-            if (value.isJsonArray()) {
-                matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsJsonArray());
-            } else {
-                final var primitive = value.getAsJsonPrimitive();
-                if (primitive.isBoolean()) {
-                    matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsBoolean());
-                } else if (primitive.isNumber()) {
-                    matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsDouble());
-                } else if (primitive.isString()) {
-                    matchingValues = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value.getAsString());
-                }
-            }
-        }
+        Set<String> matchingValues;
+        matchingValues = switch (value) {
+            case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
+            case JsonBoolean jsonBoolean -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
+            case JsonDouble jsonDouble -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonDouble.getValue());
+            case JsonString jsonString -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
+            default -> null;
+        };
         final var coll = cache.getWholeCollection(dbName, collName);
         if (matchingValues != null) {
             final var partialList = new ArrayList<JsonObject>();
@@ -175,11 +168,11 @@ public class FilterOperatorHelper {
             } else {
                 final var idSet = partialList.stream()
                         .filter(jsonObject -> jsonObject.has(Globals.PK_FIELD))
-                        .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).getAsString())
+                        .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
                         .collect(Collectors.toSet());
                 resultStream = resultStream.filter(jsonObject -> {
                     if (jsonObject.has(Globals.PK_FIELD)) {
-                        final var id = jsonObject.get(Globals.PK_FIELD).getAsString();
+                        final var id = jsonObject.get(Globals.PK_FIELD).asJsonString().getValue();
                         return idSet.contains(id);
                     }
                     return false;

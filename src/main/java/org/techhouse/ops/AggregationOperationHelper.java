@@ -3,8 +3,8 @@ package org.techhouse.ops;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.JsonArray;
-import org.techhouse.ejson.JsonObject;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -172,7 +172,7 @@ public class AggregationOperationHelper {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var sortStep = (SortAggregationStep) baseSortStep;
         // TODO: use indexes
-        if (sortStep.isAscending()) {
+        if (sortStep.getAscending()) {
             return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionAscending(o1,o2, sortStep.getFieldName()));
         } else {
             return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionDescending(o1,o2, sortStep.getFieldName()));
