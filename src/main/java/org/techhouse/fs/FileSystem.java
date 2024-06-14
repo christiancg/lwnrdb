@@ -1,6 +1,5 @@
 package org.techhouse.fs;
 
-import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -16,45 +15,13 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
 public class FileSystem {
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     private static final String RW_PERMISSIONS = "rwd";
     private final EJson eJson = IocContainer.get(EJson.class);
-    private final Map<String, Semaphore> locks = new ConcurrentHashMap<>();
     private String dbPath;
-
-    private void lock(String dbName, String collName) throws InterruptedException {
-        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        final var lock = locks.get(collIdentifier);
-        if (lock == null) {
-            final var newLock = new Semaphore(1);
-            newLock.acquire();
-            locks.put(collIdentifier, newLock);
-        } else {
-            lock.acquire();
-        }
-    }
-
-    private void release(String collIdentifier) {
-        final var lock = locks.get(collIdentifier);
-        if (lock != null) {
-            lock.release();
-        }
-    }
-
-    private void release(String dbName, String collName) {
-        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        release(collIdentifier);
-    }
-
-    private void removeLock(String dbName, String collName) {
-        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        locks.remove(collIdentifier);
-    }
 
     public void createBaseDbPath() {
         dbPath = Configuration.getInstance().getFilePath();
@@ -81,15 +48,13 @@ public class FileSystem {
         return true;
     }
 
-    public boolean deleteDatabase(String dbName) throws InterruptedException {
+    public boolean deleteDatabase(String dbName) {
         final var dbFolder = new File(dbPath + Globals.FILE_SEPARATOR + dbName);
         final var fileDeletionResult = new ArrayList<Boolean>();
         if (dbFolder.exists()) {
             final var dbFolders = dbFolder.listFiles();
             if (dbFolders != null) {
                 for (var collFolder : dbFolders) {
-                    final var collName = collFolder.getName();
-                    lock(dbName, collName);
                     final var collFiles = collFolder.listFiles();
                     if (collFiles != null) {
                         for (var file : collFiles) {
@@ -97,8 +62,6 @@ public class FileSystem {
                         }
                         fileDeletionResult.add(collFolder.delete());
                     }
-                    release(dbName, collName);
-                    removeLock(dbName, collName);
                 }
             }
             fileDeletionResult.add(dbFolder.delete());
@@ -134,9 +97,7 @@ public class FileSystem {
         }
     }
 
-    public boolean deleteCollectionFiles(String dbName, String collectionName)
-            throws InterruptedException {
-        lock(dbName, collectionName);
+    public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = getCollectionFile(dbName, collectionName);
         final var collectionFolder = new File(collectionFile.getParent());
         final var fileDeletionResult = new ArrayList<Boolean>();
@@ -145,11 +106,8 @@ public class FileSystem {
                 fileDeletionResult.add(file.delete());
             }
             fileDeletionResult.add(collectionFolder.delete());
-            release(dbName, collectionName);
-            removeLock(dbName, collectionName);
             return fileDeletionResult.stream().allMatch(aBoolean -> aBoolean);
         }
-        release(dbName, collectionName);
         return false;
     }
 
@@ -178,11 +136,10 @@ public class FileSystem {
         }
     }
 
-    public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException, InterruptedException {
+    public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
-        lock(dbName, collName);
-        final var file = getCollectionFile(entry.getDatabaseName(), entry.getCollectionName());
+        final var file = getCollectionFile(dbName, collName);
         try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
             final var strData = entry.toFileEntry();
             final var length = strData.length();
@@ -191,8 +148,6 @@ public class FileSystem {
             writer.flush();
             final var entryId = entry.get_id();
             return indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId, totalFileLength, length);
-        } finally {
-            release(dbName, collName);
         }
     }
 
@@ -207,10 +162,9 @@ public class FileSystem {
         }
     }
 
-    public void deleteFromCollection(PkIndexEntry pkIndexEntry) throws InterruptedException {
+    public void deleteFromCollection(PkIndexEntry pkIndexEntry) {
         final var dbName = pkIndexEntry.getDatabaseName();
         final var collName = pkIndexEntry.getCollectionName();
-        lock(dbName, collName);
         final var file = getCollectionFile(dbName, collName);
         final int totalFileLength = (int) file.length();
         try (final var writer = new RandomAccessFile(file, RW_PERMISSIONS)) {
@@ -218,10 +172,8 @@ public class FileSystem {
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
             deleteIndexValue(pkIndexEntry);
         } catch (IOException e) {
-            release(dbName, collName);
             throw new RuntimeException(e);
         }
-        release(dbName, collName);
     }
 
     private void deleteIndexValue(PkIndexEntry pkIndexEntry) throws IOException {
@@ -240,10 +192,9 @@ public class FileSystem {
     }
 
     public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry)
-            throws IOException, InterruptedException {
+            throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
-        lock(dbName, collName);
         final var file = getCollectionFile(dbName, collName);
         final int totalFileLength = (int) file.length();
         try (final var writer = new RandomAccessFile(file, RW_PERMISSIONS)) {
@@ -254,8 +205,6 @@ public class FileSystem {
             writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + strData.length());
             return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(), totalFileLength, length);
-        } finally {
-            release(dbName, collName);
         }
     }
 

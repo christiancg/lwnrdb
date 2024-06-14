@@ -23,7 +23,7 @@ public class EventProcessorHelper {
     private static void processDatabaseEvent(DatabaseEvent event)
             throws IOException, InterruptedException {
         final var dbName = event.getDbName();
-        if (event.getType() == EventType.CREATED_UPDATED) {
+        if (event.getType() == EventType.CREATED) {
             final var existingDbEntry = AdminOperationHelper.getDatabaseEntry(dbName);
             if (existingDbEntry == null) {
                 final var newAdminDbEntry = new AdminDbEntry(dbName);
@@ -38,7 +38,7 @@ public class EventProcessorHelper {
             throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
-        if (event.getType() == EventType.CREATED_UPDATED) {
+        if (event.getType() == EventType.CREATED) {
             final var existingCollEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
             if (existingCollEntry == null) {
                 final var newAdminCollEntry = new AdminCollEntry(dbName, collName);
@@ -56,7 +56,7 @@ public class EventProcessorHelper {
         final var dbEntry = event.getDbEntry();
         final var type = event.getType();
         IndexHelper.updateIndexes(dbName, collName, dbEntry, type);
-        AdminOperationHelper.updateEntryCount(dbName, collName);
+        AdminOperationHelper.updateEntryCount(dbName, collName, type);
     }
 
     private static void processIndexEvent(IndexEvent event)
@@ -64,7 +64,7 @@ public class EventProcessorHelper {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         final var fieldName = event.getFieldName();
-        if (event.getType() == EventType.CREATED_UPDATED) {
+        if (event.getType() == EventType.CREATED) {
             if (!AdminOperationHelper.hasIndexEntry(dbName, collName, fieldName)) {
                 AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
             }
