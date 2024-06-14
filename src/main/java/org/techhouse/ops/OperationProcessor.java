@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.*;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
@@ -17,6 +18,7 @@ public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return switch (operationRequest.getType()) {
@@ -39,7 +41,8 @@ public class OperationProcessor {
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         try {
-            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(saveRequest.getDatabaseName(), saveRequest.getCollectionName());
+            locks.lock(dbName, collName);
+            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             var foundIndexEntry = -1;
             if (saveRequest.get_id() != null) {
                 foundIndexEntry = Collections.binarySearch(primaryKeyIndex, saveRequest.get_id());
@@ -59,6 +62,8 @@ public class OperationProcessor {
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
             return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 
@@ -93,9 +98,10 @@ public class OperationProcessor {
     }
 
     private DeleteResponse processDeleteOperation(DeleteRequest deleteRequest) {
+        final var dbName = deleteRequest.getDatabaseName();
+        final var collName = deleteRequest.getCollectionName();
         try {
-            final var dbName = deleteRequest.getDatabaseName();
-            final var collName = deleteRequest.getCollectionName();
+            locks.lock(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             final var foundIndexEntry = primaryKeyIndex.stream().filter(pkIndexEntry -> pkIndexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
             if (foundIndexEntry.isPresent()) {
@@ -112,6 +118,8 @@ public class OperationProcessor {
             }
         } catch (Exception exception) {
             return new DeleteResponse(OperationStatus.ERROR, "Error while deleting entry with id: " + deleteRequest.get_id() + ". Error message: " + exception.getMessage());
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 
@@ -160,18 +168,23 @@ public class OperationProcessor {
     }
 
     private DropCollectionResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
+        final var dbName = dropCollectionRequest.getDatabaseName();
+        final var collName = dropCollectionRequest.getCollectionName();
         try {
-            final var dbName = dropCollectionRequest.getDatabaseName();
-            final var collName = dropCollectionRequest.getCollectionName();
+            locks.lock(dbName, collName);
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
                 taskManager.submitBackgroundTask(new CollectionEvent(EventType.DELETED, dbName, collName));
                 return new DropCollectionResponse(OperationStatus.OK, "Collection dropped successfully");
             }
+            locks.release(dbName, collName);
+            locks.removeLock(dbName, collName);
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection");
         } catch (Exception e) {
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection: " + e.getMessage());
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 
