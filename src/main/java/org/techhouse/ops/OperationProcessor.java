@@ -47,18 +47,20 @@ public class OperationProcessor {
             if (saveRequest.get_id() != null) {
                 foundIndexEntry = Collections.binarySearch(primaryKeyIndex, saveRequest.get_id());
             }
+            var eventType = EventType.CREATED;
             PkIndexEntry savedPkIndexEntry;
             if (foundIndexEntry >= 0) {
                 final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
                 savedPkIndexEntry = fs.updateFromCollection(entry, idxEntry);
                 primaryKeyIndex.remove(idxEntry);
+                eventType = EventType.UPDATED;
             } else {
                 savedPkIndexEntry = fs.insertIntoCollection(entry);
             }
             primaryKeyIndex.add(savedPkIndexEntry);
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
             cache.addEntryToCache(dbName, collName, entry);
-            taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED_UPDATED, dbName, collName, entry));
+            taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
             return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
@@ -128,7 +130,7 @@ public class OperationProcessor {
             final var dbName = createDatabaseRequest.getDatabaseName();
             final var result = fs.createDatabaseFolder(dbName);
             if (result) {
-                taskManager.submitBackgroundTask(new DatabaseEvent(EventType.CREATED_UPDATED, dbName));
+                taskManager.submitBackgroundTask(new DatabaseEvent(EventType.CREATED, dbName));
                 return new CreateDatabaseResponse(OperationStatus.OK, "Database created successfully");
             }
             return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
@@ -158,7 +160,7 @@ public class OperationProcessor {
             final var collName = createCollectionRequest.getCollectionName();
             final var result = fs.createCollectionFile(dbName, collName);
             if (result) {
-                taskManager.submitBackgroundTask(new CollectionEvent(EventType.CREATED_UPDATED, dbName, collName));
+                taskManager.submitBackgroundTask(new CollectionEvent(EventType.CREATED, dbName, collName));
                 return new CreateCollectionResponse(OperationStatus.OK, "Collection created successfully");
             }
             return new CreateCollectionResponse(OperationStatus.ERROR, "Error while creating collection");
@@ -194,7 +196,7 @@ public class OperationProcessor {
             final var collName = createIndexRequest.getCollectionName();
             final var fieldName = createIndexRequest.getFieldName();
             IndexHelper.createIndex(dbName, collName, fieldName);
-            taskManager.submitBackgroundTask(new IndexEvent(EventType.CREATED_UPDATED, dbName, collName, fieldName));
+            taskManager.submitBackgroundTask(new IndexEvent(EventType.CREATED, dbName, collName, fieldName));
             return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
         } catch (Exception e) {
             return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());

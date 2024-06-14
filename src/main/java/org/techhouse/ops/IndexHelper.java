@@ -77,7 +77,7 @@ public class IndexHelper {
                 toRemoveString = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, String.class);
             }
         }
-        if (type == EventType.CREATED_UPDATED) {
+        if (type == EventType.CREATED || type == EventType.UPDATED) {
             FieldIndexEntry<T> found = findMatchingEntry(dbName, collName, fieldName, value, tClass);
             if (found != null) {
                 final var ids = found.getIds();

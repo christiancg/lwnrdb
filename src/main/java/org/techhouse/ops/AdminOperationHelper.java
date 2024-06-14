@@ -1,5 +1,6 @@
 package org.techhouse.ops;
 
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -34,25 +35,30 @@ public class AdminOperationHelper {
         locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
     }
 
-    public static void updateEntryCount(String dbName, String collName)
+    private static int adminCollEntryCountUpdate(AdminCollEntry adminCollEntry, EventType type) {
+        return type == EventType.CREATED ? adminCollEntry.getEntryCount() + 1 : adminCollEntry.getEntryCount() - 1;
+    }
+
+    public static void updateEntryCount(String dbName, String collName, EventType type)
             throws IOException, InterruptedException {
-        lockAdminCollectionsCollection();
-        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        final var entryCount = cache.getEntryCountForCollection(dbName, collName);
-        final var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
-        AdminCollEntry adminCollEntry;
-        PkIndexEntry pkIndexEntry;
-        if (adminIndexPkCollEntry != null) {
-            adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
-            adminCollEntry.setEntryCount(entryCount);
-            pkIndexEntry = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
-        } else {
-            adminCollEntry = new AdminCollEntry(dbName, collName);
-            adminCollEntry.setEntryCount(entryCount);
-            pkIndexEntry = fs.insertIntoCollection(adminCollEntry);
+        if (type != EventType.UPDATED) {
+            lockAdminCollectionsCollection();
+            final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+            final var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
+            AdminCollEntry adminCollEntry;
+            PkIndexEntry pkIndexEntry;
+            if (adminIndexPkCollEntry != null) {
+                adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
+                adminCollEntry.setEntryCount(adminCollEntryCountUpdate(adminCollEntry, type));
+                pkIndexEntry = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
+            } else {
+                adminCollEntry = new AdminCollEntry(dbName, collName);
+                adminCollEntry.setEntryCount(adminCollEntryCountUpdate(adminCollEntry, type));
+                pkIndexEntry = fs.insertIntoCollection(adminCollEntry);
+            }
+            cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
+            releaseAdminCollectionsCollection();
         }
-        cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
-        releaseAdminCollectionsCollection();
     }
 
     public static void saveDatabaseEntry(AdminDbEntry dbEntry)
