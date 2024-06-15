@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 public enum OperationType {
+    BULK_SAVE, // INSERT, UPDATE
     SAVE, //INSERT, UPDATE
     FIND_BY_ID,
     AGGREGATE,

@@ -184,6 +184,12 @@ public class Cache {
         coll.put(entry.get_id(), entry);
     }
 
+    public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
+        final var collId = getCollectionIdentifier(dbName, collName);
+        var coll = collectionMap.computeIfAbsent(collId, k -> new ConcurrentHashMap<>());
+        coll.putAll(entries.stream().collect(Collectors.toMap(DbEntry::get_id, o -> o)));
+    }
+
     public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var coll = collectionMap.computeIfAbsent(collectionIdentifier, k -> new ConcurrentHashMap<>());
