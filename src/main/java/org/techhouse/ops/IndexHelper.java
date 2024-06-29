@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -22,6 +23,7 @@ import java.util.stream.Collectors;
 public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
 
     public static void createIndex(String dbName, String collName, String fieldName) {
         final var coll = cache.getWholeCollection(dbName, collName);
@@ -47,20 +49,41 @@ public class IndexHelper {
         return fs.dropIndex(dbName, collName, fieldName);
     }
 
-    public static void updateIndexes(String dbName, String collName, DbEntry entry, EventType type)
-            throws IOException {
+    public static void bulkUpdateIndexes(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries)
+            throws IOException, InterruptedException {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
-        final var data = entry.getData();
         for (var fieldName : existingIndexes) {
-            final var element = JsonUtils.getFromPath(data, fieldName);
-            if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
-                final var primitive = element.asJsonPrimitive();
-                switch (primitive) {
-                    case JsonDouble jsonDouble -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonDouble.getValue(), type, Double.class);
-                    case JsonString jsonString -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonString.getValue(), type, String.class);
-                    case JsonBoolean jsonBoolean -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonBoolean.getValue(), type, Boolean.class);
-                    default -> throw new IllegalStateException("Unexpected value: " + primitive);
-                }
+            rl.lockIndex(dbName, collName, fieldName);
+            for (var insertedEntry : insertedEntries) {
+                internalSelectIndexType(insertedEntry, dbName, collName, fieldName, EventType.CREATED);
+            }
+            for (var updatedEntry : updatedEntries) {
+                internalSelectIndexType(updatedEntry, dbName, collName, fieldName, EventType.UPDATED);
+            }
+            rl.releaseIndex(dbName, collName, fieldName);
+        }
+    }
+
+    public static void updateIndexes(String dbName, String collName, DbEntry entry, EventType type)
+            throws IOException, InterruptedException {
+        final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
+        for (var fieldName : existingIndexes) {
+            rl.lockIndex(dbName, collName, fieldName);
+            internalSelectIndexType(entry, dbName, collName, fieldName, type);
+            rl.releaseIndex(dbName, collName, fieldName);
+        }
+    }
+
+    private static void internalSelectIndexType(DbEntry entry, String dbName, String collName, String fieldName,
+                                                EventType type) throws IOException {
+        final var element = JsonUtils.getFromPath(entry.getData(), fieldName);
+        if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
+            final var primitive = element.asJsonPrimitive();
+            switch (primitive) {
+                case JsonDouble jsonDouble -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonDouble.getValue(), type, Double.class);
+                case JsonString jsonString -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonString.getValue(), type, String.class);
+                case JsonBoolean jsonBoolean -> internalUpdateIndex(dbName, collName, fieldName, entry.get_id(), jsonBoolean.getValue(), type, Boolean.class);
+                default -> throw new IllegalStateException("Unexpected value: " + primitive);
             }
         }
     }
