@@ -16,6 +16,7 @@ public class EventProcessorHelper {
             case CollectionEvent collectionEvent -> processCollectionEvent(collectionEvent);
             case EntityEvent entityEvent -> processEntityEvent(entityEvent);
             case IndexEvent indexEvent -> processIndexEvent(indexEvent);
+            case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent);
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }
@@ -47,6 +48,15 @@ public class EventProcessorHelper {
         } else {
             AdminOperationHelper.deleteCollectionEntry(dbName, collName);
         }
+    }
+
+    private static void processBulkEntityEvent(BulkEntityEvent event)
+            throws IOException, InterruptedException {
+        final var dbName = event.getDbName();
+        final var collName = event.getCollName();
+        final var insertedCount = event.getInsertedEntries().size();
+        IndexHelper.bulkUpdateIndexes(dbName, collName, event.getInsertedEntries(), event.getUpdatedEntries());
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, insertedCount);
     }
 
     private static void processEntityEvent(EntityEvent event)
