@@ -90,7 +90,7 @@ public class Cache {
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<T>> indexEntries;
         if (index == null || index.keySet().stream().noneMatch(string ->
-                string.contains(FileSystem.INDEX_FILE_NAME_SEPARATOR + fieldName + FileSystem.INDEX_FILE_NAME_SEPARATOR))
+                string.contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR))
         ) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
