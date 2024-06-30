@@ -55,7 +55,6 @@ public class EventProcessorHelper {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         final var insertedCount = event.getInsertedEntries().size();
-        //TODO: fix double indexes getting corrupted
         IndexHelper.bulkUpdateIndexes(dbName, collName, event.getInsertedEntries(), event.getUpdatedEntries());
         AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, insertedCount);
     }
