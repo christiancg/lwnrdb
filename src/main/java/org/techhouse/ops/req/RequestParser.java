@@ -24,6 +24,7 @@ public class RequestParser {
         try {
             final var baseReq = eJson.fromJson(message, OperationRequest.class);
             return switch (baseReq.getType()) {
+                case BULK_SAVE -> eJson.fromJson(message, BulkSaveRequest.class);
                 case SAVE -> {
                     final var parsed = eJson.fromJson(message, SaveRequest.class);
                     if(parsed.getObject().has(Globals.PK_FIELD)) {

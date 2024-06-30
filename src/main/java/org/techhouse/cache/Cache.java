@@ -90,7 +90,7 @@ public class Cache {
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<T>> indexEntries;
         if (index == null || index.keySet().stream().noneMatch(string ->
-                string.contains(FileSystem.INDEX_FILE_NAME_SEPARATOR + fieldName + FileSystem.INDEX_FILE_NAME_SEPARATOR))
+                string.contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR))
         ) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
@@ -182,6 +182,12 @@ public class Cache {
         final var collId = getCollectionIdentifier(dbName, collName);
         var coll = collectionMap.computeIfAbsent(collId, k -> new ConcurrentHashMap<>());
         coll.put(entry.get_id(), entry);
+    }
+
+    public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
+        final var collId = getCollectionIdentifier(dbName, collName);
+        var coll = collectionMap.computeIfAbsent(collId, k -> new ConcurrentHashMap<>());
+        coll.putAll(entries.stream().collect(Collectors.toMap(DbEntry::get_id, o -> o)));
     }
 
     public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {

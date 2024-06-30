@@ -4,15 +4,19 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.*;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
 import org.techhouse.ops.resp.*;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.List;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -22,6 +26,7 @@ public class OperationProcessor {
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return switch (operationRequest.getType()) {
+            case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest);
             case SAVE -> processSaveOperation((SaveRequest) operationRequest);
             case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest);
             case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest);
@@ -34,6 +39,68 @@ public class OperationProcessor {
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
         };
+    }
+
+    private BulkSaveResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest) {
+        // TODO: validate that there shouldn't be more than 1 object with the same id
+        final var dbName = bulkSaveRequest.getDatabaseName();
+        final var collName = bulkSaveRequest.getCollectionName();
+        final var entries = new ArrayList<DbEntry>();
+        for (var entry : bulkSaveRequest.getObjects()) {
+            entries.add(DbEntry.fromJsonObject(dbName, collName, entry));
+        }
+        try {
+            locks.lock(dbName, collName);
+            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            final var indexedDbEntriesToUpdate = new ArrayList<IndexedDbEntry>();
+            for (var i : entries) {
+                final var data = i.getData();
+                if (data.has(Globals.PK_FIELD)) {
+                    final var id = data.get(Globals.PK_FIELD).asJsonString().getValue();
+                    i.set_id(id);
+                    final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
+                    if (foundIndexEntry > 0) {
+                        final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
+                        final var indexedDbEntry = new IndexedDbEntry();
+                        indexedDbEntry.setIndex(foundIndex);
+                        indexedDbEntry.setDatabaseName(dbName);
+                        indexedDbEntry.setCollectionName(collName);
+                        indexedDbEntry.set_id(id);
+                        indexedDbEntry.setData(data);
+                        indexedDbEntriesToUpdate.add(indexedDbEntry);
+                    }
+                }
+            }
+            final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
+            if (!indexedDbEntriesToUpdate.isEmpty()) {
+                updatedIndexEntries.addAll(fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate));
+                primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream().anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
+            }
+            primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
+            final var entriesToInsert = entries.stream()
+                    .filter(dbEntry ->
+                            indexedDbEntriesToUpdate.stream()
+                                    .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id())))
+                    .toList();
+            List<IndexedDbEntry> insertedIndexEntries = new ArrayList<>();
+            if (!entriesToInsert.isEmpty()) {
+                insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
+            }
+            primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
+            primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
+            final var updatedDbEntries = updatedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
+            cache.addEntriesToCache(dbName, collName, updatedDbEntries);
+            final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
+            cache.addEntriesToCache(dbName, collName, insertedDbEntries);
+            taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
+            final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
+            final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
+            return new BulkSaveResponse(OperationStatus.OK, "Successfully saved entries", insertedIds, updatedIds);
+        } catch (Exception exception) {
+            return new BulkSaveResponse(OperationStatus.ERROR, "Error while saving entries: " + exception.getMessage(), null, null);
+        } finally {
+            locks.release(dbName, collName);
+        }
     }
 
     private SaveResponse processSaveOperation(SaveRequest saveRequest) {
