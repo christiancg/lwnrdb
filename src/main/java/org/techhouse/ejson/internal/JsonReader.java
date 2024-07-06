@@ -38,7 +38,7 @@ public class JsonReader {
             tokensToSkip++;
             return new ParseTokenResult(obj, tokensToSkip);
         }
-        for (int i = 0; i < 100; i++) {
+        for ( ; ; ) {
             firstToken = tokens.getFirst();
             var propertyName = "";
             if (firstToken.getJsonType() == JsonBaseElement.JsonType.STRING) {
@@ -68,7 +68,6 @@ public class JsonReader {
             tokens = skipOneToken(tokens);
             tokensToSkip++;
         }
-        throw new MalformedJsonException("Expected end-of-object bracket");
     }
 
     private ParseTokenResult parseArray(List<JsonBaseElement> tokens) {
