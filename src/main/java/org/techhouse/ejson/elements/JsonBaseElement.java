@@ -8,7 +8,8 @@ public abstract class JsonBaseElement {
         NULL,
         STRING,
         DOUBLE,
-        SYNTAX
+        SYNTAX,
+        CUSTOM
     }
 
     public JsonType getJsonType() {
@@ -24,7 +25,12 @@ public abstract class JsonBaseElement {
             case JsonDouble ignored -> JsonType.DOUBLE;
             case JsonBoolean ignored -> JsonType.BOOLEAN;
             case JsonSyntaxToken ignored -> JsonType.SYNTAX;
-            default -> throw new IllegalStateException("Unexpected value: " + object);
+            default -> {
+                if (JsonCustom.class.isAssignableFrom(object.getClass())) {
+                    yield JsonType.CUSTOM;
+                }
+                throw new IllegalStateException("Unexpected value: " + object);
+            }
         };
     }
 
@@ -56,6 +62,10 @@ public abstract class JsonBaseElement {
         return this instanceof JsonBoolean;
     }
 
+    public Boolean isJsonCustom() {
+        return JsonCustom.class.isAssignableFrom(this.getClass());
+    }
+
     public JsonPrimitive<?> asJsonPrimitive() {
         return (JsonPrimitive<?>) this;
     }
@@ -78,10 +88,6 @@ public abstract class JsonBaseElement {
 
     public JsonBoolean asJsonBoolean() {
         return (JsonBoolean) this;
-    }
-
-    public JsonNull asJsonNull() {
-        return (JsonNull) this;
     }
 
     public abstract JsonBaseElement deepCopy();
