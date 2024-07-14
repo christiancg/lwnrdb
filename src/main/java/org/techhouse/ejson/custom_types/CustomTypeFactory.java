@@ -34,8 +34,7 @@ public class CustomTypeFactory {
         } else {
             try {
                 final var constructor = customType.getConstructor(String.class);
-                final var content = toParse.substring(toParse.indexOf('(') + 1, toParse.length() - 1);
-                return constructor.newInstance(content);
+                return constructor.newInstance(toParse);
             } catch (Exception ex) {
                 throw new BadImplementationCustomTypeException(customType.getName(), ex);
             }
