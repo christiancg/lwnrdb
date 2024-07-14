@@ -90,5 +90,9 @@ public abstract class JsonBaseElement {
         return (JsonBoolean) this;
     }
 
+    public JsonCustom<?> asJsonCustom() {
+        return (JsonCustom<?>) this;
+    }
+
     public abstract JsonBaseElement deepCopy();
 }
