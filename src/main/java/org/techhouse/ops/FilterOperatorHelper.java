@@ -92,6 +92,13 @@ public class FilterOperatorHelper {
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
     }
 
+    @SuppressWarnings("unchecked")
+    private static Integer compareCustom(JsonCustom<?> operator, JsonCustom<?> toTestWith) {
+        final var customClass = operator.getClass();
+        // The following line throws a warning but should be fine as we are checking that it is the same class
+        return customClass.cast(operator).compare(customClass.cast(toTestWith).getCustomValue());
+    }
+
     public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
         return (JsonObject toTest, String fieldName) -> {
             final var operatorElement = operator.getValue();
@@ -120,7 +127,21 @@ public class FilterOperatorHelper {
                                 case SMALLER_THAN_EQUALS -> operatorDouble >= toTestDouble;
                                 case IN, NOT_IN, CONTAINS -> false;
                             };
-                        } else if (operatorPrimitive.isJsonString() && toTestPrimitive.isJsonString()) {
+                        } else if(operatorPrimitive.isJsonCustom() && toTestPrimitive.isJsonCustom() &&
+                                operatorPrimitive.getClass().equals(toTestPrimitive.getClass())) {
+                            final var operatorCustom = operatorPrimitive.asJsonCustom();
+                            final var toTestCustom = toTestPrimitive.asJsonCustom();
+                            return switch (operation) {
+                                case EQUALS -> compareCustom(operatorCustom, toTestCustom) == 0;
+                                case NOT_EQUALS -> compareCustom(operatorCustom, toTestCustom) != 0;
+                                case GREATER_THAN -> compareCustom(operatorCustom, toTestCustom) < 0;
+                                case GREATER_THAN_EQUALS -> compareCustom(operatorCustom, toTestCustom) <= 0;
+                                case SMALLER_THAN -> compareCustom(operatorCustom, toTestCustom) > 0;
+                                case SMALLER_THAN_EQUALS -> compareCustom(operatorCustom, toTestCustom) >= 0;
+                                case IN, NOT_IN, CONTAINS -> false;
+                            };
+                        } else if (!operatorPrimitive.isJsonCustom() && !toTestPrimitive.isJsonCustom() &&
+                                operatorPrimitive.isJsonString() && toTestPrimitive.isJsonString()) {
                             final var operatorString = operatorElement.asJsonString().getValue();
                             final var toTestString = toTestElement.asJsonString().getValue();
                             return switch (operation) {
@@ -130,7 +151,9 @@ public class FilterOperatorHelper {
                                 case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN ->
                                         false;
                             };
-                        } else return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
+                        } else {
+                            return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
+                        }
                     }
                 } else if (operatorElement.isJsonArray()) {
                     if (toTestElement != null && toTestElement.isJsonPrimitive()) {
