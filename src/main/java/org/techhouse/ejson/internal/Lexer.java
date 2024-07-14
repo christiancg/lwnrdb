@@ -1,5 +1,6 @@
 package org.techhouse.ejson.internal;
 
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ejson.exceptions.MissingEndOfStringException;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
@@ -48,7 +49,11 @@ public class Lexer {
             final var ss = input.substring(i);
             final var ls = lexString(ss);
             if (ls != null) {
-                tokens.add(ls);
+                if (JsonCustom.isJsonCustom(ls)) {
+                    tokens.add(CustomTypeFactory.getCustomTypeInstance(ls));
+                } else {
+                    tokens.add(ls);
+                }
                 i += ls.getValue().length() + 1;
                 continue;
             }
