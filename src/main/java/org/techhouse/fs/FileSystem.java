@@ -450,7 +450,9 @@ public class FileSystem {
     public Map<String, DbEntry> readWholeCollection(String dbName, String collectionName) throws IOException {
         final var collectionFile = getCollectionFile(dbName, collectionName);
         if (collectionFile.exists()) {
-            return Arrays.stream(Files.readString(collectionFile.toPath()).split(Globals.READ_WHOLE_COLLECTION_REGEX)).map(s -> {
+            return Arrays.stream(Files.readString(collectionFile.toPath()).split(Globals.READ_WHOLE_COLLECTION_REGEX))
+                    .filter(s -> !s.isEmpty())
+                    .map(s -> {
                         try {
                             return DbEntry.fromString(dbName, collectionName, s);
                         } catch (Exception e) {
