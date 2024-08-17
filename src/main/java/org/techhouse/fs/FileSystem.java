@@ -7,10 +7,10 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.utils.JsonUtils;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -345,28 +345,38 @@ public class FileSystem {
             throws IOException {
         if (removedEntry != null) {
             final var clazz = removedEntry.getValue().getClass();
-            final var strIndexType = JsonUtils.classAsString(clazz);
+            final var strIndexType = clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(strWholeFile, removedEntry.getValue().toString());
+                final var strValue = removedEntry.getValue() instanceof JsonCustom<?> ?
+                        ((JsonCustom<?>)removedEntry.getValue()).getValue() :
+                        removedEntry.getValue().toString();
+                final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting);
                     if (!removedEntry.getIds().isEmpty()) {
                         final var toWriteLine = removedEntry.toFileEntry();
                         writer.writeBytes(toWriteLine);
                         writer.writeBytes(Globals.NEWLINE);
+                    } else if (otherEntriesLength == 0) {
+                        final var indexOfNewline = strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting);
+                        final var newFileLength = strWholeFile.length() - (indexOfNewline - indexOfExisting) - Globals.NEWLINE_CHAR_LENGTH;
+                        writer.setLength(newFileLength);
                     }
                 }
             }
         }
         if (insertedEntry != null) {
             final var clazz = insertedEntry.getValue().getClass();
-            final var strIndexType = JsonUtils.classAsString(clazz);
+            final var strIndexType = clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(strWholeFile, insertedEntry.getValue().toString());
+                final var strValue = insertedEntry.getValue() instanceof JsonCustom<?> ?
+                        ((JsonCustom<?>)insertedEntry.getValue()).getValue() :
+                        insertedEntry.getValue().toString();
+                final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 final var toWriteLine = insertedEntry.toFileEntry();
                 if (indexOfExisting >= 0) {
                     shiftOtherEntries(writer, strWholeFile, indexOfExisting);
@@ -379,7 +389,7 @@ public class FileSystem {
         }
     }
 
-    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
+    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
             throws IOException {
         var replacementIndex = indexOfExisting;
         var fromExistingEntry = strWholeFile.substring(indexOfExisting);
@@ -393,6 +403,7 @@ public class FileSystem {
         }
         writer.seek(replacementIndex);
         writer.writeBytes(otherEntries);
+        return otherEntries.length();
     }
 
     private String readFully(RandomAccessFile writer) throws IOException {
@@ -422,7 +433,7 @@ public class FileSystem {
                                                                  Class<T> indexType) throws IOException {
         final var collectionFolder = getCollectionFolder(dbName, collName);
         if (collectionFolder.exists()) {
-            final var strIndexType = JsonUtils.classAsString(indexType);
+            final var strIndexType = indexType.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             if (indexFile.exists()) {
                 return Files.readAllLines(indexFile.toPath()).stream().map(s ->

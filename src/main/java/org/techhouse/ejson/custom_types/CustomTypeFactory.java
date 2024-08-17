@@ -21,6 +21,10 @@ public class CustomTypeFactory {
         }
     }
 
+    public static Map<String, Class<? extends JsonCustom<?>>> getCustomTypes() {
+        return _customTypes;
+    }
+
     public static JsonCustom<?> getCustomTypeInstance(JsonString strElement) {
         final var toParse = strElement.getValue();
         return getCustomTypeInstance(toParse);

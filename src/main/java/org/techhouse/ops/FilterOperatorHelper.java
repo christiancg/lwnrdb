@@ -177,6 +177,7 @@ public class FilterOperatorHelper {
             case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
             case JsonBoolean jsonBoolean -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
             case JsonDouble jsonDouble -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonDouble.getValue());
+            case JsonCustom<?> jsonCustom -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonCustom);
             case JsonString jsonString -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
             default -> null;
         };

@@ -35,16 +35,6 @@ public class JsonUtils {
         return result;
     }
 
-    public static String classAsString(Class<?> tClass) {
-        if (tClass == Double.class) {
-            return "Double";
-        } else if (tClass == Boolean.class) {
-            return "Boolean";
-        } else {
-            return "String";
-        }
-    }
-
     public static int sortFunctionAscending(JsonObject o1, JsonObject o2, String fieldName) {
         final var o1Field = JsonUtils.getFromPath(o1, fieldName);
         final var o2Field = JsonUtils.getFromPath(o2, fieldName);

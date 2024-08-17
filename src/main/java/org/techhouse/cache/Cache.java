@@ -6,6 +6,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -133,12 +134,33 @@ public class Cache {
                     yield null;
                 }
             }
+            case JsonCustom<?> c -> {
+                final var customTypes = CustomTypeFactory.getCustomTypes();
+                final var customClass = customTypes.get(c.getCustomTypeName());
+                final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, (Class<T>) customClass);
+                if (customIndex != null) {
+                    yield SearchUtils.findingByOperator(customIndex, operator.getFieldOperatorType(), (T) c);
+                } else {
+                    yield null;
+                }
+            }
             case JsonArray arr -> {
                 final var firstElement = arr.get(0);
                 if (firstElement.isJsonPrimitive()) {
                     final var prim = firstElement.asJsonPrimitive();
                     final var listStream = arr.asList().stream();
                     switch (prim) {
+                        case JsonCustom<?> c -> {
+                            final var customTypes = CustomTypeFactory.getCustomTypes();
+                            final var customClass = customTypes.get(c.getCustomTypeName());
+                            final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, (Class<T>) customClass);
+                            if (customIndex != null) {
+                                final var custList = listStream.map(JsonBaseElement::asJsonCustom).toList();
+                                yield SearchUtils.findingInNotIn(customIndex, operator.getFieldOperatorType(), (List<T>) custList);
+                            } else {
+                                yield null;
+                            }
+                        }
                         case JsonString ignored -> {
                             final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
                             if (stringIndex != null) {
