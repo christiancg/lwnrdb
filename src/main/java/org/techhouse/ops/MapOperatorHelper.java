@@ -250,6 +250,7 @@ public class MapOperatorHelper {
     }
 
     private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
+        // TODO: implement concat for custom type here
         final var operands = midOperator.getOperands();
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
@@ -288,6 +289,7 @@ public class MapOperatorHelper {
     }
 
     private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
+        // TODO: implement cast to and from custom type here
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
         final var field = JsonUtils.getFromPath(obj, fieldName);
