@@ -181,7 +181,7 @@ public class IndexHelper {
         final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, value.getClass());
         if (indexEntries != null) {
             return indexEntries.stream()
-                    .filter(indexEntry -> indexEntry.getValue().getCustomValue().equals(value))
+                    .filter(indexEntry -> indexEntry.getValue().compare(value.getCustomValue()) == 0)
                     .findFirst()
                     .orElse(null);
         }

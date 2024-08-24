@@ -441,6 +441,10 @@ public class FileSystem {
                         .sorted((o1, o2) -> switch (o1.getValue()) {
                             case Double d -> Double.compare(d, (Double) o2.getValue());
                             case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
+                            case JsonCustom<?> c -> {
+                                final var customClass = c.getClass();
+                                yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
+                            }
                             default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
                         }).collect(Collectors.toList());
             }
