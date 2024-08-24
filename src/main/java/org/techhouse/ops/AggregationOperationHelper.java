@@ -142,6 +142,7 @@ public class AggregationOperationHelper {
                 return result;
             }).distinct();
         } else {
+            // TODO: use indexes if fieldName has an index
             return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
                 final var json = new JsonObject();
                 json.add(fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
