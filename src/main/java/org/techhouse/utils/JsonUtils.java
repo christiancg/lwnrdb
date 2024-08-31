@@ -49,7 +49,10 @@ public class JsonUtils {
                 if (o2Field.isJsonPrimitive()) {
                     final var o1Primitive = o1Field.asJsonPrimitive();
                     final var o2Primitive = o2Field.asJsonPrimitive();
-                    if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
+                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom() &&
+                            o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
+                        return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
+                    } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
                         return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
                     } else if (o1Primitive.isJsonDouble() && o2Primitive.isJsonDouble()) {
                         return Double.compare(o1Primitive.asJsonDouble().getValue(), o2Primitive.asJsonDouble().getValue());
@@ -80,7 +83,10 @@ public class JsonUtils {
                 if (o2Field.isJsonPrimitive()) {
                     final var o1Primitive = o1Field.asJsonPrimitive();
                     final var o2Primitive = o2Field.asJsonPrimitive();
-                    if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
+                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom() &&
+                            o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
+                        return o2Primitive.asJsonCustom().getValue().compareTo(o1Primitive.asJsonCustom().getValue());
+                    } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
                         return o2Primitive.asJsonString().getValue().compareTo(o1Primitive.asJsonString().getValue());
                     } else if (o1Primitive.isJsonDouble() && o2Primitive.isJsonDouble()) {
                         return Double.compare(o2Primitive.asJsonDouble().getValue(), o1Primitive.asJsonDouble().getValue());
