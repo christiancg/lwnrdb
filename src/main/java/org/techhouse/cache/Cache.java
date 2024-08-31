@@ -14,10 +14,7 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.SearchUtils;
 
 import java.io.IOException;
-import java.util.AbstractMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -83,6 +80,22 @@ public class Cache {
         return primaryKeyIndex;
     }
 
+    public Map<String, List<FieldIndexEntry<?>>> getAllFieldIndexesAndLoadIfNecessary(String dbName, String collName,
+                                                                                  String fieldName) {
+        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        var indexes = fieldIndexMap.get(collectionIdentifier);
+        Map<String, List<FieldIndexEntry<?>>> indexMap;
+        if (indexes == null) {
+            final var allIndexesForField = fs.readAllWholeFieldIndexFiles(dbName, collName, fieldName);
+            indexMap = new ConcurrentHashMap<>(allIndexesForField);
+            fieldIndexMap.put(collectionIdentifier, indexMap);
+            return allIndexesForField;
+        } else {
+            indexMap = indexes;
+        }
+        return indexMap;
+    }
+
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
                                                                         String fieldName, Class<T> indexType)
             throws IOException {
@@ -91,7 +104,7 @@ public class Cache {
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<T>> indexEntries;
         if (index == null || index.keySet().stream().noneMatch(string ->
-                string.contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR))
+                string.contains(fieldName + Globals.COLL_IDENTIFIER_SEPARATOR))
         ) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
@@ -99,10 +112,14 @@ public class Cache {
             } else if (index == null) {
                 index = new ConcurrentHashMap<>();
             }
-            index.put(indexIdentifier, (List) indexEntries);
+            index.put(indexIdentifier, new ArrayList<>(indexEntries));
             fieldIndexMap.put(collectionIdentifier, index);
         } else {
-            indexEntries = (List) index.get(indexIdentifier);
+            indexEntries = index.get(indexIdentifier).stream()
+                    .map(fieldIndexEntry -> new FieldIndexEntry<>(fieldIndexEntry.getDatabaseName(),
+                            fieldIndexEntry.getCollectionName(), indexType.cast(fieldIndexEntry.getValue()),
+                            fieldIndexEntry.getIds()))
+                    .collect(Collectors.toList());
         }
         return indexEntries;
     }
@@ -321,6 +338,10 @@ public class Cache {
     }
 
     public boolean hasIndex(String dbName, String collName, String fieldName) {
+        return getIndexesForCollection(dbName, collName).contains(fieldName);
+    }
+
+    public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {
         final var fieldIndexes = fieldIndexMap.get(getCollectionIdentifier(dbName, collName));
         if (fieldIndexes != null) {
             return fieldIndexes.containsKey(fieldName);

@@ -152,7 +152,7 @@ public class AdminOperationHelper {
     }
 
     public static boolean hasIndexEntry(String dbName, String collName, String fieldName) {
-        return cache.hasIndex(dbName, collName, fieldName);
+        return cache.hasLoadedIndex(dbName, collName, fieldName);
     }
 
     public static void saveNewIndex(String dbName, String collName, String fieldName)

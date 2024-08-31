@@ -11,11 +11,13 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.utils.ReflectionUtils;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 
 public class FileSystem {
@@ -427,6 +429,36 @@ public class FileSystem {
             }
         }
         return false;
+    }
+
+    public ConcurrentMap<String, List<FieldIndexEntry<?>>> readAllWholeFieldIndexFiles(String dbName, String collName, String fieldName) {
+        final var collectionFolder = getCollectionFolder(dbName, collName);
+        if (collectionFolder.exists()) {
+            final var indexFiles = collectionFolder.listFiles((dir, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
+                    && !name.contains(Globals.PK_FIELD)
+                    && name.contains(fieldName));
+            if (indexFiles != null) {
+                return Arrays.stream(indexFiles).map(file -> {
+                    try {
+                        final var fileName = file.getName();
+                        final var type = fileName.split("-")[2];
+                        return new AbstractMap.SimpleEntry<>(type, Files.readAllLines(file.toPath()));
+                    } catch (IOException e) {
+                        return null;
+                    }
+                }).filter(Objects::nonNull).map((AbstractMap.SimpleEntry<String, List<String>> stringListSimpleEntry) -> {
+                    final var className = stringListSimpleEntry.getKey();
+                    final var clazz = ReflectionUtils.getClassFromSimpleName(className);
+                    return new AbstractMap.SimpleEntry<>(className,
+                            stringListSimpleEntry.getValue().stream()
+                                    .map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, clazz))
+                                    .collect(Collectors.toList()));
+                }).collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey,
+                        classListSimpleEntry -> new ArrayList<>(classListSimpleEntry.getValue()))
+                );
+            }
+        }
+        return null;
     }
 
     public <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName,
