@@ -1,6 +1,7 @@
 package org.techhouse.utils;
 
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 
 import java.util.Collections;
@@ -44,6 +45,12 @@ public class SearchUtils {
                 .collect(Collectors.toSet());
     }
 
+    private static <T, K> List<FieldIndexEntry<K>> castToJsonCustomList(List<FieldIndexEntry<T>> entries, Class<K> jsonCustomClass) {
+        return entries.stream().map(entry ->
+                new FieldIndexEntry<>(entry.getDatabaseName(), entry.getCollectionName(),
+                        jsonCustomClass.cast(entry.getValue()), entry.getIds())).toList();
+    }
+
     private static <T> List<FieldIndexEntry<Double>> castToDoubleList(List<FieldIndexEntry<T>> entries) {
         return entries.stream().map(doubleFieldIndexEntry ->
                 new FieldIndexEntry<>(doubleFieldIndexEntry.getDatabaseName(), doubleFieldIndexEntry.getCollectionName(),
@@ -53,6 +60,12 @@ public class SearchUtils {
     private static <T> Set<String> findingGreaterThan(List<FieldIndexEntry<T>> entries, T value) {
         if (value instanceof Double) {
             int index = internalGreaterSmallerEquals(castToDoubleList(entries), (Double) value,
+                    GreaterSmallerEqualsType.GREATER_THAN);
+            if (index >= 0) {
+                return toIdSet(entries, index, entries.size());
+            }
+        } else if (value instanceof JsonCustom<?> as) {
+            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
                     GreaterSmallerEqualsType.GREATER_THAN);
             if (index >= 0) {
                 return toIdSet(entries, index, entries.size());
@@ -68,6 +81,12 @@ public class SearchUtils {
             if (index >= 0) {
                 return toIdSet(entries, index, entries.size());
             }
+        } else if (value instanceof JsonCustom<?> as) {
+            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
+                    GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
+            if (index >= 0) {
+                return toIdSet(entries, index, entries.size());
+            }
         }
         return Set.of();
     }
@@ -79,6 +98,12 @@ public class SearchUtils {
             if (index >= 0) {
                 return toIdSet(entries, 0, ++index);
             }
+        } else if (value instanceof JsonCustom<?> as) {
+            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
+                    GreaterSmallerEqualsType.SMALLER_THAN);
+            if (index >= 0) {
+                return toIdSet(entries, 0, ++index);
+            }
         }
         return Set.of();
     }
@@ -86,6 +111,12 @@ public class SearchUtils {
     private static <T> Set<String> findingLessThanEquals(List<FieldIndexEntry<T>> entries, T value) {
         if (value instanceof Double) {
             int index = internalGreaterSmallerEquals(castToDoubleList(entries), (Double) value,
+                    GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
+            if (index >= 0) {
+                return toIdSet(entries, 0, ++index);
+            }
+        } else if (value instanceof JsonCustom<?> as) {
+            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
                     GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
             if (index >= 0) {
                 return toIdSet(entries, 0, ++index);
@@ -130,6 +161,71 @@ public class SearchUtils {
                     .collect(Collectors.toSet());
         }
         return Set.of();
+    }
+
+    private static <T extends JsonCustom<K>, K> int internalGreaterSmallerEquals(List<FieldIndexEntry<T>> entries,
+                                                        JsonCustom<K> value, GreaterSmallerEqualsType type) {
+        int start = 0, end = entries.size() - 1;
+        // Minimum size of the array should be 1
+        if (end == 0) {
+            return -1;
+        }
+        // If target lies beyond the max element, then the index of strictly smaller
+        // value than target should be (end - 1)
+        switch (type) {
+            case SMALLER_THAN -> {
+                var entry = entries.get(end);
+                if (value.compare(entry.getValue().getCustomValue()) > 0) {
+                    return end;
+                }
+            }
+            case SMALLER_THAN_EQUALS -> {
+                var entry = entries.get(end);
+                if (value.compare(entry.getValue().getCustomValue()) >= 0) {
+                    return end;
+                }
+            }
+            case GREATER_THAN -> {
+                var entry = entries.get(start);
+                if (value.compare(entry.getValue().getCustomValue()) < 0) {
+                    return start;
+                }
+            }
+            case GREATER_THAN_EQUALS -> {
+                var entry = entries.get(start);
+                if (value.compare(entry.getValue().getCustomValue()) <= 0) {
+                    return start;
+                }
+            }
+        }
+        int ans = -1;
+        if (type == GreaterSmallerEqualsType.SMALLER_THAN || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS) {
+            while (start <= end) {
+                int mid = (start + end) / 2; // Move to the left side if the target is smaller
+                final var midValue = entries.get(mid).getValue();
+                if (type == GreaterSmallerEqualsType.SMALLER_THAN && midValue.compare(value.getCustomValue()) >= 0 ||
+                        midValue.compare(value.getCustomValue()) > 0) {
+                    end = mid - 1;
+                } else { // Move right side
+                    ans = mid;
+                    start = mid + 1;
+                }
+            }
+        } else {
+            while (start <= end) {
+                int mid = (start + end) / 2;
+                final var midValue = entries.get(mid).getValue();
+                // Move to right side if target is greater.
+                if (type == GreaterSmallerEqualsType.GREATER_THAN && midValue.compare(value.getCustomValue()) <= 0 ||
+                        midValue.compare(value.getCustomValue()) < 0) {
+                    start = mid + 1;
+                } else { // Move left side.
+                    ans = mid;
+                    end = mid - 1;
+                }
+            }
+        }
+        return ans;
     }
 
     private static int internalGreaterSmallerEquals(List<FieldIndexEntry<Double>> entries, Double value, GreaterSmallerEqualsType type) {
