@@ -3,8 +3,7 @@ package org.techhouse.ops;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.*;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -142,6 +141,7 @@ public class AggregationOperationHelper {
                 return result;
             }).distinct();
         } else {
+            // TODO: use indexes if fieldName has an index
             return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
                 final var json = new JsonObject();
                 json.add(fieldName, JsonUtils.getFromPath(jsonObject, fieldName));

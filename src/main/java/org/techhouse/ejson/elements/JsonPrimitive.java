@@ -1,6 +1,7 @@
 package org.techhouse.ejson.elements;
 
 import lombok.Data;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 
 @Data
 public class JsonPrimitive<T> extends JsonBaseElement {
@@ -51,7 +52,13 @@ public class JsonPrimitive<T> extends JsonBaseElement {
             case JsonDouble ignored -> new JsonDouble((Double) getValue());
             case JsonBoolean ignored -> new JsonBoolean((Boolean) getValue());
             case JsonString ignored -> new JsonString((String) getValue());
-            default -> null;
+            default -> {
+                if (JsonCustom.class.isAssignableFrom(getClass())) {
+                    yield CustomTypeFactory.getCustomTypeInstance((String)this.getValue());
+                } else {
+                    yield null;
+                }
+            }
         };
     }
 }

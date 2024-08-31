@@ -16,23 +16,23 @@ public class IocContainer {
     private IocContainer() {
     }
 
-    public static <T> T get(Class<?> clazz) {
+    public static <T> T get(Class<T> clazz) {
         T targetedDependency;
         Object found = IocContainer.instance.dependencies.get(clazz.getName());
         if (found == null) {
             try {
                 final var constructor = clazz.getConstructor();
-                targetedDependency = (T) constructor.newInstance();
+                targetedDependency = constructor.newInstance();
                 if (!IocContainer.instance.dependencies.containsKey(clazz.getName())) {
                     IocContainer.instance.dependencies.put(clazz.getName(), targetedDependency);
                 } else {
-                    targetedDependency = (T) IocContainer.instance.dependencies.get(clazz.getName());
+                    targetedDependency = clazz.cast(IocContainer.instance.dependencies.get(clazz.getName()));
                 }
             } catch (NoSuchMethodException | InvocationTargetException | InstantiationException | IllegalAccessException exception) {
                 throw new DependencyInjectionFailed(exception);
             }
         } else {
-            targetedDependency = (T) found;
+            targetedDependency = clazz.cast(found);
         }
         return targetedDependency;
     }

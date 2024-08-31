@@ -1,5 +1,8 @@
 package org.techhouse.ejson;
 
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.custom_types.JsonDateTime;
+import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
@@ -14,10 +17,11 @@ public class EJson {
     private final JsonWriter writer = new JsonWriter();
 
     public EJson() {
-        registerTypes();
+        registerTypeAdapters();
+        registerExtendedTypes();
     }
 
-    private void registerTypes() {
+    private void registerTypeAdapters() {
         // boolean types
         final var booleanTypeAdapter = new BooleanTypeAdapter();
         TypeAdapterFactory.registerTypeAdapter(Boolean.class, booleanTypeAdapter);
@@ -56,13 +60,16 @@ public class EJson {
         TypeAdapterFactory.registerTypeAdapter(JsonArray.class, new JsonArrayTypeAdapter());
     }
 
-    public <T> T fromJson(String jsonString, Class<T> tClass)
-            throws Exception {
+    private void registerExtendedTypes() {
+        CustomTypeFactory.registerCustomType(JsonTime.class);
+        CustomTypeFactory.registerCustomType(JsonDateTime.class);
+    }
+
+    public <T> T fromJson(String jsonString, Class<T> tClass) {
         return reader.fromJson(jsonString, tClass);
     }
 
-    public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass)
-            throws Exception {
+    public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);
     }

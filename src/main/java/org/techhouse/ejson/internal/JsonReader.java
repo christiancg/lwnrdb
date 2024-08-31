@@ -9,7 +9,7 @@ public class JsonReader {
     private record ParseTokenResult(JsonBaseElement element, int tokensToSkip) {
     }
 
-    public <T> T fromJson(String input, Class<T> tClass) throws Exception {
+    public <T> T fromJson(String input, Class<T> tClass) {
         final var tokens = Lexer.lex(input);
         final var parsed = internalParse(tokens, true);
         final var newInstance = Assigner.assign(parsed.element().asJsonObject(), tClass);
