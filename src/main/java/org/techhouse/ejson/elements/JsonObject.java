@@ -32,16 +32,12 @@ public class JsonObject extends JsonBaseElement {
         members.put(property, new JsonDouble(value));
     }
 
-    public JsonBaseElement remove(String property) {
-        return members.remove(property);
+    public void remove(String property) {
+        members.remove(property);
     }
 
     public Set<Map.Entry<String, JsonBaseElement>> entrySet() {
         return members.entrySet();
-    }
-
-    public Set<String> keySet() {
-        return members.keySet();
     }
 
     public int size() {

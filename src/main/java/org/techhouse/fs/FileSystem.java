@@ -7,15 +7,17 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.utils.JsonUtils;
+import org.techhouse.utils.ReflectionUtils;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.*;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 
 public class FileSystem {
@@ -345,28 +347,38 @@ public class FileSystem {
             throws IOException {
         if (removedEntry != null) {
             final var clazz = removedEntry.getValue().getClass();
-            final var strIndexType = JsonUtils.classAsString(clazz);
+            final var strIndexType = clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(strWholeFile, removedEntry.getValue().toString());
+                final var strValue = removedEntry.getValue() instanceof JsonCustom<?> ?
+                        ((JsonCustom<?>)removedEntry.getValue()).getValue() :
+                        removedEntry.getValue().toString();
+                final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting);
                     if (!removedEntry.getIds().isEmpty()) {
                         final var toWriteLine = removedEntry.toFileEntry();
                         writer.writeBytes(toWriteLine);
                         writer.writeBytes(Globals.NEWLINE);
+                    } else if (otherEntriesLength == 0) {
+                        final var indexOfNewline = strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting);
+                        final var newFileLength = strWholeFile.length() - (indexOfNewline - indexOfExisting) - Globals.NEWLINE_CHAR_LENGTH;
+                        writer.setLength(newFileLength);
                     }
                 }
             }
         }
         if (insertedEntry != null) {
             final var clazz = insertedEntry.getValue().getClass();
-            final var strIndexType = JsonUtils.classAsString(clazz);
+            final var strIndexType = clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(strWholeFile, insertedEntry.getValue().toString());
+                final var strValue = insertedEntry.getValue() instanceof JsonCustom<?> ?
+                        ((JsonCustom<?>)insertedEntry.getValue()).getValue() :
+                        insertedEntry.getValue().toString();
+                final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 final var toWriteLine = insertedEntry.toFileEntry();
                 if (indexOfExisting >= 0) {
                     shiftOtherEntries(writer, strWholeFile, indexOfExisting);
@@ -379,7 +391,7 @@ public class FileSystem {
         }
     }
 
-    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
+    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
             throws IOException {
         var replacementIndex = indexOfExisting;
         var fromExistingEntry = strWholeFile.substring(indexOfExisting);
@@ -393,6 +405,7 @@ public class FileSystem {
         }
         writer.seek(replacementIndex);
         writer.writeBytes(otherEntries);
+        return otherEntries.length();
     }
 
     private String readFully(RandomAccessFile writer) throws IOException {
@@ -418,11 +431,41 @@ public class FileSystem {
         return false;
     }
 
+    public ConcurrentMap<String, List<FieldIndexEntry<?>>> readAllWholeFieldIndexFiles(String dbName, String collName, String fieldName) {
+        final var collectionFolder = getCollectionFolder(dbName, collName);
+        if (collectionFolder.exists()) {
+            final var indexFiles = collectionFolder.listFiles((dir, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
+                    && !name.contains(Globals.PK_FIELD)
+                    && name.contains(fieldName));
+            if (indexFiles != null) {
+                return Arrays.stream(indexFiles).map(file -> {
+                    try {
+                        final var fileName = file.getName();
+                        final var type = fileName.split("-")[2];
+                        return new AbstractMap.SimpleEntry<>(type, Files.readAllLines(file.toPath()));
+                    } catch (IOException e) {
+                        return null;
+                    }
+                }).filter(Objects::nonNull).map((AbstractMap.SimpleEntry<String, List<String>> stringListSimpleEntry) -> {
+                    final var className = stringListSimpleEntry.getKey();
+                    final var clazz = ReflectionUtils.getClassFromSimpleName(className);
+                    return new AbstractMap.SimpleEntry<>(className,
+                            stringListSimpleEntry.getValue().stream()
+                                    .map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, clazz))
+                                    .collect(Collectors.toList()));
+                }).collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey,
+                        classListSimpleEntry -> new ArrayList<>(classListSimpleEntry.getValue()))
+                );
+            }
+        }
+        return null;
+    }
+
     public <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName,
                                                                  Class<T> indexType) throws IOException {
         final var collectionFolder = getCollectionFolder(dbName, collName);
         if (collectionFolder.exists()) {
-            final var strIndexType = JsonUtils.classAsString(indexType);
+            final var strIndexType = indexType.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             if (indexFile.exists()) {
                 return Files.readAllLines(indexFile.toPath()).stream().map(s ->
@@ -430,6 +473,10 @@ public class FileSystem {
                         .sorted((o1, o2) -> switch (o1.getValue()) {
                             case Double d -> Double.compare(d, (Double) o2.getValue());
                             case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
+                            case JsonCustom<?> c -> {
+                                final var customClass = c.getClass();
+                                yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
+                            }
                             default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
                         }).collect(Collectors.toList());
             }
@@ -450,7 +497,9 @@ public class FileSystem {
     public Map<String, DbEntry> readWholeCollection(String dbName, String collectionName) throws IOException {
         final var collectionFile = getCollectionFile(dbName, collectionName);
         if (collectionFile.exists()) {
-            return Arrays.stream(Files.readString(collectionFile.toPath()).split(Globals.READ_WHOLE_COLLECTION_REGEX)).map(s -> {
+            return Arrays.stream(Files.readString(collectionFile.toPath()).split(Globals.READ_WHOLE_COLLECTION_REGEX))
+                    .filter(s -> !s.isEmpty())
+                    .map(s -> {
                         try {
                             return DbEntry.fromString(dbName, collectionName, s);
                         } catch (Exception e) {

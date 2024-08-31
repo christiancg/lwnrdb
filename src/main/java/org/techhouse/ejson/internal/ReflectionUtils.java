@@ -111,7 +111,7 @@ public class ReflectionUtils {
             case OBJECT -> fieldValue.asJsonObject();
             case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
             case NULL -> null;
-            case STRING -> fieldValue.asJsonString().getValue();
+            case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
             case DOUBLE -> fieldValue.asJsonDouble().getValue();
             case SYNTAX -> null; // should never come here
         };
