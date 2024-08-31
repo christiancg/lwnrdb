@@ -65,13 +65,11 @@ public class EJson {
         CustomTypeFactory.registerCustomType(JsonDateTime.class);
     }
 
-    public <T> T fromJson(String jsonString, Class<T> tClass)
-            throws Exception {
+    public <T> T fromJson(String jsonString, Class<T> tClass) {
         return reader.fromJson(jsonString, tClass);
     }
 
-    public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass)
-            throws Exception {
+    public <T> T fromJson(JsonBaseElement jsonObject, Class<T> tClass) {
         final var adapter = TypeAdapterFactory.getAdapter(tClass);
         return adapter.fromJson(jsonObject);
     }
