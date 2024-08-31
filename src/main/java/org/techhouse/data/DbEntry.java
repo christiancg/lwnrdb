@@ -25,7 +25,7 @@ public class DbEntry {
         return entry;
     }
 
-    public static DbEntry fromString(String databaseName, String collectionName, String wholeEntryFromFile) throws Exception {
+    public static DbEntry fromString(String databaseName, String collectionName, String wholeEntryFromFile) {
         final var entry = new DbEntry();
         entry.setDatabaseName(databaseName);
         entry.setCollectionName(collectionName);

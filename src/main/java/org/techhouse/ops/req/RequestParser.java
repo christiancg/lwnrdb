@@ -48,7 +48,7 @@ public class RequestParser {
         }
     }
 
-    private static OperationRequest parseAggregationRequest(final String message) throws Exception {
+    private static OperationRequest parseAggregationRequest(final String message) {
         final var aggRequest = eJson.fromJson(message, AggregateRequest.class);
         final var steps = new ArrayList<BaseAggregationStep>();
         final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
@@ -62,7 +62,7 @@ public class RequestParser {
         return aggRequest;
     }
 
-    private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray, final int index) throws Exception {
+    private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray, final int index) {
         final var obj = jsonArray.get(index).asJsonObject();
         return switch (type) {
             case FILTER -> parseFilterStep(obj);
@@ -77,12 +77,12 @@ public class RequestParser {
         };
     }
 
-    private static BaseAggregationStep parseMapStep(final JsonObject obj) throws Exception {
+    private static BaseAggregationStep parseMapStep(final JsonObject obj) {
         final var operators = obj.get("operators").asJsonArray();
         return new MapAggregationStep(parseMapOperators(operators));
     }
 
-    private static List<MapOperator> parseMapOperators(final JsonArray arr) throws Exception {
+    private static List<MapOperator> parseMapOperators(final JsonArray arr) {
         final var mapOperators = new ArrayList<MapOperator>();
         for (var mapStep : arr.asList()) {
             final var mapStepObj = mapStep.asJsonObject();
@@ -105,7 +105,7 @@ public class RequestParser {
         return mapOperators;
     }
 
-    private static BaseMidOperator parseMidOperator(final JsonObject obj) throws Exception {
+    private static BaseMidOperator parseMidOperator(final JsonObject obj) {
         final var midOperationType = eJson.fromJson(obj.get("type"), MidOperationType.class);
         return switch (midOperationType) {
             case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT ->
@@ -115,12 +115,12 @@ public class RequestParser {
         };
     }
 
-    private static BaseAggregationStep parseFilterStep(final JsonObject obj) throws Exception {
+    private static BaseAggregationStep parseFilterStep(final JsonObject obj) {
         final var operator = obj.get("operator").asJsonObject();
         return new FilterAggregationStep(recursiveParse(operator));
     }
 
-    private static BaseOperator recursiveParse(final JsonObject operator) throws Exception {
+    private static BaseOperator recursiveParse(final JsonObject operator) {
         BaseOperator parsedOperator;
         if (operator.has("fieldOperatorType")) {
             final var fieldName = operator.get("field").asJsonString().getValue();
