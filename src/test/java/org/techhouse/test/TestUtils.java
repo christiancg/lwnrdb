@@ -16,7 +16,7 @@ public class TestUtils {
         final var config = Configuration.getInstance();
         final var field = Configuration.class.getDeclaredField("filePath");
         field.setAccessible(true);
-        field.set(config, "test");
+        field.set(config, TestGlobals.PATH);
         final var fs = IocContainer.get(FileSystem.class);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
@@ -25,8 +25,8 @@ public class TestUtils {
     }
 
     public static void standardTearDown() throws IOException, InterruptedException {
-        AdminOperationHelper.deleteDatabaseEntry("myDb");
-        deleteDir(new File("test"));
+        AdminOperationHelper.deleteDatabaseEntry(TestGlobals.DB);
+        deleteDir(new File(TestGlobals.PATH));
     }
 
     private static void deleteDir(File file) throws IOException {
@@ -42,7 +42,7 @@ public class TestUtils {
     }
 
     public static void createTestDatabaseAndCollection() throws IOException, InterruptedException {
-        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("myDb"));
-        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry("myDb", "myCollection"));
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
     }
 }

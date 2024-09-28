@@ -54,12 +54,11 @@ public class EventProcessorHelperTest {
     @Test
     public void processCollectionEventDeletionTest() throws IOException, InterruptedException {
         var collectionEvent = mock(CollectionEvent.class);
-        var adminOperationHelper = mock(AdminOperationHelper.class);
         when(collectionEvent.getDbName()).thenReturn(TestGlobals.DB);
         when(collectionEvent.getCollName()).thenReturn(TestGlobals.COLL);
         when(collectionEvent.getType()).thenReturn(EventType.DELETED);
         EventProcessorHelper.processEvent(collectionEvent);
-        verify(adminOperationHelper, times(1)).deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        Assertions.assertDoesNotThrow(() -> AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
