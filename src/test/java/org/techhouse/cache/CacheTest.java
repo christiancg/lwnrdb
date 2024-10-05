@@ -14,6 +14,7 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.ReflectionUtils;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -63,12 +64,10 @@ public class CacheTest {
         final var adminCollEntry = AdminCollEntry.fromJsonObject(jsonColl);
         cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
 
-        final var databasesField = Cache.class.getDeclaredField("databases");
-        databasesField.setAccessible(true);
-        final var databases = (Map<String, AdminDbEntry>)databasesField.get(cache);
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
         // Assert
         Assertions.assertFalse(databases.isEmpty());
@@ -84,12 +83,10 @@ public class CacheTest {
         // Act
         cache.loadAdminData();
 
-        final var databasesField = Cache.class.getDeclaredField("databases");
-        databasesField.setAccessible(true);
-        final var databases = (Map<String, AdminDbEntry>)databasesField.get(cache);
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminDbEntry>)collectionsField.get(cache);
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
         // Assert
         Assertions.assertTrue(databases.isEmpty());
         Assertions.assertTrue(collections.isEmpty());
@@ -168,9 +165,8 @@ public class CacheTest {
         String collName = "testColl";
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10));
-        Field pkIndexMapField = Cache.class.getDeclaredField("pkIndexMap");
-        pkIndexMapField.setAccessible(true);
-        final var pkIndexMap = (Map<String, List<PkIndexEntry>>) pkIndexMapField.get(cache);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(collectionIdentifier, expectedPkIndex);
 
         // Act
@@ -192,9 +188,8 @@ public class CacheTest {
         Map<String, List<FieldIndexEntry<?>>> expectedIndexes = new ConcurrentHashMap<>();
         expectedIndexes.put("type1", List.of(new FieldIndexEntry<>(dbName, collName, "value1", Set.of("id1"))));
 
-        Field fieldIndexMapField = Cache.class.getDeclaredField("fieldIndexMap");
-        fieldIndexMapField.setAccessible(true);
-        final var fieldIndexMap = (Map<String, Map<String, List<FieldIndexEntry<?>>>>) fieldIndexMapField.get(cache);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         fieldIndexMap.put(collectionIdentifier, expectedIndexes);
 
         // Act
@@ -242,9 +237,8 @@ public class CacheTest {
         Map<String, List<FieldIndexEntry<?>>> indexMap = new ConcurrentHashMap<>();
         indexMap.put(indexIdentifier, List.of(entry));
 
-        Field fieldIndexMapField = Cache.class.getDeclaredField("fieldIndexMap");
-        fieldIndexMapField.setAccessible(true);
-        final var fieldIndexMap = (Map<String, Map<String, List<FieldIndexEntry<?>>>>) fieldIndexMapField.get(cache);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         fieldIndexMap.put(collectionIdentifier, indexMap);
 
         // Act
@@ -383,9 +377,8 @@ public class CacheTest {
 
         cache.addEntryToCache(dbName, collName, entry);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertTrue(collectionMap.containsKey(collId));
@@ -404,9 +397,8 @@ public class CacheTest {
 
         cache.addEntryToCache(dbName, collName, entry);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertTrue(collectionMap.containsKey(collId));
@@ -431,9 +423,8 @@ public class CacheTest {
 
         cache.addEntriesToCache(dbName, collName, entries);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertEquals(2, collectionMap.get(collId).size());
@@ -461,9 +452,8 @@ public class CacheTest {
 
         cache.addEntriesToCache(dbName, collName, entries);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
         assertEquals(1, collectionMap.get(collId).size());
@@ -485,9 +475,8 @@ public class CacheTest {
 
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
         collectionMap.putIfAbsent(collectionIdentifier, new ConcurrentHashMap<>());
         collectionMap.get(collectionIdentifier).put("testValue", expectedEntry);
 
@@ -538,9 +527,8 @@ public class CacheTest {
         AdminCollEntry adminCollEntry = mock(AdminCollEntry.class);
         when(adminCollEntry.getEntryCount()).thenReturn(2);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
         collections.put(collectionIdentifier, adminCollEntry);
 
@@ -553,9 +541,8 @@ public class CacheTest {
         wholeCollection.put("1", entry1);
         wholeCollection.put("2", entry2);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
         collectionMap.put(collectionIdentifier, wholeCollection);
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
@@ -581,9 +568,8 @@ public class CacheTest {
         AdminCollEntry adminCollEntry = mock(AdminCollEntry.class);
         when(adminCollEntry.getEntryCount()).thenReturn(2);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
         collections.put(collectionIdentifier, adminCollEntry);
 
         when(fsMock.readWholeCollection(dbName, collName)).thenThrow(new IOException("File not found"));
@@ -597,9 +583,8 @@ public class CacheTest {
         Cache cache = new Cache();
         PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L);
 
-        final var databasesPkIndexField = Cache.class.getDeclaredField("databasesPkIndex");
-        databasesPkIndexField.setAccessible(true);
-        final var databasesPkIndex = (Map<String, PkIndexEntry>)databasesPkIndexField.get(cache);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         databasesPkIndex.put("testDb", expectedEntry);
 
@@ -626,9 +611,8 @@ public class CacheTest {
         PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L);
         cache.putPkIndexAdminDbEntry(entry);
 
-        final var databasesPkIndexField = Cache.class.getDeclaredField("databasesPkIndex");
-        databasesPkIndexField.setAccessible(true);
-        final var databasesPkIndex = (Map<String, PkIndexEntry>)databasesPkIndexField.get(cache);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         assertEquals(entry, databasesPkIndex.get("value1"));
     }
@@ -641,9 +625,8 @@ public class CacheTest {
         PkIndexEntry entry = new PkIndexEntry("db1", "coll1", null, 0L, 100L);
         cache.putPkIndexAdminDbEntry(entry);
 
-        final var databasesPkIndexField = Cache.class.getDeclaredField("databasesPkIndex");
-        databasesPkIndexField.setAccessible(true);
-        final var databasesPkIndex = (Map<String, PkIndexEntry>)databasesPkIndexField.get(cache);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         assertNull(databasesPkIndex.get(null));
     }
@@ -654,9 +637,8 @@ public class CacheTest {
         Cache cache = new Cache();
         AdminDbEntry entry = new AdminDbEntry("testDb");
 
-        final var databasesField = Cache.class.getDeclaredField("databases");
-        databasesField.setAccessible(true);
-        final var databases = (Map<String, AdminDbEntry>)databasesField.get(cache);
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
 
         databases.put("testDb", entry);
 
@@ -682,9 +664,8 @@ public class CacheTest {
         Cache cache = new Cache();
         PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L);
 
-        final var collectionsPkIndexField = Cache.class.getDeclaredField("collectionsPkIndex");
-        collectionsPkIndexField.setAccessible(true);
-        final var collectionsPkIndex = (Map<String, PkIndexEntry>)collectionsPkIndexField.get(cache);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         collectionsPkIndex.put("validCollId", expectedEntry);
 
@@ -701,9 +682,8 @@ public class CacheTest {
         PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L);
         cache.putPkIndexAdminCollEntry(entry);
 
-        final var collectionsPkIndexField = Cache.class.getDeclaredField("collectionsPkIndex");
-        collectionsPkIndexField.setAccessible(true);
-        final var collectionsPkIndex = (Map<String, PkIndexEntry>)collectionsPkIndexField.get(cache);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         assertEquals(entry, collectionsPkIndex.get("value1"));
     }
@@ -716,9 +696,8 @@ public class CacheTest {
         String collName = "testCollection";
         AdminCollEntry expectedEntry = new AdminCollEntry(dbName, collName);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
         collections.put(Cache.getCollectionIdentifier(dbName, collName), expectedEntry);
 
@@ -751,12 +730,10 @@ public class CacheTest {
 
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
-        final var databasesField = Cache.class.getDeclaredField("databases");
-        databasesField.setAccessible(true);
-        final var databases = (Map<String, AdminDbEntry>)databasesField.get(cache);
-        final var databasesPkIndexField = Cache.class.getDeclaredField("databasesPkIndex");
-        databasesPkIndexField.setAccessible(true);
-        final var databasesPkIndex = (Map<String, PkIndexEntry>)databasesPkIndexField.get(cache);
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         assertEquals(adminDbEntry, databases.get("testDb"));
         assertEquals(pkIndexEntry, databasesPkIndex.get("testDb"));
@@ -770,12 +747,10 @@ public class CacheTest {
         AdminDbEntry adminDbEntry = new AdminDbEntry(dbName);
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L);
 
-        final var databasesField = Cache.class.getDeclaredField("databases");
-        databasesField.setAccessible(true);
-        final var databases = (Map<String, AdminDbEntry>)databasesField.get(cache);
-        final var databasesPkIndexField = Cache.class.getDeclaredField("databasesPkIndex");
-        databasesPkIndexField.setAccessible(true);
-        final var databasesPkIndex = (Map<String, PkIndexEntry>)databasesPkIndexField.get(cache);
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         databases.put(dbName, adminDbEntry);
         databasesPkIndex.put(dbName, pkIndexEntry);
@@ -795,12 +770,10 @@ public class CacheTest {
 
         cache.putAdminCollectionEntry(dbEntry, indexEntry);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
-        final var collectionsPkIndexField = Cache.class.getDeclaredField("collectionsPkIndex");
-        collectionsPkIndexField.setAccessible(true);
-        final var collectionsPkIndex = (Map<String, PkIndexEntry>)collectionsPkIndexField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         assertEquals(dbEntry, collections.get(dbEntry.get_id()));
         assertEquals(indexEntry, collectionsPkIndex.get(dbEntry.get_id()));
@@ -814,12 +787,10 @@ public class CacheTest {
         AdminCollEntry adminCollEntry = new AdminCollEntry(TestGlobals.DB, collIdentifier);
         PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
-        final var collectionsPkIndexField = Cache.class.getDeclaredField("collectionsPkIndex");
-        collectionsPkIndexField.setAccessible(true);
-        final var collectionsPkIndex = (Map<String, PkIndexEntry>)collectionsPkIndexField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
 
         collections.put(collIdentifier, adminCollEntry);
@@ -839,12 +810,10 @@ public class CacheTest {
 
         cache.removeAdminCollEntry(collIdentifier);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
-        final var collectionsPkIndexField = Cache.class.getDeclaredField("collectionsPkIndex");
-        collectionsPkIndexField.setAccessible(true);
-        final var collectionsPkIndex = (Map<String, PkIndexEntry>)collectionsPkIndexField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         assertFalse(collections.containsKey(collIdentifier));
         assertFalse(collectionsPkIndex.containsKey(collIdentifier));
@@ -862,9 +831,8 @@ public class CacheTest {
         Map<String, DbEntry> collection = new HashMap<>();
         collection.put(pk, new DbEntry());
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         collectionMap.put(collectionIdentifier, collection);
 
@@ -883,9 +851,8 @@ public class CacheTest {
 
         cache.evictEntry(dbName, collName, pk);
 
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         assertNull(collectionMap.get(Cache.getCollectionIdentifier(dbName, collName)));
     }
@@ -900,12 +867,10 @@ public class CacheTest {
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100);
         DbEntry dbEntry = new DbEntry();
 
-        Field pkIndexMapField = Cache.class.getDeclaredField("pkIndexMap");
-        pkIndexMapField.setAccessible(true);
-        final var pkIndexMap = (Map<String, List<PkIndexEntry>>) pkIndexMapField.get(cache);
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         pkIndexMap.put(collectionName, List.of(pkIndexEntry));
         collectionMap.put(collectionName, Map.of("key", dbEntry));
@@ -926,12 +891,10 @@ public class CacheTest {
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100);
         DbEntry dbEntry = new DbEntry();
 
-        Field pkIndexMapField = Cache.class.getDeclaredField("pkIndexMap");
-        pkIndexMapField.setAccessible(true);
-        final var pkIndexMap = (Map<String, List<PkIndexEntry>>) pkIndexMapField.get(cache);
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         pkIndexMap.put(collectionName, List.of(pkIndexEntry));
         collectionMap.put(collectionName, Map.of("key", dbEntry));
@@ -952,9 +915,8 @@ public class CacheTest {
 
         List<PkIndexEntry> pkIndexEntries = new ArrayList<>();
 
-        Field pkIndexMapField = Cache.class.getDeclaredField("pkIndexMap");
-        pkIndexMapField.setAccessible(true);
-        final var pkIndexMap = (Map<String, List<PkIndexEntry>>) pkIndexMapField.get(cache);
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
 
         pkIndexMap.put(collIdentifier, pkIndexEntries);
 
@@ -973,12 +935,10 @@ public class CacheTest {
 
         cache.evictCollection(dbName, collName);
 
-        Field pkIndexMapField = Cache.class.getDeclaredField("pkIndexMap");
-        pkIndexMapField.setAccessible(true);
-        final var pkIndexMap = (Map<String, List<PkIndexEntry>>) pkIndexMapField.get(cache);
-        final var collectionMapField = Cache.class.getDeclaredField("collectionMap");
-        collectionMapField.setAccessible(true);
-        final var collectionMap = (Map<String, Map<String, DbEntry>>)collectionMapField.get(cache);
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         assertFalse(pkIndexMap.containsKey(collIdentifier));
         assertFalse(collectionMap.containsKey(collIdentifier));
@@ -1016,9 +976,8 @@ public class CacheTest {
 
         Set<String> indexes = new HashSet<>(Arrays.asList("testField", "anotherField"));
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
+        final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", type);
 
         var coll = new AdminCollEntry(dbName, collName, indexes, 0);
 
@@ -1040,9 +999,8 @@ public class CacheTest {
         Map<String, List<FieldIndexEntry<?>>> fieldIndexes = new HashMap<>();
         fieldIndexes.put(fieldName, new ArrayList<>());
 
-        Field fieldIndexMapField = Cache.class.getDeclaredField("fieldIndexMap");
-        fieldIndexMapField.setAccessible(true);
-        final var fieldIndexMap = (Map<String, Map<String, List<FieldIndexEntry<?>>>>) fieldIndexMapField.get(cache);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
 
         fieldIndexMap.put(collectionIdentifier, fieldIndexes);
 
@@ -1073,9 +1031,8 @@ public class CacheTest {
         indexes.add("index2");
         when(adminCollEntry.getIndexes()).thenReturn(indexes);
 
-        final var collectionsField = Cache.class.getDeclaredField("collections");
-        collectionsField.setAccessible(true);
-        final var collections = (Map<String, AdminCollEntry>)collectionsField.get(cache);
+        final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var collections = TestUtils.getPrivateField(cache, "collections", type);
 
         collections.put("testDb|testColl", adminCollEntry);
         Set<String> expectedIndexes = new HashSet<>();

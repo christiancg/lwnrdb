@@ -7,6 +7,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.utils.ReflectionUtils;
 
 import java.io.File;
 import java.io.IOException;
@@ -44,5 +45,12 @@ public class TestUtils {
     public static void createTestDatabaseAndCollection() throws IOException, InterruptedException {
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    public static <U, T> T getPrivateField(U object, String fieldName, ReflectionUtils.TypeToken<T> fieldType) throws NoSuchFieldException, IllegalAccessException {
+        final var field = object.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        final var tClass = fieldType.getTypeParameter();
+        return tClass.cast(field.get(object));
     }
 }
