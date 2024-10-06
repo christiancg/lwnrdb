@@ -1,9 +1,10 @@
-package org.techhouse.bckg_ops;
+package org.techhouse.unit.bckg_ops;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.events.*;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;

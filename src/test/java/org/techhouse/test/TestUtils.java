@@ -11,6 +11,7 @@ import org.techhouse.utils.ReflectionUtils;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Method;
 
 public class TestUtils {
     public static void standardInitialSetup() throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -52,5 +53,23 @@ public class TestUtils {
         field.setAccessible(true);
         final var tClass = fieldType.getTypeParameter();
         return tClass.cast(field.get(object));
+    }
+
+    public static <U, T> T getPrivateField(U object, String fieldName, Class<T> fieldType) throws NoSuchFieldException, IllegalAccessException {
+        final var field = object.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return fieldType.cast(field.get(object));
+    }
+
+    public static <U, T> void setPrivateField(U object, String fieldName, T fieldValue) throws NoSuchFieldException, IllegalAccessException {
+        final var field = object.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(object, fieldValue);
+    }
+
+    public static <U> Method getPrivateMethod(U object, String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
+        final var method = object.getClass().getDeclaredMethod(methodName, parameterTypes);
+        method.setAccessible(true);
+        return method;
     }
 }
