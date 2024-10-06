@@ -1,7 +1,8 @@
-package org.techhouse.cache;
+package org.techhouse.unit.cache;
 
 import org.junit.jupiter.api.*;
 
+import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;

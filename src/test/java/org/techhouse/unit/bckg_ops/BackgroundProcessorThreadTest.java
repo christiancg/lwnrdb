@@ -1,5 +1,6 @@
-package org.techhouse.bckg_ops;
+package org.techhouse.unit.bckg_ops;
 
+import org.techhouse.bckg_ops.BackgroundProcessorThread;
 import org.techhouse.bckg_ops.events.Event;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
