@@ -7,7 +7,7 @@ public class StringTypeAdapter implements TypeAdapter<String> {
 
     @Override
     public String toJson(String value) {
-        return "\"" + value + "\"";
+        return value == null ? "null" : "\"" + value + "\"";
     }
 
     @Override
