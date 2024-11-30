@@ -113,7 +113,7 @@ public class Lexer {
         return null;
     }
 
-    private static JsonDouble lexNumber(String input) {
+    private static JsonNumber lexNumber(String input) {
         final var strNumber = new StringBuilder();
         for (var c : input.toCharArray()) {
             if (NUMBER_CHARACTERS.contains(c)) {
@@ -125,7 +125,7 @@ public class Lexer {
         if (strNumber.isEmpty()) {
             return null;
         } else {
-            return new JsonDouble(Double.valueOf(strNumber.toString()), strNumber.length());
+            return new JsonNumber(strNumber.toString());
         }
     }
 

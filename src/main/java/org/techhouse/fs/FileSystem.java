@@ -347,7 +347,7 @@ public class FileSystem {
             throws IOException {
         if (removedEntry != null) {
             final var clazz = removedEntry.getValue().getClass();
-            final var strIndexType = clazz.getSimpleName();
+            final var strIndexType = Number.class.isAssignableFrom(clazz) ? Number.class.getSimpleName() : clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
@@ -371,7 +371,7 @@ public class FileSystem {
         }
         if (insertedEntry != null) {
             final var clazz = insertedEntry.getValue().getClass();
-            final var strIndexType = clazz.getSimpleName();
+            final var strIndexType = Number.class.isAssignableFrom(clazz) ? Number.class.getSimpleName() : clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
@@ -465,13 +465,13 @@ public class FileSystem {
                                                                  Class<T> indexType) throws IOException {
         final var collectionFolder = getCollectionFolder(dbName, collName);
         if (collectionFolder.exists()) {
-            final var strIndexType = indexType.getSimpleName();
+            final var strIndexType = Number.class.isAssignableFrom(indexType) ? Number.class.getSimpleName() : indexType.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             if (indexFile.exists()) {
                 return Files.readAllLines(indexFile.toPath()).stream().map(s ->
                                 FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, indexType))
                         .sorted((o1, o2) -> switch (o1.getValue()) {
-                            case Double d -> Double.compare(d, (Double) o2.getValue());
+                            case Number n -> Double.compare(n.doubleValue(), ((Number)o2.getValue()).doubleValue());
                             case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
                             case JsonCustom<?> c -> {
                                 final var customClass = c.getClass();

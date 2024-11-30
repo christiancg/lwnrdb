@@ -74,7 +74,12 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     }
 
     private <P> String hardCast(Object value, Class<P> pClass, Field field) throws ClassNotFoundException {
-        final var casted = pClass.cast(value);
+        P casted;
+        if (field.getType().isPrimitive()) {
+            casted = (P) value;
+        } else {
+            casted = pClass.cast(value);
+        }
         TypeAdapter<P> adapter;
         if (field.getType().getTypeParameters().length > 0) {
             adapter = TypeAdapterFactory.getAdapter(field.getGenericType());
@@ -90,7 +95,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
     private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
         final var fieldValue = ReflectionUtils.getFieldValue(field, obj);
-        if (fieldValue == null) {
+        if (fieldValue == null || field.getType().isPrimitive()) {
             TypeAdapter<?> typeAdapter;
             if (field.getType().getTypeParameters().length > 0) {
                 typeAdapter = TypeAdapterFactory.getAdapter(field.getGenericType());

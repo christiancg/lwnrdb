@@ -93,6 +93,7 @@ public class ReflectionUtils {
                     }
                 }
                 if (shouldContinue) {
+                    constructor.setAccessible(true);
                     return tClass.cast(constructor.newInstance(parameterValues));
                 }
             }
@@ -112,7 +113,7 @@ public class ReflectionUtils {
             case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
             case NULL -> null;
             case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
-            case DOUBLE -> fieldValue.asJsonDouble().getValue();
+            case NUMBER -> fieldValue.asJsonNumber().getValue();
             case SYNTAX -> null; // should never come here
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
@@ -144,6 +145,8 @@ public class ReflectionUtils {
             } else if (parameterType == Long.class) {
                 return parameterType.cast(numberClass.cast(jsonValue).longValue());
             }
+        } else if (parameterType.isPrimitive()) {
+            return (T)jsonValue;
         }
         return parameterType.cast(jsonValue);
     }

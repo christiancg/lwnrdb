@@ -7,7 +7,7 @@ public abstract class JsonBaseElement {
         BOOLEAN,
         NULL,
         STRING,
-        DOUBLE,
+        NUMBER,
         SYNTAX,
         CUSTOM
     }
@@ -22,7 +22,7 @@ public abstract class JsonBaseElement {
             case JsonObject ignored -> JsonType.OBJECT;
             case JsonNull ignored -> JsonType.NULL;
             case JsonString ignored -> JsonType.STRING;
-            case JsonDouble ignored -> JsonType.DOUBLE;
+            case JsonNumber ignored -> JsonType.NUMBER;
             case JsonBoolean ignored -> JsonType.BOOLEAN;
             case JsonSyntaxToken ignored -> JsonType.SYNTAX;
             default -> {
@@ -54,8 +54,8 @@ public abstract class JsonBaseElement {
         return this instanceof JsonString;
     }
 
-    public Boolean isJsonDouble() {
-        return this instanceof JsonDouble;
+    public Boolean isJsonNumber() {
+        return this instanceof JsonNumber;
     }
 
     public Boolean isJsonBoolean() {
@@ -78,8 +78,8 @@ public abstract class JsonBaseElement {
         return (JsonArray) this;
     }
 
-    public JsonDouble asJsonDouble() {
-        return (JsonDouble) this;
+    public JsonNumber asJsonNumber() {
+        return (JsonNumber) this;
     }
 
     public JsonString asJsonString() {

@@ -109,7 +109,7 @@ public class AdminCollEntryTest {
         assertEquals(10, entry.getEntryCount());
         JsonObject data = entry.getData();
         assertTrue(data.has("entryCount"));
-        assertEquals(10, data.get("entryCount").asJsonDouble().asInteger());
+        assertEquals(10, data.get("entryCount").asJsonNumber().asInteger());
     }
 
     // Handles negative entryCount values
@@ -120,7 +120,7 @@ public class AdminCollEntryTest {
         assertEquals(-5, entry.getEntryCount());
         JsonObject data = entry.getData();
         assertTrue(data.has("entryCount"));
-        assertEquals(-5, data.get("entryCount").asJsonDouble().asInteger());
+        assertEquals(-5, data.get("entryCount").asJsonNumber().asInteger());
     }
 
     // setDatabaseName should not alter the database name

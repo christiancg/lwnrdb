@@ -61,7 +61,7 @@ public class CacheTest {
         final var arrColl = new JsonArray();
         arrColl.add("test_index");
         jsonColl.add("indexes", arrColl);
-        jsonColl.add("entryCount", new JsonDouble(0));
+        jsonColl.add("entryCount", new JsonNumber(0));
         final var adminCollEntry = AdminCollEntry.fromJsonObject(jsonColl);
         cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
 
@@ -284,11 +284,11 @@ public class CacheTest {
         var dbName = "testDB";
         var collName = "testCollection";
         var fieldName = "testField";
-        var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, new JsonDouble(10.0));
+        var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, new JsonNumber(10.0));
         var value = 10.0;
 
-        var indexEntries = List.of(new FieldIndexEntry<>(dbName, collName, value, Set.of("id1", "id2")));
-        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class))
+        var indexEntries = List.of(new FieldIndexEntry<Number>(dbName, collName, value, Set.of("id1", "id2")));
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class))
                 .thenReturn(indexEntries);
 
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, value))
