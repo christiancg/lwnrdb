@@ -20,6 +20,6 @@ public class JsonArrayTypeAdapter implements TypeAdapter<JsonArray> {
 
     @Override
     public JsonArray fromJson(JsonBaseElement value) {
-        return value.getJsonType() == JsonBaseElement.JsonType.ARRAY ? value.asJsonArray() : null;
+        return value == null ? null : value.getJsonType() == JsonBaseElement.JsonType.ARRAY ? value.asJsonArray() : null;
     }
 }
