@@ -14,7 +14,7 @@ public class BooleanTypeAdapter implements TypeAdapter<Boolean> {
         if (value.getJsonType() == JsonBaseElement.JsonType.BOOLEAN) {
             return value.asJsonBoolean().getValue();
         } else if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
-            return Boolean.getBoolean(value.asJsonString().getValue());
+            return Boolean.parseBoolean(value.asJsonString().getValue());
         } else {
             return null;
         }
