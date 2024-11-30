@@ -11,8 +11,8 @@ public class NumberTypeAdapter implements TypeAdapter<Number> {
 
     @Override
     public Number fromJson(JsonBaseElement value) {
-        if (value.getJsonType() == JsonBaseElement.JsonType.DOUBLE) {
-            return value.asJsonDouble().getValue();
+        if (value.getJsonType() == JsonBaseElement.JsonType.NUMBER) {
+            return value.asJsonNumber().getValue();
         } else {
             return null;
         }

@@ -28,6 +28,7 @@ public class EJson {
         TypeAdapterFactory.registerTypeAdapter(boolean.class, booleanTypeAdapter);
         // number types
         final var numberTypeAdapter = new NumberTypeAdapter();
+        TypeAdapterFactory.registerTypeAdapter(Number.class, numberTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(short.class, numberTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(Short.class, numberTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(int.class, numberTypeAdapter);
@@ -47,7 +48,7 @@ public class EJson {
         // ejson types
         final var jsonBaseElementTypeAdapter = new JsonBaseElementTypeAdapter();
         TypeAdapterFactory.registerTypeAdapter(JsonBoolean.class, jsonBaseElementTypeAdapter);
-        TypeAdapterFactory.registerTypeAdapter(JsonDouble.class, jsonBaseElementTypeAdapter);
+        TypeAdapterFactory.registerTypeAdapter(JsonNumber.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonNull.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonString.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonBaseElement.class, jsonBaseElementTypeAdapter);

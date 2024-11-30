@@ -115,24 +115,24 @@ public class MapOperatorHelper {
 
     private static JsonObject internalGenericArrayOperator(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj,
                                                            Integer startNumber,
-                                                           BiFunction<Double, Double, Double> onNumber,
-                                                           BiFunction<Double, Double, Double> onString) {
+                                                           BiFunction<Number, Number, Number> onNumber,
+                                                           BiFunction<Number, Number, Number> onString) {
         final var operands = midOperator.getOperands();
-        double result = startNumber;
+        Number result = startNumber;
         for (var maxStep : operands) {
             if (maxStep.isJsonPrimitive()) {
-                if (maxStep.isJsonDouble()) {
-                    final var primitiveAsDouble = maxStep.asJsonDouble().getValue();
-                    result = onNumber.apply(result, primitiveAsDouble);
+                if (maxStep.isJsonNumber()) {
+                    final var primitiveAsNumber = maxStep.asJsonNumber().getValue();
+                    result = onNumber.apply(result, primitiveAsNumber);
                 } else if (maxStep.isJsonString()) {
                     final var fieldName = maxStep.asJsonString().getValue();
                     final var foundElement = JsonUtils.getFromPath(obj, fieldName);
-                    if (!foundElement.isJsonNull() && foundElement.isJsonDouble()) {
-                        final var foundPrimitiveAsDouble = foundElement.asJsonDouble().getValue();
+                    if (!foundElement.isJsonNull() && foundElement.isJsonNumber()) {
+                        final var foundPrimitiveAsNumber = foundElement.asJsonNumber().getValue();
                         if (onString != null) {
-                            result = onString.apply(result, foundPrimitiveAsDouble);
+                            result = onString.apply(result, foundPrimitiveAsNumber);
                         } else {
-                            result = onNumber.apply(result, foundPrimitiveAsDouble);
+                            result = onNumber.apply(result, foundPrimitiveAsNumber);
                         }
                     }
                 }
@@ -143,48 +143,48 @@ public class MapOperatorHelper {
     }
 
     private static JsonObject multiply(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = (Double result, Double number) -> result * number;
-        BiFunction<Double, Double, Double> onString = (Double result, Double number) -> result == 0 ?
-                result + number :
-                result * number;
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> result.doubleValue() * number.doubleValue();
+        BiFunction<Number, Number, Number> onString = (Number result, Number number) -> result.doubleValue() == 0 ?
+                result.doubleValue() + number.doubleValue() :
+                result.doubleValue() * number.doubleValue();
         return internalGenericArrayOperator(midOperator, addFieldName, obj, 0, onNumber, onString);
     }
 
     private static JsonObject divide(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = (Double result, Double number) -> result / number;
-        BiFunction<Double, Double, Double> onString = (Double result, Double number) -> result == 0 ?
-                result + number :
-                result / number;
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> result.doubleValue() / number.doubleValue();
+        BiFunction<Number, Number, Number> onString = (Number result, Number number) -> result.doubleValue() == 0 ?
+                result.doubleValue() + number.doubleValue() :
+                result.doubleValue() / number.doubleValue();
         return internalGenericArrayOperator(midOperator, addFieldName, obj,0, onNumber, onString);
     }
 
     private static JsonObject pow(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = Math::pow;
-        BiFunction<Double, Double, Double> onString = (Double result, Double number) -> result == 0 ?
-                result + number :
-                Math.pow(result, number);
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> Math.pow(result.doubleValue(), number.doubleValue());
+        BiFunction<Number, Number, Number> onString = (Number result, Number number) -> result.doubleValue() == 0 ?
+                result.doubleValue() + number.doubleValue() :
+                Math.pow(result.doubleValue(), number.doubleValue());
         return internalGenericArrayOperator(midOperator, addFieldName, obj, 0, onNumber, onString);
     }
 
     private static JsonObject root(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = (Double result, Double number) -> Math.pow(result, 1 / number);
-        BiFunction<Double, Double, Double> onString = (Double result, Double number) -> result == 0 ?
-                result + number :
-                Math.pow(result, 1 / number);
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> Math.pow(result.doubleValue(), 1 / number.doubleValue());
+        BiFunction<Number, Number, Number> onString = (Number result, Number number) -> result.doubleValue() == 0 ?
+                result.doubleValue() + number.doubleValue() :
+                Math.pow(result.doubleValue(), 1 / number.doubleValue());
         return internalGenericArrayOperator(midOperator, addFieldName, obj, 0, onNumber, onString);
     }
 
     private static JsonObject sum(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = Double::sum;
-        BiFunction<Double, Double, Double> onString = Double::sum;
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> result.doubleValue() + number.doubleValue();
+        BiFunction<Number, Number, Number> onString = (Number result, Number number) -> result.doubleValue() + number.doubleValue();
         return internalGenericArrayOperator(midOperator, addFieldName, obj, 0, onNumber, onString);
     }
 
     private static JsonObject subs(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = (Double result, Double number) -> result - number;
-        BiFunction<Double, Double, Double> onString = (Double result, Double number) -> result == 0 ?
-                result + number :
-                result - number;
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> result.doubleValue() - number.doubleValue();
+        BiFunction<Number, Number, Number> onString = (Number result, Number number) -> result.doubleValue() == 0 ?
+                result.doubleValue() + number.doubleValue() :
+                result.doubleValue() - number.doubleValue();
         return internalGenericArrayOperator(midOperator, addFieldName, obj, 0, onNumber, onString);
     }
 
@@ -194,14 +194,14 @@ public class MapOperatorHelper {
         double result = 0;
         for (var avgStep : operands) {
             if (avgStep.isJsonPrimitive()) {
-                if (avgStep.isJsonDouble()) {
-                    result += avgStep.asJsonDouble().getValue();
+                if (avgStep.isJsonNumber()) {
+                    result += avgStep.asJsonNumber().getValue().doubleValue();
                     validSteps++;
                 } else if (avgStep.isJsonString()) {
                     final var fieldName = avgStep.asJsonString().getValue();
                     final var foundElement = JsonUtils.getFromPath(obj, fieldName);
-                    if (!foundElement.isJsonNull() && foundElement.isJsonDouble()) {
-                        result += foundElement.asJsonDouble().getValue();
+                    if (!foundElement.isJsonNull() && foundElement.isJsonNumber()) {
+                        result += foundElement.asJsonNumber().getValue().doubleValue();
                         validSteps++;
                     }
                 }
@@ -213,12 +213,12 @@ public class MapOperatorHelper {
     }
 
     private static JsonObject max(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = (Double result, Double number) -> number > result ? number : result;
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> number.doubleValue() > result.doubleValue() ? number : result;
         return internalGenericArrayOperator(midOperator, addFieldName, obj, Integer.MIN_VALUE, onNumber, null);
     }
 
     private static JsonObject min(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        BiFunction<Double, Double, Double> onNumber = (Double result, Double number) -> number < result ? number : result;
+        BiFunction<Number, Number, Number> onNumber = (Number result, Number number) -> number.doubleValue() < result.doubleValue() ? number : result;
         return internalGenericArrayOperator(midOperator, addFieldName, obj, Integer.MAX_VALUE, onNumber, null);
     }
 
@@ -226,8 +226,8 @@ public class MapOperatorHelper {
         final var operand = midOperator.getOperand();
         final var element = JsonUtils.getFromPath(obj, operand);
         Double absValue = null;
-        if (element.isJsonDouble()) {
-            final var doubleValue = element.asJsonDouble().getValue();
+        if (element.isJsonNumber()) {
+            final var doubleValue = element.asJsonNumber().getValue().doubleValue();
             absValue = Math.abs(doubleValue);
         }
         obj.addProperty(addFieldName, absValue);
@@ -298,11 +298,11 @@ public class MapOperatorHelper {
             final var primitive = field.asJsonPrimitive();
             casted = switch (type) {
                 case NUMBER -> {
-                    if (primitive.isJsonDouble()) {
+                    if (primitive.isJsonNumber()) {
                         yield primitive;
                     } else if (primitive.isJsonString()) {
                         try {
-                            yield new JsonDouble(Double.parseDouble(primitive.asJsonString().getValue()));
+                            yield new JsonNumber(Double.parseDouble(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
                         }
                     }
@@ -311,9 +311,9 @@ public class MapOperatorHelper {
                 case STRING -> {
                     if (primitive.isJsonString()) {
                         yield primitive;
-                    } else if (primitive.isJsonDouble()) {
-                        final var value = primitive.asJsonDouble().getValue();
-                        yield new JsonString(value % 1 == 0 ? Integer.toString(value.intValue()) : Double.toString(value));
+                    } else if (primitive.isJsonNumber()) {
+                        final var value = primitive.asJsonNumber().getValue();
+                        yield new JsonString(value.doubleValue() % 1 == 0 ? Integer.toString(value.intValue()) : Double.toString(value.doubleValue()));
                     } else if (primitive.isJsonBoolean()) {
                         yield new JsonString(Boolean.toString(primitive.asJsonBoolean().getValue()));
                     }
@@ -327,8 +327,8 @@ public class MapOperatorHelper {
                             yield new JsonBoolean(Boolean.parseBoolean(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
                         }
-                    } else if (primitive.isJsonDouble()) {
-                        final var number = primitive.asJsonDouble().getValue();
+                    } else if (primitive.isJsonNumber()) {
+                        final var number = primitive.asJsonNumber().getValue().doubleValue();
                         yield new JsonBoolean(number != 0);
                     }
                     yield JsonNull.INSTANCE;

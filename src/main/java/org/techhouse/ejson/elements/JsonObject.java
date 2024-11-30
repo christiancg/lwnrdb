@@ -21,15 +21,15 @@ public class JsonObject extends JsonBaseElement {
     }
 
     public void addProperty(String property, Integer value) {
-        members.put(property, new JsonDouble(value));
+        members.put(property, new JsonNumber(value));
     }
 
-    public void addProperty(String property, Double value) {
-        members.put(property, new JsonDouble(value));
+    public void addProperty(String property, Number value) {
+        members.put(property, new JsonNumber(value));
     }
 
     public void addProperty(String property, Long value) {
-        members.put(property, new JsonDouble(value));
+        members.put(property, new JsonNumber(value));
     }
 
     public void remove(String property) {

@@ -31,7 +31,7 @@ public class ReflectionUtils {
     public static Class<?> getClassFromSimpleName(String className) {
         return switch (className) {
             case "String" -> String.class;
-            case "Double" -> Double.class;
+            case "Number" -> Number.class;
             case "Boolean" -> Boolean.class;
             default ->  {
                 final var customTypes = CustomTypeFactory.getCustomTypes();
