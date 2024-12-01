@@ -7,10 +7,6 @@ import org.techhouse.ejson.custom_types.CustomTypeFactory;
 public class JsonPrimitive<T> extends JsonBaseElement {
     protected T value;
 
-    protected void set(T value) {
-        this.value = value;
-    }
-
     protected T get() {
         return this.value;
     }
