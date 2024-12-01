@@ -6,11 +6,11 @@ on:
 jobs:
   buildAndTest:
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
+          architecture: x64
       - name: Run Maven Install
         run: mvn install
     runs-on: windows-latest
