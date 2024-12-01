@@ -5,11 +5,13 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.ReflectionUtils;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
+import org.techhouse.log.Logger;
 
 import java.lang.reflect.Field;
 
 public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
+    private final Logger logger = Logger.logFor(ReflectionTypeAdapter.class);
     private final Class<T> clazz;
 
     public ReflectionTypeAdapter(Class<T> clazz) {
@@ -62,6 +64,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             }
             return clazz.cast(instance);
         } catch (Exception e) {
+            logger.error(e.getMessage(), e);
             return null;
         }
     }

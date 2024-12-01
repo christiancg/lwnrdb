@@ -128,8 +128,7 @@ public class ReflectionUtils {
                 final var actualClass = Class.forName(actualType.getTypeName());
                 List<Object> listInstance = new ArrayList<>();
                 fieldValue.asJsonArray().forEach((arrItem) -> {
-                    final var obj = arrItem.asJsonObject();
-                    final var item = Assigner.assign(obj, actualClass);
+                    final var item = Assigner.assign(arrItem, actualClass);
                     listInstance.add(item);
                 });
                 return parameterType.cast(listInstance);
