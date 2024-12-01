@@ -12,9 +12,7 @@ import java.nio.file.Paths;
 import java.util.*;
 
 public class ConfigReader {
-    private static final Set<String> configKeys = new HashSet<>(
-            List.of("port", "maxConnections", "filePath", "backgroundProcessingThreads", "logPath", "maxLogFiles")
-    );
+    private static final Set<String> configKeys = Set.of("port", "maxConnections", "filePath", "backgroundProcessingThreads", "logPath", "maxLogFiles");
     private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
     private static final Logger logger = Logger.logFor(ConfigReader.class);
 
