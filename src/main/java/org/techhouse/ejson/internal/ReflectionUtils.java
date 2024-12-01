@@ -2,6 +2,7 @@ package org.techhouse.ejson.internal;
 
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ejson.exceptions.NoConstructorException;
+import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
 import java.lang.reflect.*;
 import java.util.ArrayList;
@@ -147,6 +148,9 @@ public class ReflectionUtils {
             }
         } else if (parameterType.isPrimitive()) {
             return (T)jsonValue;
+        } else if (jsonValue != null && fieldValue.isJsonObject()) {
+            final var adapter = TypeAdapterFactory.getAdapter(parameterType);
+            return adapter.fromJson(fieldValue);
         }
         return parameterType.cast(jsonValue);
     }
