@@ -13,6 +13,9 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     private final Class<T> clazz;
 
     public ReflectionTypeAdapter(Class<T> clazz) {
+        if (clazz == null) {
+            throw new NullPointerException("clazz can't be null");
+        }
         this.clazz = clazz;
     }
 
