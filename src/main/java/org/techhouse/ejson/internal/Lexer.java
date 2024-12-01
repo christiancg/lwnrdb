@@ -6,42 +6,16 @@ import org.techhouse.ejson.exceptions.MissingEndOfStringException;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class Lexer {
-    private static final HashSet<Character> JSON_SYNTAX = new HashSet<>() {{
-        add(',');
-        add(':');
-        add('[');
-        add(']');
-        add('{');
-        add('}');
-    }};
-    private static final HashSet<Character> JSON_WHITESPACE = new HashSet<>() {{
-        add(' ');
-        add('\t');
-        add('\b');
-        add('\n');
-        add('\r');
-    }};
+    private static final Set<Character> JSON_SYNTAX = Set.of(',', ':', '[', ']', '{', '}');
+    private static final Set<Character> JSON_WHITESPACE = Set.of(' ', '\t', '\b', '\n', '\r');
     private static final int FALSE_LEN = "false".length();
     private static final int TRUE_LEN = "true".length();
     private static final int NULL_LEN = "null".length();
-    private static final HashSet<Character> NUMBER_CHARACTERS = new HashSet<>() {{
-        add('0');
-        add('1');
-        add('2');
-        add('3');
-        add('4');
-        add('5');
-        add('6');
-        add('7');
-        add('8');
-        add('9');
-        add('-');
-        add('.');
-    }};
+    private static final Set<Character> NUMBER_CHARACTERS = Set.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '.');
 
     public static List<JsonBaseElement> lex(String input) {
         final var tokens = new ArrayList<JsonBaseElement>();
