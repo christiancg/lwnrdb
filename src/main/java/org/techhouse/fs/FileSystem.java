@@ -441,7 +441,7 @@ public class FileSystem {
                 return Arrays.stream(indexFiles).map(file -> {
                     try {
                         final var fileName = file.getName();
-                        final var type = fileName.split("-")[2];
+                        final var type = fileName.split("-")[2].split("\\.")[0];
                         return new AbstractMap.SimpleEntry<>(type, Files.readAllLines(file.toPath()));
                     } catch (IOException e) {
                         return null;
