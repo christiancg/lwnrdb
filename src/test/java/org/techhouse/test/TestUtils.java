@@ -13,6 +13,8 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 public class TestUtils {
     public static void standardInitialSetup() throws NoSuchFieldException, IllegalAccessException, IOException {
         final var config = Configuration.getInstance();
@@ -71,5 +73,19 @@ public class TestUtils {
         final var method = object.getClass().getDeclaredMethod(methodName, parameterTypes);
         method.setAccessible(true);
         return method;
+    }
+
+    public static void deleteFolder(File folder) {
+        File[] files = folder.listFiles();
+        if(files!=null) { //some JVMs return null for empty dirs
+            for(File f: files) {
+                if(f.isDirectory()) {
+                    deleteFolder(f);
+                } else {
+                    assertTrue(f.delete());
+                }
+            }
+        }
+        assertTrue(folder.delete());
     }
 }

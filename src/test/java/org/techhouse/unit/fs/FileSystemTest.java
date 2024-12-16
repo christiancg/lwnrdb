@@ -44,22 +44,8 @@ public class FileSystemTest {
     public void tearDown() {
         File dbDir = new File(TestGlobals.PATH);
         if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite() && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
-            deleteFolder(dbDir);
+            TestUtils.deleteFolder(dbDir);
         }
-    }
-
-    private void deleteFolder(File folder) {
-        File[] files = folder.listFiles();
-        if(files!=null) { //some JVMs return null for empty dirs
-            for(File f: files) {
-                if(f.isDirectory()) {
-                    deleteFolder(f);
-                } else {
-                    assertTrue(f.delete());
-                }
-            }
-        }
-        assertTrue(folder.delete());
     }
 
     // Create and initialize database directory structure with proper permissions
