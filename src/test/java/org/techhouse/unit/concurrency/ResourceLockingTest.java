@@ -1,5 +1,6 @@
 package org.techhouse.unit.concurrency;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
@@ -15,6 +16,11 @@ import java.util.concurrent.Semaphore;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class ResourceLockingTest {
+
+    @AfterEach
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.releaseAllLocks();
+    }
 
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException {
