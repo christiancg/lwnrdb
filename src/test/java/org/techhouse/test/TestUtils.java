@@ -1,6 +1,7 @@
 package org.techhouse.test;
 
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -12,6 +13,8 @@ import org.techhouse.utils.ReflectionUtils;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
+import java.util.Map;
+import java.util.concurrent.Semaphore;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -87,5 +90,14 @@ public class TestUtils {
             }
         }
         assertTrue(folder.delete());
+    }
+
+    public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {
+        final var locker = IocContainer.get(ResourceLocking.class);
+        final var locksType = new ReflectionUtils.TypeToken<Map<String, Semaphore>>() {};
+        final var locks = TestUtils.getPrivateField(locker, "locks", locksType);
+        for (var lock : locks.entrySet()) {
+            lock.getValue().release();
+        }
     }
 }
