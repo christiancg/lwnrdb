@@ -4,6 +4,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -33,7 +34,7 @@ public class SearchUtils {
         final var indexIndex = Collections.binarySearch(entries, value);
         Stream<FieldIndexEntry<T>> resultStream;
         if (indexIndex >= 0) {
-            final var auxList = entries.subList(0, indexIndex);
+            final var auxList = new ArrayList<>(entries.subList(0, indexIndex));
             if (indexIndex <= entries.size() + 1) {
                 auxList.addAll(entries.subList(indexIndex + 1, entries.size()));
             }
