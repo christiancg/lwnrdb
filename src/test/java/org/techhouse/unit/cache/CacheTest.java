@@ -34,7 +34,7 @@ public class CacheTest {
     }
 
     @AfterEach
-    public void tearDown() throws IOException, InterruptedException {
+    public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
