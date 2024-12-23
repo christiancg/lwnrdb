@@ -28,7 +28,7 @@ public class EventProcessorHelperTest {
     }
 
     @AfterEach
-    public void tearDown() throws IOException, InterruptedException {
+    public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -93,7 +93,7 @@ public class EventProcessorHelperTest {
         EventProcessorHelper.processEvent(entityEvent);
         final var collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(collEntry.getEntryCount(), 1, "Entry count should be 1");
+        Assertions.assertEquals(1, collEntry.getEntryCount(), "Entry count should be 1");
     }
 
     @Test
@@ -103,11 +103,11 @@ public class EventProcessorHelperTest {
         EventProcessorHelper.processEvent(createIndexEvent);
         var collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(collEntry.getIndexes().size(), 1, "Index count should be 1");
+        Assertions.assertEquals(1, collEntry.getIndexes().size(), "Index count should be 1");
         final var deleteIndexEvent = new IndexEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, "myField");
         EventProcessorHelper.processEvent(deleteIndexEvent);
         collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(collEntry.getIndexes().size(), 0, "Index count should be 0");
+        Assertions.assertEquals(0, collEntry.getIndexes().size(), "Index count should be 0");
     }
 }

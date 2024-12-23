@@ -14,6 +14,7 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -31,9 +32,21 @@ public class TestUtils {
         cache.loadAdminData();
     }
 
-    public static void standardTearDown() throws IOException, InterruptedException {
+    public static void standardTearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
         AdminOperationHelper.deleteDatabaseEntry(TestGlobals.DB);
         deleteDir(new File(TestGlobals.PATH));
+        clearCache();
+    }
+
+    private static void clearCache() throws NoSuchFieldException, IllegalAccessException {
+        Cache cache = IocContainer.get(Cache.class);
+        TestUtils.setPrivateField( cache, "collections", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "databases", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "databasesPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "collectionsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "collectionMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "fieldIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "pkIndexMap", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) throws IOException {
