@@ -161,6 +161,8 @@ public class FilterOperatorHelper {
                         final var result = jsonArray.contains(toTestElement);
                         return (operation == FieldOperatorType.IN) == result;
                     }
+                } else if (operatorElement.isJsonNull()) {
+                    return toTestElement.isJsonNull();
                 }
             }
             return false;
@@ -203,8 +205,12 @@ public class FilterOperatorHelper {
                 });
             }
         } else {
-            resultStream = coll.values().stream().map(DbEntry::getData)
-                    .filter(data -> test.test(data, fieldName));
+            if (resultStream == null) {
+                resultStream = coll.values().stream().map(DbEntry::getData)
+                        .filter(data -> test.test(data, fieldName));
+            } else {
+                resultStream = resultStream.filter(data -> test.test(data, fieldName));
+            }
         }
         return resultStream;
     }
