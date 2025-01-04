@@ -424,4 +424,15 @@ public class JsonObjectTest {
         assertEquals(JsonNull.INSTANCE, copy.get("nullValue"));
         assertEquals(new JsonString("test"), copy.get("normalValue"));
     }
+
+    // Add boolean property with true value
+    @Test
+    public void test_add_boolean_property_with_true_value() {
+        JsonObject jsonObject = new JsonObject();
+
+        jsonObject.addProperty("isEnabled", true);
+
+        JsonBoolean result = (JsonBoolean) jsonObject.get("isEnabled");
+        assertEquals(true, result.getValue());
+    }
 }

@@ -20,6 +20,10 @@ public class JsonObject extends JsonBaseElement {
         add(property, value);
     }
 
+    public void addProperty(String property, Boolean value) {
+        members.put(property, new JsonBoolean(value));
+    }
+
     public void addProperty(String property, Integer value) {
         members.put(property, new JsonNumber(value));
     }
