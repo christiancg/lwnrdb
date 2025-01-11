@@ -15,6 +15,7 @@ import org.techhouse.utils.JsonUtils;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -30,23 +31,29 @@ public class IndexHelper {
                 .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
         final Map<Class<?>, List<FieldIndexEntry<?>>> indexes = entriesToBeIndexed.entrySet().stream().map(jsonElementListEntry -> {
             final var key = jsonElementListEntry.getKey();
-            final var primitive = key.asJsonPrimitive();
             final var ids = jsonElementListEntry.getValue().stream()
                     .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue()).collect(Collectors.toSet());
-            return switch (primitive) {
-                case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
-                case JsonString jsonString -> {
-                    if (jsonString.isJsonCustom()) {
-                        final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
-                        yield new FieldIndexEntry<>(dbName, collName, custom, ids);
-                    } else {
-                        yield new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
+            if (key.isJsonPrimitive()) {
+                final var primitive = key.asJsonPrimitive();
+                return switch (primitive) {
+                    case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+                    case JsonString jsonString -> {
+                        if (jsonString.isJsonCustom()) {
+                            final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
+                            yield new FieldIndexEntry<>(dbName, collName, custom, ids);
+                        } else {
+                            yield new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
+                        }
                     }
-                }
-                case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
-                default -> throw new IllegalStateException("Unexpected value: " + primitive);
-            };
-        }).collect(Collectors.groupingBy(fieldIndexEntry -> {
+                    case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
+                    default -> throw new IllegalStateException("Unexpected value: " + primitive);
+                };
+            } else if (key.isJsonNull()) {
+                return new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE, ids);
+            } else {
+                return null;
+            }
+        }).filter(Objects::nonNull).collect(Collectors.groupingBy(fieldIndexEntry -> {
             final var clazz = fieldIndexEntry.getValue().getClass();
             if (Number.class.isAssignableFrom(clazz)) {
                 return Number.class;
