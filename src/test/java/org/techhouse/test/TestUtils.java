@@ -32,8 +32,7 @@ public class TestUtils {
         cache.loadAdminData();
     }
 
-    public static void standardTearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
-        AdminOperationHelper.deleteDatabaseEntry(TestGlobals.DB);
+    public static void standardTearDown() throws IOException, NoSuchFieldException, IllegalAccessException {
         deleteDir(new File(TestGlobals.PATH));
         clearCache();
     }
@@ -64,6 +63,9 @@ public class TestUtils {
     public static void createTestDatabaseAndCollection() throws IOException, InterruptedException {
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
+        FileSystem fs = IocContainer.get(FileSystem.class);
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
     }
 
     public static <U, T> T getPrivateField(U object, String fieldName, ReflectionUtils.TypeToken<T> fieldType) throws NoSuchFieldException, IllegalAccessException {
