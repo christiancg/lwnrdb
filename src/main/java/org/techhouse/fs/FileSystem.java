@@ -342,6 +342,23 @@ public class FileSystem {
         }
     }
 
+    private <K> String getStringValue(FieldIndexEntry<K> entry) {
+        final var value = entry.getValue();
+        var strValue = "";
+        if (value instanceof JsonCustom<?> jsonCustom) {
+            strValue = jsonCustom.getValue();
+        } else if (value instanceof Number number) {
+            if (number.doubleValue() % 1 == 0) {
+                strValue = String.valueOf(number.longValue());
+            } else {
+                strValue = String.valueOf(number.doubleValue());
+            }
+        } else {
+            strValue = value.toString();
+        }
+        return strValue;
+    }
+
     public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
                                         FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry)
             throws IOException {
@@ -351,12 +368,10 @@ public class FileSystem {
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var strValue = removedEntry.getValue() instanceof JsonCustom<?> ?
-                        ((JsonCustom<?>)removedEntry.getValue()).getValue() :
-                        removedEntry.getValue().toString();
+                final var strValue = getStringValue(removedEntry);
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 if (indexOfExisting >= 0) {
-                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
                     if (!removedEntry.getIds().isEmpty()) {
                         final var toWriteLine = removedEntry.toFileEntry();
                         writer.writeBytes(toWriteLine);
@@ -375,13 +390,11 @@ public class FileSystem {
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var strValue = insertedEntry.getValue() instanceof JsonCustom<?> ?
-                        ((JsonCustom<?>)insertedEntry.getValue()).getValue() :
-                        insertedEntry.getValue().toString();
+                final var strValue = getStringValue(insertedEntry);
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 final var toWriteLine = insertedEntry.toFileEntry();
                 if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
                 } else {
                     writer.seek(strWholeFile.length());
                 }
@@ -391,7 +404,7 @@ public class FileSystem {
         }
     }
 
-    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
+    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting, int lengthOfExisting)
             throws IOException {
         var replacementIndex = indexOfExisting;
         var fromExistingEntry = strWholeFile.substring(indexOfExisting);
@@ -405,6 +418,7 @@ public class FileSystem {
         }
         writer.seek(replacementIndex);
         writer.writeBytes(otherEntries);
+        writer.setLength(writer.length() - lengthOfExisting - Globals.NEWLINE_CHAR_LENGTH);
         return otherEntries.length();
     }
 
