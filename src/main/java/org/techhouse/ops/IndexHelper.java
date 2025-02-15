@@ -15,6 +15,7 @@ import org.techhouse.utils.JsonUtils;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -30,23 +31,35 @@ public class IndexHelper {
                 .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
         final Map<Class<?>, List<FieldIndexEntry<?>>> indexes = entriesToBeIndexed.entrySet().stream().map(jsonElementListEntry -> {
             final var key = jsonElementListEntry.getKey();
-            final var primitive = key.asJsonPrimitive();
             final var ids = jsonElementListEntry.getValue().stream()
                     .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue()).collect(Collectors.toSet());
-            return switch (primitive) {
-                case JsonDouble jsonDouble -> new FieldIndexEntry<>(dbName, collName, jsonDouble.getValue(), ids);
-                case JsonString jsonString -> {
-                    if (jsonString.isJsonCustom()) {
-                        final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
-                        yield new FieldIndexEntry<>(dbName, collName, custom, ids);
-                    } else {
-                        yield new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
+            if (key.isJsonPrimitive()) {
+                final var primitive = key.asJsonPrimitive();
+                return switch (primitive) {
+                    case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+                    case JsonString jsonString -> {
+                        if (jsonString.isJsonCustom()) {
+                            final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
+                            yield new FieldIndexEntry<>(dbName, collName, custom, ids);
+                        } else {
+                            yield new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
+                        }
                     }
-                }
-                case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
-                default -> throw new IllegalStateException("Unexpected value: " + primitive);
-            };
-        }).collect(Collectors.groupingBy(fieldIndexEntry -> fieldIndexEntry.getValue().getClass()));
+                    case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
+                    default -> throw new IllegalStateException("Unexpected value: " + primitive);
+                };
+            } else if (key.isJsonNull()) {
+                return new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE, ids);
+            } else {
+                return null;
+            }
+        }).filter(Objects::nonNull).collect(Collectors.groupingBy(fieldIndexEntry -> {
+            final var clazz = fieldIndexEntry.getValue().getClass();
+            if (Number.class.isAssignableFrom(clazz)) {
+                return Number.class;
+            }
+            return clazz;
+        }));
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
     }
 
@@ -85,8 +98,8 @@ public class IndexHelper {
         if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
             final var primitive = element.asJsonPrimitive();
             switch (primitive) {
-                case JsonDouble jsonDouble -> findExistingValuesAndUpdate(dbName, collName, fieldName, entry.get_id(),
-                        type, jsonDouble.getValue(), Double.class);
+                case JsonNumber jsonNumber -> findExistingValuesAndUpdate(dbName, collName, fieldName, entry.get_id(),
+                        type, jsonNumber.getValue(), Number.class);
                 case JsonString jsonString -> {
                     if (jsonString.isJsonCustom()) {
                         final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
@@ -106,12 +119,12 @@ public class IndexHelper {
     private static <T> void  findExistingValuesAndUpdate(String dbName, String collName, String fieldName,
                                                     String entryId, EventType type, T value, Class<T> tClass) throws IOException {
         FieldIndexEntry<Boolean> toRemoveBoolean = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, Boolean.class);
-        FieldIndexEntry<Double> toRemoveDouble = null;
+        FieldIndexEntry<Number> toRemoveNumber = null;
         FieldIndexEntry<String> toRemoveString = null;
         FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom = null;
         if (toRemoveBoolean == null) {
-            toRemoveDouble = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, Double.class);
-            if (toRemoveDouble == null) {
+            toRemoveNumber = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, Number.class);
+            if (toRemoveNumber == null) {
                 toRemoveString = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, String.class);
                 if (toRemoveString == null) {
                     final var customTypes = CustomTypeFactory.getCustomTypes();
@@ -128,16 +141,16 @@ public class IndexHelper {
         }
         if (value instanceof JsonCustom<?>) {
             internalUpdateCustomIndex(dbName, collName, fieldName, entryId, (JsonCustom<?>) value, type, toRemoveBoolean,
-                    toRemoveDouble, toRemoveString, toRemoveJsonCustom);
+                    toRemoveNumber, toRemoveString, toRemoveJsonCustom);
         } else {
-            internalUpdateIndex(dbName, collName, fieldName, entryId, value, type, tClass, toRemoveBoolean, toRemoveDouble,
+            internalUpdateIndex(dbName, collName, fieldName, entryId, value, type, tClass, toRemoveBoolean, toRemoveNumber,
                     toRemoveString, toRemoveJsonCustom);
         }
     }
 
     private static void internalUpdateCustomIndex(String dbName, String collName, String fieldName, String entryId,
                                                   JsonCustom<?> value, EventType type, FieldIndexEntry<Boolean> toRemoveBoolean,
-                                                  FieldIndexEntry<Double> toRemoveDouble, FieldIndexEntry<String> toRemoveString,
+                                                  FieldIndexEntry<Number> toRemoveNumber, FieldIndexEntry<String> toRemoveString,
                                                   FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom)
             throws IOException {
         if (type == EventType.CREATED || type == EventType.UPDATED) {
@@ -145,19 +158,19 @@ public class IndexHelper {
             if (found != null) {
                 final var ids = found.getIds();
                 ids.add(entryId);
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveDouble, toRemoveString, toRemoveJsonCustom, found);
+                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom, found);
             } else {
                 FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveDouble, toRemoveString, toRemoveJsonCustom, indexEntry);
+                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom, indexEntry);
             }
         } else {
-            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveDouble, toRemoveString, toRemoveJsonCustom,null);
+            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom,null);
         }
     }
 
     private static <T> void internalUpdateIndex(String dbName, String collName, String fieldName, String entryId, T value,
                                                 EventType type, Class<T> tClass, FieldIndexEntry<Boolean> toRemoveBoolean,
-                                                FieldIndexEntry<Double> toRemoveDouble, FieldIndexEntry<String> toRemoveString,
+                                                FieldIndexEntry<Number> toRemoveNumber, FieldIndexEntry<String> toRemoveString,
                                                 FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom)
             throws IOException {
         if (type == EventType.CREATED || type == EventType.UPDATED) {
@@ -165,13 +178,13 @@ public class IndexHelper {
             if (found != null) {
                 final var ids = found.getIds();
                 ids.add(entryId);
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveDouble, toRemoveString, toRemoveJsonCustom, found);
+                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom, found);
             } else {
                 FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveDouble, toRemoveString, toRemoveJsonCustom, indexEntry);
+                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom, indexEntry);
             }
         } else {
-            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveDouble, toRemoveString, toRemoveJsonCustom,null);
+            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom,null);
         }
     }
 
@@ -203,14 +216,14 @@ public class IndexHelper {
 
     private static <T> void updateFromFiles(String dbName, String collName, String fieldName,
                                             FieldIndexEntry<Boolean> toRemoveBoolean,
-                                            FieldIndexEntry<Double> toRemoveDouble,
+                                            FieldIndexEntry<Number> toRemoveNumber,
                                             FieldIndexEntry<String> toRemoveString,
                                             FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom,
                                             FieldIndexEntry<T> indexEntry) throws IOException {
         if (toRemoveBoolean != null) {
             fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveBoolean);
-        } else if (toRemoveDouble != null) {
-            fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveDouble);
+        } else if (toRemoveNumber != null) {
+            fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveNumber);
         } else if (toRemoveJsonCustom != null) {
             fs.updateIndexFiles(dbName, collName, fieldName, indexEntry, toRemoveJsonCustom);
         } else {

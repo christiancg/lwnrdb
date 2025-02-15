@@ -4,6 +4,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -33,7 +34,7 @@ public class SearchUtils {
         final var indexIndex = Collections.binarySearch(entries, value);
         Stream<FieldIndexEntry<T>> resultStream;
         if (indexIndex >= 0) {
-            final var auxList = entries.subList(0, indexIndex);
+            final var auxList = new ArrayList<>(entries.subList(0, indexIndex));
             if (indexIndex <= entries.size() + 1) {
                 auxList.addAll(entries.subList(indexIndex + 1, entries.size()));
             }
@@ -54,12 +55,12 @@ public class SearchUtils {
     private static <T> List<FieldIndexEntry<Double>> castToDoubleList(List<FieldIndexEntry<T>> entries) {
         return entries.stream().map(doubleFieldIndexEntry ->
                 new FieldIndexEntry<>(doubleFieldIndexEntry.getDatabaseName(), doubleFieldIndexEntry.getCollectionName(),
-                        (Double) doubleFieldIndexEntry.getValue(), doubleFieldIndexEntry.getIds())).toList();
+                        ((Number) doubleFieldIndexEntry.getValue()).doubleValue(), doubleFieldIndexEntry.getIds())).toList();
     }
 
     private static <T> Set<String> findingGreaterThan(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Double) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), (Double) value,
+        if (value instanceof Number) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
                     GreaterSmallerEqualsType.GREATER_THAN);
             if (index >= 0) {
                 return toIdSet(entries, index, entries.size());
@@ -75,8 +76,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingGreaterThanEquals(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Double) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), (Double) value,
+        if (value instanceof Number) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
                     GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
             if (index >= 0) {
                 return toIdSet(entries, index, entries.size());
@@ -92,8 +93,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingLessThan(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Double) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), (Double) value,
+        if (value instanceof Number) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
                     GreaterSmallerEqualsType.SMALLER_THAN);
             if (index >= 0) {
                 return toIdSet(entries, 0, ++index);
@@ -109,8 +110,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingLessThanEquals(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Double) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), (Double) value,
+        if (value instanceof Number) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
                     GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
             if (index >= 0) {
                 return toIdSet(entries, 0, ++index);

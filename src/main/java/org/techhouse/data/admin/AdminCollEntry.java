@@ -52,7 +52,7 @@ public class AdminCollEntry extends DbEntry {
                 .stream().map(element -> element.asJsonString().getValue())
                 .collect(Collectors.toSet());
         result.setIndexes(collections);
-        final var entryCount = object.get(ENTRY_COUNT_FIELD_NAME).asJsonDouble().asInteger();
+        final var entryCount = object.get(ENTRY_COUNT_FIELD_NAME).asJsonNumber().asInteger();
         result.setEntryCount(entryCount);
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);

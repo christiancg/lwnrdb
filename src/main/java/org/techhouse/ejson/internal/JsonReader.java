@@ -17,6 +17,9 @@ public class JsonReader {
     }
 
     private ParseTokenResult internalParse(List<JsonBaseElement> tokens, boolean isRoot) {
+        if (tokens.isEmpty()) {
+            throw new MalformedJsonException("Empty JSON array");
+        }
         final var firstToken = tokens.getFirst();
         if (isRoot && (!firstToken.equals(JsonSyntaxToken.LEFT_BRACE) && !firstToken.equals(JsonSyntaxToken.LEFT_BRACKET))) {
             throw new MalformedJsonException("Json must start with either a left bracket or a left brace");

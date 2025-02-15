@@ -102,9 +102,9 @@ public class Cache {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var indexIdentifier = getIndexIdentifier(fieldName, indexType);
         var index = fieldIndexMap.get(collectionIdentifier);
-        List<FieldIndexEntry<T>> indexEntries;
+        List<FieldIndexEntry<T>> indexEntries = null;
         if (index == null || index.keySet().stream().noneMatch(string ->
-                string.contains(fieldName + Globals.COLL_IDENTIFIER_SEPARATOR))
+                string.contains(indexIdentifier))
         ) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
@@ -115,11 +115,14 @@ public class Cache {
             index.put(indexIdentifier, new ArrayList<>(indexEntries));
             fieldIndexMap.put(collectionIdentifier, index);
         } else {
-            indexEntries = index.get(indexIdentifier).stream()
-                    .map(fieldIndexEntry -> new FieldIndexEntry<>(fieldIndexEntry.getDatabaseName(),
-                            fieldIndexEntry.getCollectionName(), indexType.cast(fieldIndexEntry.getValue()),
-                            fieldIndexEntry.getIds()))
-                    .collect(Collectors.toList());
+            final var existingIndex = index.get(indexIdentifier);
+            if (existingIndex != null) {
+                indexEntries = existingIndex.stream()
+                        .map(fieldIndexEntry -> new FieldIndexEntry<>(fieldIndexEntry.getDatabaseName(),
+                                fieldIndexEntry.getCollectionName(), indexType.cast(fieldIndexEntry.getValue()),
+                                fieldIndexEntry.getIds()))
+                        .collect(Collectors.toList());
+            }
         }
         return indexEntries;
     }
@@ -127,10 +130,10 @@ public class Cache {
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
             throws IOException {
         return switch (value) {
-            case Double d -> {
-                final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
-                if (doubleIndex != null) {
-                    yield SearchUtils.findingByOperator(doubleIndex, operator.getFieldOperatorType(), d);
+            case Number n -> {
+                final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
+                if (numberIndex != null) {
+                    yield SearchUtils.findingByOperator(numberIndex, operator.getFieldOperatorType(), n);
                 } else {
                     yield null;
                 }
@@ -187,11 +190,11 @@ public class Cache {
                                 yield null;
                             }
                         }
-                        case JsonDouble ignored -> {
-                            final var doubleIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
-                            if (doubleIndex != null) {
-                                final var doubleList = listStream.map(x -> x.asJsonDouble().getValue()).toList();
-                                yield SearchUtils.findingInNotIn(doubleIndex, operator.getFieldOperatorType(), doubleList);
+                        case JsonNumber ignored -> {
+                            final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
+                            if (numberIndex != null) {
+                                final var numberList = listStream.map(x -> x.asJsonNumber().getValue()).toList();
+                                yield SearchUtils.findingInNotIn(numberIndex, operator.getFieldOperatorType(), numberList);
                             } else {
                                 yield null;
                             }

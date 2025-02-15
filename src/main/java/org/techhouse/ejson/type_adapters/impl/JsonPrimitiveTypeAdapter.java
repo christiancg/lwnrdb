@@ -9,13 +9,13 @@ public class JsonPrimitiveTypeAdapter implements TypeAdapter<JsonPrimitive<?>> {
 
     @Override
     public String toJson(JsonPrimitive<?> value) {
-        return TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value);
+        return value == null ? "null" : TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value);
     }
 
     @Override
     public JsonPrimitive<?> fromJson(JsonBaseElement value) {
-        return switch (value.getJsonType()) {
-            case BOOLEAN, DOUBLE, STRING -> (JsonPrimitive<?>) TypeAdapterFactory.getAdapter(JsonBaseElement.class).fromJson(value);
+        return value == null ? null : switch (value.getJsonType()) {
+            case BOOLEAN, NUMBER, STRING -> (JsonPrimitive<?>) TypeAdapterFactory.getAdapter(JsonBaseElement.class).fromJson(value);
             default -> null;
         };
     }

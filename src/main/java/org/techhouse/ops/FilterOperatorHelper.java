@@ -115,16 +115,16 @@ public class FilterOperatorHelper {
                                 return operatorPrimitive.asJsonBoolean().getValue() != toTestPrimitive.asJsonBoolean().getValue();
                             }
                             return false;
-                        } else if (operatorPrimitive.isJsonDouble() && toTestPrimitive.isJsonDouble()) {
-                            final var operatorDouble = operatorElement.asJsonDouble().getValue();
-                            final var toTestDouble = toTestElement.asJsonDouble().getValue();
+                        } else if (operatorPrimitive.isJsonNumber() && toTestPrimitive.isJsonNumber()) {
+                            final var operatorDouble = operatorElement.asJsonNumber().getValue();
+                            final var toTestDouble = toTestElement.asJsonNumber().getValue();
                             return switch (operation) {
                                 case EQUALS -> Objects.equals(operatorDouble, toTestDouble);
                                 case NOT_EQUALS -> !Objects.equals(operatorDouble, toTestDouble);
-                                case GREATER_THAN -> operatorDouble < toTestDouble;
-                                case GREATER_THAN_EQUALS -> operatorDouble <= toTestDouble;
-                                case SMALLER_THAN -> operatorDouble > toTestDouble;
-                                case SMALLER_THAN_EQUALS -> operatorDouble >= toTestDouble;
+                                case GREATER_THAN -> operatorDouble.doubleValue() < toTestDouble.doubleValue();
+                                case GREATER_THAN_EQUALS -> operatorDouble.doubleValue() <= toTestDouble.doubleValue();
+                                case SMALLER_THAN -> operatorDouble.doubleValue() > toTestDouble.doubleValue();
+                                case SMALLER_THAN_EQUALS -> operatorDouble.doubleValue() >= toTestDouble.doubleValue();
                                 case IN, NOT_IN, CONTAINS -> false;
                             };
                         } else if(operatorPrimitive.isJsonCustom() && toTestPrimitive.isJsonCustom() &&
@@ -161,6 +161,8 @@ public class FilterOperatorHelper {
                         final var result = jsonArray.contains(toTestElement);
                         return (operation == FieldOperatorType.IN) == result;
                     }
+                } else if (operatorElement.isJsonNull()) {
+                    return toTestElement.isJsonNull();
                 }
             }
             return false;
@@ -176,7 +178,7 @@ public class FilterOperatorHelper {
         matchingValues = switch (value) {
             case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
             case JsonBoolean jsonBoolean -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
-            case JsonDouble jsonDouble -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonDouble.getValue());
+            case JsonNumber jsonNumber -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonNumber.getValue());
             case JsonCustom<?> jsonCustom -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonCustom);
             case JsonString jsonString -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
             default -> null;
@@ -203,8 +205,12 @@ public class FilterOperatorHelper {
                 });
             }
         } else {
-            resultStream = coll.values().stream().map(DbEntry::getData)
-                    .filter(data -> test.test(data, fieldName));
+            if (resultStream == null) {
+                resultStream = coll.values().stream().map(DbEntry::getData)
+                        .filter(data -> test.test(data, fieldName));
+            } else {
+                resultStream = resultStream.filter(data -> test.test(data, fieldName));
+            }
         }
         return resultStream;
     }

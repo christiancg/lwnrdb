@@ -342,21 +342,36 @@ public class FileSystem {
         }
     }
 
+    private <K> String getStringValue(FieldIndexEntry<K> entry) {
+        final var value = entry.getValue();
+        var strValue = "";
+        if (value instanceof JsonCustom<?> jsonCustom) {
+            strValue = jsonCustom.getValue();
+        } else if (value instanceof Number number) {
+            if (number.doubleValue() % 1 == 0) {
+                strValue = String.valueOf(number.longValue());
+            } else {
+                strValue = String.valueOf(number.doubleValue());
+            }
+        } else {
+            strValue = value.toString();
+        }
+        return strValue;
+    }
+
     public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
                                         FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry)
             throws IOException {
         if (removedEntry != null) {
             final var clazz = removedEntry.getValue().getClass();
-            final var strIndexType = clazz.getSimpleName();
+            final var strIndexType = Number.class.isAssignableFrom(clazz) ? Number.class.getSimpleName() : clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var strValue = removedEntry.getValue() instanceof JsonCustom<?> ?
-                        ((JsonCustom<?>)removedEntry.getValue()).getValue() :
-                        removedEntry.getValue().toString();
+                final var strValue = getStringValue(removedEntry);
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 if (indexOfExisting >= 0) {
-                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
                     if (!removedEntry.getIds().isEmpty()) {
                         final var toWriteLine = removedEntry.toFileEntry();
                         writer.writeBytes(toWriteLine);
@@ -371,17 +386,15 @@ public class FileSystem {
         }
         if (insertedEntry != null) {
             final var clazz = insertedEntry.getValue().getClass();
-            final var strIndexType = clazz.getSimpleName();
+            final var strIndexType = Number.class.isAssignableFrom(clazz) ? Number.class.getSimpleName() : clazz.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             try (final var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
                 final var strWholeFile = readFully(writer);
-                final var strValue = insertedEntry.getValue() instanceof JsonCustom<?> ?
-                        ((JsonCustom<?>)insertedEntry.getValue()).getValue() :
-                        insertedEntry.getValue().toString();
+                final var strValue = getStringValue(insertedEntry);
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 final var toWriteLine = insertedEntry.toFileEntry();
                 if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
                 } else {
                     writer.seek(strWholeFile.length());
                 }
@@ -391,7 +404,7 @@ public class FileSystem {
         }
     }
 
-    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
+    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting, int lengthOfExisting)
             throws IOException {
         var replacementIndex = indexOfExisting;
         var fromExistingEntry = strWholeFile.substring(indexOfExisting);
@@ -405,6 +418,7 @@ public class FileSystem {
         }
         writer.seek(replacementIndex);
         writer.writeBytes(otherEntries);
+        writer.setLength(writer.length() - lengthOfExisting - Globals.NEWLINE_CHAR_LENGTH);
         return otherEntries.length();
     }
 
@@ -441,7 +455,7 @@ public class FileSystem {
                 return Arrays.stream(indexFiles).map(file -> {
                     try {
                         final var fileName = file.getName();
-                        final var type = fileName.split("-")[2];
+                        final var type = fileName.split("-")[2].split("\\.")[0];
                         return new AbstractMap.SimpleEntry<>(type, Files.readAllLines(file.toPath()));
                     } catch (IOException e) {
                         return null;
@@ -465,13 +479,13 @@ public class FileSystem {
                                                                  Class<T> indexType) throws IOException {
         final var collectionFolder = getCollectionFolder(dbName, collName);
         if (collectionFolder.exists()) {
-            final var strIndexType = indexType.getSimpleName();
+            final var strIndexType = Number.class.isAssignableFrom(indexType) ? Number.class.getSimpleName() : indexType.getSimpleName();
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             if (indexFile.exists()) {
                 return Files.readAllLines(indexFile.toPath()).stream().map(s ->
                                 FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, indexType))
                         .sorted((o1, o2) -> switch (o1.getValue()) {
-                            case Double d -> Double.compare(d, (Double) o2.getValue());
+                            case Number n -> Double.compare(n.doubleValue(), ((Number)o2.getValue()).doubleValue());
                             case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
                             case JsonCustom<?> c -> {
                                 final var customClass = c.getClass();

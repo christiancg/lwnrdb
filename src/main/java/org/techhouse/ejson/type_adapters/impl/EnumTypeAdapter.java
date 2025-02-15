@@ -26,6 +26,7 @@ public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
         if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
             try {
                 Method valueOf = clazz.getMethod("valueOf", String.class);
+                valueOf.setAccessible(true);
                 Object enumValue = valueOf.invoke(null, value.asJsonString().getValue());
                 return clazz.cast(enumValue);
             } catch (Exception e) {
