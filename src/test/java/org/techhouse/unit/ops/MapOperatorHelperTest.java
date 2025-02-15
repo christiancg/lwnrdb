@@ -1,5 +1,6 @@
 package org.techhouse.unit.ops;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ops.MapOperatorHelper;
@@ -12,13 +13,20 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
+import org.techhouse.test.TestUtils;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 public class MapOperatorHelperTest {
+    @AfterEach
+    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+        TestUtils.releaseAllLocks();
+    }
+
     // Process MapOperator with ADD_FIELD type and valid numeric operations (sum, multiply, avg)
     @Test
     public void test_add_field_numeric_operations() {

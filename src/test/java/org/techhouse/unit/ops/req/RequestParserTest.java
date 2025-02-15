@@ -49,8 +49,7 @@ public class RequestParserTest {
         String createDbRequest = """
             {
                 "type": "CREATE_DATABASE",
-                "databaseName": "newDb",
-                "collectionName": null
+                "databaseName": "newDb"
             }""";
 
         OperationRequest saveResult = RequestParser.parseRequest(saveRequest);
