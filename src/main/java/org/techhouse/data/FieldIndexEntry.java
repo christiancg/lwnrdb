@@ -32,7 +32,7 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         final var parts = line.split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
         final var strValue = parts[0];
         Object value;
-        if (tClass == Double.class) {
+        if (Number.class.isAssignableFrom(tClass)) {
             value = Double.parseDouble(strValue);
         } else if (tClass == Boolean.class) {
             value = Boolean.parseBoolean(strValue);
@@ -47,7 +47,7 @@ public class FieldIndexEntry<T> implements Comparable<T> {
     @Override
     public int compareTo(T otherIndexValue) {
         return switch (value) {
-            case Double d -> d.compareTo((Double) otherIndexValue);
+            case Number d -> Double.compare(d.doubleValue(), ((Number) otherIndexValue).doubleValue());
             case Boolean b -> b.compareTo((Boolean) otherIndexValue);
             case String s -> s.compareToIgnoreCase((String) otherIndexValue);
             case null -> 0;

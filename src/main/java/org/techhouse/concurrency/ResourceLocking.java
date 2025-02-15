@@ -16,8 +16,7 @@ public class ResourceLocking {
     }
 
     private String getIndexIdentifier(String dbName, String collName, String fieldName) {
-        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR +
-                fieldName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldName;
     }
 
     public void lockIndex(String dbName, String collName, String fieldName) throws InterruptedException {

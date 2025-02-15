@@ -2,6 +2,7 @@ package org.techhouse.ejson.internal;
 
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ejson.exceptions.NoConstructorException;
+import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
 import java.lang.reflect.*;
 import java.util.ArrayList;
@@ -93,6 +94,7 @@ public class ReflectionUtils {
                     }
                 }
                 if (shouldContinue) {
+                    constructor.setAccessible(true);
                     return tClass.cast(constructor.newInstance(parameterValues));
                 }
             }
@@ -112,7 +114,7 @@ public class ReflectionUtils {
             case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
             case NULL -> null;
             case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
-            case DOUBLE -> fieldValue.asJsonDouble().getValue();
+            case NUMBER -> fieldValue.asJsonNumber().getValue();
             case SYNTAX -> null; // should never come here
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
@@ -126,8 +128,7 @@ public class ReflectionUtils {
                 final var actualClass = Class.forName(actualType.getTypeName());
                 List<Object> listInstance = new ArrayList<>();
                 fieldValue.asJsonArray().forEach((arrItem) -> {
-                    final var obj = arrItem.asJsonObject();
-                    final var item = Assigner.assign(obj, actualClass);
+                    final var item = Assigner.assign(arrItem, actualClass);
                     listInstance.add(item);
                 });
                 return parameterType.cast(listInstance);
@@ -144,6 +145,11 @@ public class ReflectionUtils {
             } else if (parameterType == Long.class) {
                 return parameterType.cast(numberClass.cast(jsonValue).longValue());
             }
+        } else if (parameterType.isPrimitive()) {
+            return (T)jsonValue;
+        } else if (jsonValue != null && fieldValue.isJsonObject()) {
+            final var adapter = TypeAdapterFactory.getAdapter(parameterType);
+            return adapter.fromJson(fieldValue);
         }
         return parameterType.cast(jsonValue);
     }

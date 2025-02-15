@@ -54,8 +54,8 @@ public class JsonUtils {
                         return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
                     } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
                         return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
-                    } else if (o1Primitive.isJsonDouble() && o2Primitive.isJsonDouble()) {
-                        return Double.compare(o1Primitive.asJsonDouble().getValue(), o2Primitive.asJsonDouble().getValue());
+                    } else if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
+                        return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(), o2Primitive.asJsonNumber().getValue().doubleValue());
                     } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
                         return o1Primitive.asJsonBoolean().getValue() ? -1 : 1;
                     }
@@ -88,8 +88,8 @@ public class JsonUtils {
                         return o2Primitive.asJsonCustom().getValue().compareTo(o1Primitive.asJsonCustom().getValue());
                     } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
                         return o2Primitive.asJsonString().getValue().compareTo(o1Primitive.asJsonString().getValue());
-                    } else if (o1Primitive.isJsonDouble() && o2Primitive.isJsonDouble()) {
-                        return Double.compare(o2Primitive.asJsonDouble().getValue(), o1Primitive.asJsonDouble().getValue());
+                    } else if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
+                        return Double.compare(o2Primitive.asJsonNumber().getValue().doubleValue(), o1Primitive.asJsonNumber().getValue().doubleValue());
                     } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
                         return o2Primitive.asJsonBoolean().getValue() ? 1 : -1;
                     }

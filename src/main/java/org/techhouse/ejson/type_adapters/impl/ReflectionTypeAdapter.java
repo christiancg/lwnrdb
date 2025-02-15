@@ -5,14 +5,19 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.ReflectionUtils;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
+import org.techhouse.log.Logger;
 
 import java.lang.reflect.Field;
 
 public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
+    private final Logger logger = Logger.logFor(ReflectionTypeAdapter.class);
     private final Class<T> clazz;
 
     public ReflectionTypeAdapter(Class<T> clazz) {
+        if (clazz == null) {
+            throw new NullPointerException("clazz can't be null");
+        }
         this.clazz = clazz;
     }
 
@@ -59,6 +64,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             }
             return clazz.cast(instance);
         } catch (Exception e) {
+            logger.error(e.getMessage(), e);
             return null;
         }
     }
@@ -74,7 +80,12 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     }
 
     private <P> String hardCast(Object value, Class<P> pClass, Field field) throws ClassNotFoundException {
-        final var casted = pClass.cast(value);
+        P casted;
+        if (field.getType().isPrimitive()) {
+            casted = (P) value;
+        } else {
+            casted = pClass.cast(value);
+        }
         TypeAdapter<P> adapter;
         if (field.getType().getTypeParameters().length > 0) {
             adapter = TypeAdapterFactory.getAdapter(field.getGenericType());
@@ -90,7 +101,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
     private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
         final var fieldValue = ReflectionUtils.getFieldValue(field, obj);
-        if (fieldValue == null) {
+        if (fieldValue == null || field.getType().isPrimitive()) {
             TypeAdapter<?> typeAdapter;
             if (field.getType().getTypeParameters().length > 0) {
                 typeAdapter = TypeAdapterFactory.getAdapter(field.getGenericType());

@@ -51,7 +51,7 @@ public class JsonArray extends JsonBaseElement implements Iterable<JsonBaseEleme
     }
 
     public List<JsonBaseElement> asList() {
-        return elements;
+        return new ArrayList<>(elements);
     }
 
     @Override
