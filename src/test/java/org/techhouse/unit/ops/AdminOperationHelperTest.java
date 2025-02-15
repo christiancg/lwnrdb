@@ -21,8 +21,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class AdminOperationHelperTest {
     @BeforeEach
-    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
         TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
     }
 
     @AfterEach

@@ -30,8 +30,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class AggregationOperationHelperTest {
     @BeforeEach
-    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
         TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
     }
 
     @AfterEach
@@ -42,6 +43,7 @@ public class AggregationOperationHelperTest {
     // Process aggregation request with multiple steps in sequence (filter->map->group)
     @Test
     public void test_process_multiple_steps_sequence() throws IOException {
+        System.out.println("Running test_process_multiple_steps_sequence");
         // Arrange
         var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         var steps = new ArrayList<BaseAggregationStep>();
@@ -66,6 +68,7 @@ public class AggregationOperationHelperTest {
     // Handle null or empty resultStream at different stages of processing
     @Test
     public void test_handle_null_result_stream() throws IOException, InterruptedException {
+        System.out.println("Running test_handle_null_result_stream");
         // Arrange
         var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         var steps = new ArrayList<BaseAggregationStep>();
@@ -91,6 +94,7 @@ public class AggregationOperationHelperTest {
     // Process each aggregation step type correctly with valid input data
     @Test
     public void test_process_aggregation_with_valid_steps() throws IOException {
+        System.out.println("Running test_process_aggregation_with_valid_steps");
         // Arrange
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         List<BaseAggregationStep> steps = List.of(
@@ -117,6 +121,7 @@ public class AggregationOperationHelperTest {
     // Return empty list when no aggregation steps provided
     @Test
     public void test_process_aggregation_with_no_steps() throws IOException {
+        System.out.println("Running test_process_aggregation_with_no_steps");
         // Arrange
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         request.setAggregationSteps(Collections.emptyList());
@@ -132,6 +137,7 @@ public class AggregationOperationHelperTest {
     // Process join operation with matching fields between collections
     @Test
     public void test_process_join_operation_with_matching_fields() throws IOException {
+        System.out.println("Running test_process_join_operation_with_matching_fields");
         // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "localField", "remoteField", "asField");
@@ -156,6 +162,7 @@ public class AggregationOperationHelperTest {
     // Process group by operation with valid field name and data
     @Test
     public void test_process_group_by_operation_with_valid_field() throws IOException {
+        System.out.println("Running test_process_group_by_operation_with_valid_field");
         // Arrange
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         GroupByAggregationStep groupByStep = new GroupByAggregationStep("groupField");
@@ -176,6 +183,7 @@ public class AggregationOperationHelperTest {
     // Process distinct operation on specific field with valid data
     @Test
     public void test_process_distinct_operation_on_specific_field() throws IOException {
+        System.out.println("Running test_process_distinct_operation_on_specific_field");
         // Arrange
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         DistinctAggregationStep distinctStep = new DistinctAggregationStep("distinctField");
@@ -198,6 +206,8 @@ public class AggregationOperationHelperTest {
     // Handle invalid field names in sort/group/join operations
     @Test
     public void test_handle_invalid_field_names_in_operations() throws IOException {
+        System.out.println("Running test_handle_invalid_field_names_in_operations");
+        
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         GroupByAggregationStep groupByStep = new GroupByAggregationStep("invalidField");
         SortAggregationStep sortStep = new SortAggregationStep("invalidField", true);
@@ -228,6 +238,7 @@ public class AggregationOperationHelperTest {
     // Handle empty collections in join operations
     @Test
     public void test_handle_empty_collections_in_join() throws IOException {
+        System.out.println("Running test_handle_empty_collections_in_join");
         // Arrange
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "localField", "remoteField", "asField");
@@ -244,6 +255,7 @@ public class AggregationOperationHelperTest {
     // Process map operations with empty operator list
     @Test
     public void test_process_map_with_empty_operator_list() throws IOException {
+        System.out.println("Running test_process_map_with_empty_operator_list");
         // Arrange
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         MapAggregationStep mapStep = new MapAggregationStep(Collections.emptyList());
@@ -260,6 +272,8 @@ public class AggregationOperationHelperTest {
     // Handle missing fields in json objects during operations
     @Test
     public void test_handle_missing_fields() throws IOException {
+        System.out.println("Running test_handle_missing_fields");
+        
         AggregateRequest request = new AggregateRequest("testDB", "testCollection");
         List<BaseAggregationStep> steps = new ArrayList<>();
         steps.add(new GroupByAggregationStep("nonExistentField"));

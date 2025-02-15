@@ -32,7 +32,7 @@ public class TestUtils {
         cache.loadAdminData();
     }
 
-    public static void standardTearDown() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public static void standardTearDown() throws NoSuchFieldException, IllegalAccessException {
         deleteDir(new File(TestGlobals.PATH));
         clearCache();
     }
@@ -48,7 +48,7 @@ public class TestUtils {
         TestUtils.setPrivateField( cache, "pkIndexMap", new ConcurrentHashMap<>());
     }
 
-    private static void deleteDir(File file) throws IOException {
+    private static void deleteDir(File file) {
         File[] contents = file.listFiles();
         if (contents != null) {
             for (File f : contents) {
@@ -56,7 +56,7 @@ public class TestUtils {
             }
         }
         if (!file.delete()) {
-            throw new IOException("File " + file.getName() + " was not deleted");
+            file.deleteOnExit();
         }
     }
 
