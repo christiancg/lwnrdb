@@ -26,6 +26,5 @@ public class Globals {
     public static final String NEWLINE_REGEX = System.lineSeparator().equals("\n") ? "\\n" : "\\r\\n";
     public static final int NEWLINE_CHAR_LENGTH = System.lineSeparator().equals("\n") ? 1 : 2;
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
-    public static final String READ_WHOLE_COLLECTION_REGEX = "(?=(?<!:)\\{)";
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
 }
