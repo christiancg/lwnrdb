@@ -142,9 +142,9 @@ public class FileSystem {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
         try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
             for (var entry : entries) {
-                final var strData = entry.toFileEntry();
+                final var strData = entry.toFileEntry() + Globals.NEWLINE;
                 final var length = strData.length();
-                final var totalFileLength = file.length();
+                final var totalFileLength = file.length() + Globals.NEWLINE_CHAR_LENGTH;
                 writer.append(strData);
                 writer.flush();
                 final var entryId = entry.get_id();
@@ -166,9 +166,9 @@ public class FileSystem {
         final var collName = entry.getCollectionName();
         final var file = getCollectionFile(dbName, collName);
         try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
-            final var strData = entry.toFileEntry();
+            final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var length = strData.length();
-            final var totalFileLength = file.length();
+            final var totalFileLength = file.length() + Globals.NEWLINE_CHAR_LENGTH;
             writer.append(strData);
             writer.flush();
             final var entryId = entry.get_id();
@@ -194,7 +194,7 @@ public class FileSystem {
         final int totalFileLength = (int) file.length();
         try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
-            writer.setLength(totalFileLength - pkIndexEntry.getLength());
+            writer.setLength(totalFileLength - pkIndexEntry.getLength() - Globals.NEWLINE_CHAR_LENGTH);
             deleteIndexValue(pkIndexEntry);
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -225,7 +225,7 @@ public class FileSystem {
             for (var entry : entries) {
                 shiftOtherEntriesToStart(writer, entry.getIndex(), totalFileLength);
                 writer.seek(totalFileLength - entry.getIndex().getLength());
-                final var strData = entry.toFileEntry();
+                final var strData = entry.toFileEntry() + Globals.NEWLINE;
                 final var length = strData.length();
                 writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
                 writer.setLength(totalFileLength - entry.getIndex().getLength() + strData.length());
@@ -252,7 +252,7 @@ public class FileSystem {
         try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
-            final var strData = entry.toFileEntry();
+            final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var length = strData.length();
             writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + strData.length());
@@ -511,7 +511,8 @@ public class FileSystem {
     public Map<String, DbEntry> readWholeCollection(String dbName, String collectionName) throws IOException {
         final var collectionFile = getCollectionFile(dbName, collectionName);
         if (collectionFile.exists()) {
-            return Arrays.stream(Files.readString(collectionFile.toPath()).split(Globals.READ_WHOLE_COLLECTION_REGEX))
+            return Files.readAllLines(collectionFile.toPath())
+                    .stream()
                     .filter(s -> !s.isEmpty())
                     .map(s -> {
                         try {
