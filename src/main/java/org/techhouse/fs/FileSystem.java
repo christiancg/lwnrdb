@@ -144,7 +144,7 @@ public class FileSystem {
             for (var entry : entries) {
                 final var strData = entry.toFileEntry() + Globals.NEWLINE;
                 final var length = strData.length();
-                final var totalFileLength = file.length() + Globals.NEWLINE_CHAR_LENGTH;
+                var totalFileLength = file.length();
                 writer.append(strData);
                 writer.flush();
                 final var entryId = entry.get_id();
@@ -168,7 +168,7 @@ public class FileSystem {
         try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var length = strData.length();
-            final var totalFileLength = file.length() + Globals.NEWLINE_CHAR_LENGTH;
+            var totalFileLength = file.length();
             writer.append(strData);
             writer.flush();
             final var entryId = entry.get_id();
@@ -194,7 +194,7 @@ public class FileSystem {
         final int totalFileLength = (int) file.length();
         try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
-            writer.setLength(totalFileLength - pkIndexEntry.getLength() - Globals.NEWLINE_CHAR_LENGTH);
+            writer.setLength(totalFileLength - pkIndexEntry.getLength());
             deleteIndexValue(pkIndexEntry);
         } catch (IOException e) {
             throw new RuntimeException(e);
