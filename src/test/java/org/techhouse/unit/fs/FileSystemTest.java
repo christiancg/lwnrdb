@@ -325,8 +325,7 @@ public class FileSystemTest {
         try (RandomAccessFile reader = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             byte[] content = new byte[(int)reader.length()];
             reader.readFully(content);
-            assertEquals(entry2.toFileEntry(), new String(content, StandardCharsets.UTF_8));
-            assertEquals(entry2.toFileEntry().length(), reader.length());
+            assertEquals(entry2.toFileEntry(), new String(content, StandardCharsets.UTF_8).replace(Globals.NEWLINE, ""));
         }
 
         assertTrue(file.delete());
@@ -633,14 +632,10 @@ public class FileSystemTest {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
-        String testData = "{\"_id\":\"123\",\"name\":\"test\"}{\"_id\":\"456\",\"name\":\"test2\"}";
-
-        File mockFile = mock(File.class);
-        when(mockFile.exists()).thenReturn(true);
-        when(mockFile.toPath()).thenReturn(Path.of("test.db"));
+        List<String> testData = List.of("{\"_id\":\"123\",\"name\":\"test\"}", "{\"_id\":\"456\",\"name\":\"test2\"}");
 
         try (MockedStatic<Files> mockedFiles = mockStatic(Files.class)) {
-            mockedFiles.when(() -> Files.readString(any(Path.class))).thenReturn(testData);
+            mockedFiles.when(() -> Files.readAllLines(any(Path.class))).thenReturn(testData);
 
             // Act
             Map<String, DbEntry> result = fileSystem.readWholeCollection(TestGlobals.DB, TestGlobals.COLL);
