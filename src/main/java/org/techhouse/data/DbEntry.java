@@ -15,6 +15,7 @@ public class DbEntry {
     private String databaseName;
     private String collectionName;
     private JsonObject data;
+    private long page;
 
     public static DbEntry fromJsonObject(String databaseName, String collectionName, JsonObject jsonObject) {
         final var entry = new DbEntry();
