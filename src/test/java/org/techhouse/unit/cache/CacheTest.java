@@ -53,7 +53,7 @@ public class CacheTest {
         arrDb.add("test_create_collection");
         jsonDb.add("collections", arrDb);
         final var adminDbEntry = AdminDbEntry.fromJsonObject(jsonDb);
-        final var pkIndexEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "test_create", 0, 100);
+        final var pkIndexEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "test_create", 0, 100,0);
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
         final var jsonColl = new JsonObject();
@@ -165,7 +165,7 @@ public class CacheTest {
         String dbName = "testDb";
         String collName = "testColl";
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10));
+        List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10,0));
         final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(collectionIdentifier, expectedPkIndex);
@@ -467,7 +467,7 @@ public class CacheTest {
         // Arrange
         String dbName = "testDb";
         String collName = "testColl";
-        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100);
+        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100,0);
         Cache cache = new Cache();
         DbEntry expectedEntry = new DbEntry();
         expectedEntry.setDatabaseName(dbName);
@@ -495,7 +495,7 @@ public class CacheTest {
         // Arrange
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
-        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100);
+        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100,0);
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
         Field fsField = Cache.class.getDeclaredField("fs");
@@ -582,7 +582,7 @@ public class CacheTest {
     @Test
     public void test_retrieve_pkindexentry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L);
+        PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L,0);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
@@ -609,7 +609,7 @@ public class CacheTest {
     @Test
     public void test_add_valid_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L,0);
         cache.putPkIndexAdminDbEntry(entry);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
@@ -623,7 +623,7 @@ public class CacheTest {
     @Disabled // This one will fail because we're not checking that the pk index value shouldn't be null. We should probably do it
     public void test_add_null_value_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", null, 0L, 100L);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", null, 0L, 100L,0);
         cache.putPkIndexAdminDbEntry(entry);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
@@ -663,7 +663,7 @@ public class CacheTest {
     @Test
     public void test_retrieve_existing_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L);
+        PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L,0);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
@@ -680,7 +680,7 @@ public class CacheTest {
     @Test
     public void test_adds_pkindexentry_to_map() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L,0);
         cache.putPkIndexAdminCollEntry(entry);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
@@ -727,7 +727,7 @@ public class CacheTest {
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminDbEntry adminDbEntry = new AdminDbEntry("testDb");
-        PkIndexEntry pkIndexEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L,0);
 
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
@@ -746,7 +746,7 @@ public class CacheTest {
         Cache cache = new Cache();
         String dbName = "testDb";
         AdminDbEntry adminDbEntry = new AdminDbEntry(dbName);
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L,0);
 
         final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
@@ -767,7 +767,7 @@ public class CacheTest {
     public void test_successfully_adds_entries_to_collections_maps() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminCollEntry dbEntry = new AdminCollEntry("testDb", "testColl");
-        PkIndexEntry indexEntry = new PkIndexEntry("testDb", "testColl", "testValue", 1L, 100L);
+        PkIndexEntry indexEntry = new PkIndexEntry("testDb", "testColl", "testValue", 1L, 100L,0);
 
         cache.putAdminCollectionEntry(dbEntry, indexEntry);
 
@@ -786,7 +786,7 @@ public class CacheTest {
         Cache cache = new Cache();
         String collIdentifier = "testCollection";
         AdminCollEntry adminCollEntry = new AdminCollEntry(TestGlobals.DB, collIdentifier);
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L,0);
 
         final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
@@ -865,7 +865,7 @@ public class CacheTest {
         String dbName = "testDb";
         String collectionName = dbName + "_collection";
 
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100,0);
         DbEntry dbEntry = new DbEntry();
 
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
@@ -889,7 +889,7 @@ public class CacheTest {
         String dbName = "";
         String collectionName = dbName + "_collection";
 
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100,0);
         DbEntry dbEntry = new DbEntry();
 
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};

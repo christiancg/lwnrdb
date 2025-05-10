@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -185,7 +186,7 @@ public class FileSystemTest {
         String dbName = "nonExistentDb";
         String collectionName = "nonExistentCollection";
         String id = "123";
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, id, 0L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, id, 0L, 100L,0);
 
         // Act & Assert
         assertThrows(FileNotFoundException.class, () -> fileSystem.getById(pkIndexEntry));
@@ -292,7 +293,7 @@ public class FileSystemTest {
         assertTrue(result.getLength() > 0);
 
         final var filePath = TestUtils.getPrivateField(fs, "dbPath", String.class);
-        File collFile = new File(filePath + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + ".dat");
+        File collFile = new File(filePath + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         assertTrue(collFile.exists());
     }
 
@@ -303,7 +304,7 @@ public class FileSystemTest {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
-        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + ".dat");
+        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
 
         JsonObject data = new JsonObject();
         data.addProperty("name", "test");
@@ -316,7 +317,7 @@ public class FileSystemTest {
         fileSystem.insertIntoCollection(entry1);
         fileSystem.insertIntoCollection(entry2);
 
-        PkIndexEntry entryToDelete = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 25);
+        PkIndexEntry entryToDelete = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 25, 0);
 
         // Execute
         fileSystem.deleteFromCollection(entryToDelete);
@@ -380,7 +381,7 @@ public class FileSystemTest {
     public void test_update_file_length() throws NoSuchFieldException, IllegalAccessException, IOException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
-        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + ".dat");
+        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         final var jsonObject = new JsonObject();
         jsonObject.addProperty("name", "test");
         final var dbEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, jsonObject);
@@ -592,9 +593,9 @@ public class FileSystemTest {
         when(mockIndexFile.toPath()).thenReturn(path);
 
         List<String> fileLines = Arrays.asList(
-                "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100",
-                "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100",
-                "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100"
+                "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "0"
         );
         Files.write(path, fileLines);
 
@@ -635,6 +636,8 @@ public class FileSystemTest {
         List<String> testData = List.of("{\"_id\":\"123\",\"name\":\"test\"}", "{\"_id\":\"456\",\"name\":\"test2\"}");
 
         try (MockedStatic<Files> mockedFiles = mockStatic(Files.class)) {
+            mockedFiles.when(() -> Files.list(any(Path.class)))
+                    .thenReturn(Stream.of(Path.of(TestGlobals.PATH + "/" + TestGlobals.DB + "/" + TestGlobals.COLL + "-0.dat")));
             mockedFiles.when(() -> Files.readAllLines(any(Path.class))).thenReturn(testData);
 
             // Act
