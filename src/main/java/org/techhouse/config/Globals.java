@@ -22,6 +22,7 @@ public class Globals {
     public static final String ADMIN_COLLECTIONS_COLLECTION_NAME = "collections";
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
+    public static final String FILE_PAGE_SEPARATOR = "-";
     public static final String NEWLINE = System.lineSeparator();
     public static final String NEWLINE_REGEX = System.lineSeparator().equals("\n") ? "\\n" : "\\r\\n";
     public static final int NEWLINE_CHAR_LENGTH = System.lineSeparator().equals("\n") ? 1 : 2;

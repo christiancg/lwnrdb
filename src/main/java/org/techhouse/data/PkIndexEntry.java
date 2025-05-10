@@ -12,14 +12,15 @@ public class PkIndexEntry implements Comparable<String> {
     private String value;
     private long position;
     private long length;
+    private long page;
 
     public String toFileEntry() {
-        return value + Globals.INDEX_ENTRY_SEPARATOR + position + Globals.INDEX_ENTRY_SEPARATOR + length;
+        return value + Globals.INDEX_ENTRY_SEPARATOR + position + Globals.INDEX_ENTRY_SEPARATOR + length + Globals.INDEX_ENTRY_SEPARATOR + page;
     }
 
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
         final var parts = line.trim().replace("\r","").replace("\n","").split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
-        return new PkIndexEntry(databaseName, collectionName, parts[0], Long.parseLong(parts[1]), Long.parseLong(parts[2]));
+        return new PkIndexEntry(databaseName, collectionName, parts[0], Long.parseLong(parts[1]), Long.parseLong(parts[2]), Long.parseLong(parts[3]));
     }
 
     @Override
