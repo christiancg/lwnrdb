@@ -68,6 +68,12 @@ public class TestUtils {
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
     }
 
+    public static void createTestJoinCollection() throws IOException, InterruptedException {
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.JOIN_COLL));
+        FileSystem fs = IocContainer.get(FileSystem.class);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.JOIN_COLL);
+    }
+
     public static <U, T> T getPrivateField(U object, String fieldName, ReflectionUtils.TypeToken<T> fieldType) throws NoSuchFieldException, IllegalAccessException {
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);

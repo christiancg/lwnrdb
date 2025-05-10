@@ -10,8 +10,8 @@ public class PkIndexEntryTest {
     // Convert PkIndexEntry to a file entry string using toFileEntry
     @Test
     public void test_to_file_entry_conversion() {
-        PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L);
-        String expected = "testValue<|>123<|>456";
+        PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L,0);
+        String expected = "testValue<|>123<|>456<|>0";
         assertEquals(expected, entry.toFileEntry());
     }
 
@@ -24,14 +24,14 @@ public class PkIndexEntryTest {
 
     @Test
     public void test_compareTo_equal_values() {
-        PkIndexEntry entry = new PkIndexEntry("db", "collection", "value", 1L, 1L);
+        PkIndexEntry entry = new PkIndexEntry("db", "collection", "value", 1L, 1L,0);
         int result = entry.compareTo("value");
         assertEquals(0, result);
     }
 
     @Test
     public void test_compareTo_null_value() {
-        PkIndexEntry entry = new PkIndexEntry("db", "collection", "value", 1L, 1L);
+        PkIndexEntry entry = new PkIndexEntry("db", "collection", "value", 1L, 1L,0);
         assertThrows(NullPointerException.class, () -> entry.compareTo(null));
     }
 }
