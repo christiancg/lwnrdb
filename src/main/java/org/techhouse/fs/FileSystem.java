@@ -20,6 +20,7 @@ import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class FileSystem {
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -135,6 +136,33 @@ public class FileSystem {
             jsonObject.remove(Globals.PK_FIELD);
             entry.setData(jsonObject);
             return entry;
+        }
+    }
+
+    public Stream<DbEntry> getMultipleById(List<PkIndexEntry> pkIndexEntry, File collectionFile) throws Exception {
+        final var dbName = pkIndexEntry.getFirst().getDatabaseName();
+        final var collName = pkIndexEntry.getFirst().getCollectionName();
+        try (final var reader = new RandomAccessFile(collectionFile, Globals.R_PERMISSIONS)) {
+            pkIndexEntry.sort(Comparator.comparing(pkIndexEntry1 -> (Long) pkIndexEntry1.getPosition()));
+            return pkIndexEntry.stream().map(pkIndexEntry1 -> {
+                try {
+                    reader.seek(pkIndexEntry1.getPosition());
+                    final var entryLength = (int) pkIndexEntry1.getLength();
+                    byte[] buffer = new byte[entryLength];
+                    reader.readFully(buffer, 0, entryLength);
+                    final var strEntry = new String(buffer);
+                    final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+                    final var entry = new DbEntry();
+                    entry.setDatabaseName(dbName);
+                    entry.setCollectionName(collName);
+                    entry.set_id(pkIndexEntry1.getValue());
+                    jsonObject.remove(Globals.PK_FIELD);
+                    entry.setData(jsonObject);
+                    return entry;
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
         }
     }
 
@@ -537,6 +565,26 @@ public class FileSystem {
         } else {
             return new HashMap<>();
         }
+    }
+
+    public Map<String, DbEntry> readCollectionEntries(String dbName, String collectionName, List<PkIndexEntry> entryList)  {
+        return entryList.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage))
+                .entrySet()
+                .parallelStream()
+                .reduce(new HashMap<>(), (identity, longListEntry) -> {
+                    final var page = longListEntry.getKey();
+                    final var collectionFile = getCollectionFile(dbName, collectionName, page);
+                    if (collectionFile.exists()) {
+                        try {
+                            identity.putAll(getMultipleById(longListEntry.getValue(), collectionFile).collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry)));
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    } else {
+                        return identity;
+                    }
+                    return identity;
+                }, (stringDbEntryHashMap, stringDbEntryHashMap2) -> stringDbEntryHashMap);
     }
 
     public Map<String, DbEntry> readWholeCollectionPage(String collectionIdentifier, long page) throws IOException {
