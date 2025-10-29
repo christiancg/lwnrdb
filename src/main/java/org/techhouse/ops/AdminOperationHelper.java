@@ -4,20 +4,27 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class AdminOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final Logger log = Logger.logFor(AdminOperationHelper.class);
 
     private static void lockAdminCollectionsCollection() throws InterruptedException {
         locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
@@ -35,36 +42,134 @@ public class AdminOperationHelper {
         locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
     }
 
-    public static void bulkUpdateEntryCount(String dbName, String collName, int insertedCount)
-            throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, insertedCount);
+    private static void lockAdminPageCollection(String collName) throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName));
     }
 
-    public static void updateEntryCount(String dbName, String collName, EventType type)
-            throws IOException, InterruptedException {
-        if (type != EventType.UPDATED) {
-            baseUpdateEntryCount(dbName, collName, type == EventType.CREATED ? 1 : -1);
-        }
+    private static void releaseAdminPageCollection(String collName) {
+        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName));
     }
 
-    private static void baseUpdateEntryCount(final String dbName, final String collName, final int insertedEntries)
+    public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted)
+            throws IOException, InterruptedException {
+        baseUpdateEntryCount(dbName, collName, type, inserted);
+    }
+
+    public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry)
+            throws IOException, InterruptedException {
+        baseUpdateEntryCount(dbName, collName, type, List.of(dbEntry));
+    }
+
+    private static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type, final List<DbEntry> insertedOrDeleted)
             throws InterruptedException, IOException {
-        lockAdminCollectionsCollection();
+        lockAdminPageCollection(collName);
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
-        AdminCollEntry adminCollEntry;
+        List<AdminPageEntry> adminPageEntries;
         PkIndexEntry pkIndexEntry;
+        final var pagesPerCollectionName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
+        final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(DbEntry::getPage));
+        final var insertedPages = grouped.entrySet().stream()
+                .map(longListEntry -> {
+                    final var groupedEntry = new AdminPageEntry(collName);
+                    groupedEntry.setPage(longListEntry.getKey());
+                    groupedEntry.setEntryCount(longListEntry.getValue().size());
+                    // TODO: replace size calculation using proper size
+                    final var groupedSize = longListEntry.getValue().stream().map(dbEntry -> dbEntry.toFileEntry().length()).reduce(0, Integer::sum);
+                    groupedEntry.setPageSize(groupedSize);
+                    return groupedEntry;
+                }).toList();
         if (adminIndexPkCollEntry != null) {
-            adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
-            adminCollEntry.setEntryCount(adminCollEntry.getEntryCount() + insertedEntries);
-            pkIndexEntry = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
+            adminPageEntries = cache.getAdminPageEntries(dbName, collName);
+            final var touchedPages = adminPageEntries.stream()
+                    .filter(page -> insertedPages.stream().anyMatch(dbEntry -> dbEntry.getPage() == page.getPage()))
+                    .peek(page -> {
+                        final var insertedPage = insertedPages.stream().filter(dbEntry -> dbEntry.getPage() == page.getPage()).findFirst();
+                        if (insertedPage.isPresent()) {
+                            switch (type) {
+                                case UPDATED:
+                                    // TODO: implement this case
+                                    break;
+                                case CREATED:
+                                    page.setEntryCount(page.getEntryCount() + insertedPage.get().getEntryCount());
+                                    page.setPageSize(page.getPageSize() + insertedPage.get().getPageSize());
+                                    break;
+                                case DELETED:
+                                    page.setEntryCount(page.getEntryCount() - insertedPage.get().getEntryCount());
+                                    page.setPageSize(page.getPageSize() - insertedPage.get().getPageSize());
+                                    break;
+                            }
+                        }
+                    }).toList();
+            final var newPages = insertedPages.stream()
+                    .filter(page -> adminPageEntries.stream().noneMatch(p -> p.getPage() == page.getPage()))
+                    .map(page -> {
+                        final var newPkIndexEntry = new AdminPageEntry(collName);
+                        newPkIndexEntry.setPage(page.getPage());
+                        newPkIndexEntry.setEntryCount(page.getEntryCount());
+                        newPkIndexEntry.setPageSize(page.getPageSize());
+                        return newPkIndexEntry;
+                    })
+                    .toList();
+            if (!newPages.isEmpty()) {
+                fs.bulkInsertIntoCollection(Globals.ADMIN_DB_NAME, pagesPerCollectionName, newPages);
+            }
+            // Update touched pages using bulkUpdateFromCollection method
+            if (!touchedPages.isEmpty()) {
+                updateTouchedPagesInFileSystem(dbName, collName, pagesPerCollectionName, touchedPages, adminPageEntries);
+            }
         } else {
-            adminCollEntry = new AdminCollEntry(dbName, collName);
-            adminCollEntry.setEntryCount(adminCollEntry.getEntryCount() + insertedEntries);
+            final var adminCollEntry = new AdminCollEntry(dbName, collName);
             pkIndexEntry = fs.insertIntoCollection(adminCollEntry);
+            cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
+            fs.bulkInsertIntoCollection(Globals.ADMIN_DB_NAME, pagesPerCollectionName, insertedPages);
         }
-        cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
-        releaseAdminCollectionsCollection();
+        releaseAdminPageCollection(collName);
+    }
+
+    /**
+     * Updates touched admin page entries in the filesystem using bulkUpdateFromCollection
+     */
+    private static void updateTouchedPagesInFileSystem(String dbName, String collName, String pagesPerCollectionName,
+                                                       List<AdminPageEntry> touchedPages, List<AdminPageEntry> adminPageEntries)
+            throws IOException {
+        // Update the cache with the modified entries
+        final var updatedPageEntries = new ArrayList<>(adminPageEntries);
+        // Replace the touched pages in the list with their updated versions
+        for (var touchedPage : touchedPages) {
+            updatedPageEntries.removeIf(p -> p.getPage() == touchedPage.getPage());
+            updatedPageEntries.add(touchedPage);
+        }
+        cache.putAdminPageEntries(dbName, collName, updatedPageEntries);
+
+        // Convert touched pages to IndexedDbEntry objects for bulkUpdateFromCollection
+        final var indexedEntriesToUpdate = new ArrayList<IndexedDbEntry>();
+
+        for (var touchedPage : touchedPages) {
+            try {
+                // Create IndexedDbEntry from the touched page
+                final var indexedEntry = new IndexedDbEntry();
+                indexedEntry.set_id(touchedPage.get_id());
+                indexedEntry.setDatabaseName(Globals.ADMIN_DB_NAME);
+                indexedEntry.setCollectionName(pagesPerCollectionName);
+                indexedEntry.setData(touchedPage.getData());
+
+                // Read the PK index file to find the index entry for this page
+                final var existingPkIndexEntry = findPkIndexEntryById(Globals.ADMIN_DB_NAME, pagesPerCollectionName, touchedPage.get_id());
+                if (existingPkIndexEntry != null) {
+                    indexedEntry.setIndex(existingPkIndexEntry);
+                    indexedEntriesToUpdate.add(indexedEntry);
+                }
+            } catch (Exception e) {
+                // If we can't get the PK index for this entry, skip it
+                log.error("Warning: Could not retrieve PK index for admin page entry: " + touchedPage.get_id(), e);
+            }
+        }
+
+        // Use bulkUpdateFromCollection to persist the updates to filesystem
+        if (!indexedEntriesToUpdate.isEmpty()) {
+            fs.bulkUpdateFromCollection(Globals.ADMIN_DB_NAME, pagesPerCollectionName, indexedEntriesToUpdate);
+        }
     }
 
     public static void saveDatabaseEntry(AdminDbEntry dbEntry)
@@ -184,5 +289,37 @@ public class AdminOperationHelper {
             cache.putPkIndexAdminCollEntry(adminIndexPkCollEntry);
             releaseAdminCollectionsCollection();
         }
+    }
+
+    /**
+     * Helper method to find a PK index entry by ID from the index file
+     */
+    private static PkIndexEntry findPkIndexEntryById(String dbName, String collName, String id) throws IOException {
+        // Construct the path to the PK index file
+        final var indexFileName = collName + "_pk_string.idx";
+        final var dbPath = System.getProperty("user.dir") + "/db"; // Should use config
+        final var indexFilePath = dbPath + "/" + dbName + "/" + collName + "/" + indexFileName;
+        final var indexFile = new java.io.File(indexFilePath);
+
+        if (!indexFile.exists()) {
+            return null;
+        }
+
+        try (final var reader = new java.io.BufferedReader(new java.io.FileReader(indexFile))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                // Parse the index entry line to find matching ID
+                final var parts = line.split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
+                if (parts.length >= 4 && parts[0].equals(id)) {
+                    // Found the matching entry, create PkIndexEntry
+                    final var position = Long.parseLong(parts[1]);
+                    final var length = Integer.parseInt(parts[2]);
+                    final var page = Long.parseLong(parts[3]);
+                    return new PkIndexEntry(dbName, collName, id, position, length, page);
+                }
+            }
+        }
+
+        return null; // Not found
     }
 }

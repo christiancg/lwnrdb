@@ -41,6 +41,7 @@ public class FileSystem {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        createPagesFolder();
     }
 
     public boolean createDatabaseFolder(String dbName) {
@@ -49,6 +50,18 @@ public class FileSystem {
             return dbFolder.mkdir();
         }
         return true;
+    }
+
+    private void createPagesFolder() {
+        final var pagesFolder = Paths.get(dbPath + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME
+                + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER_NAME);
+        if (!Files.exists(pagesFolder)) {
+            try {
+                Files.createDirectory(pagesFolder);
+            } catch (IOException e) {
+                throw new DirectoryNotFoundException(pagesFolder.toAbsolutePath().toString());
+            }
+        }
     }
 
     public boolean deleteDatabase(String dbName) {
@@ -143,7 +156,7 @@ public class FileSystem {
         final var dbName = pkIndexEntry.getFirst().getDatabaseName();
         final var collName = pkIndexEntry.getFirst().getCollectionName();
         try (final var reader = new RandomAccessFile(collectionFile, Globals.R_PERMISSIONS)) {
-            pkIndexEntry.sort(Comparator.comparing(pkIndexEntry1 -> (Long) pkIndexEntry1.getPosition()));
+            pkIndexEntry.sort(Comparator.comparing(PkIndexEntry::getPosition));
             return pkIndexEntry.stream().map(pkIndexEntry1 -> {
                 try {
                     reader.seek(pkIndexEntry1.getPosition());
@@ -166,7 +179,7 @@ public class FileSystem {
         }
     }
 
-    public List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<DbEntry> entries) throws IOException {
+    public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<T> entries) throws IOException {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
         final var entrySet = entries.stream().collect(Collectors.groupingBy(DbEntry::getPage)).entrySet();
         for (var groupedEntry : entrySet) {
