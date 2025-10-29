@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
@@ -120,8 +121,10 @@ public class AggregationOperationHelper {
         if (resultStream != null) {
             result.addProperty(COUNT_FIELD_NAME, resultStream.count());
         } else {
-            final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
-            result.addProperty(COUNT_FIELD_NAME, adminCollEntry.getEntryCount());
+            final var adminPageEntries = cache.getAdminPageEntries(dbName, collName);
+            final var totalCount = adminPageEntries != null ?
+                adminPageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum() : 0;
+            result.addProperty(COUNT_FIELD_NAME, totalCount);
         }
         return Stream.of(result);
     }

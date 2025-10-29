@@ -78,7 +78,7 @@ public class AggregationOperationHelperTest {
 
         final var dbEntry = new AdminDbEntry(TestGlobals.DB);
         AdminOperationHelper.saveDatabaseEntry(dbEntry);
-        final var collEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL, Set.of(), 1);
+        final var collEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL, Set.of());
         AdminOperationHelper.saveCollectionEntry(collEntry);
     
         // Act

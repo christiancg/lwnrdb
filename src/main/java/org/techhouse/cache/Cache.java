@@ -6,6 +6,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.fs.FileSystem;
@@ -26,8 +27,10 @@ public class Cache {
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
     private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
     private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
+    private final Map<String, List<AdminPageEntry>> pages = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> databasesPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
+    private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
         final var pkIndexAdminDbEntries =
@@ -246,9 +249,10 @@ public class Cache {
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
-        final var collData = collections.get(collectionIdentifier);
         final var wholeCollection = collectionMap.get(collectionIdentifier);
-        if (wholeCollection == null || wholeCollection.isEmpty() || wholeCollection.size() < collData.getEntryCount()) {
+        final var collPages = pages.get(collectionIdentifier);
+        final var entryCount = collPages.stream().map(AdminPageEntry::getEntryCount).reduce(Integer::sum);
+        if (wholeCollection == null || wholeCollection.isEmpty() || entryCount.isEmpty() || wholeCollection.size() < entryCount.get()) {
             try {
                 return fs.readWholeCollection(dbName, collName);
             } catch (IOException e) {
@@ -280,6 +284,18 @@ public class Cache {
 
     public AdminCollEntry getAdminCollectionEntry(String dbName, String collName) {
         return collections.get(getCollectionIdentifier(dbName, collName));
+    }
+
+    public List<AdminPageEntry> getAdminPageEntries(String dbName, String collName) {
+        return pages.get(getCollectionIdentifier(dbName, collName));
+    }
+
+    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
+        pages.put(getCollectionIdentifier(dbName, collName), adminPageEntries);
+    }
+
+    public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
+        pages.get(getCollectionIdentifier(dbName, collName)).add(adminPageEntry);
     }
 
     public void putAdminDbEntry(AdminDbEntry dbEntry, PkIndexEntry indexEntry) {

@@ -54,9 +54,9 @@ public class EventProcessorHelper {
             throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
-        final var insertedCount = event.getInsertedEntries().size();
         IndexHelper.bulkUpdateIndexes(dbName, collName, event.getInsertedEntries(), event.getUpdatedEntries());
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, insertedCount);
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries());
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries());
     }
 
     private static void processEntityEvent(EntityEvent event)
@@ -66,7 +66,7 @@ public class EventProcessorHelper {
         final var dbEntry = event.getDbEntry();
         final var type = event.getType();
         IndexHelper.updateIndexes(dbName, collName, dbEntry, type);
-        AdminOperationHelper.updateEntryCount(dbName, collName, type);
+        AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry);
     }
 
     private static void processIndexEvent(IndexEvent event)
