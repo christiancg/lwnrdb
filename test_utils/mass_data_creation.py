@@ -30,34 +30,32 @@ def randomDatetime(variance=8):
     random_time = datetime.now() + timedelta(seconds = delta)
     return '#datetime(' + random_time.strftime('%Y-%m-%dT%H:%M:%S') + ')'
 
-def one_by_one_creation(s):
-    for i in range(0,NUM_ENTRIES_PER_THREAD):
-        base_message_individual["object"] = {"aNumber": randomInt(size=2), "aString": randomString(size=2), "aBoolean": randomBool(), "aDatetime": randomDatetime()} 
-        message = json.dumps(base_message_individual)
-        
-        s.sendall(message.encode() + '\n'.encode())
-        data = s.recv(2048)
+def one_by_one_creation(s, f):
+    for i in range(0, NUM_ENTRIES_PER_THREAD):
+        obj = {"aNumber": randomInt(size=2), "aString": randomString(size=2), "aBoolean": randomBool(), "aDatetime": randomDatetime()}
+        message = json.dumps({**base_message_individual, "object": obj})
+        s.sendall(message.encode() + b'\n')
+        f.readline()
 
-def bulk_creation(s):
+def bulk_creation(s, f):
     arr = []
-    for i in range(0,NUM_ENTRIES_PER_THREAD):
-        str = randomString(size=3)
-        object = {"aNumber": randomInt(size=3), "aString": str, "aBoolean": randomBool(), "aDatetime": randomDatetime()}
-        # object["_id"] = str
-        arr.append(object)
-    base_message_bulk["objects"] = arr
-    message = json.dumps(base_message_bulk)
-    s.sendall(message.encode() + '\n'.encode())
-    data = s.recv(65536)
+    for i in range(0, NUM_ENTRIES_PER_THREAD):
+        rstr = randomString(size=3)
+        obj = {"aNumber": randomInt(size=3), "aString": rstr, "aBoolean": randomBool(), "aDatetime": randomDatetime()}
+        arr.append(obj)
+    message = json.dumps({**base_message_bulk, "objects": arr})
+    s.sendall(message.encode() + b'\n')
+    f.readline()
 
 def thread_function(thread_number):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
+        f = s.makefile('rb')
         print(f"Start sending from {thread_number}")
         if BULK_CREATION:
-            bulk_creation(s)
+            bulk_creation(s, f)
         else:
-            one_by_one_creation(s)
+            one_by_one_creation(s, f)
         print(f"Finished sending from {thread_number}")
 
 start = datetime.now()
