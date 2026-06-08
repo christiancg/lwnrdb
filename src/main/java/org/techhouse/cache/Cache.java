@@ -67,8 +67,6 @@ public class Cache {
         }
     }
 
-    private static final String PAGES_COLLECTION_PREFIX = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", "");
-
     private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
         final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
         final var collId = getCollectionIdentifier(dbName, collName);
@@ -84,16 +82,7 @@ public class Cache {
                     .forEach(pageEntries::add));
         }
         pages.put(collId, pageEntries);
-
-        // Load the pagination tracker for pagesCollName itself. If pagesCollName is layer 1
-        // (e.g., "pages_myColl"), its tracker lives on disk as pages_pages_myColl — recurse.
-        // If pagesCollName is layer 2 (e.g., "pages_pages_myColl"), its tracker is in-memory
-        // only — reconstruct from the PK index by grouping entries per page.
-        if (!collName.startsWith(PAGES_COLLECTION_PREFIX)) {
-            loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, pagesCollName);
-        } else {
-            rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
-        }
+        rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
     }
 
     private void rebuildInMemoryPagesFromPkIndex(String collName, List<PkIndexEntry> pkIdx) {
