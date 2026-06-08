@@ -432,7 +432,7 @@ public class FileSystem {
     public boolean dropIndex(String dbName, String collName, String fieldName) {
         final var collFolder = getCollectionFolder(dbName, collName);
         if (collFolder.exists()) {
-            final var indexFiles = collFolder.listFiles((dir, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
+            final var indexFiles = collFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
                     && name.contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR));
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
@@ -448,7 +448,7 @@ public class FileSystem {
     public ConcurrentMap<String, List<FieldIndexEntry<?>>> readAllWholeFieldIndexFiles(String dbName, String collName, String fieldName) {
         final var collectionFolder = getCollectionFolder(dbName, collName);
         if (collectionFolder.exists()) {
-            final var indexFiles = collectionFolder.listFiles((dir, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
+            final var indexFiles = collectionFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
                     && !name.contains(Globals.PK_FIELD)
                     && name.contains(fieldName));
             if (indexFiles != null) {
@@ -484,7 +484,7 @@ public class FileSystem {
             if (indexFile.exists()) {
                 return Files.readAllLines(indexFile.toPath()).stream().map(s ->
                                 FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, indexType))
-                        .sorted((o1, o2) -> switch (o1.getValue()) {
+                        .sorted((o1, o2) -> switch ((Object) o1.getValue()) {
                             case Number n -> Double.compare(n.doubleValue(), ((Number)o2.getValue()).doubleValue());
                             case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
                             case JsonCustom<?> c -> {
@@ -520,7 +520,7 @@ public class FileSystem {
                             throw new RuntimeException(e);
                         }
                     })
-                    .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry));
+                    .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry, (_, replacement) -> replacement));
         } else {
             return new HashMap<>();
         }
