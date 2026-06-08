@@ -246,7 +246,7 @@ public class Cache {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var collData = collections.get(collectionIdentifier);
         final var wholeCollection = collectionMap.get(collectionIdentifier);
-        if (wholeCollection == null || wholeCollection.isEmpty() || wholeCollection.size() < collData.getEntryCount()) {
+        if (wholeCollection == null || wholeCollection.isEmpty() || collData == null || wholeCollection.size() < collData.getEntryCount()) {
             try {
                 return fs.readWholeCollection(dbName, collName);
             } catch (IOException e) {
