@@ -68,7 +68,7 @@ public class Cache {
     }
 
     private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
-        final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         final var collId = getCollectionIdentifier(dbName, collName);
         final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, pagesCollName);
         // The PK index loaded here belongs to pagesCollName (the file on disk that holds the

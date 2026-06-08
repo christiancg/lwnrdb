@@ -41,12 +41,12 @@ public class AdminOperationHelper {
         locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
     }
 
-    private static void lockAdminPageCollection(String collName) throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName));
+    private static void lockAdminPageCollection(String dbName, String collName) throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName));
     }
 
-    private static void releaseAdminPageCollection(String collName) {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName));
+    private static void releaseAdminPageCollection(String dbName, String collName) {
+        locks.release(Globals.ADMIN_DB_NAME, String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName));
     }
 
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted)
@@ -64,9 +64,9 @@ public class AdminOperationHelper {
         if (insertedOrDeleted.isEmpty()) {
             return;
         }
-        lockAdminPageCollection(collName);
+        lockAdminPageCollection(dbName, collName);
         try {
-            final var pagesPerCollectionName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
+            final var pagesPerCollectionName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
             fs.createCollectionFile(Globals.ADMIN_DB_NAME, pagesPerCollectionName);
             final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(DbEntry::getPage));
             final var existingPageEntries = cache.getAdminPageEntries(dbName, collName);
@@ -109,7 +109,7 @@ public class AdminOperationHelper {
                 updateTouchedPagesInFileSystem(pagesPerCollectionName, touchedPages);
             }
         } finally {
-            releaseAdminPageCollection(collName);
+            releaseAdminPageCollection(dbName, collName);
         }
     }
 
@@ -247,13 +247,13 @@ public class AdminOperationHelper {
         return cache.getAdminDbEntry(dbName);
     }
 
-    public static void createPageCollections(String collName) throws IOException {
-        final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
+    public static void createPageCollections(String dbName, String collName) throws IOException {
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         fs.createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollName);
     }
 
     public static void deletePageCollections(String dbName, String collName) {
-        final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         fs.deleteCollectionFiles(Globals.ADMIN_DB_NAME, pagesCollName);
         cache.removeAdminPageEntries(dbName, collName);
         cache.removeAdminPageEntries(Globals.ADMIN_DB_NAME, pagesCollName);
