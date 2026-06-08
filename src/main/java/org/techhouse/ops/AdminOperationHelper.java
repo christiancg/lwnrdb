@@ -103,20 +103,18 @@ public class AdminOperationHelper {
             }
             cache.putAdminPageEntries(dbName, collName, workingPageEntries);
             if (!newPages.isEmpty()) {
-                insertAdminPages(collName, pagesPerCollectionName, newPages);
+                insertAdminPages(pagesPerCollectionName, newPages);
             }
             if (!touchedPages.isEmpty()) {
-                updateTouchedPagesInFileSystem(collName, pagesPerCollectionName, touchedPages);
+                updateTouchedPagesInFileSystem(pagesPerCollectionName, touchedPages);
             }
         } finally {
             releaseAdminPageCollection(collName);
         }
     }
 
-    private static final String PAGES_COLLECTION_PREFIX = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", "");
-
-    private static void insertAdminPages(String collName, String pagesPerCollectionName,
-                                         List<AdminPageEntry> newPages) throws IOException, InterruptedException {
+    private static void insertAdminPages(String pagesPerCollectionName,
+                                         List<AdminPageEntry> newPages) throws IOException {
         final var pendingPageBytes = new HashMap<Long, Long>();
         for (var p : newPages) {
             final var size = p.byteSize();
@@ -129,56 +127,45 @@ public class AdminOperationHelper {
         for (var ie : inserted) {
             pkIdxList.add(ie.getIndex());
         }
-        // Next-layer tracking. If collName starts with the pages-collection prefix then we're inserting
-        // at layer 2 (pages_pages_<X>) and the next layer is in-memory only — we deliberately stop the
-        // recursion here. Otherwise (layer 1, pages_<X>) we persist by recursing into baseUpdateEntryCount,
-        // which will write the layer-2 metadata to pages_pages_<X> on disk.
-        if (collName.startsWith(PAGES_COLLECTION_PREFIX)) {
-            trackInMemoryAdminPages(Globals.ADMIN_DB_NAME, pagesPerCollectionName, inserted);
-        } else {
-            final var insertedDbEntries = inserted.stream().map(IndexedDbEntry::toDbEntry).toList();
-            baseUpdateEntryCount(Globals.ADMIN_DB_NAME, pagesPerCollectionName, EventType.CREATED, insertedDbEntries);
-        }
+        trackInMemoryAdminPages(pagesPerCollectionName, inserted);
     }
 
-    private static void trackInMemoryAdminPages(String adminDb, String pagesPerCollectionName,
-                                                List<IndexedDbEntry> inserted) {
+    private static void trackInMemoryAdminPages(String pagesPerCollectionName, List<IndexedDbEntry> inserted) {
         for (var ie : inserted) {
             final var page = ie.getIndex().getPage();
             final var bytes = ie.getIndex().getLength();
-            final var existing = cache.getAdminPageEntry(adminDb, pagesPerCollectionName, page);
+            final var existing = cache.getAdminPageEntry(Globals.ADMIN_DB_NAME, pagesPerCollectionName, page);
             if (existing != null) {
                 existing.setEntryCount(existing.getEntryCount() + 1);
                 existing.setPageSize(existing.getPageSize() + bytes);
             } else {
-                final var newEntry = new AdminPageEntry(adminDb, pagesPerCollectionName, page);
+                final var newEntry = new AdminPageEntry(Globals.ADMIN_DB_NAME, pagesPerCollectionName, page);
                 newEntry.setEntryCount(1);
                 newEntry.setPageSize(bytes);
-                cache.addAdminPageEntries(adminDb, pagesPerCollectionName, newEntry);
+                cache.addAdminPageEntries(Globals.ADMIN_DB_NAME, pagesPerCollectionName, newEntry);
             }
         }
     }
 
-    private static void trackInMemoryAdminPagesForUpdate(String adminDb, String pagesPerCollectionName,
-                                                         List<IndexedDbEntry> updated) {
+    private static void trackInMemoryAdminPagesForUpdate(String pagesPerCollectionName, List<IndexedDbEntry> updated) {
         for (var ie : updated) {
             final var page = ie.getIndex().getPage();
             final var newBytes = ie.getIndex().getLength();
             final var prevBytes = ie.getPreviousByteSize();
-            final var existing = cache.getAdminPageEntry(adminDb, pagesPerCollectionName, page);
+            final var existing = cache.getAdminPageEntry(Globals.ADMIN_DB_NAME, pagesPerCollectionName, page);
             if (existing != null) {
                 existing.setPageSize(existing.getPageSize() + newBytes - prevBytes);
             } else {
-                final var newEntry = new AdminPageEntry(adminDb, pagesPerCollectionName, page);
+                final var newEntry = new AdminPageEntry(Globals.ADMIN_DB_NAME, pagesPerCollectionName, page);
                 newEntry.setEntryCount(0);
                 newEntry.setPageSize(newBytes);
-                cache.addAdminPageEntries(adminDb, pagesPerCollectionName, newEntry);
+                cache.addAdminPageEntries(Globals.ADMIN_DB_NAME, pagesPerCollectionName, newEntry);
             }
         }
     }
 
-    private static void updateTouchedPagesInFileSystem(String collName, String pagesPerCollectionName,
-                                                       List<AdminPageEntry> touchedPages) throws IOException, InterruptedException {
+    private static void updateTouchedPagesInFileSystem(String pagesPerCollectionName,
+                                                       List<AdminPageEntry> touchedPages) throws IOException {
         final var pkIdxList = cache.getAdminPagePkIndexes(Globals.ADMIN_DB_NAME, pagesPerCollectionName);
         final var indexedEntriesToUpdate = new ArrayList<IndexedDbEntry>();
         for (var touchedPage : touchedPages) {
@@ -203,12 +190,7 @@ public class AdminOperationHelper {
                 pkIdxList.removeIf(pk -> pk.getValue().equals(ie.get_id()));
                 pkIdxList.add(ie.getIndex());
             }
-            if (collName.startsWith(PAGES_COLLECTION_PREFIX)) {
-                trackInMemoryAdminPagesForUpdate(Globals.ADMIN_DB_NAME, pagesPerCollectionName, updated);
-            } else {
-                final var updatedDbEntries = updated.stream().map(IndexedDbEntry::toDbEntry).toList();
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, pagesPerCollectionName, EventType.UPDATED, updatedDbEntries);
-            }
+            trackInMemoryAdminPagesForUpdate(pagesPerCollectionName, updated);
         }
     }
 
@@ -265,29 +247,14 @@ public class AdminOperationHelper {
         return cache.getAdminDbEntry(dbName);
     }
 
-    /**
-     * Create the two layers of admin page-tracking files for a newly-created collection:
-     *   pages_<coll>          — persisted pagination metadata for the user collection
-     *   pages_pages_<coll>    — persisted pagination metadata for pages_<coll> itself
-     * The third layer (pages_pages_pages_<coll>) is tracked in memory only and rebuilt
-     * at startup from layer-2's PK index.
-     */
     public static void createPageCollections(String collName) throws IOException {
         final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
-        final var pagesPagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", pagesCollName);
         fs.createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollName);
-        fs.createCollectionFile(Globals.ADMIN_DB_NAME, pagesPagesCollName);
     }
 
-    /**
-     * Drop both layers of admin page-tracking files and evict their in-memory trackers.
-     * Mirror of {@link #createPageCollections(String)}.
-     */
     public static void deletePageCollections(String dbName, String collName) {
         final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
-        final var pagesPagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", pagesCollName);
         fs.deleteCollectionFiles(Globals.ADMIN_DB_NAME, pagesCollName);
-        fs.deleteCollectionFiles(Globals.ADMIN_DB_NAME, pagesPagesCollName);
         cache.removeAdminPageEntries(dbName, collName);
         cache.removeAdminPageEntries(Globals.ADMIN_DB_NAME, pagesCollName);
     }
