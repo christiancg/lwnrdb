@@ -520,7 +520,7 @@ public class FileSystem {
                             throw new RuntimeException(e);
                         }
                     })
-                    .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry));
+                    .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry, (_, replacement) -> replacement));
         } else {
             return new HashMap<>();
         }
