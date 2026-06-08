@@ -26,6 +26,7 @@ public class ClientTracker {
     }
 
     public void updateLastCommandTime(UUID clientId) {
+        if (clientId == null) return;
         final var client = clients.get(clientId);
         if (client != null) {
             client.setLastCommandTime(LocalDateTime.now());
