@@ -44,8 +44,6 @@ public class FileSystem {
         final var pagesCollections = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", pagesDatabases));
-        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", pagesCollections));
     }
 
     public boolean createDatabaseFolder(String dbName) {
