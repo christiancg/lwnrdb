@@ -29,17 +29,18 @@ public class MessageProcessor implements Runnable {
 
     @Override
     public void run() {
-        BufferedReader reader;
-        BufferedWriter writer;
-        try {
-            reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+        try (socket) {
+            final var reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+            final var writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
             if (clientId != null) {
                 var close = false;
-                var message = "";
                 while (!close) {
-                    message = reader.readLine();
-                    if (message != null && !message.isBlank()) {
+                    final var message = reader.readLine();
+                    if (message == null) {
+                        clientTracker.removeById(clientId);
+                        break;
+                    }
+                    if (!message.isBlank()) {
                         var response = "";
                         try {
                             final var parsedMessage = RequestParser.parseRequest(message);
@@ -65,7 +66,6 @@ public class MessageProcessor implements Runnable {
                 writer.newLine();
                 writer.flush();
             }
-            writer.close();
         } catch (IOException e) {
             if (clientId != null) {
                 clientTracker.removeById(clientId);
