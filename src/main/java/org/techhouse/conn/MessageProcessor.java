@@ -54,6 +54,7 @@ public class MessageProcessor implements Runnable {
                         }
                         clientTracker.updateLastCommandTime(clientId);
                         writer.write(response);
+                        writer.newLine();
                         writer.flush();
                     }
                 }
@@ -61,6 +62,7 @@ public class MessageProcessor implements Runnable {
                 final var responseObj = new OperationResponse(OperationType.CLOSE_CONNECTION, OperationStatus.ERROR,
                         "Max number of connections reached");
                 writer.write(eJson.toJson(responseObj));
+                writer.newLine();
                 writer.flush();
             }
             writer.close();
