@@ -28,14 +28,7 @@ public class ResourceLocking {
     }
 
     private void lock(String lockName) throws InterruptedException {
-        final var lock = locks.get(lockName);
-        if (lock == null) {
-            final var newLock = new Semaphore(1);
-            locks.put(lockName, newLock);
-            newLock.acquire();
-        } else {
-            lock.acquire();
-        }
+        locks.computeIfAbsent(lockName, _ -> new Semaphore(1)).acquire();
     }
 
     public void release(String lockName) {
