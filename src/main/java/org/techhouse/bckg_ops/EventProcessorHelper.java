@@ -42,7 +42,7 @@ public class EventProcessorHelper {
         if (event.getType() == EventType.CREATED) {
             final var existingCollEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
             if (existingCollEntry == null) {
-                AdminOperationHelper.createPageCollections(collName);
+                AdminOperationHelper.createPageCollections(dbName, collName);
                 final var newAdminCollEntry = new AdminCollEntry(dbName, collName);
                 AdminOperationHelper.saveCollectionEntry(newAdminCollEntry);
             }
