@@ -44,18 +44,16 @@ public class Cache {
             final var adminDatabasesColl =
                     fs.readWholeCollection(getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME));
             final var adminDatabasesCollMap = adminDatabasesColl.entrySet().stream()
-                    .map(stringDbEntryEntry -> new AbstractMap.SimpleEntry<>(stringDbEntryEntry.getKey(),
-                            AdminDbEntry.fromJsonObject(stringDbEntryEntry.getValue().getData())))
-                    .collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
+                    .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
+                            e -> AdminDbEntry.fromJsonObject(e.getValue().getData())));
             databases.putAll(adminDatabasesCollMap);
         }
         if (!pkIndexAdminCollEntries.isEmpty()) {
             final var adminCollectionsColl =
                     fs.readWholeCollection(getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME));
             final var adminCollectionsCollMap = adminCollectionsColl.entrySet().stream()
-                    .map(stringDbEntryEntry -> new AbstractMap.SimpleEntry<>(stringDbEntryEntry.getKey(),
-                            AdminCollEntry.fromJsonObject(stringDbEntryEntry.getValue().getData())))
-                    .collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue));
+                    .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
+                            e -> AdminCollEntry.fromJsonObject(e.getValue().getData())));
             collections.putAll(adminCollectionsCollMap);
         }
     }
@@ -222,19 +220,19 @@ public class Cache {
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
         final var collId = getCollectionIdentifier(dbName, collName);
-        var coll = collectionMap.computeIfAbsent(collId, k -> new ConcurrentHashMap<>());
+        var coll = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         coll.put(entry.get_id(), entry);
     }
 
     public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
         final var collId = getCollectionIdentifier(dbName, collName);
-        var coll = collectionMap.computeIfAbsent(collId, k -> new ConcurrentHashMap<>());
+        var coll = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         coll.putAll(entries.stream().collect(Collectors.toMap(DbEntry::get_id, o -> o)));
     }
 
     public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
-        final var coll = collectionMap.computeIfAbsent(collectionIdentifier, k -> new ConcurrentHashMap<>());
+        final var coll = collectionMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>());
         final var pk = idxEntry.getValue();
         var entry = coll.get(pk);
         if (entry == null) {
