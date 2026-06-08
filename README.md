@@ -31,6 +31,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
+- Each collection is split across pages (one file per page) sized up to `maxPageSizeBytes`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages_<collection>`, and the pagination of that admin collection is itself persisted under `admin/pages_pages_<collection>` (further levels are tracked in memory only and rebuilt at startup). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
 
 ## Pending tasks
 

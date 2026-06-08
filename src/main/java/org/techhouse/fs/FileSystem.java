@@ -16,7 +16,6 @@ import org.techhouse.utils.ReflectionUtils;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
@@ -41,7 +40,12 @@ public class FileSystem {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        createPagesFolder();
+        final var pagesDatabases = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        final var pagesCollections = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
+        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", pagesDatabases));
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", pagesCollections));
     }
 
     public boolean createDatabaseFolder(String dbName) {
@@ -50,18 +54,6 @@ public class FileSystem {
             return dbFolder.mkdir();
         }
         return true;
-    }
-
-    private void createPagesFolder() {
-        final var pagesFolder = Paths.get(dbPath + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME
-                + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER_NAME);
-        if (!Files.exists(pagesFolder)) {
-            try {
-                Files.createDirectory(pagesFolder);
-            } catch (IOException e) {
-                throw new DirectoryNotFoundException(pagesFolder.toAbsolutePath().toString());
-            }
-        }
     }
 
     public boolean deleteDatabase(String dbName) {
@@ -184,11 +176,13 @@ public class FileSystem {
         final var entrySet = entries.stream().collect(Collectors.groupingBy(DbEntry::getPage)).entrySet();
         for (var groupedEntry : entrySet) {
             final var page = groupedEntry.getKey();
+            final var pageEntries = groupedEntry.getValue();
             final var file = getCollectionFile(dbName, collName, page);
             try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
-                for (var entry : entries) {
+                for (var entry : pageEntries) {
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                    final var length = strData.length();
+                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+                    final var length = bytes.length;
                     var totalFileLength = file.length();
                     writer.append(strData);
                     writer.flush();
@@ -214,7 +208,8 @@ public class FileSystem {
         final var file = getCollectionFile(dbName, collName, page);
         try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var length = strData.length();
+            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+            final var length = bytes.length;
             var totalFileLength = file.length();
             writer.append(strData);
             writer.flush();
@@ -270,16 +265,18 @@ public class FileSystem {
         final var entrySet = entries.stream().collect(Collectors.groupingBy(indexedDbEntry -> indexedDbEntry.getIndex().getPage())).entrySet();
         for (var groupedEntry : entrySet) {
             final var page = groupedEntry.getKey();
+            final var pageEntries = groupedEntry.getValue();
             final var file = getCollectionFile(dbName, collName, page);
             int totalFileLength = (int) file.length();
             try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-                for (var entry : entries) {
+                for (var entry : pageEntries) {
                     shiftOtherEntriesToStart(writer, entry.getIndex(), totalFileLength);
                     writer.seek(totalFileLength - entry.getIndex().getLength());
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                    final var length = strData.length();
-                    writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
-                    writer.setLength(totalFileLength - entry.getIndex().getLength() + strData.length());
+                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+                    final var length = bytes.length;
+                    writer.write(bytes, 0, length);
+                    writer.setLength(totalFileLength - entry.getIndex().getLength() + length);
                     final var updatedIndex = updateIndexValues(dbName, collName, entry.get_id(), totalFileLength, length, page);
                     final var updatedIndexEntry = new IndexedDbEntry();
                     updatedIndexEntry.setIndex(updatedIndex);
@@ -287,6 +284,7 @@ public class FileSystem {
                     updatedIndexEntry.setCollectionName(collName);
                     updatedIndexEntry.setDatabaseName(dbName);
                     updatedIndexEntry.setData(entry.getData());
+                    updatedIndexEntry.setPreviousByteSize(entry.getIndex().getLength());
                     result.add(updatedIndexEntry);
                     totalFileLength = (int) file.length();
                 }
@@ -306,9 +304,11 @@ public class FileSystem {
             shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var length = strData.length();
-            writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
-            writer.setLength(totalFileLength - pkIndexEntry.getLength() + strData.length());
+            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+            final var length = bytes.length;
+            writer.write(bytes, 0, length);
+            writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
+            entry.setPreviousByteSize(pkIndexEntry.getLength());
             return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(), totalFileLength, length, page);
         }
     }
@@ -580,24 +580,22 @@ public class FileSystem {
         }
     }
 
-    public Map<String, DbEntry> readCollectionEntries(String dbName, String collectionName, List<PkIndexEntry> entryList)  {
+    public Map<String, DbEntry> readCollectionEntries(String dbName, String collectionName, List<PkIndexEntry> entryList) {
         return entryList.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage))
-                .entrySet()
-                .parallelStream()
-                .reduce(new HashMap<>(), (identity, longListEntry) -> {
+                .entrySet().parallelStream()
+                .flatMap(longListEntry -> {
                     final var page = longListEntry.getKey();
                     final var collectionFile = getCollectionFile(dbName, collectionName, page);
-                    if (collectionFile.exists()) {
-                        try {
-                            identity.putAll(getMultipleById(longListEntry.getValue(), collectionFile).collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry)));
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
-                    } else {
-                        return identity;
+                    if (!collectionFile.exists()) {
+                        return Stream.empty();
                     }
-                    return identity;
-                }, (stringDbEntryHashMap, _) -> stringDbEntryHashMap);
+                    try {
+                        return getMultipleById(longListEntry.getValue(), collectionFile);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry, (_, replacement) -> replacement));
     }
 
     public Map<String, DbEntry> readWholeCollectionPage(String collectionIdentifier, long page) throws IOException {
@@ -607,34 +605,38 @@ public class FileSystem {
         return readWholeCollectionPage(dbName, collName, page);
     }
 
-    // TODO: this method shouldn't exist, just implementing it as a temporary solution to paging without the need to
-    //      change the whole code
-    public Map<String, DbEntry> readWholeCollection(String dbName, String collName) throws IOException {
-        try (final var files = Files.list(Paths.get(Configuration.getInstance().getFilePath() + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collName))) {
-            return files.
-                    filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).
-                    map(path -> {
-                        final var fileName = path.toFile().getName();
-                        final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "").split(Globals.FILE_PAGE_SEPARATOR);
-                        final var page = Long.parseLong(fileParts[fileParts.length - 1]);
-                        try {
-                            return readWholeCollectionPage(dbName, collName, page);
-                        } catch (IOException e) {
-                            throw new RuntimeException(e);
-                        }
-                    }).reduce(new HashMap<>(), (stringDbEntryMap, stringDbEntryMap2) -> {
-                        stringDbEntryMap.putAll(stringDbEntryMap2);
-                        return stringDbEntryMap;
-                    });
+    public Stream<Map<String, DbEntry>> streamPages(String dbName, String collName) throws IOException {
+        final var collectionFolder = getCollectionFolder(dbName, collName).toPath();
+        if (!Files.exists(collectionFolder)) {
+            return Stream.empty();
         }
+        final var pathStream = Files.list(collectionFolder);
+        return pathStream
+                .filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION))
+                .map(path -> {
+                    final var fileName = path.toFile().getName();
+                    final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "")
+                            .split(Globals.FILE_PAGE_SEPARATOR);
+                    final var page = Long.parseLong(fileParts[fileParts.length - 1]);
+                    try {
+                        return readWholeCollectionPage(dbName, collName, page);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .onClose(pathStream::close);
     }
 
-    // TODO: this method shouldn't exist, just implementing it as a temporary solution to paging without the need to
-    //      change the whole code
-    public Map<String, DbEntry> readWholeCollection(String collectionIdentifier) throws IOException {
-        final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
-        final var dbName = parts[0];
-        final var collName = parts[1];
-        return readWholeCollection(dbName, collName);
+    public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
+        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        if (!indexFile.exists()) {
+            return null;
+        }
+        return Files.readAllLines(indexFile.toPath()).stream()
+                .filter(line -> !line.isEmpty())
+                .map(line -> PkIndexEntry.fromIndexFileEntry(dbName, collName, line))
+                .filter(entry -> entry.getValue().equals(id))
+                .findFirst()
+                .orElse(null);
     }
 }

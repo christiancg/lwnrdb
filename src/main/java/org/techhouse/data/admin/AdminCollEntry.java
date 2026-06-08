@@ -60,9 +60,4 @@ public class AdminCollEntry extends DbEntry {
         data.add(INDEXES_FIELD_NAME, arr);
         this.setData(data);
     }
-
-    @Override
-    public void setDatabaseName(String value) {}
-    @Override
-    public void setCollectionName(String value) {}
 }

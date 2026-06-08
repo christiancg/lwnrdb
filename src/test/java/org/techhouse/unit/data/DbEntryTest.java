@@ -92,4 +92,26 @@ public class DbEntryTest {
         assertNotNull(fileEntry);
         assertTrue(fileEntry.contains(entry.get_id()));
     }
+
+    // byteSize returns the UTF-8 byte length of the file entry plus newline
+    @Test
+    public void test_byte_size_returns_utf8_byte_length() {
+        DbEntry entry = new DbEntry();
+        entry.set_id("id");
+        JsonObject data = new JsonObject();
+        data.addProperty("emoji", "héllo");
+        entry.setData(data);
+        int size = entry.byteSize();
+        String expected = entry.toFileEntry() + Globals.NEWLINE;
+        assertEquals(expected.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, size);
+        assertTrue(size > expected.length(),
+                "Multi-byte chars should make byte count exceed char count");
+    }
+
+    // byteSize returns 0 when data is null
+    @Test
+    public void test_byte_size_is_zero_when_data_null() {
+        DbEntry entry = new DbEntry();
+        assertEquals(0, entry.byteSize());
+    }
 }

@@ -55,6 +55,8 @@ public class ConfigReaderTest {
         expectedConfig.put("backgroundProcessingThreads", "10");
         expectedConfig.put("logPath", "logs");
         expectedConfig.put("maxLogFiles", "7");
+        expectedConfig.put("maxPageSizeBytes", "2097152");
+        expectedConfig.put("maxEntrySizeBytes", "1048576");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

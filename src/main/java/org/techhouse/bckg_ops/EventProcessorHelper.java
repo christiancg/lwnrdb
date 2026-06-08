@@ -42,11 +42,13 @@ public class EventProcessorHelper {
         if (event.getType() == EventType.CREATED) {
             final var existingCollEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
             if (existingCollEntry == null) {
+                AdminOperationHelper.createPageCollections(collName);
                 final var newAdminCollEntry = new AdminCollEntry(dbName, collName);
                 AdminOperationHelper.saveCollectionEntry(newAdminCollEntry);
             }
         } else {
             AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+            AdminOperationHelper.deletePageCollections(dbName, collName);
         }
     }
 
