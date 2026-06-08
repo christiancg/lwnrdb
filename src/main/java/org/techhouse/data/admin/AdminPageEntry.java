@@ -1,41 +1,72 @@
 package org.techhouse.data.admin;
 
-import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.Getter;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
 @EqualsAndHashCode(callSuper = true)
-@Data
+@Getter
 public class AdminPageEntry extends DbEntry {
     private static final String PAGE_FIELD_NAME = "page";
     private static final String ENTRY_COUNT_FIELD_NAME = "entryCount";
     private static final String PAGE_SIZE_FIELD_NAME = "size";
-    private int page;
+    private long page;
     private int entryCount;
-    private int pageSize;
+    private long pageSize;
 
-    public AdminPageEntry(String collectionName) {
-        super.setDatabaseName(Globals.ADMIN_DB_NAME);
-        super.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME.replace("{}", collectionName));
+    public AdminPageEntry(String dbName, String collectionName) {
+        this(dbName, collectionName, 0L);
     }
 
-    public static AdminPageEntry fromJsonObject(String collName, JsonObject object) {
-        final var result = new AdminPageEntry(collName);
+    public AdminPageEntry(String dbName, String collectionName, long page) {
+        setDatabaseName(Globals.ADMIN_DB_NAME);
+        setCollectionName(Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collectionName));
+        this.page = page;
+        set_id(buildId(dbName, collectionName, page));
+        setData(new JsonObject());
+        syncData();
+    }
+
+    public static AdminPageEntry fromJsonObject(String dbName, String collName, JsonObject object) {
+        final var result = new AdminPageEntry(dbName, collName);
         result.setData(object);
         final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
         result.set_id(id);
-        result.setPage(object.get(PAGE_FIELD_NAME).asJsonNumber().getValue().intValue());
-        result.setEntryCount(object.get(ENTRY_COUNT_FIELD_NAME).asJsonNumber().getValue().intValue());
-        result.setPageSize(object.get(PAGE_SIZE_FIELD_NAME).asJsonNumber().getValue().intValue());
-        result.setDatabaseName(Globals.ADMIN_DB_NAME);
-        result.setCollectionName(Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName));
+        result.page = object.get(PAGE_FIELD_NAME).asJsonNumber().getValue().longValue();
+        result.entryCount = object.get(ENTRY_COUNT_FIELD_NAME).asJsonNumber().getValue().intValue();
+        result.pageSize = object.get(PAGE_SIZE_FIELD_NAME).asJsonNumber().getValue().longValue();
+        result.syncData();
         return result;
     }
 
-    @Override
-    public void setDatabaseName(String value) {}
-    @Override
-    public void setCollectionName(String value) {}
+    public static String buildId(String dbName, String collName, long page) {
+        return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + page;
+    }
+
+    public void setPage(long page) {
+        this.page = page;
+        syncData();
+    }
+
+    public void setEntryCount(int entryCount) {
+        this.entryCount = entryCount;
+        syncData();
+    }
+
+    public void setPageSize(long pageSize) {
+        this.pageSize = pageSize;
+        syncData();
+    }
+
+    private void syncData() {
+        final var data = getData();
+        if (data == null) {
+            return;
+        }
+        data.addProperty(PAGE_FIELD_NAME, page);
+        data.addProperty(ENTRY_COUNT_FIELD_NAME, entryCount);
+        data.addProperty(PAGE_SIZE_FIELD_NAME, pageSize);
+    }
 }

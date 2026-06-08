@@ -16,6 +16,7 @@ public class IndexedDbEntry {
     private String collectionName;
     private JsonObject data;
     private PkIndexEntry index;
+    private long previousByteSize;
 
     public DbEntry toDbEntry() {
         final var entry = new DbEntry();
@@ -23,6 +24,10 @@ public class IndexedDbEntry {
         entry.setDatabaseName(databaseName);
         entry.setCollectionName(collectionName);
         entry.setData(data);
+        if (index != null) {
+            entry.setPage(index.getPage());
+        }
+        entry.setPreviousByteSize(previousByteSize);
         return entry;
     }
 

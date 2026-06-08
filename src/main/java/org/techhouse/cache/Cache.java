@@ -1,5 +1,6 @@
 package org.techhouse.cache;
 
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -33,6 +34,8 @@ public class Cache {
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         final var pkIndexAdminDbEntries =
                 fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -44,21 +47,75 @@ public class Cache {
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         collectionsPkIndex.putAll(pkIndexAdminCollEntriesMap);
         if (!pkIndexAdminDbEntriesMap.isEmpty()) {
-            final var adminDatabasesColl =
-                    fs.readWholeCollection(getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME));
+            final var adminDatabasesColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
             final var adminDatabasesCollMap = adminDatabasesColl.entrySet().stream()
                     .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
                             e -> AdminDbEntry.fromJsonObject(e.getValue().getData())));
             databases.putAll(adminDatabasesCollMap);
         }
         if (!pkIndexAdminCollEntries.isEmpty()) {
-            final var adminCollectionsColl =
-                    fs.readWholeCollection(getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME));
+            final var adminCollectionsColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             final var adminCollectionsCollMap = adminCollectionsColl.entrySet().stream()
                     .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
                             e -> AdminCollEntry.fromJsonObject(e.getValue().getData())));
             collections.putAll(adminCollectionsCollMap);
         }
+        for (var collEntry : collections.values()) {
+            final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+            if (parts.length < 2) continue;
+            loadAdminPagesForCollection(parts[0], parts[1]);
+        }
+    }
+
+    private static final String PAGES_COLLECTION_PREFIX = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", "");
+
+    private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
+        final var pagesCollName = Globals.ADMIN_PAGES_PER_COLLECTION_NAME.replace("{}", collName);
+        final var collId = getCollectionIdentifier(dbName, collName);
+        final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, pagesCollName);
+        // The PK index loaded here belongs to pagesCollName (the file on disk that holds the
+        // AdminPageEntries for `collName`). It must be keyed by (admin, pagesCollName) because
+        // that's where insertAdminPages / updateTouchedPagesInFileSystem look it up.
+        pagesPkIndexes.put(getCollectionIdentifier(Globals.ADMIN_DB_NAME, pagesCollName), new ArrayList<>(pkIdx));
+        final var pageEntries = new ArrayList<AdminPageEntry>();
+        try (final var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, pagesCollName)) {
+            pagesStream.forEach(map -> map.values().stream()
+                    .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData()))
+                    .forEach(pageEntries::add));
+        }
+        pages.put(collId, pageEntries);
+
+        // Load the pagination tracker for pagesCollName itself. If pagesCollName is layer 1
+        // (e.g., "pages_myColl"), its tracker lives on disk as pages_pages_myColl — recurse.
+        // If pagesCollName is layer 2 (e.g., "pages_pages_myColl"), its tracker is in-memory
+        // only — reconstruct from the PK index by grouping entries per page.
+        if (!collName.startsWith(PAGES_COLLECTION_PREFIX)) {
+            loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, pagesCollName);
+        } else {
+            rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
+        }
+    }
+
+    private void rebuildInMemoryPagesFromPkIndex(String collName, List<PkIndexEntry> pkIdx) {
+        final var byPage = pkIdx.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage));
+        final var entries = new ArrayList<AdminPageEntry>();
+        for (var e : byPage.entrySet()) {
+            final var pageNum = e.getKey();
+            final var pkList = e.getValue();
+            final var entry = new AdminPageEntry(Globals.ADMIN_DB_NAME, collName, pageNum);
+            entry.setEntryCount(pkList.size());
+            entry.setPageSize(pkList.stream().mapToLong(PkIndexEntry::getLength).sum());
+            entries.add(entry);
+        }
+        pages.put(getCollectionIdentifier(Globals.ADMIN_DB_NAME, collName), entries);
+    }
+
+    private Map<String, DbEntry> readWholeCollection(String dbName, String collName) throws IOException {
+        final var result = new HashMap<String, DbEntry>();
+        try (final var pagesStream = fs.streamPages(dbName, collName)) {
+            pagesStream.forEach(result::putAll);
+        }
+        return result;
     }
 
     public static String getCollectionIdentifier(String dbName, String collName) {
@@ -249,15 +306,55 @@ public class Cache {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var wholeCollection = collectionMap.get(collectionIdentifier);
         final var collPages = pages.get(collectionIdentifier);
-        final var entryCount = collPages.stream().map(AdminPageEntry::getEntryCount).reduce(Integer::sum);
-        if (wholeCollection == null || wholeCollection.isEmpty() || entryCount.isEmpty() || wholeCollection.size() < entryCount.get()) {
-            try {
-                return fs.readWholeCollection(dbName, collName);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
+        if (collPages == null) {
+            if (wholeCollection != null && !wholeCollection.isEmpty()) {
+                return wholeCollection;
             }
+            return readWholeCollectionFromFs(dbName, collName);
+        }
+        if (wholeCollection == null || wholeCollection.isEmpty()) {
+            return readWholeCollectionFromFs(dbName, collName);
+        }
+        final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+        if (wholeCollection.size() < entryCount) {
+            return readWholeCollectionFromFs(dbName, collName);
         }
         return wholeCollection;
+    }
+
+    private Map<String, DbEntry> readWholeCollectionFromFs(String dbName, String collName) {
+        try {
+            return readWholeCollection(dbName, collName);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
+        return selectPageForInsert(dbName, collName, entryByteSize, Map.of());
+    }
+
+    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
+                                    Map<Long, Long> pendingPageBytes) {
+        final var maxPageBytes = Configuration.getInstance().getMaxPageSizeBytes();
+        final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
+        final var fit = pageEntries.stream()
+                .sorted(Comparator.comparingLong(AdminPageEntry::getPage))
+                .filter(p -> p.getPageSize() + pendingPageBytes.getOrDefault(p.getPage(), 0L) + entryByteSize <= maxPageBytes)
+                .findFirst();
+        if (fit.isPresent()) {
+            return fit.get().getPage();
+        }
+        final var maxKnownPage = pageEntries.stream().mapToLong(AdminPageEntry::getPage).max().orElse(-1L);
+        final var maxPendingPage = pendingPageBytes.keySet().stream().mapToLong(Long::longValue).max().orElse(-1L);
+        return Math.max(maxKnownPage, maxPendingPage) + 1L;
+    }
+
+    public long currentPageBytes(String dbName, String collName, long page) {
+        final var pageEntries = pages.get(getCollectionIdentifier(dbName, collName));
+        if (pageEntries == null) return 0L;
+        return pageEntries.stream().filter(p -> p.getPage() == page)
+                .mapToLong(AdminPageEntry::getPageSize).findFirst().orElse(0L);
     }
 
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
@@ -288,12 +385,29 @@ public class Cache {
         return pages.get(getCollectionIdentifier(dbName, collName));
     }
 
+    public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
+        final var entries = pages.get(getCollectionIdentifier(dbName, collName));
+        if (entries == null) return null;
+        return entries.stream().filter(p -> p.getPage() == page).findFirst().orElse(null);
+    }
+
     public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
         pages.put(getCollectionIdentifier(dbName, collName), adminPageEntries);
     }
 
     public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
-        pages.get(getCollectionIdentifier(dbName, collName)).add(adminPageEntry);
+        pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
+                .add(adminPageEntry);
+    }
+
+    public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
+        return pagesPkIndexes.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
+    }
+
+    public void removeAdminPageEntries(String dbName, String collName) {
+        final var collId = getCollectionIdentifier(dbName, collName);
+        pages.remove(collId);
+        pagesPkIndexes.remove(collId);
     }
 
     public void putAdminDbEntry(AdminDbEntry dbEntry, PkIndexEntry indexEntry) {
@@ -343,15 +457,14 @@ public class Cache {
             throws IOException {
         if (resultStream != null) {
             return resultStream;
-        } else {
-            final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
-            var coll = collectionMap.get(collectionIdentifier);
-            if (coll == null) {
-                coll = fs.readWholeCollection(collectionIdentifier);
-                collectionMap.put(collectionIdentifier, coll);
-            }
-            return coll.values().stream().map(DbEntry::getData);
         }
+        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        var coll = collectionMap.get(collectionIdentifier);
+        if (coll == null) {
+            coll = new ConcurrentHashMap<>(readWholeCollection(dbName, collName));
+            collectionMap.put(collectionIdentifier, coll);
+        }
+        return coll.values().stream().map(DbEntry::getData);
     }
 
     public boolean hasIndex(String dbName, String collName, String fieldName) {

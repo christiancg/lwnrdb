@@ -16,6 +16,7 @@ import org.techhouse.ops.resp.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 
 public class OperationProcessor {
@@ -84,6 +85,13 @@ public class OperationProcessor {
                     .toList();
             List<IndexedDbEntry> insertedIndexEntries = new ArrayList<>();
             if (!entriesToInsert.isEmpty()) {
+                final var pendingPageBytes = new HashMap<Long, Long>();
+                for (var e : entriesToInsert) {
+                    final var size = e.byteSize();
+                    final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
+                    e.setPage(target);
+                    pendingPageBytes.merge(target, (long) size, Long::sum);
+                }
                 insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
             }
             primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
@@ -118,10 +126,12 @@ public class OperationProcessor {
             PkIndexEntry savedPkIndexEntry;
             if (foundIndexEntry >= 0) {
                 final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
+                entry.setPage(idxEntry.getPage());
                 savedPkIndexEntry = fs.updateFromCollection(entry, idxEntry);
                 primaryKeyIndex.remove(idxEntry);
                 eventType = EventType.UPDATED;
             } else {
+                entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
                 savedPkIndexEntry = fs.insertIntoCollection(entry);
             }
             primaryKeyIndex.add(savedPkIndexEntry);

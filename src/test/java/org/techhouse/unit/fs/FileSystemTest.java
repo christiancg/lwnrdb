@@ -4,7 +4,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
-import org.mockito.MockedStatic;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -23,7 +22,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -256,6 +254,41 @@ public class FileSystemTest {
         assertEquals(TestGlobals.COLL, result.getFirst().getCollectionName());
         assertNotNull(result.getFirst().get_id());
         assertNotNull(result.getFirst().getIndex());
+    }
+
+    // bulkInsert with entries on different pages writes each entry to its own page only
+    @Test
+    public void test_bulk_insert_groups_entries_by_page() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        List<DbEntry> entries = new ArrayList<>();
+        JsonObject d1 = new JsonObject(); d1.addProperty("f", "p0");
+        DbEntry e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d1);
+        e1.setPage(0);
+        e1.set_id("p0-1");
+
+        JsonObject d2 = new JsonObject(); d2.addProperty("f", "p1");
+        DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d2);
+        e2.setPage(1);
+        e2.set_id("p1-1");
+
+        entries.add(e1);
+        entries.add(e2);
+
+        List<IndexedDbEntry> result = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        assertEquals(2, result.size());
+
+        final var page0 = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0);
+        final var page1 = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 1);
+        assertEquals(1, page0.size(), "Page 0 should contain only its grouped entry");
+        assertEquals(1, page1.size(), "Page 1 should contain only its grouped entry");
+        assertTrue(page0.containsKey("p0-1"));
+        assertTrue(page1.containsKey("p1-1"));
     }
 
     // Handle empty list of entries
@@ -626,87 +659,65 @@ public class FileSystemTest {
         assertTrue(result.isEmpty());
     }
 
-    // Successfully reads and parses collection file into Map<String, DbEntry>
+    // streamPages yields one map per page file
     @Test
-    public void test_read_collection_file_success() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
+    public void test_stream_pages_yields_one_map_per_page() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
-        List<String> testData = List.of("{\"_id\":\"123\",\"name\":\"test\"}", "{\"_id\":\"456\",\"name\":\"test2\"}");
+        DbEntry e1 = new DbEntry();
+        e1.set_id("1");
+        e1.setDatabaseName(TestGlobals.DB);
+        e1.setCollectionName(TestGlobals.COLL);
+        e1.setData(new JsonObject());
+        e1.setPage(0);
+        fileSystem.insertIntoCollection(e1);
 
-        try (MockedStatic<Files> mockedFiles = mockStatic(Files.class)) {
-            mockedFiles.when(() -> Files.list(any(Path.class)))
-                    .thenReturn(Stream.of(Path.of(TestGlobals.PATH + "/" + TestGlobals.DB + "/" + TestGlobals.COLL + "-0.dat")));
-            mockedFiles.when(() -> Files.readAllLines(any(Path.class))).thenReturn(testData);
+        DbEntry e2 = new DbEntry();
+        e2.set_id("2");
+        e2.setDatabaseName(TestGlobals.DB);
+        e2.setCollectionName(TestGlobals.COLL);
+        e2.setData(new JsonObject());
+        e2.setPage(1);
+        fileSystem.insertIntoCollection(e2);
 
-            // Act
-            Map<String, DbEntry> result = fileSystem.readWholeCollection(TestGlobals.DB, TestGlobals.COLL);
-
-            // Assert
-            assertEquals(2, result.size());
-            assertTrue(result.containsKey("123"));
-            assertTrue(result.containsKey("456"));
-            assertEquals(TestGlobals.DB, result.get("123").getDatabaseName());
-            assertEquals(TestGlobals.COLL, result.get("123").getCollectionName());
-        }
+        final var pages = fileSystem.streamPages(TestGlobals.DB, TestGlobals.COLL).toList();
+        assertEquals(2, pages.size());
+        final var allIds = new java.util.HashSet<String>();
+        for (var p : pages) allIds.addAll(p.keySet());
+        assertTrue(allIds.contains("1"));
+        assertTrue(allIds.contains("2"));
     }
 
-    // Handles empty collection file
+    // streamPages on a non-existent collection folder returns an empty stream
     @Test
-    public void test_empty_collection_file() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
+    public void test_stream_pages_missing_folder_empty() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
-
-        // Act
-        Map<String, DbEntry> result = fileSystem.readWholeCollection(TestGlobals.DB, TestGlobals.COLL);
-
-        // Assert
-        assertNotNull(result);
-        assertTrue(result.isEmpty());
+        assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
     }
 
-    // Successfully splits collection identifier with correct separator and returns collection data
+    // findPkIndexEntry returns matching entry from configured path
     @Test
-    public void test_split_collection_identifier_and_return_data() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
+    public void test_find_pk_index_entry() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
-        String collectionIdentifier = TestGlobals.DB + "|" + TestGlobals.COLL;
-        DbEntry expectedEntry = new DbEntry();
-        expectedEntry.set_id("1");
-        expectedEntry.setDatabaseName(TestGlobals.DB);
-        expectedEntry.setCollectionName(TestGlobals.COLL);
-        expectedEntry.setData(new JsonObject());
-        Map<String, DbEntry> expected = Map.of("1", expectedEntry);
+        DbEntry entry = new DbEntry();
+        entry.set_id("findMe");
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.setData(new JsonObject());
+        fileSystem.insertIntoCollection(entry);
 
-        fileSystem.insertIntoCollection(expectedEntry);
+        final var found = fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "findMe");
+        assertNotNull(found);
+        assertEquals("findMe", found.getValue());
 
-        // Act
-        Map<String, DbEntry> result = fileSystem.readWholeCollection(collectionIdentifier);
-
-        // Assert
-        assertEquals(expected.size(), result.size());
-        assertEquals(expected.get("1").get_id(), result.get("1").get_id());
-        assertEquals(expected.get("1").getDatabaseName(), result.get("1").getDatabaseName());
-        assertEquals(expected.get("1").getCollectionName(), result.get("1").getCollectionName());
-    }
-
-    // Handles empty collection file by returning empty HashMap
-    @Test
-    public void test_empty_collection_returns_empty_map() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
-
-        String collectionIdentifier = TestGlobals.DB + "|" + TestGlobals.COLL;
-
-        // Act
-        Map<String, DbEntry> result = fileSystem.readWholeCollection(collectionIdentifier);
-
-        // Assert
-        assertTrue(result.isEmpty());
+        assertNull(fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "nope"));
     }
 }
