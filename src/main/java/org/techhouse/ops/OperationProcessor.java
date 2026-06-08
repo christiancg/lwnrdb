@@ -4,6 +4,7 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.*;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
@@ -18,6 +19,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -49,6 +51,13 @@ public class OperationProcessor {
         final var entries = new ArrayList<DbEntry>();
         for (var entry : bulkSaveRequest.getObjects()) {
             entries.add(DbEntry.fromJsonObject(dbName, collName, entry));
+        }
+        final var maxEntrySize = Configuration.getInstance().getMaxEntrySizeBytes();
+        for (var entry : entries) {
+            if (entry.byteSize() > maxEntrySize) {
+                return new BulkSaveResponse(OperationStatus.ERROR,
+                        "Entry size of " + entry.byteSize() + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null, null);
+            }
         }
         try {
             locks.lock(dbName, collName);
@@ -88,7 +97,7 @@ public class OperationProcessor {
                 final var pendingPageBytes = new HashMap<Long, Long>();
                 for (var e : entriesToInsert) {
                     final var size = e.byteSize();
-                    final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
+                    final var target = cache.selectPageForInsert(size, primaryKeyIndex, pendingPageBytes);
                     e.setPage(target);
                     pendingPageBytes.merge(target, (long) size, Long::sum);
                 }
@@ -115,6 +124,11 @@ public class OperationProcessor {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
+        final var maxEntrySize = Configuration.getInstance().getMaxEntrySizeBytes();
+        if (entry.byteSize() > maxEntrySize) {
+            return new SaveResponse(OperationStatus.ERROR,
+                    "Entry size of " + entry.byteSize() + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null);
+        }
         try {
             locks.lock(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
@@ -131,7 +145,7 @@ public class OperationProcessor {
                 primaryKeyIndex.remove(idxEntry);
                 eventType = EventType.UPDATED;
             } else {
-                entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
+                entry.setPage(cache.selectPageForInsert(entry.byteSize(), primaryKeyIndex, Map.of()));
                 savedPkIndexEntry = fs.insertIntoCollection(entry);
             }
             primaryKeyIndex.add(savedPkIndexEntry);

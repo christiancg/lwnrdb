@@ -339,6 +339,23 @@ public class Cache {
         return Math.max(maxKnownPage, maxPendingPage) + 1L;
     }
 
+    public long selectPageForInsert(int entryByteSize,
+                                    List<PkIndexEntry> primaryKeyIndex, Map<Long, Long> pendingPageBytes) {
+        final var maxPageBytes = Configuration.getInstance().getMaxPageSizeBytes();
+        final var confirmedPageBytes = primaryKeyIndex.stream()
+                .collect(Collectors.groupingBy(PkIndexEntry::getPage, Collectors.summingLong(PkIndexEntry::getLength)));
+        final var allPages = Stream.concat(confirmedPageBytes.keySet().stream(), pendingPageBytes.keySet().stream())
+                .distinct().sorted().toList();
+        for (final var page : allPages) {
+            final var used = confirmedPageBytes.getOrDefault(page, 0L) + pendingPageBytes.getOrDefault(page, 0L);
+            if (used + entryByteSize <= maxPageBytes) {
+                return page;
+            }
+        }
+        final var maxKnownPage = allPages.isEmpty() ? -1L : allPages.getLast();
+        return maxKnownPage + 1L;
+    }
+
     public long currentPageBytes(String dbName, String collName, long page) {
         final var pageEntries = pages.get(getCollectionIdentifier(dbName, collName));
         if (pageEntries == null) return 0L;
