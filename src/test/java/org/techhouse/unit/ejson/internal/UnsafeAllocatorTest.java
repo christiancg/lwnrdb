@@ -1,7 +1,5 @@
 package org.techhouse.unit.ejson.internal;
 
-import lombok.Getter;
-import lombok.Setter;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.internal.UnsafeAllocator;
 
@@ -10,8 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 public class UnsafeAllocatorTest {
     @Test
     public void test_creates_simple_class() throws Exception {
-        @Getter
-        @Setter
         class TestClass {
             private String testField = "initial";
         }
@@ -21,8 +17,6 @@ public class UnsafeAllocatorTest {
 
     @Test
     public void test_creates_class_with_constructor() throws Exception {
-        @Getter
-        @Setter
         class TestClassWithConstructor {
             private String testField;
             public TestClassWithConstructor(String testField) {

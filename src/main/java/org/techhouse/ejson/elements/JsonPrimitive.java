@@ -1,14 +1,20 @@
 package org.techhouse.ejson.elements;
 
-import lombok.Data;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 
-@Data
 public class JsonPrimitive<T> extends JsonBaseElement {
     protected T value;
 
     protected T get() {
         return this.value;
+    }
+
+    public T getValue() {
+        return this.value;
+    }
+
+    public void setValue(T value) {
+        this.value = value;
     }
 
     @Override

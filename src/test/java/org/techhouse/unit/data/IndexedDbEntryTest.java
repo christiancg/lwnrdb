@@ -148,4 +148,86 @@ public class IndexedDbEntryTest {
         final var eJson = TestUtils.getPrivateField(indexedDbEntry, "eJson", EJson.class);
         assertNotNull(eJson);
     }
+
+    @Test
+    public void test_equals_same_instance() {
+        IndexedDbEntry entry = new IndexedDbEntry();
+        entry.set_id("id1");
+        assertEquals(entry, entry);
+    }
+
+    @Test
+    public void test_equals_symmetric() {
+        IndexedDbEntry entry1 = new IndexedDbEntry();
+        entry1.set_id("id1");
+        entry1.setDatabaseName("db");
+        entry1.setCollectionName("coll");
+
+        IndexedDbEntry entry2 = new IndexedDbEntry();
+        entry2.set_id("id1");
+        entry2.setDatabaseName("db");
+        entry2.setCollectionName("coll");
+
+        assertEquals(entry1, entry2);
+        assertEquals(entry2, entry1);
+    }
+
+    @Test
+    public void test_equals_null_returns_false() {
+        IndexedDbEntry entry = new IndexedDbEntry();
+        entry.set_id("id1");
+        assertNotEquals(null, entry);
+    }
+
+    @Test
+    public void test_equals_different_class_returns_false() {
+        IndexedDbEntry entry = new IndexedDbEntry();
+        entry.set_id("id1");
+        assertNotEquals("notAnEntry", entry);
+    }
+
+    @Test
+    public void test_equals_different_id_returns_false() {
+        IndexedDbEntry entry1 = new IndexedDbEntry();
+        entry1.set_id("id1");
+        IndexedDbEntry entry2 = new IndexedDbEntry();
+        entry2.set_id("id2");
+        assertNotEquals(entry1, entry2);
+    }
+
+    @Test
+    public void test_hashCode_same_values_equal() {
+        IndexedDbEntry entry1 = new IndexedDbEntry();
+        entry1.set_id("id1");
+        entry1.setDatabaseName("db");
+
+        IndexedDbEntry entry2 = new IndexedDbEntry();
+        entry2.set_id("id1");
+        entry2.setDatabaseName("db");
+
+        assertEquals(entry1.hashCode(), entry2.hashCode());
+    }
+
+    @Test
+    public void test_hashCode_different_id_differs() {
+        IndexedDbEntry entry1 = new IndexedDbEntry();
+        entry1.set_id("id1");
+        IndexedDbEntry entry2 = new IndexedDbEntry();
+        entry2.set_id("id2");
+        assertNotEquals(entry1.hashCode(), entry2.hashCode());
+    }
+
+    @Test
+    public void test_toString_not_null() {
+        IndexedDbEntry entry = new IndexedDbEntry();
+        entry.set_id("id1");
+        assertNotNull(entry.toString());
+    }
+
+    @Test
+    public void test_previousByteSize_getter_setter() {
+        IndexedDbEntry entry = new IndexedDbEntry();
+        entry.setPreviousByteSize(512L);
+        assertEquals(512L, entry.getPreviousByteSize());
+    }
 }

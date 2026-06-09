@@ -277,7 +277,7 @@ public class MapOperatorHelper {
             } else if (concatStep.isJsonArray()) {
                 for (var arrayElement : concatStep.asJsonArray()) {
                     if (arrayElement.isJsonPrimitive()) {
-                        result.append(arrayElement);
+                        result.append(arrayElement.asJsonPrimitive().getValue());
                     }
                 }
             } else if (concatStep.isJsonNull()) {

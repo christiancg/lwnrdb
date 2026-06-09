@@ -1,7 +1,5 @@
 package org.techhouse.unit.ejson.internal;
 
-import lombok.Getter;
-import lombok.Setter;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.ejson.internal.ReflectionUtils;
@@ -17,8 +15,6 @@ public class ReflectionUtilsTest {
     // Get and set field values for accessible class fields
     @Test
     public void test_get_set_field_values() throws IllegalAccessException {
-        @Getter
-        @Setter
         class TestClass {
             private String testField = "initial";
         }
@@ -37,8 +33,6 @@ public class ReflectionUtilsTest {
     // Access private fields and constructors by setting accessible flag
     @Test
     public void test_access_private_members() {
-        @Getter
-        @Setter
         class PrivateClass {
             private final String privateField;
             private PrivateClass(String value) {

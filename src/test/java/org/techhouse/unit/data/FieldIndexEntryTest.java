@@ -174,4 +174,64 @@ public class FieldIndexEntryTest {
         FieldIndexEntry entry = new FieldIndexEntry<>("db", "col", null, Set.of("id1"));
         assertEquals(0, entry.compareTo("anything"));
     }
+
+    @Test
+    public void test_equals_same_instance() {
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        assertEquals(entry, entry);
+    }
+
+    @Test
+    public void test_equals_symmetric() {
+        FieldIndexEntry<String> entry1 = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        FieldIndexEntry<String> entry2 = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        assertEquals(entry1, entry2);
+        assertEquals(entry2, entry1);
+    }
+
+    @Test
+    public void test_equals_null_returns_false() {
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        assertNotEquals(null, entry);
+    }
+
+    @Test
+    public void test_equals_different_class_returns_false() {
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        assertNotEquals("notAnEntry", entry);
+    }
+
+    @Test
+    public void test_equals_different_value_returns_false() {
+        FieldIndexEntry<String> entry1 = new FieldIndexEntry<>("db", "coll", "val1", Set.of("id1"));
+        FieldIndexEntry<String> entry2 = new FieldIndexEntry<>("db", "coll", "val2", Set.of("id1"));
+        assertNotEquals(entry1, entry2);
+    }
+
+    @Test
+    public void test_equals_different_ids_returns_false() {
+        FieldIndexEntry<String> entry1 = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        FieldIndexEntry<String> entry2 = new FieldIndexEntry<>("db", "coll", "val", Set.of("id2"));
+        assertNotEquals(entry1, entry2);
+    }
+
+    @Test
+    public void test_hashCode_same_values_equal() {
+        FieldIndexEntry<String> entry1 = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        FieldIndexEntry<String> entry2 = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        assertEquals(entry1.hashCode(), entry2.hashCode());
+    }
+
+    @Test
+    public void test_hashCode_different_value_differs() {
+        FieldIndexEntry<String> entry1 = new FieldIndexEntry<>("db", "coll", "val1", Set.of("id1"));
+        FieldIndexEntry<String> entry2 = new FieldIndexEntry<>("db", "coll", "val2", Set.of("id1"));
+        assertNotEquals(entry1.hashCode(), entry2.hashCode());
+    }
+
+    @Test
+    public void test_toString_not_null() {
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
+        assertNotNull(entry.toString());
+    }
 }

@@ -114,4 +114,43 @@ public class JsonPrimitiveTest {
         assertEquals(true, ((JsonBoolean) copy).getValue());
     }
 
+    @Test
+    public void test_equals_two_numbers_same_value_returns_true() {
+        JsonNumber n1 = new JsonNumber(3.14);
+        JsonNumber n2 = new JsonNumber(3.14);
+        assertEquals(n1, n2);
+    }
+
+    @Test
+    public void test_equals_two_numbers_different_value_returns_false() {
+        JsonNumber n1 = new JsonNumber(1.0);
+        JsonNumber n2 = new JsonNumber(2.0);
+        assertNotEquals(n1, n2);
+    }
+
+    @Test
+    public void test_equals_nan_values_returns_true() {
+        JsonNumber n1 = new JsonNumber(Double.NaN);
+        JsonNumber n2 = new JsonNumber(Double.NaN);
+        assertEquals(n1, n2);
+    }
+
+    @Test
+    public void test_equals_different_primitive_types_returns_false() {
+        JsonString s = new JsonString("true");
+        JsonBoolean b = new JsonBoolean(true);
+        assertNotEquals(s, b);
+    }
+
+    @Test
+    public void test_hashCode_number_returns_value_hashcode() {
+        JsonNumber n = new JsonNumber(42);
+        assertEquals(n.getValue().hashCode(), n.hashCode());
+    }
+
+    @Test
+    public void test_toString_not_null() {
+        JsonString s = new JsonString("hello");
+        assertNotNull(s.toString());
+    }
 }

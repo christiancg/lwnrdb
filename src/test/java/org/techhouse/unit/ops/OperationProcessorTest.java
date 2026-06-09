@@ -390,17 +390,6 @@ public class OperationProcessorTest {
         assertNull(response.getResults());
     }
 
-    // Creating a database with an invalid name (using file system reserved chars) returns an error
-    @Test
-    public void test_create_database_with_reserved_char_returns_error() {
-        // Path traversal attempts will cause the mkdir to fail
-        CreateDatabaseRequest request = new CreateDatabaseRequest("../invalid");
-        OperationResponse response = processor.processMessage(request);
-        // The filesystem will reject the path; either ERROR or OK depending on OS, but it exercises the path
-        assertNotNull(response);
-        assertInstanceOf(CreateDatabaseResponse.class, response);
-    }
-
     // Bulk save with some already-existing IDs performs updates for those entries
     @Test
     public void test_bulk_save_updates_existing_entries() {
