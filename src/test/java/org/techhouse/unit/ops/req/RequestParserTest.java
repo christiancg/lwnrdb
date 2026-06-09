@@ -360,6 +360,40 @@ public class RequestParserTest {
         assertEquals(OperationType.CLOSE_CONNECTION, result.getType());
     }
 
+    // Parse CREATE_COLLECTION request (covers L41)
+    @Test
+    public void test_parse_create_collection_request() {
+        String msg = """
+            {"type":"CREATE_COLLECTION","databaseName":"db","collectionName":"coll"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(CreateCollectionRequest.class, result);
+        assertEquals(OperationType.CREATE_COLLECTION, result.getType());
+    }
+
+    // RequestParser instantiation covers implicit default constructor (L20)
+    @Test
+    public void test_request_parser_instantiation() {
+        assertNotNull(new RequestParser());
+    }
+
+    // MAP step with a conjunction condition covers the condition parsing path (L94, L137-138)
+    @Test
+    public void test_parse_map_step_with_conjunction_condition() {
+        String msg = """
+            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+              {"type":"MAP","operators":[{
+                "fieldName":"result",
+                "condition":{"conjunctionType":"AND","operators":[
+                  {"fieldOperatorType":"EQUALS","field":"x","value":1}
+                ]},
+                "operator":{"type":"SUM","operands":["x",1]}
+              }]}
+            ]}""";
+        AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
+        assertNotNull(result);
+        assertEquals(1, result.getAggregationSteps().size());
+    }
+
     // Parse aggregation with GROUP_BY, COUNT, DISTINCT, JOIN, LIMIT, SKIP, SORT steps
     @Test
     public void test_parse_aggregation_with_all_step_types() {

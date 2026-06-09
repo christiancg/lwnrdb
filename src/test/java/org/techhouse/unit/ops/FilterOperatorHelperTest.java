@@ -509,6 +509,75 @@ public class FilterOperatorHelperTest {
         assertFalse(result.isEmpty());
     }
 
+    // processOperator uses index when available (covers matchingValues != null path L187-205)
+    @Test
+    public void test_process_operator_with_index_returns_indexed_results() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        // Insert two entries
+        JsonObject obj1 = new JsonObject();
+        obj1.add(Globals.PK_FIELD, new JsonString("idx1"));
+        obj1.addProperty("score", 100);
+        JsonObject obj2 = new JsonObject();
+        obj2.add(Globals.PK_FIELD, new JsonString("idx2"));
+        obj2.addProperty("score", 200);
+
+        DbEntry e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
+        e1.set_id("idx1");
+        DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
+        e2.set_id("idx2");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        cache.putAdminCollectionEntry(adminCollEntry, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "idx1", 0, 100, 0));
+
+        // Create an index on "score"
+        org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
+        // Ensure the collection entry knows about the index
+        final var coll = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        coll.setIndexes(java.util.Set.of("score"));
+
+        // Query with EQUALS on the indexed field — matchingValues will be non-null
+        FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(100));
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL).toList();
+
+        assertEquals(1, result.size());
+        assertEquals(100, result.getFirst().get("score").asJsonNumber().asInteger());
+    }
+
+    // matchingValues != null with non-null resultStream filters the existing stream by index (L194-205)
+    @Test
+    public void test_process_operator_with_index_and_existing_stream() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        JsonObject obj1 = new JsonObject();
+        obj1.add(Globals.PK_FIELD, new JsonString("is1"));
+        obj1.addProperty("level", 5);
+        JsonObject obj2 = new JsonObject();
+        obj2.add(Globals.PK_FIELD, new JsonString("is2"));
+        obj2.addProperty("level", 10);
+
+        DbEntry e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
+        e1.set_id("is1");
+        DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
+        e2.set_id("is2");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
+        final var adminCollEntry2 = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        cache.putAdminCollectionEntry(adminCollEntry2, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "is1", 0, 100, 0));
+
+        org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "level");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(java.util.Set.of("level"));
+
+        FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(5));
+        // Pass a non-null stream — triggers the resultStream != null branch of matchingValues path
+        java.util.stream.Stream<JsonObject> existing = java.util.stream.Stream.of(obj1, obj2);
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, existing, TestGlobals.DB, TestGlobals.COLL).toList();
+
+        assertEquals(1, result.size());
+        assertEquals(5, result.getFirst().get("level").asJsonNumber().asInteger());
+    }
+
     // processOperator with a JsonArray value exercises the JsonArray index path (IN)
     @Test
     public void test_process_operator_with_jsonarray_value() throws IOException {

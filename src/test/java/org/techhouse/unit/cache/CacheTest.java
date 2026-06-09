@@ -1296,4 +1296,27 @@ public class CacheTest {
 
         assertNull(result);
     }
+
+    // loadAdminData with pre-existing databases and collections populates all maps (L49-67, L92-98)
+    @Test
+    public void test_load_admin_data_with_existing_databases_and_collections() throws Exception {
+        // Save a database and collection to disk
+        TestUtils.createTestDatabaseAndCollection();
+
+        // Clear the in-memory cache so loadAdminData must reload from disk
+        Cache cache = IocContainer.get(Cache.class);
+        TestUtils.setPrivateField(cache, "databases", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "collections", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "databasesPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "collectionsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "pagesPkIndexes", new ConcurrentHashMap<>());
+
+        // Reload admin data — should find the saved database and collection
+        cache.loadAdminData();
+
+        // Verify databases and collections were loaded
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+    }
 }

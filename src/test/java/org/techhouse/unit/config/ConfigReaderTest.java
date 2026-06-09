@@ -89,4 +89,25 @@ public class ConfigReaderTest {
             }
         }
     }
+
+    // ConfigReader instantiation covers implicit default constructor (L14)
+    @Test
+    public void test_config_reader_instantiation() {
+        assertNotNull(new ConfigReader());
+    }
+
+    // Config file with a line missing '=' triggers warning branch (L74)
+    @Test
+    public void test_config_file_with_invalid_property_line() throws IOException {
+        String configContent = "port=8989\nnot_a_valid_property\nmaxConnections=100\n";
+        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        try {
+            Files.writeString(configFile.toPath(), configContent);
+            var config = ConfigReader.loadConfiguration();
+            assertNotNull(config);
+            assertEquals("8989", config.get("port"));
+        } finally {
+            configFile.delete();
+        }
+    }
 }

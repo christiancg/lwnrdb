@@ -276,4 +276,22 @@ public class JsonUtilsTest {
         obj.addProperty("existing", "value");
         assertEquals(JsonNull.INSTANCE, JsonUtils.getFromPath(obj, "missing"));
     }
+
+    // JsonUtils instantiation covers implicit default constructor (L7)
+    @Test
+    public void test_json_utils_instantiation() {
+        assertNotNull(new JsonUtils());
+    }
+
+    // sortFunctionDescending: first is primitive, second is non-primitive (object) returns 1 (L98)
+    @Test
+    public void test_sort_descending_first_primitive_second_non_primitive_returns_positive() {
+        JsonObject inner = new JsonObject();
+        inner.addProperty("x", 1);
+        JsonObject obj1 = new JsonObject();
+        obj1.addProperty("field", "hello");
+        JsonObject obj2 = new JsonObject();
+        obj2.add("field", inner);
+        assertTrue(JsonUtils.sortFunctionDescending(obj1, obj2, "field") > 0);
+    }
 }
