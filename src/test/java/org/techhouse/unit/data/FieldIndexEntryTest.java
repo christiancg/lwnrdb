@@ -21,11 +21,11 @@ public class FieldIndexEntryTest {
         assertEquals(expected, entry.toFileEntry());
     }
 
-    // Handles null values gracefully in compareTo method
+    // @NonNull on the parameter means passing null throws NullPointerException
     @Test
     public void test_compare_to_with_null_value() {
         FieldIndexEntry<String> entry = new FieldIndexEntry<>("testDB", "testCollection", null, new HashSet<>());
-        assertEquals(0, entry.compareTo(null));
+        assertThrows(NullPointerException.class, () -> entry.compareTo(null));
     }
 
     // Correctly parses a line with Double value and returns FieldIndexEntry
@@ -33,7 +33,7 @@ public class FieldIndexEntryTest {
     public void test_parse_double_value() {
         String databaseName = "testDB";
         String collectionName = "testCollection";
-        String line = "123.45<|>id1;id2";
+        String line = "123.45|id1;id2";
         FieldIndexEntry<Double> entry = FieldIndexEntry.fromIndexFileEntry(databaseName, collectionName, line, Double.class);
         assertEquals("testDB", entry.getDatabaseName());
         assertEquals("testCollection", entry.getCollectionName());
@@ -54,6 +54,36 @@ public class FieldIndexEntryTest {
         assertEquals("testCollection", entry.getCollectionName());
         assertNull(entry.getValue());
         assertTrue(entry.getIds().isEmpty());
+    }
+
+    @Test
+    public void test_to_file_entry_with_pipe_in_value() {
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>("testDB", "testCollection", "val|ue", Set.of("id1"));
+        assertEquals("val|ue|id1", entry.toFileEntry());
+    }
+
+    @Test
+    public void test_parse_string_value_with_pipe() {
+        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", "val|ue|id1;id2", String.class);
+        assertEquals("val|ue", entry.getValue());
+        assertTrue(entry.getIds().contains("id1"));
+        assertTrue(entry.getIds().contains("id2"));
+    }
+
+    @Test
+    public void test_parse_string_value_with_multiple_pipes() {
+        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", "a|b|c|id1", String.class);
+        assertEquals("a|b|c", entry.getValue());
+        assertTrue(entry.getIds().contains("id1"));
+    }
+
+    @Test
+    public void test_roundtrip_with_pipe_in_value() {
+        FieldIndexEntry<String> original = new FieldIndexEntry<>("testDB", "testCollection", "foo|bar", Set.of("id1", "id2"));
+        String line = original.toFileEntry();
+        FieldIndexEntry<String> parsed = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", line, String.class);
+        assertEquals("foo|bar", parsed.getValue());
+        assertEquals(original.getIds(), parsed.getIds());
     }
 
     // Compares two Double values correctly

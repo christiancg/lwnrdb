@@ -380,8 +380,7 @@ public class FileSystem {
             var indexLine = 0;
             var oldIndexLine = "";
             for (int i = 0; i < lines.length; i++) {
-                final var parts = lines[i].split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
-                if (parts[0].equals(value)) {
+                if (!lines[i].isBlank() && PkIndexEntry.fromIndexFileEntry(dbName, collectionName, lines[i]).getValue().equals(value)) {
                     indexLine = i;
                     oldIndexLine = lines[i];
                     break;
@@ -434,11 +433,21 @@ public class FileSystem {
     }
 
     private int searchIndexValue(String strWholeFile, String value) {
-        if (strWholeFile.startsWith(value + Globals.INDEX_ENTRY_SEPARATOR)) {
-            return 0;
-        } else {
-            return strWholeFile.indexOf(Globals.NEWLINE + value + Globals.INDEX_ENTRY_SEPARATOR);
+        int lineStart = 0;
+        while (lineStart < strWholeFile.length()) {
+            final int lineEnd = strWholeFile.indexOf(Globals.NEWLINE, lineStart);
+            final int effectiveEnd = lineEnd == -1 ? strWholeFile.length() : lineEnd;
+            final var line = strWholeFile.substring(lineStart, effectiveEnd);
+            if (!line.isBlank()) {
+                final var separatorIdx = line.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+                if (separatorIdx >= 0 && line.substring(0, separatorIdx).equals(value)) {
+                    return lineStart == 0 ? 0 : lineStart - Globals.NEWLINE_CHAR_LENGTH;
+                }
+            }
+            if (lineEnd == -1) break;
+            lineStart = lineEnd + Globals.NEWLINE_CHAR_LENGTH;
         }
+        return -1;
     }
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
@@ -470,15 +479,11 @@ public class FileSystem {
                 final var strValue = getStringValue(removedEntry);
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 if (indexOfExisting >= 0) {
-                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
                     if (!removedEntry.getIds().isEmpty()) {
                         final var toWriteLine = removedEntry.toFileEntry();
                         writer.writeBytes(toWriteLine);
                         writer.writeBytes(Globals.NEWLINE);
-                    } else if (otherEntriesLength == 0) {
-                        final var indexOfNewline = strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting);
-                        final var newFileLength = strWholeFile.length() - (indexOfNewline - indexOfExisting) - Globals.NEWLINE_CHAR_LENGTH;
-                        writer.setLength(newFileLength);
                     }
                 }
             }
@@ -493,7 +498,7 @@ public class FileSystem {
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 final var toWriteLine = insertedEntry.toFileEntry();
                 if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
                 } else {
                     writer.seek(strWholeFile.length());
                 }
@@ -503,7 +508,7 @@ public class FileSystem {
         }
     }
 
-    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting, int lengthOfExisting)
+    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
             throws IOException {
         var replacementIndex = indexOfExisting;
         var fromExistingEntry = strWholeFile.substring(indexOfExisting);
@@ -517,8 +522,7 @@ public class FileSystem {
         }
         writer.seek(replacementIndex);
         writer.writeBytes(otherEntries);
-        writer.setLength(writer.length() - lengthOfExisting - Globals.NEWLINE_CHAR_LENGTH);
-        return otherEntries.length();
+        writer.setLength(replacementIndex + otherEntries.length());
     }
 
     private String readFully(RandomAccessFile writer) throws IOException {
@@ -624,31 +628,6 @@ public class FileSystem {
         } else {
             return new HashMap<>();
         }
-    }
-
-    public Map<String, DbEntry> readCollectionEntries(String dbName, String collectionName, List<PkIndexEntry> entryList) {
-        return entryList.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage))
-                .entrySet().parallelStream()
-                .flatMap(longListEntry -> {
-                    final var page = longListEntry.getKey();
-                    final var collectionFile = getCollectionFile(dbName, collectionName, page);
-                    if (!collectionFile.exists()) {
-                        return Stream.empty();
-                    }
-                    try {
-                        return getMultipleById(longListEntry.getValue(), collectionFile);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                })
-                .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry, (_, replacement) -> replacement));
-    }
-
-    public Map<String, DbEntry> readWholeCollectionPage(String collectionIdentifier, long page) throws IOException {
-        final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
-        final var dbName = parts[0];
-        final var collName = parts[1];
-        return readWholeCollectionPage(dbName, collName, page);
     }
 
     public Stream<Map<String, DbEntry>> streamPages(String dbName, String collName) throws IOException {

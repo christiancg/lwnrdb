@@ -2,6 +2,7 @@ package org.techhouse.data;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NonNull;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
@@ -29,8 +30,8 @@ public class FieldIndexEntry<T> implements Comparable<T> {
     }
 
     public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line, Class<T> tClass) {
-        final var parts = line.split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
-        final var strValue = parts[0];
+        final var separatorIdx = line.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+        final var strValue = line.substring(0, separatorIdx);
         Object value;
         if (Number.class.isAssignableFrom(tClass)) {
             value = Double.parseDouble(strValue);
@@ -41,11 +42,12 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         } else {
             value = CustomTypeFactory.getCustomTypeInstance(strValue);
         }
-        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(parts[1].split(";")).collect(Collectors.toSet()));
+        final var idsStr = line.substring(separatorIdx + Globals.INDEX_ENTRY_SEPARATOR.length());
+        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(idsStr.split(";")).collect(Collectors.toSet()));
     }
 
     @Override
-    public int compareTo(T otherIndexValue) {
+    public int compareTo(@NonNull T otherIndexValue) {
         return switch (value) {
             case Number d -> Double.compare(d.doubleValue(), ((Number) otherIndexValue).doubleValue());
             case Boolean b -> b.compareTo((Boolean) otherIndexValue);
