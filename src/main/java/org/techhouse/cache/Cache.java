@@ -299,19 +299,12 @@ public class Cache {
             if (wholeCollection != null && !wholeCollection.isEmpty()) {
                 return wholeCollection;
             }
-            return readWholeCollectionFromFs(dbName, collName);
+        } else if (wholeCollection != null && !wholeCollection.isEmpty()) {
+            final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+            if (wholeCollection.size() >= entryCount) {
+                return wholeCollection;
+            }
         }
-        if (wholeCollection == null || wholeCollection.isEmpty()) {
-            return readWholeCollectionFromFs(dbName, collName);
-        }
-        final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-        if (wholeCollection.size() < entryCount) {
-            return readWholeCollectionFromFs(dbName, collName);
-        }
-        return wholeCollection;
-    }
-
-    private Map<String, DbEntry> readWholeCollectionFromFs(String dbName, String collName) {
         try {
             return readWholeCollection(dbName, collName);
         } catch (IOException e) {
