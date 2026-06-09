@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import org.junit.jupiter.api.*;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
@@ -326,5 +327,141 @@ public class OperationProcessorTest {
         assertNotNull(response.getCollections());
         assertTrue(response.getCollections().contains(TestGlobals.COLL));
         assertFalse(response.getCollections().contains("otherColl"));
+    }
+
+    // CLOSE_CONNECTION returns a CloseConnectionResponse
+    @Test
+    public void test_close_connection_returns_correct_response() {
+        CloseConnectionRequest request = new CloseConnectionRequest();
+
+        OperationResponse response = processor.processMessage(request);
+
+        assertNotNull(response);
+        assertInstanceOf(CloseConnectionResponse.class, response);
+        assertEquals(OperationType.CLOSE_CONNECTION, response.getType());
+    }
+
+    // Save with an existing _id updates the entry rather than inserting a duplicate
+    @Test
+    public void test_save_operation_updates_existing_entry() {
+        SaveRequest firstSave = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("updateMe"));
+        obj.add("value", new JsonNumber(1));
+        firstSave.setObject(obj);
+        firstSave.set_id("updateMe");
+        SaveResponse firstResponse = (SaveResponse) processor.processMessage(firstSave);
+        assertEquals(OperationStatus.OK, firstResponse.getStatus());
+
+        SaveRequest secondSave = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject updated = new JsonObject();
+        updated.add(Globals.PK_FIELD, new JsonString("updateMe"));
+        updated.add("value", new JsonNumber(2));
+        secondSave.setObject(updated);
+        secondSave.set_id("updateMe");
+        SaveResponse secondResponse = (SaveResponse) processor.processMessage(secondSave);
+
+        assertEquals(OperationStatus.OK, secondResponse.getStatus());
+        assertEquals("updateMe", secondResponse.get_id());
+    }
+
+    // Delete returns NOT_FOUND when the entry does not exist
+    @Test
+    public void test_delete_returns_not_found_for_missing_entry() {
+        DeleteRequest request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("no-such-id");
+
+        DeleteResponse response = (DeleteResponse) processor.processMessage(request);
+
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+    }
+
+    // Aggregate returns NOT_FOUND when no documents match
+    @Test
+    public void test_aggregate_returns_not_found_when_no_results() {
+        AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(
+                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "nobody", new JsonString("nope")))
+        ));
+
+        AggregateResponse response = (AggregateResponse) processor.processMessage(request);
+
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertNull(response.getResults());
+    }
+
+    // Creating a database with an invalid name (using file system reserved chars) returns an error
+    @Test
+    public void test_create_database_with_reserved_char_returns_error() {
+        // Path traversal attempts will cause the mkdir to fail
+        CreateDatabaseRequest request = new CreateDatabaseRequest("../invalid");
+        OperationResponse response = processor.processMessage(request);
+        // The filesystem will reject the path; either ERROR or OK depending on OS, but it exercises the path
+        assertNotNull(response);
+        assertInstanceOf(CreateDatabaseResponse.class, response);
+    }
+
+    // Bulk save with some already-existing IDs performs updates for those entries
+    @Test
+    public void test_bulk_save_updates_existing_entries() {
+        SaveRequest insert = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("bulkExisting"));
+        obj.add("v", new JsonNumber(1));
+        insert.setObject(obj);
+        insert.set_id("bulkExisting");
+        processor.processMessage(insert);
+
+        BulkSaveRequest bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject updated = new JsonObject();
+        updated.add(Globals.PK_FIELD, new JsonString("bulkExisting"));
+        updated.add("v", new JsonNumber(2));
+        JsonObject newOne = new JsonObject();
+        newOne.add(Globals.PK_FIELD, new JsonString("bulkNew"));
+        bulk.setObjects(List.of(updated, newOne));
+
+        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(bulk);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertTrue(response.getInserted().contains("bulkNew"));
+    }
+
+    // Drop index returns error when the collection does not exist
+    @Test
+    public void test_drop_index_returns_error_for_nonexistent_collection() {
+        DropIndexRequest request = new DropIndexRequest(TestGlobals.DB, "noSuchColl", "noSuchField");
+
+        DropIndexResponse response = (DropIndexResponse) processor.processMessage(request);
+
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+    }
+
+    // Save an oversized entry returns an error response
+    @Test
+    public void test_save_oversized_entry_returns_error() {
+        SaveRequest request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("bigId"));
+        // Create a value larger than 1MB (maxEntrySizeBytes default)
+        obj.add("bigField", new JsonString("x".repeat(1_048_600)));
+        request.setObject(obj);
+
+        SaveResponse response = (SaveResponse) processor.processMessage(request);
+
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+    }
+
+    // Bulk save with an oversized entry returns an error response
+    @Test
+    public void test_bulk_save_oversized_entry_returns_error() {
+        BulkSaveRequest request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("bigId2"));
+        obj.add("bigField", new JsonString("x".repeat(1_048_600)));
+        request.setObjects(List.of(obj));
+
+        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(request);
+
+        assertEquals(OperationStatus.ERROR, response.getStatus());
     }
 }

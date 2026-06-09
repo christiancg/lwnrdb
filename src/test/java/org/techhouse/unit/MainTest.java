@@ -59,7 +59,27 @@ public class MainTest {
     @Test
     public void test_invalid_port_throws_exception() {
         String[] args = new String[]{"invalid_port"};
-    
+
         assertThrows(InvalidPortException.class, () -> Main.main(args));
+    }
+
+    // Valid port number provided as command line argument is parsed correctly
+    @Test
+    public void test_valid_port_arg_starts_server() throws Exception {
+        Configuration config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        String[] args = new String[]{"19099"};
+        Thread thread = new Thread(() -> {
+            try {
+                Main.main(args);
+            } catch (Exception e) {
+                // expected on interrupt
+            }
+        });
+        thread.start();
+        Thread.sleep(500);
+        thread.interrupt();
+        thread.join(2000);
     }
 }

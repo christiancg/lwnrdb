@@ -2,6 +2,7 @@ package org.techhouse.unit.ejson.custom_types;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 import java.time.LocalTime;
 
@@ -87,5 +88,11 @@ public class JsonTimeTest {
         JsonTime time = new JsonTime(LocalTime.of(10, 30));
 
         assertThrows(NullPointerException.class, () -> time.compare(null));
+    }
+
+    // Invalid format string throws WrongFormatCustomTypeException
+    @Test
+    public void test_invalid_format_throws_wrong_format_exception() {
+        assertThrows(WrongFormatCustomTypeException.class, () -> new JsonTime("#time(not_a_time)"));
     }
 }

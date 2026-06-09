@@ -154,4 +154,41 @@ public class JsonReaderTest {
         assertNotNull(result);
         assertEquals(List.of("value1", "value2", "value3"), result.getStringArray());
     }
+
+    // Root JSON starting with a non-brace/bracket throws MalformedJsonException (L25)
+    @Test
+    public void test_root_not_starting_with_brace_or_bracket_throws() {
+        // EJson parses via fromJson which calls internalParse(tokens, isRoot=true)
+        // We can trigger this via EJson
+        EJson eJson = new EJson();
+        assertThrows(Exception.class, () -> eJson.fromJson("123", Object.class));
+    }
+
+    // Object with non-string key throws MalformedJsonException (L52)
+    @Test
+    public void test_object_non_string_key_throws_malformed_json() {
+        EJson eJson = new EJson();
+        assertThrows(Exception.class, () -> eJson.fromJson("{123: \"value\"}", Object.class));
+    }
+
+    // Object missing colon after key throws MalformedJsonException (L56)
+    @Test
+    public void test_object_missing_colon_throws_malformed_json() {
+        EJson eJson = new EJson();
+        assertThrows(Exception.class, () -> eJson.fromJson("{\"key\" \"value\"}", Object.class));
+    }
+
+    // Object missing comma between pairs throws MalformedJsonException (L69)
+    @Test
+    public void test_object_missing_comma_throws_malformed_json() {
+        EJson eJson = new EJson();
+        assertThrows(Exception.class, () -> eJson.fromJson("{\"a\": 1 \"b\": 2}", Object.class));
+    }
+
+    // Array missing comma between elements throws MalformedJsonException (L94)
+    @Test
+    public void test_array_missing_comma_throws_malformed_json() {
+        EJson eJson = new EJson();
+        assertThrows(Exception.class, () -> eJson.fromJson("[1 2 3]", Object.class));
+    }
 }

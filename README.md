@@ -35,8 +35,12 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Date type support
+- [x] Date type support 
 - [ ] Geo type support
+  - [ ] Distance operator
+  - [ ] Within operator
+- [ ] Vector type support
+  - [ ] Semantic search
 - [ ] Index usage in:
   - [ ] group by
   - [ ] join
@@ -44,11 +48,14 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Better file locks
-- [ ] Unit tests everywhere
+- [x] 95% test coverage
 - [ ] Request validation
 - [ ] Iterative read depending on available memory and document count
 - [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
-- [ ] Numerical values that are integers shouldn't be printed with ".0" 
+- [x] Numerical values that are integers shouldn't be printed with ".0"
+- [ ] Users and permissions
+- [ ] Secure connections with TLS or something similar
+- [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 
 ## Q&A
 

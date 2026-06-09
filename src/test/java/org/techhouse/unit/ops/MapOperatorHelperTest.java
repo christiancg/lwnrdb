@@ -401,6 +401,302 @@ public class MapOperatorHelperTest {
         assertEquals(0.0, result.get("sum").asJsonNumber().getValue().doubleValue());
     }
 
+    // MIN operator picks the minimum of field references and constants
+    @Test
+    public void test_min_operation() {
+        JsonObject input = new JsonObject();
+        input.addProperty("a", 5);
+        input.addProperty("b", 15);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("a"));
+        operands.add(new JsonString("b"));
+        operands.add(new JsonNumber(10));
+        ArrayParamMidOperator minOp = new ArrayParamMidOperator(MidOperationType.MIN, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("min", null, minOp), input);
+        assertEquals(5.0, result.get("min").asJsonNumber().getValue().doubleValue());
+    }
+
+    // MAX operator picks the maximum of field references and constants
+    @Test
+    public void test_max_operation() {
+        JsonObject input = new JsonObject();
+        input.addProperty("a", 5);
+        input.addProperty("b", 15);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("a"));
+        operands.add(new JsonString("b"));
+        operands.add(new JsonNumber(10));
+        ArrayParamMidOperator maxOp = new ArrayParamMidOperator(MidOperationType.MAX, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("max", null, maxOp), input);
+        assertEquals(15.0, result.get("max").asJsonNumber().getValue().doubleValue());
+    }
+
+    // SUBS operator subtracts all values from the first operand
+    @Test
+    public void test_subs_operation() {
+        JsonObject input = new JsonObject();
+        input.addProperty("base", 100);
+        input.addProperty("sub", 30);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("base"));
+        operands.add(new JsonString("sub"));
+        operands.add(new JsonNumber(10));
+        ArrayParamMidOperator subsOp = new ArrayParamMidOperator(MidOperationType.SUBS, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("subs", null, subsOp), input);
+        assertEquals(60.0, result.get("subs").asJsonNumber().getValue().doubleValue());
+    }
+
+    // ROOT operator computes nth root
+    @Test
+    public void test_root_operation() {
+        JsonObject input = new JsonObject();
+        input.addProperty("base", 27);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("base"));
+        operands.add(new JsonNumber(3));
+        ArrayParamMidOperator rootOp = new ArrayParamMidOperator(MidOperationType.ROOT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("root", null, rootOp), input);
+        assertEquals(3.0, result.get("root").asJsonNumber().getValue().doubleValue(), 0.0001);
+    }
+
+    // CAST number to boolean (0 → false, non-zero → true)
+    @Test
+    public void test_cast_number_to_boolean() {
+        JsonObject input = new JsonObject();
+        input.addProperty("zero", 0);
+        input.addProperty("nonzero", 5);
+        CastMidOperator castZero = new CastMidOperator("zero", CastToType.BOOLEAN);
+        CastMidOperator castNonZero = new CastMidOperator("nonzero", CastToType.BOOLEAN);
+        JsonObject r1 = MapOperatorHelper.processOperator(new AddFieldMapOperator("boolZero", null, castZero), input);
+        JsonObject r2 = MapOperatorHelper.processOperator(new AddFieldMapOperator("boolNonZero", null, castNonZero), input);
+        assertFalse(r1.get("boolZero").asJsonBoolean().getValue());
+        assertTrue(r2.get("boolNonZero").asJsonBoolean().getValue());
+    }
+
+    // CAST boolean to number is not supported — returns JsonNull
+    @Test
+    public void test_cast_boolean_to_number_returns_null() {
+        JsonObject input = new JsonObject();
+        input.add("t", new JsonBoolean(true));
+        JsonObject result = MapOperatorHelper.processOperator(
+                new AddFieldMapOperator("n", null, new CastMidOperator("t", CastToType.NUMBER)), input);
+        assertTrue(result.get("n").isJsonNull());
+    }
+
+    // ADD_FIELD with a false condition does not add the field
+    @Test
+    public void test_add_field_with_false_condition_skips_operation() {
+        JsonObject input = new JsonObject();
+        input.addProperty("score", 5);
+
+        FieldOperator falseCondition = new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(99));
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("score"));
+        operands.add(new JsonNumber(2));
+        ArrayParamMidOperator multiplyOp = new ArrayParamMidOperator(MidOperationType.MULTIPLY, operands);
+        AddFieldMapOperator op = new AddFieldMapOperator("doubled", falseCondition, multiplyOp);
+
+        JsonObject result = MapOperatorHelper.processOperator(op, input);
+
+        assertFalse(result.has("doubled"));
+    }
+
+    // Condition with OR conjunction where no sub-operators match (orConjunction returns false)
+    @Test
+    public void test_or_condition_all_false_skips_field() {
+        JsonObject input = new JsonObject();
+        input.addProperty("x", 1);
+
+        List<BaseOperator> ops = List.of(
+                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(99)),
+                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(98))
+        );
+        ConjunctionOperator orCond = new ConjunctionOperator(ConjunctionOperatorType.OR, ops);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("x"));
+        AddFieldMapOperator op = new AddFieldMapOperator("result", orCond,
+                new ArrayParamMidOperator(MidOperationType.SUM, operands));
+
+        JsonObject result = MapOperatorHelper.processOperator(op, input);
+        assertFalse(result.has("result"));
+    }
+
+    // Condition with XOR conjunction matching exactly one operator adds the field
+    @Test
+    public void test_xor_condition_one_match_adds_field() {
+        JsonObject input = new JsonObject();
+        input.addProperty("x", 5);
+        input.addProperty("y", 10);
+
+        List<BaseOperator> ops = List.of(
+                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(5)),
+                new FieldOperator(FieldOperatorType.EQUALS, "y", new JsonNumber(99))
+        );
+        ConjunctionOperator xorCond = new ConjunctionOperator(ConjunctionOperatorType.XOR, ops);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("x"));
+        AddFieldMapOperator op = new AddFieldMapOperator("result", xorCond,
+                new ArrayParamMidOperator(MidOperationType.SUM, operands));
+
+        JsonObject result = MapOperatorHelper.processOperator(op, input);
+        assertTrue(result.has("result"));
+    }
+
+    // Condition with NOR returns false (not supported in MAP conditions)
+    @Test
+    public void test_nor_condition_returns_false_skips_field() {
+        JsonObject input = new JsonObject();
+        input.addProperty("x", 5);
+
+        List<BaseOperator> ops = List.of(
+                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(99))
+        );
+        ConjunctionOperator norCond = new ConjunctionOperator(ConjunctionOperatorType.NOR, ops);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("x"));
+        AddFieldMapOperator op = new AddFieldMapOperator("result", norCond,
+                new ArrayParamMidOperator(MidOperationType.SUM, operands));
+
+        JsonObject result = MapOperatorHelper.processOperator(op, input);
+        assertFalse(result.has("result"));
+    }
+
+    // Nested conjunction operator as condition is processed recursively (L50)
+    @Test
+    public void test_nested_conjunction_as_condition() {
+        JsonObject input = new JsonObject();
+        input.addProperty("a", 1);
+        input.addProperty("b", 2);
+
+        ConjunctionOperator inner = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(
+                new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonNumber(1)),
+                new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonNumber(2))
+        ));
+        ConjunctionOperator outer = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(inner));
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("a"));
+        AddFieldMapOperator op = new AddFieldMapOperator("result", outer,
+                new ArrayParamMidOperator(MidOperationType.SUM, operands));
+
+        JsonObject result = MapOperatorHelper.processOperator(op, input);
+        assertTrue(result.has("result"));
+    }
+
+    // CONCAT with a numeric field reference uses toJson for non-string element (L270)
+    @Test
+    public void test_concat_non_string_field_uses_tojson() {
+        JsonObject input = new JsonObject();
+        input.addProperty("score", 42);
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("score"));
+        ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
+        assertTrue(result.has("out"));
+        assertTrue(result.get("out").asJsonString().getValue().contains("42"));
+    }
+
+    // CONCAT with a JsonNumber operand directly uses toJson (L275)
+    @Test
+    public void test_concat_json_number_operand_uses_tojson() {
+        JsonObject input = new JsonObject();
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonNumber(99));
+        ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
+        assertTrue(result.has("out"));
+    }
+
+    // CONCAT with a JsonArray operand appends its primitive elements (L278-282)
+    @Test
+    public void test_concat_jsonarray_operand() {
+        JsonObject input = new JsonObject();
+        JsonArray arr = new JsonArray();
+        arr.add(new JsonString("x"));
+        arr.add(new JsonString("y"));
+        JsonArray operands = new JsonArray();
+        operands.add(arr);
+        ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
+        assertTrue(result.get("out").asJsonString().getValue().contains("x"));
+    }
+
+    // CONCAT with a JsonNull operand appends null string (L284)
+    @Test
+    public void test_concat_jsonnull_operand() {
+        JsonObject input = new JsonObject();
+        JsonArray operands = new JsonArray();
+        operands.add(JsonNull.INSTANCE);
+        ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
+        assertTrue(result.has("out"));
+    }
+
+    // MapOperatorHelper instantiation covers implicit default constructor (L23)
+    @Test
+    public void test_map_operator_helper_instantiation() {
+        assertNotNull(new MapOperatorHelper());
+    }
+
+    // CAST NUMBER when field is already a number returns the number (L302)
+    @Test
+    public void test_cast_number_to_number_returns_same() {
+        JsonObject input = new JsonObject();
+        input.addProperty("n", 42);
+        CastMidOperator cast = new CastMidOperator("n", CastToType.NUMBER);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals(42, result.get("out").asJsonNumber().asInteger());
+    }
+
+    // CAST NUMBER from a parseable string (L305)
+    @Test
+    public void test_cast_string_to_number_parseable() {
+        JsonObject input = new JsonObject();
+        input.addProperty("s", "3.14");
+        CastMidOperator cast = new CastMidOperator("s", CastToType.NUMBER);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals(3.14, result.get("out").asJsonNumber().getValue().doubleValue(), 0.001);
+    }
+
+    // CAST STRING when field is already a string returns it (L313)
+    @Test
+    public void test_cast_string_to_string_returns_same() {
+        JsonObject input = new JsonObject();
+        input.addProperty("s", "hello");
+        CastMidOperator cast = new CastMidOperator("s", CastToType.STRING);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals("hello", result.get("out").asJsonString().getValue());
+    }
+
+    // CAST STRING from boolean (L318)
+    @Test
+    public void test_cast_boolean_to_string() {
+        JsonObject input = new JsonObject();
+        input.add("flag", new JsonBoolean(true));
+        CastMidOperator cast = new CastMidOperator("flag", CastToType.STRING);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals("true", result.get("out").asJsonString().getValue());
+    }
+
+    // CAST BOOLEAN when field is already boolean returns it (L324)
+    @Test
+    public void test_cast_boolean_to_boolean_returns_same() {
+        JsonObject input = new JsonObject();
+        input.add("flag", new JsonBoolean(false));
+        CastMidOperator cast = new CastMidOperator("flag", CastToType.BOOLEAN);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertFalse(result.get("out").asJsonBoolean().getValue());
+    }
+
+    // CAST to NUMBER when field is JsonNull returns JsonNull (L309)
+    @Test
+    public void test_cast_null_field_to_number_returns_null() {
+        JsonObject input = new JsonObject();
+        input.add("n", JsonNull.INSTANCE);
+        CastMidOperator cast = new CastMidOperator("n", CastToType.NUMBER);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertTrue(result.get("out").isJsonNull());
+    }
+
     // Attempt to remove non-existent field
     @Test
     public void test_remove_non_existent_field() {
