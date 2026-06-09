@@ -10,11 +10,7 @@ import org.techhouse.ops.req.agg.step.*;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 
-import java.util.Set;
-
 public class AggregationStepValidator {
-    private static final Set<MidOperationType> BINARY_MID_OPERATORS =
-            Set.of(MidOperationType.SUBS, MidOperationType.DIVIDE, MidOperationType.POW, MidOperationType.ROOT);
 
     public static ValidationResult validate(BaseAggregationStep step) {
         return switch (step.getType()) {
