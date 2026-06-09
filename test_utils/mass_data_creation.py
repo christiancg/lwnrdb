@@ -9,7 +9,7 @@ HOST = "127.0.0.1"  # The server's hostname or IP address
 PORT = 8989  # The port used by the server
 
 NUM_THREADS = 10
-NUM_ENTRIES_PER_THREAD = 100
+NUM_ENTRIES_PER_THREAD = 1000
 
 BULK_CREATION = False
 
