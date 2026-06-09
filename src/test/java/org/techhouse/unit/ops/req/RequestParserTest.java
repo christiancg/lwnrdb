@@ -69,6 +69,22 @@ public class RequestParserTest {
         assertEquals("newDb", createDbResult.getDatabaseName());
     }
 
+    // Successfully parse LIST_DATABASES request
+    @Test
+    public void test_parse_list_databases_request() {
+        String listDatabasesRequest = """
+            {
+                "type": "LIST_DATABASES"
+            }""";
+
+        OperationRequest result = RequestParser.parseRequest(listDatabasesRequest);
+
+        assertInstanceOf(ListDatabasesRequest.class, result);
+        assertEquals(OperationType.LIST_DATABASES, result.getType());
+        assertNull(result.getDatabaseName());
+        assertNull(result.getCollectionName());
+    }
+
     // Handle null values in JSON fields
     @Test
     public void test_handle_null_json_fields() {
@@ -254,5 +270,22 @@ public class RequestParserTest {
         String invalidMessage = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"INVALID\" }] }";
         Exception exception = assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(invalidMessage));
         assertNotNull(exception);
+    }
+
+    // Successfully parse LIST_COLLECTIONS request
+    @Test
+    public void test_parse_list_collections_request() {
+        String listCollectionsRequest = """
+            {
+                "type": "LIST_COLLECTIONS",
+                "databaseName": "testDb"
+            }""";
+
+        OperationRequest result = RequestParser.parseRequest(listCollectionsRequest);
+
+        assertInstanceOf(ListCollectionsRequest.class, result);
+        assertEquals(OperationType.LIST_COLLECTIONS, result.getType());
+        assertEquals("testDb", result.getDatabaseName());
+        assertNull(result.getCollectionName());
     }
 }

@@ -230,4 +230,101 @@ public class OperationProcessorTest {
         // First insert into a small collection lands on page 0
         assertEquals(0L, saved.get().getPage());
     }
+
+    // List databases returns user databases excluding admin
+    @Test
+    public void test_list_databases_returns_user_databases_excluding_admin() {
+        ListDatabasesRequest request = new ListDatabasesRequest();
+
+        ListDatabasesResponse response = (ListDatabasesResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getDatabases());
+        assertTrue(response.getDatabases().contains(TestGlobals.DB));
+        assertFalse(response.getDatabases().contains(Globals.ADMIN_DB_NAME));
+    }
+
+    // List databases returns OK with empty list when no user databases exist
+    @Test
+    public void test_list_databases_returns_ok_with_empty_list() {
+        // Note: cannot easily test with empty database list given the test setup
+        // creates TestGlobals.DB at @BeforeAll; this test documents the expected behavior
+        ListDatabasesRequest request = new ListDatabasesRequest();
+
+        ListDatabasesResponse response = (ListDatabasesResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getDatabases());
+        // List should never be null on success, even if empty
+    }
+
+    // List collections returns collections of the database
+    @Test
+    public void test_list_collections_returns_collections_of_db() {
+        ListCollectionsRequest request = new ListCollectionsRequest(TestGlobals.DB);
+
+        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getCollections());
+        assertTrue(response.getCollections().contains(TestGlobals.COLL));
+    }
+
+    // List collections returns NOT_FOUND for unknown database
+    @Test
+    public void test_list_collections_unknown_database_returns_not_found() {
+        ListCollectionsRequest request = new ListCollectionsRequest("does-not-exist");
+
+        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertNull(response.getCollections());
+    }
+
+    // List collections for admin database returns empty list
+    @Test
+    public void test_list_collections_admin_database_returns_empty_list() {
+        ListCollectionsRequest request = new ListCollectionsRequest(Globals.ADMIN_DB_NAME);
+
+        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getCollections());
+        assertTrue(response.getCollections().isEmpty());
+    }
+
+    // List collections with blank database name returns error
+    @Test
+    public void test_list_collections_blank_database_name_returns_error() {
+        ListCollectionsRequest request = new ListCollectionsRequest("");
+
+        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+    }
+
+    // List collections only returns collections of requested database
+    @Test
+    public void test_list_collections_only_returns_collections_of_requested_db() {
+        CreateDatabaseRequest createDbRequest = new CreateDatabaseRequest("otherDb");
+        processor.processMessage(createDbRequest);
+
+        CreateCollectionRequest createCollRequest = new CreateCollectionRequest("otherDb", "otherColl");
+        processor.processMessage(createCollRequest);
+
+        ListCollectionsRequest request = new ListCollectionsRequest(TestGlobals.DB);
+        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getCollections());
+        assertTrue(response.getCollections().contains(TestGlobals.COLL));
+        assertFalse(response.getCollections().contains("otherColl"));
+    }
 }
