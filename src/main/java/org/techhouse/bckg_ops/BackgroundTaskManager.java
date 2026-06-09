@@ -10,7 +10,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 public class BackgroundTaskManager {
     private final Logger logger = Logger.logFor(BackgroundTaskManager.class);
-    private static final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
+    private final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
     private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public void submitBackgroundTask(Event op) {
