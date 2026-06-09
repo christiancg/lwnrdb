@@ -1,17 +1,28 @@
 package org.techhouse.ops.resp;
 
-import lombok.AccessLevel;
-import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.Setter;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
-@Getter
-@Setter(AccessLevel.PROTECTED)
-@RequiredArgsConstructor
 public class OperationResponse {
     private final OperationType type;
     private final OperationStatus status;
     private final String message;
+
+    public OperationResponse(OperationType type, OperationStatus status, String message) {
+        this.type = type;
+        this.status = status;
+        this.message = message;
+    }
+
+    public OperationType getType() {
+        return type;
+    }
+
+    public OperationStatus getStatus() {
+        return status;
+    }
+
+    public String getMessage() {
+        return message;
+    }
 }

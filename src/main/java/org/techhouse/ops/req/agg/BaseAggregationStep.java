@@ -1,10 +1,13 @@
 package org.techhouse.ops.req.agg;
 
-import lombok.*;
-
-@Getter
-@Setter(AccessLevel.PROTECTED)
-@RequiredArgsConstructor
 public class BaseAggregationStep {
     private final AggregationStepType type;
+
+    public BaseAggregationStep(AggregationStepType type) {
+        this.type = type;
+    }
+
+    public AggregationStepType getType() {
+        return type;
+    }
 }

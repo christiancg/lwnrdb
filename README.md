@@ -56,6 +56,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Users and permissions
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
+- [x] Remove lombok
 
 ## Q&A
 

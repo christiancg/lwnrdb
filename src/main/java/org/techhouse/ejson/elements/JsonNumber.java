@@ -1,8 +1,5 @@
 package org.techhouse.ejson.elements;
 
-import lombok.Getter;
-
-@Getter
 public class JsonNumber extends JsonPrimitive<Number> {
     private int strLength;
     public JsonNumber() {
@@ -26,6 +23,10 @@ public class JsonNumber extends JsonPrimitive<Number> {
             }
             this.strLength = value.length();
         }
+    }
+
+    public int getStrLength() {
+        return strLength;
     }
 
     public Integer asInteger() {

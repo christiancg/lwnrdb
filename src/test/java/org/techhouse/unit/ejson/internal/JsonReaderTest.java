@@ -1,7 +1,5 @@
 package org.techhouse.unit.ejson.internal;
 
-import lombok.Getter;
-import lombok.Setter;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
@@ -12,17 +10,29 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonReaderTest {
-    @Getter
-    @Setter
     static class TestClass {
         private String name;
         private int value;
+
+        public String getName() {
+            return name;
+        }
+
+        public int getValue() {
+            return value;
+        }
     }
-    @Getter
-    @Setter
     static class TestPerson {
         private String name;
         private int age;
+
+        public String getName() {
+            return name;
+        }
+
+        public int getAge() {
+            return age;
+        }
     }
 
     // Parse valid JSON object with multiple key-value pairs
@@ -71,20 +81,26 @@ public class JsonReaderTest {
     @Test
     public void test_parse_json_with_nested_properties() {
         new EJson();
-        @Getter
-        @Setter
         class InnerClass {
             private String key;
+
+            public String getKey() {
+                return key;
+            }
         }
-        @Getter
-        @Setter
         class OuterClass {
             private InnerClass inner;
+
+            public InnerClass getInner() {
+                return inner;
+            }
         }
-        @Getter
-        @Setter
         class MyClass {
             private OuterClass outer;
+
+            public OuterClass getOuter() {
+                return outer;
+            }
         }
         String jsonInput = "{\"outer\":{\"inner\":{\"key\":\"value\"}}}";
         Class<MyClass> targetClass = MyClass.class;
@@ -101,12 +117,22 @@ public class JsonReaderTest {
     // Parse JSON object with primitive data types (string, number, boolean)
     @Test
     public void test_parse_json_with_primitive_types() {
-        @Getter
-        @Setter
         class PrimitiveClass {
             private String stringKey;
             private int numberKey;
             private boolean booleanKey;
+
+            public String getStringKey() {
+                return stringKey;
+            }
+
+            public int getNumberKey() {
+                return numberKey;
+            }
+
+            public boolean isBooleanKey() {
+                return booleanKey;
+            }
         }
         String jsonInput = "{\"stringKey\":\"stringValue\",\"numberKey\":123,\"booleanKey\":true}";
         Class<PrimitiveClass> targetClass = PrimitiveClass.class;
@@ -123,8 +149,6 @@ public class JsonReaderTest {
     // Parse empty JSON object into target class
     @Test
     public void test_parse_empty_json_object() {
-        @Getter
-        @Setter
         class EmptyClass {
         }
         String jsonInput = "{}";
@@ -140,10 +164,12 @@ public class JsonReaderTest {
     @Test
     public void test_parse_json_with_array() {
         new EJson();
-        @Getter
-        @Setter
         class ClassWithArray {
             private List<String> stringArray;
+
+            public List<String> getStringArray() {
+                return stringArray;
+            }
         }
         String jsonInput = "{\"stringArray\": [\"value1\",\"value2\",\"value3\"]}";
         Class<ClassWithArray> targetClass = ClassWithArray.class;

@@ -1,7 +1,5 @@
 package org.techhouse.data.admin;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -9,10 +7,9 @@ import org.techhouse.ejson.elements.JsonObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
-@EqualsAndHashCode(callSuper = true)
-@Data
 public class AdminDbEntry extends DbEntry {
     private static final String COLLECTIONS_FIELD_NAME = "collections";
     private List<String> collections;
@@ -59,5 +56,27 @@ public class AdminDbEntry extends DbEntry {
         collections.forEach(arr::add);
         data.add(COLLECTIONS_FIELD_NAME, arr);
         this.setData(data);
+    }
+
+    public List<String> getCollections() {
+        return collections;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof AdminDbEntry that)) return false;
+        if (!super.equals(o)) return false;
+        return Objects.equals(collections, that.collections);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), collections);
+    }
+
+    @Override
+    public String toString() {
+        return "AdminDbEntry(super=" + super.toString() + ", collections=" + collections + ")";
     }
 }
