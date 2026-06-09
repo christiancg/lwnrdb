@@ -35,6 +35,7 @@ public class OperationProcessor {
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest);
             case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
+            case LIST_DATABASES -> processListDatabasesOperation();
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
             case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest);
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
@@ -248,6 +249,16 @@ public class OperationProcessor {
             return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
         } catch (Exception exception) {
             return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
+        }
+    }
+
+    private ListDatabasesResponse processListDatabasesOperation() {
+        try {
+            final var names = cache.getUserDatabaseNames();
+            return new ListDatabasesResponse(OperationStatus.OK, "Ok", names);
+        } catch (Exception e) {
+            return new ListDatabasesResponse(OperationStatus.ERROR,
+                    "Error while listing databases: " + e.getMessage(), null);
         }
     }
 

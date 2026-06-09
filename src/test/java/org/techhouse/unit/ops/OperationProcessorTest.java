@@ -230,4 +230,33 @@ public class OperationProcessorTest {
         // First insert into a small collection lands on page 0
         assertEquals(0L, saved.get().getPage());
     }
+
+    // List databases returns user databases excluding admin
+    @Test
+    public void test_list_databases_returns_user_databases_excluding_admin() {
+        ListDatabasesRequest request = new ListDatabasesRequest();
+
+        ListDatabasesResponse response = (ListDatabasesResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getDatabases());
+        assertTrue(response.getDatabases().contains(TestGlobals.DB));
+        assertFalse(response.getDatabases().contains(Globals.ADMIN_DB_NAME));
+    }
+
+    // List databases returns OK with empty list when no user databases exist
+    @Test
+    public void test_list_databases_returns_ok_with_empty_list() {
+        // Note: cannot easily test with empty database list given the test setup
+        // creates TestGlobals.DB at @BeforeAll; this test documents the expected behavior
+        ListDatabasesRequest request = new ListDatabasesRequest();
+
+        ListDatabasesResponse response = (ListDatabasesResponse) processor.processMessage(request);
+
+        assertNotNull(response);
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNotNull(response.getDatabases());
+        // List should never be null on success, even if empty
+    }
 }

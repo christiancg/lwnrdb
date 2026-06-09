@@ -344,6 +344,13 @@ public class Cache {
         return databases.get(dbName);
     }
 
+    public List<String> getUserDatabaseNames() {
+        return databases.keySet().stream()
+                .filter(name -> !Globals.ADMIN_DB_NAME.equals(name))
+                .sorted()
+                .toList();
+    }
+
     public PkIndexEntry getPkIndexAdminCollEntry(String collIdentifier) {
         return collectionsPkIndex.get(collIdentifier);
     }

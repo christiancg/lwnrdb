@@ -1,6 +1,9 @@
 // Create database
 {"type": "CREATE_DATABASE", "databaseName": "test"}
 
+// List all databases
+{"type": "LIST_DATABASES"}
+
 // Create a collection in that database
 {"type": "CREATE_COLLECTION", "databaseName": "test", "collectionName": "testCollection"}
 
