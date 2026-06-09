@@ -87,4 +87,57 @@ public class AdminCollEntryTest {
         assertTrue(indexesArray.contains(new JsonString("index1")));
         assertTrue(indexesArray.contains(new JsonString("index2")));
     }
+
+    @Test
+    public void test_equals_same_instance() {
+        AdminCollEntry entry = new AdminCollEntry("db", "coll");
+        assertEquals(entry, entry);
+    }
+
+    @Test
+    public void test_equals_symmetric() {
+        AdminCollEntry entry1 = new AdminCollEntry("db", "coll");
+        AdminCollEntry entry2 = new AdminCollEntry("db", "coll");
+        assertEquals(entry1, entry2);
+        assertEquals(entry2, entry1);
+    }
+
+    @Test
+    public void test_equals_null_returns_false() {
+        AdminCollEntry entry = new AdminCollEntry("db", "coll");
+        assertNotEquals(null, entry);
+    }
+
+    @Test
+    public void test_equals_different_class_returns_false() {
+        AdminCollEntry entry = new AdminCollEntry("db", "coll");
+        assertNotEquals("notAnEntry", entry);
+    }
+
+    @Test
+    public void test_equals_different_indexes_returns_false() {
+        AdminCollEntry entry1 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx1")));
+        AdminCollEntry entry2 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx2")));
+        assertNotEquals(entry1, entry2);
+    }
+
+    @Test
+    public void test_hashCode_same_values_equal() {
+        AdminCollEntry entry1 = new AdminCollEntry("db", "coll");
+        AdminCollEntry entry2 = new AdminCollEntry("db", "coll");
+        assertEquals(entry1.hashCode(), entry2.hashCode());
+    }
+
+    @Test
+    public void test_hashCode_different_indexes_differs() {
+        AdminCollEntry entry1 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx1")));
+        AdminCollEntry entry2 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx2")));
+        assertNotEquals(entry1.hashCode(), entry2.hashCode());
+    }
+
+    @Test
+    public void test_toString_not_null() {
+        AdminCollEntry entry = new AdminCollEntry("db", "coll");
+        assertNotNull(entry.toString());
+    }
 }

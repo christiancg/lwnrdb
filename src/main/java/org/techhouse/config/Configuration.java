@@ -1,8 +1,5 @@
 package org.techhouse.config;
 
-import lombok.Getter;
-
-@Getter
 public class Configuration {
     private static final Configuration config = new Configuration();
 
@@ -39,5 +36,37 @@ public class Configuration {
             config.load();
         }
         return config;
+    }
+
+    public int getPort() {
+        return port;
+    }
+
+    public int getMaxConnections() {
+        return maxConnections;
+    }
+
+    public String getFilePath() {
+        return filePath;
+    }
+
+    public int getBackgroundProcessingThreads() {
+        return backgroundProcessingThreads;
+    }
+
+    public String getLogPath() {
+        return logPath;
+    }
+
+    public int getMaxLogFiles() {
+        return maxLogFiles;
+    }
+
+    public int getMaxPageSizeBytes() {
+        return maxPageSizeBytes;
+    }
+
+    public int getMaxEntrySizeBytes() {
+        return maxEntrySizeBytes;
     }
 }

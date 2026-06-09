@@ -1,10 +1,8 @@
 package org.techhouse.ejson.elements;
 
-import lombok.Getter;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
-@Getter
 public abstract class JsonCustom<T> extends JsonString {
     protected T customValue;
 
@@ -22,6 +20,10 @@ public abstract class JsonCustom<T> extends JsonString {
     }
 
     public JsonCustom() {
+    }
+
+    public T getCustomValue() {
+        return customValue;
     }
 
     public String stringDataValue() {

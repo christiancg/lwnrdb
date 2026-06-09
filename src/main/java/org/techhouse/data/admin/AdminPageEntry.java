@@ -1,13 +1,11 @@
 package org.techhouse.data.admin;
 
-import lombok.EqualsAndHashCode;
-import lombok.Getter;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
-@EqualsAndHashCode(callSuper = true)
-@Getter
+import java.util.Objects;
+
 public class AdminPageEntry extends DbEntry {
     private static final String PAGE_FIELD_NAME = "page";
     private static final String ENTRY_COUNT_FIELD_NAME = "entryCount";
@@ -68,5 +66,35 @@ public class AdminPageEntry extends DbEntry {
         data.addProperty(PAGE_FIELD_NAME, page);
         data.addProperty(ENTRY_COUNT_FIELD_NAME, entryCount);
         data.addProperty(PAGE_SIZE_FIELD_NAME, pageSize);
+    }
+
+    public long getPage() {
+        return page;
+    }
+
+    public int getEntryCount() {
+        return entryCount;
+    }
+
+    public long getPageSize() {
+        return pageSize;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof AdminPageEntry that)) return false;
+        if (!super.equals(o)) return false;
+        return page == that.page && entryCount == that.entryCount && pageSize == that.pageSize;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), page, entryCount, pageSize);
+    }
+
+    @Override
+    public String toString() {
+        return "AdminPageEntry(super=" + super.toString() + ", page=" + page + ", entryCount=" + entryCount + ", pageSize=" + pageSize + ")";
     }
 }

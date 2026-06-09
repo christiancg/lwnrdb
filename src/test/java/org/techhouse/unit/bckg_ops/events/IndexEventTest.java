@@ -4,8 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.IndexEvent;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class IndexEventTest {
     // Creating an IndexEvent with valid EventType and strings initializes all fields correctly
@@ -61,5 +60,50 @@ public class IndexEventTest {
         IndexEvent indexEvent2 = new IndexEvent(type, dbName, collName, fieldName);
         assertEquals(indexEvent1, indexEvent2);
         assertEquals(indexEvent1.hashCode(), indexEvent2.hashCode());
+    }
+
+    @Test
+    public void test_equals_same_instance() {
+        IndexEvent event = new IndexEvent(EventType.CREATED, "db", "coll", "field");
+        assertEquals(event, event);
+    }
+
+    @Test
+    public void test_equals_null_returns_false() {
+        IndexEvent event = new IndexEvent(EventType.CREATED, "db", "coll", "field");
+        assertNotEquals(null, event);
+    }
+
+    @Test
+    public void test_equals_different_class_returns_false() {
+        IndexEvent event = new IndexEvent(EventType.CREATED, "db", "coll", "field");
+        assertNotEquals("notAnEvent", event);
+    }
+
+    @Test
+    public void test_equals_different_fieldName_returns_false() {
+        IndexEvent event1 = new IndexEvent(EventType.CREATED, "db", "coll", "field1");
+        IndexEvent event2 = new IndexEvent(EventType.CREATED, "db", "coll", "field2");
+        assertNotEquals(event1, event2);
+    }
+
+    @Test
+    public void test_equals_different_collName_returns_false() {
+        IndexEvent event1 = new IndexEvent(EventType.CREATED, "db", "coll1", "field");
+        IndexEvent event2 = new IndexEvent(EventType.CREATED, "db", "coll2", "field");
+        assertNotEquals(event1, event2);
+    }
+
+    @Test
+    public void test_hashCode_different_value_differs() {
+        IndexEvent event1 = new IndexEvent(EventType.CREATED, "db", "coll", "field1");
+        IndexEvent event2 = new IndexEvent(EventType.CREATED, "db", "coll", "field2");
+        assertNotEquals(event1.hashCode(), event2.hashCode());
+    }
+
+    @Test
+    public void test_toString_not_null() {
+        IndexEvent event = new IndexEvent(EventType.CREATED, "db", "coll", "field");
+        assertNotNull(event.toString());
     }
 }

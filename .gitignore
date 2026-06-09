@@ -37,6 +37,10 @@ build/
 ### Mac OS ###
 .DS_Store
 
+### Claude ###
+CLAUDE.md
+
+### DB files ###
 logs/
 db/
-test/
+/test/
