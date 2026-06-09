@@ -17,8 +17,9 @@ public class FieldIndexEntryTest {
     public void test_to_file_entry_serialization() {
         Set<String> ids = new HashSet<>(Arrays.asList("id1", "id2"));
         FieldIndexEntry<String> entry = new FieldIndexEntry<>("testDB", "testCollection", "testValue", ids);
-        String expected = "testValue" + Globals.INDEX_ENTRY_SEPARATOR + "id2;id1";
-        assertEquals(expected, entry.toFileEntry());
+        final var result = entry.toFileEntry();
+        assertTrue(result.equals("testValue" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2") ||
+                   result.equals("testValue" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1"));
     }
 
     // @NonNull on the parameter means passing null throws NullPointerException
@@ -33,7 +34,7 @@ public class FieldIndexEntryTest {
     public void test_parse_double_value() {
         String databaseName = "testDB";
         String collectionName = "testCollection";
-        String line = "123.45|id1;id2";
+        String line = "123.45" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2";
         FieldIndexEntry<Double> entry = FieldIndexEntry.fromIndexFileEntry(databaseName, collectionName, line, Double.class);
         assertEquals("testDB", entry.getDatabaseName());
         assertEquals("testCollection", entry.getCollectionName());
@@ -59,12 +60,13 @@ public class FieldIndexEntryTest {
     @Test
     public void test_to_file_entry_with_pipe_in_value() {
         FieldIndexEntry<String> entry = new FieldIndexEntry<>("testDB", "testCollection", "val|ue", Set.of("id1"));
-        assertEquals("val|ue|id1", entry.toFileEntry());
+        assertEquals("val|ue" + Globals.ID_SEPARATOR + "id1", entry.toFileEntry());
     }
 
     @Test
     public void test_parse_string_value_with_pipe() {
-        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", "val|ue|id1;id2", String.class);
+        String line = "val|ue" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2";
+        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", line, String.class);
         assertEquals("val|ue", entry.getValue());
         assertTrue(entry.getIds().contains("id1"));
         assertTrue(entry.getIds().contains("id2"));
@@ -72,7 +74,8 @@ public class FieldIndexEntryTest {
 
     @Test
     public void test_parse_string_value_with_multiple_pipes() {
-        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", "a|b|c|id1", String.class);
+        String line = "a|b|c" + Globals.ID_SEPARATOR + "id1";
+        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", line, String.class);
         assertEquals("a|b|c", entry.getValue());
         assertTrue(entry.getIds().contains("id1"));
     }
@@ -84,6 +87,41 @@ public class FieldIndexEntryTest {
         FieldIndexEntry<String> parsed = FieldIndexEntry.fromIndexFileEntry("testDB", "testCollection", line, String.class);
         assertEquals("foo|bar", parsed.getValue());
         assertEquals(original.getIds(), parsed.getIds());
+    }
+
+    @Test
+    public void test_id_with_pipe_is_stored_and_parsed_correctly() {
+        FieldIndexEntry<String> original = new FieldIndexEntry<>("db", "coll", "someValue", Set.of("id|with|pipes"));
+        FieldIndexEntry<String> parsed = FieldIndexEntry.fromIndexFileEntry("db", "coll", original.toFileEntry(), String.class);
+        assertEquals("someValue", parsed.getValue());
+        assertEquals(1, parsed.getIds().size());
+        assertTrue(parsed.getIds().contains("id|with|pipes"));
+    }
+
+    @Test
+    public void test_id_with_semicolon_is_stored_and_parsed_correctly() {
+        FieldIndexEntry<String> original = new FieldIndexEntry<>("db", "coll", "someValue", Set.of("id;with;semicolons"));
+        FieldIndexEntry<String> parsed = FieldIndexEntry.fromIndexFileEntry("db", "coll", original.toFileEntry(), String.class);
+        assertEquals("someValue", parsed.getValue());
+        assertEquals(1, parsed.getIds().size());
+        assertTrue(parsed.getIds().contains("id;with;semicolons"));
+    }
+
+    @Test
+    public void test_multiple_ids_with_special_chars_are_stored_and_parsed_correctly() {
+        Set<String> ids = Set.of("id|pipe", "id;semi", "id|and;both");
+        FieldIndexEntry<String> original = new FieldIndexEntry<>("db", "coll", "someValue", ids);
+        FieldIndexEntry<String> parsed = FieldIndexEntry.fromIndexFileEntry("db", "coll", original.toFileEntry(), String.class);
+        assertEquals("someValue", parsed.getValue());
+        assertEquals(ids, parsed.getIds());
+    }
+
+    @Test
+    public void test_value_and_id_both_contain_pipe() {
+        FieldIndexEntry<String> original = new FieldIndexEntry<>("db", "coll", "val|ue", Set.of("id|one", "id|two"));
+        FieldIndexEntry<String> parsed = FieldIndexEntry.fromIndexFileEntry("db", "coll", original.toFileEntry(), String.class);
+        assertEquals("val|ue", parsed.getValue());
+        assertEquals(Set.of("id|one", "id|two"), parsed.getIds());
     }
 
     // Compares two Double values correctly
