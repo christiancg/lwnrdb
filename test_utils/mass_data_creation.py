@@ -58,9 +58,48 @@ def thread_function(thread_number):
             one_by_one_creation(s, f)
         print(f"Finished sending from {thread_number}")
 
+def setup_database():
+    """Create test database and collection if they don't exist"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((HOST, PORT))
+        f = s.makefile('rb')
+
+        # Check if database exists
+        list_db_msg = json.dumps({"type": "LIST_DATABASES"})
+        s.sendall(list_db_msg.encode() + b'\n')
+        response = json.loads(f.readline().decode())
+        databases = response.get("databases", [])
+
+        if "test" not in databases:
+            print("Creating database 'test'...")
+            create_db_msg = json.dumps({"type": "CREATE_DATABASE", "databaseName": "test"})
+            s.sendall(create_db_msg.encode() + b'\n')
+            response = f.readline().decode()
+            print(f"Create database response: {response.strip()}")
+        else:
+            print("Database 'test' already exists")
+
+        # Check if collection exists
+        list_coll_msg = json.dumps({"type": "LIST_COLLECTIONS", "databaseName": "test"})
+        s.sendall(list_coll_msg.encode() + b'\n')
+        response = json.loads(f.readline().decode())
+        collections = response.get("collections") or []
+
+        if "testCollection" not in collections:
+            print("Creating collection 'testCollection'...")
+            create_coll_msg = json.dumps({"type": "CREATE_COLLECTION", "databaseName": "test", "collectionName": "testCollection"})
+            s.sendall(create_coll_msg.encode() + b'\n')
+            response = f.readline().decode()
+            print(f"Create collection response: {response.strip()}")
+        else:
+            print("Collection 'testCollection' already exists")
+
 start = datetime.now()
 start_time = start.strftime("%H:%M:%S")
 print(f"Started at {start_time!r}")
+print("Setting up database and collection...")
+setup_database()
+print("Database setup complete, starting data creation...")
 threads = []
 for i in range(0,NUM_THREADS):
     x = threading.Thread(target=thread_function, args=(i,))
