@@ -43,4 +43,4 @@ CLAUDE.md
 ### DB files ###
 logs/
 db/
-test/
+/test/
