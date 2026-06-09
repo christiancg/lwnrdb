@@ -288,4 +288,117 @@ public class RequestParserTest {
         assertEquals("testDb", result.getDatabaseName());
         assertNull(result.getCollectionName());
     }
+
+    // Parse BULK_SAVE request
+    @Test
+    public void test_parse_bulk_save_request() {
+        String msg = """
+            {"type":"BULK_SAVE","databaseName":"db","collectionName":"coll","objects":[{"name":"a"}]}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(BulkSaveRequest.class, result);
+        assertEquals(OperationType.BULK_SAVE, result.getType());
+    }
+
+    // Parse FIND_BY_ID request
+    @Test
+    public void test_parse_find_by_id_request() {
+        String msg = """
+            {"type":"FIND_BY_ID","databaseName":"db","collectionName":"coll","_id":"123"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(FindByIdRequest.class, result);
+        assertEquals(OperationType.FIND_BY_ID, result.getType());
+    }
+
+    // Parse DROP_DATABASE request
+    @Test
+    public void test_parse_drop_database_request() {
+        String msg = """
+            {"type":"DROP_DATABASE","databaseName":"myDb"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(DropDatabaseRequest.class, result);
+        assertEquals(OperationType.DROP_DATABASE, result.getType());
+        assertEquals("myDb", result.getDatabaseName());
+    }
+
+    // Parse DROP_COLLECTION request
+    @Test
+    public void test_parse_drop_collection_request() {
+        String msg = """
+            {"type":"DROP_COLLECTION","databaseName":"db","collectionName":"coll"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(DropCollectionRequest.class, result);
+        assertEquals(OperationType.DROP_COLLECTION, result.getType());
+    }
+
+    // Parse CREATE_INDEX request
+    @Test
+    public void test_parse_create_index_request() {
+        String msg = """
+            {"type":"CREATE_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(CreateIndexRequest.class, result);
+        assertEquals(OperationType.CREATE_INDEX, result.getType());
+    }
+
+    // Parse DROP_INDEX request
+    @Test
+    public void test_parse_drop_index_request() {
+        String msg = """
+            {"type":"DROP_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(DropIndexRequest.class, result);
+        assertEquals(OperationType.DROP_INDEX, result.getType());
+    }
+
+    // Parse CLOSE_CONNECTION request
+    @Test
+    public void test_parse_close_connection_request() {
+        String msg = """
+            {"type":"CLOSE_CONNECTION"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(CloseConnectionRequest.class, result);
+        assertEquals(OperationType.CLOSE_CONNECTION, result.getType());
+    }
+
+    // Parse aggregation with GROUP_BY, COUNT, DISTINCT, JOIN, LIMIT, SKIP, SORT steps
+    @Test
+    public void test_parse_aggregation_with_all_step_types() {
+        String msg = """
+            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+              {"type":"GROUP_BY","fieldName":"category"},
+              {"type":"COUNT"},
+              {"type":"DISTINCT","fieldName":"name"},
+              {"type":"JOIN","joinCollection":"other","localField":"id","remoteField":"refId","asField":"joined"},
+              {"type":"LIMIT","limit":10},
+              {"type":"SKIP","skip":5},
+              {"type":"SORT","fieldName":"score","ascending":true}
+            ]}""";
+        AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
+        assertNotNull(result);
+        assertEquals(7, result.getAggregationSteps().size());
+    }
+
+    // Parse aggregation MAP step with ABS mid-operator
+    @Test
+    public void test_parse_map_with_abs_operator() {
+        String msg = """
+            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+              {"type":"MAP","operators":[{"fieldName":"absVal","condition":null,"operator":{"type":"ABS","operand":"n"}}]}
+            ]}""";
+        AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
+        assertNotNull(result);
+        assertEquals(1, result.getAggregationSteps().size());
+    }
+
+    // Parse aggregation MAP step with CAST mid-operator
+    @Test
+    public void test_parse_map_with_cast_operator() {
+        String msg = """
+            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+              {"type":"MAP","operators":[{"fieldName":"casted","condition":null,"operator":{"type":"CAST","fieldName":"score","toType":"STRING"}}]}
+            ]}""";
+        AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
+        assertNotNull(result);
+        assertEquals(1, result.getAggregationSteps().size());
+    }
 }

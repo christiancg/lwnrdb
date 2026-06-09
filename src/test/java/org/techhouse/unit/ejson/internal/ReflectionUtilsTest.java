@@ -3,8 +3,7 @@ package org.techhouse.unit.ejson.internal;
 import lombok.Getter;
 import lombok.Setter;
 import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.*;
 import org.techhouse.ejson.internal.ReflectionUtils;
 
 import java.lang.reflect.Constructor;
@@ -179,5 +178,49 @@ public class ReflectionUtilsTest {
     public enum TestEnum {
         VALUE1,
         VALUE2
+    }
+
+    // cast with NULL json type returns null
+    @Test
+    public void test_cast_null_json_type_returns_null() throws Exception {
+        assertNull(cast(String.class, JsonNull.INSTANCE, null));
+    }
+
+    // cast NUMBER to Integer performs intValue() conversion (L140)
+    @Test
+    public void test_cast_number_to_integer() throws Exception {
+        JsonNumber num = new JsonNumber(42.7);
+        Integer result = cast(Integer.class, num, null);
+        assertEquals(42, result);
+    }
+
+    // cast NUMBER to Double performs doubleValue() conversion (L142)
+    @Test
+    public void test_cast_number_to_double() throws Exception {
+        JsonNumber num = new JsonNumber(3.14);
+        Double result = cast(Double.class, num, null);
+        assertEquals(3.14, result, 0.001);
+    }
+
+    // cast NUMBER to Float performs floatValue() conversion (L144)
+    @Test
+    public void test_cast_number_to_float() throws Exception {
+        JsonNumber num = new JsonNumber(1.5);
+        Float result = cast(Float.class, num, null);
+        assertEquals(1.5f, result, 0.001f);
+    }
+
+    // cast NUMBER to Long performs longValue() conversion (L146)
+    @Test
+    public void test_cast_number_to_long() throws Exception {
+        JsonNumber num = new JsonNumber(100.9);
+        Long result = cast(Long.class, num, null);
+        assertEquals(100L, result);
+    }
+
+    // cast with SYNTAX json type returns null (L118)
+    @Test
+    public void test_cast_syntax_token_returns_null() throws Exception {
+        assertNull(cast(String.class, JsonSyntaxToken.COMMA, null));
     }
 }
