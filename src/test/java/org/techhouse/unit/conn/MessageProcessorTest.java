@@ -123,6 +123,24 @@ public class MessageProcessorTest {
         }
     }
 
+    // A request that fails validation returns an ERROR response without reaching the processor
+    @Test
+    public void test_invalid_request_validation_fails_sends_error_response() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        // SAVE with a 2-char databaseName violates the naming rule
+        String msg = "{\"type\":\"SAVE\",\"databaseName\":\"ab\",\"collectionName\":\"myColl\",\"object\":{}}\n";
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+
+        MessageProcessor mp = new MessageProcessor(socket);
+        Thread t = new Thread(mp);
+        t.start();
+        t.join(3000);
+
+        String response = out.toString();
+        assertTrue(response.contains("ERROR"), "Validation failure should return ERROR status");
+        assertTrue(response.contains("SAVE"), "Response type should echo the operation type");
+    }
+
     // An IOException on the output stream is handled without crashing
     @Test
     public void test_ioexception_on_output_stream_is_handled() throws Exception {
