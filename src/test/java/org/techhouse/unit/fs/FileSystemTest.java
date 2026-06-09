@@ -442,9 +442,9 @@ public class FileSystemTest {
         fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
-        assertTrue(fileContent.contains("value1" + Globals.INDEX_ENTRY_SEPARATOR + "id2;id1") ||
-                fileContent.contains("value1" + Globals.INDEX_ENTRY_SEPARATOR + "id1;id2"));
-        assertTrue(fileContent.contains("value2" + Globals.INDEX_ENTRY_SEPARATOR + "id3"));
+        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1") ||
+                fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2"));
+        assertTrue(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3"));
         assertTrue(fileContent.endsWith(Globals.NEWLINE));
     }
 
@@ -477,10 +477,10 @@ public class FileSystemTest {
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
 
-        assertTrue(fileContent.contains("value1" + Globals.INDEX_ENTRY_SEPARATOR + "id1;id2") ||
-                fileContent.contains("value1" + Globals.INDEX_ENTRY_SEPARATOR + "id2;id1"));
-        assertFalse(fileContent.contains("value2" + Globals.INDEX_ENTRY_SEPARATOR + "id3;id4") ||
-                fileContent.contains("value2" + Globals.INDEX_ENTRY_SEPARATOR + "id4;id3"));
+        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2") ||
+                fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1"));
+        assertFalse(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3" + Globals.ID_SEPARATOR + "id4") ||
+                fileContent.contains("value2" + Globals.ID_SEPARATOR + "id4" + Globals.ID_SEPARATOR + "id3"));
     }
 
     // Handle case when removedEntry has empty ids set
@@ -513,7 +513,7 @@ public class FileSystemTest {
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
-        assertTrue(fileContent.contains("foo|bar|id1"));
+        assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id1"));
     }
 
     @Test
@@ -535,8 +535,80 @@ public class FileSystemTest {
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
 
-        assertFalse(fileContent.contains("foo|id1"), "exact 'foo' entry should have been removed");
-        assertTrue(fileContent.contains("foo|bar|id2"), "'foo|bar' entry must not be affected");
+        assertFalse(fileContent.contains("foo" + Globals.ID_SEPARATOR + "id1"), "exact 'foo' entry should have been removed");
+        assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id2"), "'foo|bar' entry must not be affected");
+    }
+
+    @Test
+    public void test_field_index_roundtrip_with_pipe_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "testField";
+
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", Set.of("doc|id|one", "doc|id|two"));
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        assertNotNull(index);
+        assertEquals(1, index.size());
+        assertEquals("someValue", index.getFirst().getValue());
+        assertTrue(index.getFirst().getIds().contains("doc|id|one"));
+        assertTrue(index.getFirst().getIds().contains("doc|id|two"));
+    }
+
+    @Test
+    public void test_field_index_roundtrip_with_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "testField";
+
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", Set.of("doc;id;one", "doc;id;two"));
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        assertNotNull(index);
+        assertEquals(1, index.size());
+        assertEquals("someValue", index.getFirst().getValue());
+        assertTrue(index.getFirst().getIds().contains("doc;id;one"));
+        assertTrue(index.getFirst().getIds().contains("doc;id;two"));
+    }
+
+    @Test
+    public void test_field_index_roundtrip_with_pipe_and_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "testField";
+
+        Set<String> ids = Set.of("id|pipe", "id;semi", "id|and;both");
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", ids);
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        assertNotNull(index);
+        assertEquals(1, index.size());
+        assertEquals(ids, index.getFirst().getIds());
+    }
+
+    @Test
+    public void test_field_index_update_id_with_special_chars() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "testField";
+
+        // Insert initial entry pointing to a document with special-char ID
+        FieldIndexEntry<String> initial = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue", Set.of("doc|one", "doc;two"));
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, initial, null);
+
+        // Remove one ID, keep the other
+        FieldIndexEntry<String> removed = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue", Set.of("doc;two"));
+        FieldIndexEntry<String> updated = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue", Set.of("doc|one"));
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, updated, removed);
+
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        assertNotNull(index);
+        assertEquals(1, index.size());
+        assertTrue(index.getFirst().getIds().contains("doc|one"));
+        assertFalse(index.getFirst().getIds().contains("doc;two"));
     }
 
     @Test
@@ -557,6 +629,46 @@ public class FileSystemTest {
         List<PkIndexEntry> index = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, index.size());
         assertEquals("my|custom|id", index.getFirst().getValue());
+    }
+
+    @Test
+    public void test_pk_index_roundtrip_with_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+
+        DbEntry entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("my;custom;id");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+
+        PkIndexEntry saved = fileSystem.insertIntoCollection(entry);
+        assertEquals("my;custom;id", saved.getValue());
+
+        List<PkIndexEntry> index = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, index.size());
+        assertEquals("my;custom;id", index.getFirst().getValue());
+    }
+
+    @Test
+    public void test_pk_index_roundtrip_with_pipe_and_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+
+        DbEntry entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("my|and;special|id");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+
+        PkIndexEntry saved = fileSystem.insertIntoCollection(entry);
+        assertEquals("my|and;special|id", saved.getValue());
+
+        List<PkIndexEntry> index = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, index.size());
+        assertEquals("my|and;special|id", index.getFirst().getValue());
     }
 
     // Successfully delete all index files for a given field in an existing collection

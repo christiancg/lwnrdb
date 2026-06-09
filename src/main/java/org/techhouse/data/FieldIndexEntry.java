@@ -26,11 +26,11 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         } else {
             strValue = value.toString();
         }
-        return strValue + Globals.INDEX_ENTRY_SEPARATOR + String.join(";", ids);
+        return strValue + Globals.ID_SEPARATOR + String.join(Globals.ID_SEPARATOR, ids);
     }
 
     public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line, Class<T> tClass) {
-        final var separatorIdx = line.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+        final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
         final var strValue = line.substring(0, separatorIdx);
         Object value;
         if (Number.class.isAssignableFrom(tClass)) {
@@ -42,8 +42,8 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         } else {
             value = CustomTypeFactory.getCustomTypeInstance(strValue);
         }
-        final var idsStr = line.substring(separatorIdx + Globals.INDEX_ENTRY_SEPARATOR.length());
-        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(idsStr.split(";")).collect(Collectors.toSet()));
+        final var idsStr = line.substring(separatorIdx + Globals.ID_SEPARATOR.length());
+        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(idsStr.split(Globals.ID_SEPARATOR)).collect(Collectors.toSet()));
     }
 
     @Override

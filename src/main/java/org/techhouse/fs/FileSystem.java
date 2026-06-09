@@ -142,33 +142,6 @@ public class FileSystem {
         }
     }
 
-    public Stream<DbEntry> getMultipleById(List<PkIndexEntry> pkIndexEntry, File collectionFile) throws Exception {
-        final var dbName = pkIndexEntry.getFirst().getDatabaseName();
-        final var collName = pkIndexEntry.getFirst().getCollectionName();
-        try (final var reader = new RandomAccessFile(collectionFile, Globals.R_PERMISSIONS)) {
-            pkIndexEntry.sort(Comparator.comparing(PkIndexEntry::getPosition));
-            return pkIndexEntry.stream().map(pkIndexEntry1 -> {
-                try {
-                    reader.seek(pkIndexEntry1.getPosition());
-                    final var entryLength = (int) pkIndexEntry1.getLength();
-                    byte[] buffer = new byte[entryLength];
-                    reader.readFully(buffer, 0, entryLength);
-                    final var strEntry = new String(buffer);
-                    final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
-                    final var entry = new DbEntry();
-                    entry.setDatabaseName(dbName);
-                    entry.setCollectionName(collName);
-                    entry.set_id(pkIndexEntry1.getValue());
-                    jsonObject.remove(Globals.PK_FIELD);
-                    entry.setData(jsonObject);
-                    return entry;
-                } catch (IOException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-        }
-    }
-
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<T> entries) throws IOException {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
         final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
@@ -439,7 +412,7 @@ public class FileSystem {
             final int effectiveEnd = lineEnd == -1 ? strWholeFile.length() : lineEnd;
             final var line = strWholeFile.substring(lineStart, effectiveEnd);
             if (!line.isBlank()) {
-                final var separatorIdx = line.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+                final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
                 if (separatorIdx >= 0 && line.substring(0, separatorIdx).equals(value)) {
                     return lineStart == 0 ? 0 : lineStart - Globals.NEWLINE_CHAR_LENGTH;
                 }
