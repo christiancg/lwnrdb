@@ -7,6 +7,9 @@
 // Create a collection in that database
 {"type": "CREATE_COLLECTION", "databaseName": "test", "collectionName": "testCollection"}
 
+// List all collections of a database
+{"type": "LIST_COLLECTIONS", "databaseName": "test"}
+
 // Create a test object in collection
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "name": "test" }}
 

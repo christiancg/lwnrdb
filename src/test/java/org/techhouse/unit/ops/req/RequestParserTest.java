@@ -271,4 +271,21 @@ public class RequestParserTest {
         Exception exception = assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(invalidMessage));
         assertNotNull(exception);
     }
+
+    // Successfully parse LIST_COLLECTIONS request
+    @Test
+    public void test_parse_list_collections_request() {
+        String listCollectionsRequest = """
+            {
+                "type": "LIST_COLLECTIONS",
+                "databaseName": "testDb"
+            }""";
+
+        OperationRequest result = RequestParser.parseRequest(listCollectionsRequest);
+
+        assertInstanceOf(ListCollectionsRequest.class, result);
+        assertEquals(OperationType.LIST_COLLECTIONS, result.getType());
+        assertEquals("testDb", result.getDatabaseName());
+        assertNull(result.getCollectionName());
+    }
 }

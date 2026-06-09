@@ -38,6 +38,7 @@ public class OperationProcessor {
             case LIST_DATABASES -> processListDatabasesOperation();
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
             case DROP_COLLECTION -> processDropCollectionOperation((DropCollectionRequest) operationRequest);
+            case LIST_COLLECTIONS -> processListCollectionsOperation((ListCollectionsRequest) operationRequest);
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
@@ -295,6 +296,28 @@ public class OperationProcessor {
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection: " + e.getMessage());
         } finally {
             locks.release(dbName, collName);
+        }
+    }
+
+    private ListCollectionsResponse processListCollectionsOperation(ListCollectionsRequest request) {
+        try {
+            final var dbName = request.getDatabaseName();
+            if (dbName == null || dbName.isBlank()) {
+                return new ListCollectionsResponse(OperationStatus.ERROR,
+                        "Database name is required", null);
+            }
+            if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+                return new ListCollectionsResponse(OperationStatus.OK, "Ok", List.of());
+            }
+            if (cache.getAdminDbEntry(dbName) == null) {
+                return new ListCollectionsResponse(OperationStatus.NOT_FOUND,
+                        "Database " + dbName + " not found", null);
+            }
+            final var names = cache.getCollectionNamesForDatabase(dbName);
+            return new ListCollectionsResponse(OperationStatus.OK, "Ok", names);
+        } catch (Exception e) {
+            return new ListCollectionsResponse(OperationStatus.ERROR,
+                    "Error while listing collections: " + e.getMessage(), null);
         }
     }
 
