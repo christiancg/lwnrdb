@@ -2,6 +2,7 @@ package org.techhouse.data;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.NonNull;
 import org.techhouse.config.Globals;
 
 @Data
@@ -19,12 +20,20 @@ public class PkIndexEntry implements Comparable<String> {
     }
 
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
-        final var parts = line.trim().replace("\r","").replace("\n","").split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
-        return new PkIndexEntry(databaseName, collectionName, parts[0], Long.parseLong(parts[1]), Long.parseLong(parts[2]), Long.parseLong(parts[3]));
+        final var cleaned = line.trim().replace("\r", "").replace("\n", "");
+        final var sep = Globals.INDEX_ENTRY_SEPARATOR;
+        final var lastPipe       = cleaned.lastIndexOf(sep);
+        final var secondLastPipe = cleaned.lastIndexOf(sep, lastPipe - 1);
+        final var thirdLastPipe  = cleaned.lastIndexOf(sep, secondLastPipe - 1);
+        return new PkIndexEntry(databaseName, collectionName,
+                cleaned.substring(0, thirdLastPipe),
+                Long.parseLong(cleaned.substring(thirdLastPipe + sep.length(), secondLastPipe)),
+                Long.parseLong(cleaned.substring(secondLastPipe + sep.length(), lastPipe)),
+                Long.parseLong(cleaned.substring(lastPipe + sep.length())));
     }
 
     @Override
-    public int compareTo(String otherIndexValue) {
+    public int compareTo(@NonNull String otherIndexValue) {
         return value.compareTo(otherIndexValue);
     }
 }

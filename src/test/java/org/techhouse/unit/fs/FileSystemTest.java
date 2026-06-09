@@ -502,6 +502,63 @@ public class FileSystemTest {
         assertFalse(fileContent.contains("123" + Globals.INDEX_ENTRY_SEPARATOR));
     }
 
+    @Test
+    public void test_update_index_files_with_pipe_in_field_value() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "testField";
+
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar", Set.of("id1"));
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
+        String fileContent = Files.readString(indexFile.toPath());
+        assertTrue(fileContent.contains("foo|bar|id1"));
+    }
+
+    @Test
+    public void test_search_does_not_match_prefix_when_value_contains_pipe() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "testField";
+
+        // Write two entries: "foo" and "foo|bar" — the search for "foo" must not hit "foo|bar"
+        FieldIndexEntry<String> fooBar = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar", Set.of("id2"));
+        FieldIndexEntry<String> foo    = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo",     Set.of("id1"));
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, fooBar, null);
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, foo,    null);
+
+        // Remove "foo" — should only remove the exact "foo" entry, leaving "foo|bar" intact
+        FieldIndexEntry<String> fooEmpty = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo", Set.of());
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, fooEmpty);
+
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
+        String fileContent = Files.readString(indexFile.toPath());
+
+        assertFalse(fileContent.contains("foo|id1"), "exact 'foo' entry should have been removed");
+        assertTrue(fileContent.contains("foo|bar|id2"), "'foo|bar' entry must not be affected");
+    }
+
+    @Test
+    public void test_pk_index_roundtrip_with_pipe_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+
+        DbEntry entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("my|custom|id");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+
+        PkIndexEntry saved = fileSystem.insertIntoCollection(entry);
+        assertEquals("my|custom|id", saved.getValue());
+
+        List<PkIndexEntry> index = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, index.size());
+        assertEquals("my|custom|id", index.getFirst().getValue());
+    }
+
     // Successfully delete all index files for a given field in an existing collection
     @Test
     public void test_delete_index_files_success() throws IOException, NoSuchFieldException, IllegalAccessException {
