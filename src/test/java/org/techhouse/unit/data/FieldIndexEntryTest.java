@@ -158,4 +158,20 @@ public class FieldIndexEntryTest {
         assertEquals("db2", fieldIndexEntry.getDatabaseName());
         assertEquals(Set.of("id2"), fieldIndexEntry.getIds());
     }
+
+    // compareTo with Boolean value (L53)
+    @Test
+    public void test_compare_to_boolean_values() {
+        FieldIndexEntry<Boolean> entry = new FieldIndexEntry<>("db", "col", false, Set.of("id1"));
+        assertTrue(entry.compareTo(true) < 0);
+        assertEquals(0, entry.compareTo(false));
+    }
+
+    // compareTo with null value returns 0 (L55)
+    @Test
+    @SuppressWarnings("unchecked")
+    public void test_compare_to_null_value_returns_zero() {
+        FieldIndexEntry entry = new FieldIndexEntry<>("db", "col", null, Set.of("id1"));
+        assertEquals(0, entry.compareTo("anything"));
+    }
 }

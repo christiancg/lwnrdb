@@ -1,7 +1,9 @@
 package org.techhouse.unit.ejson.type_adapters;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
@@ -96,5 +98,26 @@ public class TypeAdapterFactoryTest {
         TypeAdapter<String> result = TypeAdapterFactory.getAdapter(String.class);
 
         assertSame(stringAdapter, result);
+    }
+
+    // TypeAdapterFactory instantiation covers implicit default constructor (L14)
+    @Test
+    public void test_type_adapter_factory_instantiation() {
+        assertNotNull(new TypeAdapterFactory());
+    }
+
+    // getAdapter(Class) for a JsonCustom subclass returns a JsonCustomTypeAdapter (L51-53)
+    @Test
+    public void test_get_adapter_for_custom_type() {
+        new org.techhouse.ejson.EJson(); // register custom types
+        TypeAdapter<JsonTime> adapter = TypeAdapterFactory.getAdapter(JsonTime.class);
+        assertNotNull(adapter);
+    }
+
+    // JsonBaseElementTypeAdapter.toJson with a syntax token throws (L23 default case)
+    @Test
+    public void test_json_base_element_adapter_syntax_token_throws() {
+        TypeAdapter<JsonBaseElement> adapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
+        assertThrows(IllegalStateException.class, () -> adapter.toJson(JsonSyntaxToken.COMMA));
     }
 }

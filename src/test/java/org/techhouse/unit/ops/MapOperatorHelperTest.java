@@ -631,6 +631,72 @@ public class MapOperatorHelperTest {
         assertTrue(result.has("out"));
     }
 
+    // MapOperatorHelper instantiation covers implicit default constructor (L23)
+    @Test
+    public void test_map_operator_helper_instantiation() {
+        assertNotNull(new MapOperatorHelper());
+    }
+
+    // CAST NUMBER when field is already a number returns the number (L302)
+    @Test
+    public void test_cast_number_to_number_returns_same() {
+        JsonObject input = new JsonObject();
+        input.addProperty("n", 42);
+        CastMidOperator cast = new CastMidOperator("n", CastToType.NUMBER);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals(42, result.get("out").asJsonNumber().asInteger());
+    }
+
+    // CAST NUMBER from a parseable string (L305)
+    @Test
+    public void test_cast_string_to_number_parseable() {
+        JsonObject input = new JsonObject();
+        input.addProperty("s", "3.14");
+        CastMidOperator cast = new CastMidOperator("s", CastToType.NUMBER);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals(3.14, result.get("out").asJsonNumber().getValue().doubleValue(), 0.001);
+    }
+
+    // CAST STRING when field is already a string returns it (L313)
+    @Test
+    public void test_cast_string_to_string_returns_same() {
+        JsonObject input = new JsonObject();
+        input.addProperty("s", "hello");
+        CastMidOperator cast = new CastMidOperator("s", CastToType.STRING);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals("hello", result.get("out").asJsonString().getValue());
+    }
+
+    // CAST STRING from boolean (L318)
+    @Test
+    public void test_cast_boolean_to_string() {
+        JsonObject input = new JsonObject();
+        input.add("flag", new JsonBoolean(true));
+        CastMidOperator cast = new CastMidOperator("flag", CastToType.STRING);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals("true", result.get("out").asJsonString().getValue());
+    }
+
+    // CAST BOOLEAN when field is already boolean returns it (L324)
+    @Test
+    public void test_cast_boolean_to_boolean_returns_same() {
+        JsonObject input = new JsonObject();
+        input.add("flag", new JsonBoolean(false));
+        CastMidOperator cast = new CastMidOperator("flag", CastToType.BOOLEAN);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertFalse(result.get("out").asJsonBoolean().getValue());
+    }
+
+    // CAST to NUMBER when field is JsonNull returns JsonNull (L309)
+    @Test
+    public void test_cast_null_field_to_number_returns_null() {
+        JsonObject input = new JsonObject();
+        input.add("n", JsonNull.INSTANCE);
+        CastMidOperator cast = new CastMidOperator("n", CastToType.NUMBER);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertTrue(result.get("out").isJsonNull());
+    }
+
     // Attempt to remove non-existent field
     @Test
     public void test_remove_non_existent_field() {

@@ -9,6 +9,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -442,6 +443,95 @@ public class AggregationOperationHelperTest {
 
         assertFalse(result.isEmpty());
         assertTrue(result.stream().anyMatch(r -> r.has("joined") && !r.get("joined").asJsonArray().isEmpty()));
+    }
+
+    // DISTINCT with null fieldName returns unique objects (removes _id) (L138-145)
+    @Test
+    public void test_distinct_with_null_field_name_returns_unique_objects() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        insertEntry(cache, "dn1", "color", "red");
+        insertEntry(cache, "dn2", "color", "red");
+
+        AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new DistinctAggregationStep(null)));
+
+        List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
+        // null fieldName → distinct on whole object minus _id
+        assertNotNull(result);
+        // Both entries have same fields, so distinct should collapse to 1
+        assertEquals(1, result.size());
+    }
+
+    // DISTINCT with empty fieldName also removes _id and deduplicates (L138-145)
+    @Test
+    public void test_distinct_with_empty_field_name() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        insertEntry(cache, "de1", "x", "same");
+        insertEntry(cache, "de2", "x", "same");
+
+        AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new DistinctAggregationStep("")));
+
+        List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
+        assertNotNull(result);
+        assertEquals(1, result.size());
+    }
+
+    // JOIN skips objects that lack the local field (L109, L115)
+    @Test
+    public void test_join_skips_objects_without_local_field() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+
+        // Entry without the localField
+        JsonObject noField = new JsonObject();
+        noField.add(Globals.PK_FIELD, new JsonString("nf1"));
+        noField.addProperty("other", "value");
+        DbEntry nfEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, noField);
+        nfEntry.set_id("nf1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, nfEntry);
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
+
+        AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(
+                new JoinAggregationStep(TestGlobals.JOIN_COLL, "missingField", "refKey", "joined")
+        ));
+
+        List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
+        assertNotNull(result);
+        // Object without localField should still appear but with empty joined array
+        assertTrue(result.stream().allMatch(r -> !r.has("joined") || r.get("joined").asJsonArray().isEmpty()));
+    }
+
+    // AggregationOperationHelper instantiation covers implicit constructor (L21)
+    @Test
+    public void test_aggregation_operation_helper_instantiation() {
+        assertNotNull(new AggregationOperationHelper());
+    }
+
+    // MAP step with actual data exercises the lambda body (L61-62)
+    @Test
+    public void test_map_step_processes_actual_data() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        insertEntry(cache, "map1", "score", 10);
+        insertEntry(cache, "map2", "score", 20);
+
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("score"));
+        operands.add(new JsonNumber(5));
+        org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator sumOp =
+                new org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator(
+                        org.techhouse.ops.req.agg.mid_operators.MidOperationType.SUM, operands);
+        org.techhouse.ops.req.agg.step.map.AddFieldMapOperator mapOp =
+                new org.techhouse.ops.req.agg.step.map.AddFieldMapOperator("total", null, sumOp);
+
+        AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new MapAggregationStep(List.of(mapOp))));
+
+        List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
+
+        assertNotNull(result);
+        assertFalse(result.isEmpty());
+        assertTrue(result.stream().allMatch(r -> r.has("total")));
     }
 
     // Handle missing fields in json objects during operations

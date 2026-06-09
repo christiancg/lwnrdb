@@ -6,9 +6,11 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -65,13 +67,67 @@ public class AdminOperationHelperTest {
 
         // Act
         AdminOperationHelper.saveDatabaseEntry(dbEntry);
-    
+
         // Assert
         final var typeToken = new ReflectionUtils.TypeToken<Map<String, Semaphore>>() {};
         final var actualLocks = TestUtils.getPrivateField(locks, "locks", typeToken);
         assertNotNull(actualLocks.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME)));
         final var inserted = cache.getAdminDbEntry(Globals.ADMIN_DB_NAME);
         assertNotNull(inserted);
+    }
+
+    // AdminOperationHelper instantiation covers implicit default constructor (L23)
+    @Test
+    public void test_admin_operation_helper_instantiation() {
+        assertNotNull(new AdminOperationHelper());
+    }
+
+    // saveDatabaseEntry for an already-existing database takes the update path (L204-205)
+    @Test
+    public void test_save_database_entry_updates_existing() {
+        // TestGlobals.DB was created in @BeforeEach — calling saveDatabaseEntry again triggers the update path
+        AdminDbEntry dbEntry = new AdminDbEntry(TestGlobals.DB);
+        // This should update the existing entry rather than insert
+        assertDoesNotThrow(() -> AdminOperationHelper.saveDatabaseEntry(dbEntry));
+        Cache cache = IocContainer.get(Cache.class);
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
+    }
+
+    // saveCollectionEntry for an already-existing collection takes the update path (L269-270)
+    @Test
+    public void test_save_collection_entry_updates_existing() {
+        AdminCollEntry collEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        // TestGlobals.DB/COLL already exists — calling saveCollectionEntry triggers the update path
+        assertDoesNotThrow(() -> AdminOperationHelper.saveCollectionEntry(collEntry));
+        Cache cache = IocContainer.get(Cache.class);
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // deleteDatabaseEntry with collections iterates and deletes them (L229-231)
+    @Test
+    public void test_delete_database_entry_with_collections() throws Exception {
+        // Create a new database with a collection, then delete the database
+        AdminDbEntry dbEntry = new AdminDbEntry("toDeleteWithColl");
+        AdminOperationHelper.saveDatabaseEntry(dbEntry);
+        AdminCollEntry collEntry = new AdminCollEntry("toDeleteWithColl", "aColl");
+        AdminOperationHelper.saveCollectionEntry(collEntry);
+
+        assertDoesNotThrow(() -> AdminOperationHelper.deleteDatabaseEntry("toDeleteWithColl"));
+
+        Cache cache = IocContainer.get(Cache.class);
+        assertNull(cache.getAdminDbEntry("toDeleteWithColl"));
+    }
+
+    // deleteCollectionEntry removes a collection (exercises L299-300 path)
+    @Test
+    public void test_delete_collection_entry_existing() throws Exception {
+        AdminCollEntry collEntry = new AdminCollEntry(TestGlobals.DB, "tempColl");
+        AdminOperationHelper.saveCollectionEntry(collEntry);
+
+        assertDoesNotThrow(() -> AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, "tempColl"));
+
+        Cache cache = IocContainer.get(Cache.class);
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "tempColl"));
     }
 
 }

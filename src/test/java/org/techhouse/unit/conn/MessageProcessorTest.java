@@ -4,6 +4,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.test.TestUtils;
 
@@ -95,6 +96,31 @@ public class MessageProcessorTest {
 
         String response = out.toString();
         assertFalse(response.isEmpty(), "An error response should have been written");
+    }
+
+    // When max connections is reached, clientId is null and an error response is sent (L63-67)
+    @Test
+    public void test_max_connections_sends_error_response() throws Exception {
+        // Set maxConnections to 0 so any new connection gets null clientId
+        Configuration config = Configuration.getInstance();
+        int originalMax = config.getMaxConnections();
+        try {
+            TestUtils.setPrivateField(config, "maxConnections", 0);
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            Socket socket = mockSocket(new ByteArrayInputStream("".getBytes()), out);
+
+            MessageProcessor mp = new MessageProcessor(socket);
+            Thread t = new Thread(mp);
+            t.start();
+            t.join(3000);
+
+            String response = out.toString();
+            assertTrue(response.contains("CLOSE_CONNECTION"), "Should send CLOSE_CONNECTION on max connections");
+            assertTrue(response.contains("ERROR"), "Should include ERROR status");
+        } finally {
+            TestUtils.setPrivateField(config, "maxConnections", originalMax);
+        }
     }
 
     // An IOException on the output stream is handled without crashing

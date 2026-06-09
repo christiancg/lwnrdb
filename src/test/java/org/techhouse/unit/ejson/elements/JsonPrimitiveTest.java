@@ -103,4 +103,15 @@ public class JsonPrimitiveTest {
                 }
         );
     }
+
+    // deepCopy on JsonBoolean returns new instance with same value (L49)
+    @Test
+    public void test_json_boolean_deep_copy() {
+        JsonBoolean original = new JsonBoolean(true);
+        JsonBaseElement copy = original.deepCopy();
+        assertInstanceOf(JsonBoolean.class, copy);
+        assertNotSame(original, copy);
+        assertEquals(true, ((JsonBoolean) copy).getValue());
+    }
+
 }
