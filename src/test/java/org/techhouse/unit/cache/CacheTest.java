@@ -9,8 +9,10 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
@@ -1134,5 +1136,164 @@ public class CacheTest {
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
         assertEquals(1, result.size());
+    }
+
+    // getCollectionNamesForDatabase returns only collections belonging to the given database
+    @Test
+    public void test_get_collection_names_for_database() throws IOException, InterruptedException {
+        TestUtils.createTestDatabaseAndCollection();
+        Cache cache = IocContainer.get(Cache.class);
+        List<String> names = cache.getCollectionNamesForDatabase(TestGlobals.DB);
+        assertNotNull(names);
+        assertTrue(names.contains(TestGlobals.COLL));
+    }
+
+    // getCollectionNamesForDatabase does not return collections from other databases
+    @Test
+    public void test_get_collection_names_excludes_other_databases() throws IOException, InterruptedException {
+        TestUtils.createTestDatabaseAndCollection();
+        Cache cache = IocContainer.get(Cache.class);
+        List<String> names = cache.getCollectionNamesForDatabase("someOtherDb");
+        assertNotNull(names);
+        assertTrue(names.isEmpty());
+    }
+
+    // getAdminPageEntry returns the correct page entry
+    @Test
+    public void test_get_admin_page_entry_returns_correct_entry() {
+        Cache cache = new Cache();
+        cache.updatePageSizeInMemory("db", "coll", 0L, 100L);
+        var entry = cache.getAdminPageEntry("db", "coll", 0L);
+        assertNotNull(entry);
+        assertEquals(0L, entry.getPage());
+    }
+
+    // getAdminPageEntry returns null for a page number that does not exist
+    @Test
+    public void test_get_admin_page_entry_returns_null_for_missing_page() {
+        Cache cache = new Cache();
+        cache.updatePageSizeInMemory("db", "coll", 0L, 100L);
+        var entry = cache.getAdminPageEntry("db", "coll", 99L);
+        assertNull(entry);
+    }
+
+    // getAdminPageEntry returns null when no pages exist for the collection
+    @Test
+    public void test_get_admin_page_entry_returns_null_when_no_pages() {
+        Cache cache = new Cache();
+        var entry = cache.getAdminPageEntry("db", "coll", 0L);
+        assertNull(entry);
+    }
+
+    // getIdsFromIndex with a JsonCustom value returns results from custom index
+    @Test
+    public void test_get_ids_from_index_with_custom_type() throws IOException {
+        var cache = mock(Cache.class);
+        var dbName = "db";
+        var collName = "coll";
+        var fieldName = "time";
+        var timeValue = new JsonTime("#time(10:00:00)");
+        var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, timeValue);
+        @SuppressWarnings("unchecked")
+        List<FieldIndexEntry<Object>> idx = (List<FieldIndexEntry<Object>>) (List<?>) List.of(
+                new FieldIndexEntry<>(dbName, collName, timeValue, Set.of("id1")));
+        when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any()))
+                .thenReturn(idx);
+        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, (Object) timeValue)).thenCallRealMethod();
+
+        var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, (Object) timeValue);
+
+        assertNotNull(result);
+        assertTrue(result.contains("id1"));
+    }
+
+    // getIdsFromIndex with JsonArray containing JsonString elements
+    @Test
+    public void test_get_ids_from_index_with_jsonarray_of_strings() throws IOException {
+        var cache = mock(Cache.class);
+        var dbName = "db";
+        var collName = "coll";
+        var fieldName = "tag";
+        var arr = new JsonArray();
+        arr.add(new JsonString("alpha"));
+        arr.add(new JsonString("beta"));
+        var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
+        var idx = List.of(
+                new FieldIndexEntry<>(dbName, collName, "alpha", Set.of("id1")),
+                new FieldIndexEntry<>(dbName, collName, "gamma", Set.of("id2"))
+        );
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class)).thenReturn(idx);
+        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
+
+        var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr);
+
+        assertNotNull(result);
+        assertTrue(result.contains("id1"));
+        assertFalse(result.contains("id2"));
+    }
+
+    // getIdsFromIndex with JsonArray containing JsonNumber elements
+    @Test
+    public void test_get_ids_from_index_with_jsonarray_of_numbers() throws IOException {
+        var cache = mock(Cache.class);
+        var dbName = "db";
+        var collName = "coll";
+        var fieldName = "score";
+        var arr = new JsonArray();
+        arr.add(new JsonNumber(10.0));
+        arr.add(new JsonNumber(20.0));
+        var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
+        @SuppressWarnings("unchecked")
+        List<FieldIndexEntry<Number>> idx = (List<FieldIndexEntry<Number>>) (List<?>) List.of(
+                new FieldIndexEntry<>(dbName, collName, 10.0, Set.of("id1")),
+                new FieldIndexEntry<>(dbName, collName, 30.0, Set.of("id2"))
+        );
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
+        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
+
+        var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr);
+
+        assertNotNull(result);
+        assertTrue(result.contains("id1"));
+        assertFalse(result.contains("id2"));
+    }
+
+    // getIdsFromIndex with JsonArray containing JsonBoolean elements
+    @Test
+    public void test_get_ids_from_index_with_jsonarray_of_booleans() throws IOException {
+        var cache = mock(Cache.class);
+        var dbName = "db";
+        var collName = "coll";
+        var fieldName = "active";
+        var arr = new JsonArray();
+        arr.add(new JsonBoolean(true));
+        var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
+        var idx = List.of(
+                new FieldIndexEntry<>(dbName, collName, true, Set.of("id1")),
+                new FieldIndexEntry<>(dbName, collName, false, Set.of("id2"))
+        );
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class)).thenReturn(idx);
+        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
+
+        var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr);
+
+        assertNotNull(result);
+        assertTrue(result.contains("id1"));
+        assertFalse(result.contains("id2"));
+    }
+
+    // getIdsFromIndex with JsonArray containing a non-primitive first element returns null
+    @Test
+    public void test_get_ids_from_index_with_jsonarray_non_primitive_returns_null() throws IOException {
+        var cache = new Cache();
+        var arr = new JsonArray();
+        JsonObject nested = new JsonObject();
+        nested.addProperty("key", "value");
+        arr.add(nested);
+        var operator = new FieldOperator(FieldOperatorType.IN, "field", arr);
+
+        var result = cache.getIdsFromIndex("db", "coll", "field", operator, arr);
+
+        assertNull(result);
     }
 }

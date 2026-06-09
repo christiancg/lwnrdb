@@ -176,4 +176,18 @@ public class CustomTypeFactoryTest {
 
         assertEquals("The custom type unknown has not been registered", exception.getMessage());
     }
+
+    // getCustomTypeInstance with invalid format string throws BadImplementationCustomTypeException (L42)
+    @Test
+    public void test_get_instance_with_invalid_format_throws_bad_implementation() {
+        new org.techhouse.ejson.EJson(); // registers custom types including time
+        assertThrows(BadImplementationCustomTypeException.class,
+                () -> CustomTypeFactory.getCustomTypeInstance("#time(not_a_valid_time)"));
+    }
+
+    // Instantiating CustomTypeFactory covers implicit default constructor
+    @Test
+    public void test_custom_type_factory_instantiation() {
+        assertNotNull(new CustomTypeFactory());
+    }
 }

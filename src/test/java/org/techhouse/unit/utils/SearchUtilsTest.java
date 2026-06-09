@@ -254,6 +254,121 @@ public class SearchUtilsTest {
         assertEquals(2, resultNotIn.size());
     }
 
+    // CONTAINS with a non-String value returns empty set
+    @Test
+    public void test_contains_non_string_value_returns_empty() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", 20, Set.of("id2"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.CONTAINS, 10);
+        assertTrue(result.isEmpty());
+    }
+
+    // GREATER_THAN with a non-Number non-JsonCustom value (e.g. String) returns empty set
+    @Test
+    public void test_greater_than_string_value_returns_empty() {
+        List<FieldIndexEntry<String>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", "apple", Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", "banana", Set.of("id2"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN, "apple");
+        assertTrue(result.isEmpty());
+    }
+
+    // SMALLER_THAN with a non-Number non-JsonCustom value returns empty set
+    @Test
+    public void test_smaller_than_string_value_returns_empty() {
+        List<FieldIndexEntry<String>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", "apple", Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", "banana", Set.of("id2"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.SMALLER_THAN, "banana");
+        assertTrue(result.isEmpty());
+    }
+
+    // Single-element list returns empty for GREATER_THAN (end == 0 branch)
+    @Test
+    public void test_greater_than_single_element_list_returns_empty() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN, 5);
+        assertTrue(result.isEmpty());
+    }
+
+    // Single-element list returns empty for SMALLER_THAN (end == 0 branch)
+    @Test
+    public void test_smaller_than_single_element_list_returns_empty() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.SMALLER_THAN, 20);
+        assertTrue(result.isEmpty());
+    }
+
+    // GREATER_THAN when value is less than the first entry (early-return start branch)
+    @Test
+    public void test_greater_than_value_below_first_entry_returns_all() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", 20, Set.of("id2")),
+                new FieldIndexEntry<>("db1", "col1", 30, Set.of("id3"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN, 5);
+        assertEquals(Set.of("id1", "id2", "id3"), result);
+    }
+
+    // SMALLER_THAN when value is greater than the last entry (early-return end branch)
+    @Test
+    public void test_smaller_than_value_above_last_entry_returns_all() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", 20, Set.of("id2")),
+                new FieldIndexEntry<>("db1", "col1", 30, Set.of("id3"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.SMALLER_THAN, 40);
+        assertEquals(Set.of("id1", "id2", "id3"), result);
+    }
+
+    // SMALLER_THAN_EQUALS when value equals last entry (early-return end branch)
+    @Test
+    public void test_smaller_than_equals_value_equals_last_returns_all() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", 20, Set.of("id2")),
+                new FieldIndexEntry<>("db1", "col1", 30, Set.of("id3"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.SMALLER_THAN_EQUALS, 30);
+        assertEquals(Set.of("id1", "id2", "id3"), result);
+    }
+
+    // GREATER_THAN_EQUALS when value equals the first entry (early-return start branch)
+    @Test
+    public void test_greater_than_equals_value_equals_first_returns_all() {
+        List<FieldIndexEntry<Number>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
+                new FieldIndexEntry<>("db1", "col1", 20, Set.of("id2")),
+                new FieldIndexEntry<>("db1", "col1", 30, Set.of("id3"))
+        );
+        Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN_EQUALS, 10);
+        assertEquals(Set.of("id1", "id2", "id3"), result);
+    }
+
+    // findingInNotIn throws UnsupportedOperationException for non-IN/NOT_IN operators
+    @Test
+    public void test_finding_in_not_in_throws_for_non_in_operators() {
+        List<FieldIndexEntry<String>> entries = List.of(
+                new FieldIndexEntry<>("db1", "col1", "value1", Set.of("id1"))
+        );
+        assertThrows(UnsupportedOperationException.class,
+                () -> SearchUtils.findingInNotIn(entries, FieldOperatorType.EQUALS, List.of("value1")));
+        assertThrows(UnsupportedOperationException.class,
+                () -> SearchUtils.findingInNotIn(entries, FieldOperatorType.CONTAINS, List.of("value1")));
+        assertThrows(UnsupportedOperationException.class,
+                () -> SearchUtils.findingInNotIn(entries, FieldOperatorType.GREATER_THAN, List.of("value1")));
+    }
+
     // Test the method using JsonDateTime and JsonTime entries
     @Test
     public void test_json_datetime_and_json_time_operators() {
