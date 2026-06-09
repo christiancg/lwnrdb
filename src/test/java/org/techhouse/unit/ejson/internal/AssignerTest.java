@@ -37,4 +37,10 @@ public class AssignerTest {
     public void test_assign_null_json() {
         assertThrows(NullPointerException.class, () -> Assigner.assign(null, Person.class));
     }
+
+    // Instantiating Assigner (covers implicit default constructor for coverage)
+    @Test
+    public void test_assigner_instantiation() {
+        assertNotNull(new Assigner());
+    }
 }

@@ -68,5 +68,26 @@ public class LexerTest {
         assertInstanceOf(JsonNull.class, tokens.getFirst());
     }
 
+    // Lexes a custom type string and returns a JsonCustom token (L27 branch)
+    @Test
+    public void test_lex_custom_type_string() {
+        new org.techhouse.ejson.EJson(); // registers custom types
+        String input = "\"#time(10:30:00)\"";
+        List<JsonBaseElement> tokens = Lexer.lex(input);
+        assertEquals(1, tokens.size());
+        assertInstanceOf(JsonCustom.class, tokens.getFirst());
+    }
 
+    // Unterminated string throws MissingEndOfStringException (L79 branch)
+    @Test
+    public void test_lex_unterminated_string_throws() {
+        String input = "\"unclosed";
+        assertThrows(org.techhouse.ejson.exceptions.MissingEndOfStringException.class, () -> Lexer.lex(input));
+    }
+
+    // Lexer instantiation covers implicit default constructor (L12)
+    @Test
+    public void test_lexer_instantiation() {
+        assertNotNull(new Lexer());
+    }
 }

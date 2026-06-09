@@ -3,13 +3,14 @@ package org.techhouse.unit.ops;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
-import org.techhouse.ejson.elements.JsonNull;
-import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.elements.*;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.test.TestGlobals;
@@ -183,5 +184,92 @@ public class IndexHelperTest {
         assertEquals(1, entriesWith10AsValue.size());
         final var entriesWith42AsValue = index.stream().filter(e -> e.getValue() == 42).toList();
         assertEquals(0, entriesWith42AsValue.size());
+    }
+
+    private DbEntry entryWith(String id, String field, JsonBaseElement value) {
+        JsonObject obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(field, value);
+        DbEntry e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        e.set_id(id);
+        return e;
+    }
+
+    private void setupCollection(Cache cache, DbEntry... entries) {
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "x", 0, 100, 0);
+        cache.putAdminCollectionEntry(adminCollEntry, pk);
+        for (var entry : entries) {
+            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        }
+    }
+
+    // updateIndexes indexes a String-valued field for a CREATED event
+    @Test
+    public void test_update_indexes_string_field() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("s1", "tag", new JsonString("alpha"));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tag");
+
+        final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        adminColl.setIndexes(Set.of("tag"));
+
+        DbEntry newEntry = entryWith("s2", "tag", new JsonString("beta"));
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+    }
+
+    // updateIndexes indexes a Boolean-valued field for a CREATED event
+    @Test
+    public void test_update_indexes_boolean_field() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "active");
+
+        final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        adminColl.setIndexes(Set.of("active"));
+
+        DbEntry newEntry = entryWith("b2", "active", new JsonBoolean(false));
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+    }
+
+    // updateIndexes indexes a custom type (JsonTime) field for a CREATED event
+    @Test
+    public void test_update_indexes_custom_type_field() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("ct1", "startTime", new JsonTime("#time(08:00:00)"));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "startTime");
+
+        final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        adminColl.setIndexes(Set.of("startTime"));
+
+        DbEntry newEntry = entryWith("ct2", "startTime", new JsonTime("#time(09:00:00)"));
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
+
+        final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime", JsonTime.class);
+        assertNotNull(index);
+        assertFalse(index.isEmpty());
+    }
+
+    // updateIndexes with DELETED event removes an entry from the index
+    @Test
+    public void test_update_indexes_deleted_event_removes_entry() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("del1", "score", new JsonNumber(99));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
+
+        final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        adminColl.setIndexes(Set.of("score"));
+
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
+
+        final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "score", Double.class);
+        assertTrue(index == null || index.stream().noneMatch(e -> e.getIds().contains("del1")));
     }
 }

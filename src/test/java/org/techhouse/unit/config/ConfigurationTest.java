@@ -112,4 +112,10 @@ public class ConfigurationTest {
             assertEquals(7, config.getMaxLogFiles());
         }
     }
+
+    // Globals instantiation covers implicit default constructor (L5)
+    @Test
+    public void test_globals_instantiation() {
+        assertNotNull(new Globals());
+    }
 }
