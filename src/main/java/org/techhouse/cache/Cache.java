@@ -339,30 +339,6 @@ public class Cache {
         return Math.max(maxKnownPage, maxPendingPage) + 1L;
     }
 
-    public long selectPageForInsert(int entryByteSize,
-                                    List<PkIndexEntry> primaryKeyIndex, Map<Long, Long> pendingPageBytes) {
-        final var maxPageBytes = Configuration.getInstance().getMaxPageSizeBytes();
-        final var confirmedPageBytes = primaryKeyIndex.stream()
-                .collect(Collectors.groupingBy(PkIndexEntry::getPage, Collectors.summingLong(PkIndexEntry::getLength)));
-        final var allPages = Stream.concat(confirmedPageBytes.keySet().stream(), pendingPageBytes.keySet().stream())
-                .distinct().sorted().toList();
-        for (final var page : allPages) {
-            final var used = confirmedPageBytes.getOrDefault(page, 0L) + pendingPageBytes.getOrDefault(page, 0L);
-            if (used + entryByteSize <= maxPageBytes) {
-                return page;
-            }
-        }
-        final var maxKnownPage = allPages.isEmpty() ? -1L : allPages.getLast();
-        return maxKnownPage + 1L;
-    }
-
-    public long currentPageBytes(String dbName, String collName, long page) {
-        final var pageEntries = pages.get(getCollectionIdentifier(dbName, collName));
-        if (pageEntries == null) return 0L;
-        return pageEntries.stream().filter(p -> p.getPage() == page)
-                .mapToLong(AdminPageEntry::getPageSize).findFirst().orElse(0L);
-    }
-
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
         return databasesPkIndex.get(dbName);
     }
@@ -404,6 +380,20 @@ public class Cache {
     public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
         pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
                 .add(adminPageEntry);
+    }
+
+    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
+        final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
+        final var existing = pageEntries.stream().filter(p -> p.getPage() == page).findFirst();
+        if (existing.isPresent()) {
+            existing.get().setPageSize(existing.get().getPageSize() + bytesDelta);
+            existing.get().setEntryCount(existing.get().getEntryCount() + 1);
+        } else {
+            final var newEntry = new AdminPageEntry(dbName, collName, page);
+            newEntry.setPageSize(bytesDelta);
+            newEntry.setEntryCount(1);
+            pageEntries.add(newEntry);
+        }
     }
 
     public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {

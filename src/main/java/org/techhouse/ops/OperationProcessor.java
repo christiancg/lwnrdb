@@ -19,7 +19,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -97,11 +96,14 @@ public class OperationProcessor {
                 final var pendingPageBytes = new HashMap<Long, Long>();
                 for (var e : entriesToInsert) {
                     final var size = e.byteSize();
-                    final var target = cache.selectPageForInsert(size, primaryKeyIndex, pendingPageBytes);
+                    final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
                     e.setPage(target);
                     pendingPageBytes.merge(target, (long) size, Long::sum);
                 }
                 insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
+                for (var ie : insertedIndexEntries) {
+                    cache.updatePageSizeInMemory(dbName, collName, ie.getIndex().getPage(), ie.getIndex().getLength());
+                }
             }
             primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
@@ -145,11 +147,15 @@ public class OperationProcessor {
                 primaryKeyIndex.remove(idxEntry);
                 eventType = EventType.UPDATED;
             } else {
-                entry.setPage(cache.selectPageForInsert(entry.byteSize(), primaryKeyIndex, Map.of()));
+                entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
                 savedPkIndexEntry = fs.insertIntoCollection(entry);
+                cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(), savedPkIndexEntry.getLength());
             }
-            primaryKeyIndex.add(savedPkIndexEntry);
-            primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
+            int insertAt = Collections.binarySearch(primaryKeyIndex, savedPkIndexEntry.getValue());
+            if (insertAt < 0) {
+                insertAt = -(insertAt + 1);
+            }
+            primaryKeyIndex.add(insertAt, savedPkIndexEntry);
             cache.addEntryToCache(dbName, collName, entry);
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
