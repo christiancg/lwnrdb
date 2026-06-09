@@ -6,8 +6,7 @@ import org.techhouse.data.DbEntry;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class BulkEntityEventTest {
     // Creating a BulkEntityEvent with valid dbName, collName, and non-empty lists of DbEntry
@@ -66,5 +65,50 @@ public class BulkEntityEventTest {
         BulkEntityEvent event2 = new BulkEntityEvent("testDB", "testCollection", insertedEntries, updatedEntries);
         assertEquals(event1, event2);
         assertEquals(event2.hashCode(), event1.hashCode());
+    }
+
+    @Test
+    public void test_equals_same_instance() {
+        BulkEntityEvent event = new BulkEntityEvent("db", "coll", List.of(), List.of());
+        assertEquals(event, event);
+    }
+
+    @Test
+    public void test_equals_null_returns_false() {
+        BulkEntityEvent event = new BulkEntityEvent("db", "coll", List.of(), List.of());
+        assertNotEquals(null, event);
+    }
+
+    @Test
+    public void test_equals_different_class_returns_false() {
+        BulkEntityEvent event = new BulkEntityEvent("db", "coll", List.of(), List.of());
+        assertNotEquals("notAnEvent", event);
+    }
+
+    @Test
+    public void test_equals_different_dbName_returns_false() {
+        BulkEntityEvent event1 = new BulkEntityEvent("db1", "coll", List.of(), List.of());
+        BulkEntityEvent event2 = new BulkEntityEvent("db2", "coll", List.of(), List.of());
+        assertNotEquals(event1, event2);
+    }
+
+    @Test
+    public void test_equals_different_collName_returns_false() {
+        BulkEntityEvent event1 = new BulkEntityEvent("db", "coll1", List.of(), List.of());
+        BulkEntityEvent event2 = new BulkEntityEvent("db", "coll2", List.of(), List.of());
+        assertNotEquals(event1, event2);
+    }
+
+    @Test
+    public void test_hashCode_different_value_differs() {
+        BulkEntityEvent event1 = new BulkEntityEvent("db1", "coll", List.of(), List.of());
+        BulkEntityEvent event2 = new BulkEntityEvent("db2", "coll", List.of(), List.of());
+        assertNotEquals(event1.hashCode(), event2.hashCode());
+    }
+
+    @Test
+    public void test_toString_not_null() {
+        BulkEntityEvent event = new BulkEntityEvent("db", "coll", List.of(), List.of());
+        assertNotNull(event.toString());
     }
 }

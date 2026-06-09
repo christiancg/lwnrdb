@@ -1,7 +1,5 @@
 package org.techhouse.unit.ejson.internal;
 
-import lombok.Getter;
-import lombok.Setter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
@@ -17,11 +15,17 @@ public class JsonWriterTest {
     // Convert simple POJO to JSON string using reflection adapter
     @Test
     public void test_convert_pojo_to_json_string() {
-        @Getter
-        @Setter
-        class TestPojo {
+                class TestPojo {
             private String name;
             private int value;
+
+            public void setName(String name) {
+                this.name = name;
+            }
+
+            public void setValue(int value) {
+                this.value = value;
+            }
         }
         JsonWriter writer = new JsonWriter();
         TestPojo pojo = new TestPojo();

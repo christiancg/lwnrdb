@@ -1,7 +1,5 @@
 package org.techhouse.unit.ejson.internal;
 
-import lombok.Getter;
-import lombok.Setter;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -10,11 +8,25 @@ import org.techhouse.ejson.internal.Assigner;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class AssignerTest {
-    @Getter
-    @Setter
     static class Person {
         private String name;
         private int age;
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public int getAge() {
+            return age;
+        }
+
+        public void setAge(int age) {
+            this.age = age;
+        }
     }
 
     // Assign JsonObject to a simple POJO class using reflection adapter

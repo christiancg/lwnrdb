@@ -1,18 +1,15 @@
 package org.techhouse.data.admin;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-@EqualsAndHashCode(callSuper = true)
-@Data
 public class AdminCollEntry extends DbEntry {
     private static final String INDEXES_FIELD_NAME = "indexes";
     private Set<String> indexes;
@@ -59,5 +56,27 @@ public class AdminCollEntry extends DbEntry {
         indexes.forEach(arr::add);
         data.add(INDEXES_FIELD_NAME, arr);
         this.setData(data);
+    }
+
+    public Set<String> getIndexes() {
+        return indexes;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof AdminCollEntry that)) return false;
+        if (!super.equals(o)) return false;
+        return Objects.equals(indexes, that.indexes);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(super.hashCode(), indexes);
+    }
+
+    @Override
+    public String toString() {
+        return "AdminCollEntry(super=" + super.toString() + ", indexes=" + indexes + ")";
     }
 }

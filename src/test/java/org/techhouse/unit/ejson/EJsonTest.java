@@ -1,7 +1,5 @@
 package org.techhouse.unit.ejson;
 
-import lombok.Getter;
-import lombok.Setter;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -102,11 +100,17 @@ public class EJsonTest {
         assertEquals(123, result.getValue());
     }
 
-    @Getter
-    @Setter
     private static class TestClass {
         private String name;
         private int value;
+
+        public String getName() {
+            return name;
+        }
+
+        public int getValue() {
+            return value;
+        }
     }
 
     // Handle empty JSON string input
@@ -118,11 +122,25 @@ public class EJsonTest {
         assertThrows(MalformedJsonException.class, () -> eJson.fromJson(emptyJson, TestClass.class));
     }
 
-    @Getter
-    @Setter
     private static class SimpleTestClass {
         private String name;
         private int value;
+
+        public String getName() {
+            return name;
+        }
+
+        public int getValue() {
+            return value;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public void setValue(int value) {
+            this.value = value;
+        }
     }
 
     // Convert simple object to JSON string using its class type

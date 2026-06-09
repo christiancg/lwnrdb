@@ -1,23 +1,26 @@
 package org.techhouse.data;
 
-import lombok.AllArgsConstructor;
-import lombok.Data;
-import lombok.NonNull;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
 
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-@Data
-@AllArgsConstructor
 public class FieldIndexEntry<T> implements Comparable<T> {
     private String databaseName;
     private String collectionName;
     private T value;
     private Set<String> ids;
+
+    public FieldIndexEntry(String databaseName, String collectionName, T value, Set<String> ids) {
+        this.databaseName = databaseName;
+        this.collectionName = collectionName;
+        this.value = value;
+        this.ids = ids;
+    }
 
     public String toFileEntry() {
         String strValue;
@@ -46,8 +49,41 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(idsStr.split(Globals.ID_SEPARATOR)).collect(Collectors.toSet()));
     }
 
+    public String getDatabaseName() {
+        return databaseName;
+    }
+
+    public void setDatabaseName(String databaseName) {
+        this.databaseName = databaseName;
+    }
+
+    public String getCollectionName() {
+        return collectionName;
+    }
+
+    public void setCollectionName(String collectionName) {
+        this.collectionName = collectionName;
+    }
+
+    public T getValue() {
+        return value;
+    }
+
+    public void setValue(T value) {
+        this.value = value;
+    }
+
+    public Set<String> getIds() {
+        return ids;
+    }
+
+    public void setIds(Set<String> ids) {
+        this.ids = ids;
+    }
+
     @Override
-    public int compareTo(@NonNull T otherIndexValue) {
+    public int compareTo(T otherIndexValue) {
+        Objects.requireNonNull(otherIndexValue);
         return switch (value) {
             case Number d -> Double.compare(d.doubleValue(), ((Number) otherIndexValue).doubleValue());
             case Boolean b -> b.compareTo((Boolean) otherIndexValue);
@@ -63,5 +99,22 @@ public class FieldIndexEntry<T> implements Comparable<T> {
                 }
             }
         };
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof FieldIndexEntry<?> that)) return false;
+        return Objects.equals(databaseName, that.databaseName) && Objects.equals(collectionName, that.collectionName) && Objects.equals(value, that.value) && Objects.equals(ids, that.ids);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(databaseName, collectionName, value, ids);
+    }
+
+    @Override
+    public String toString() {
+        return "FieldIndexEntry(databaseName=" + databaseName + ", collectionName=" + collectionName + ", value=" + value + ", ids=" + ids + ")";
     }
 }
