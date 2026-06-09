@@ -351,6 +351,15 @@ public class Cache {
                 .toList();
     }
 
+    public List<String> getCollectionNamesForDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        return collections.keySet().stream()
+                .filter(id -> id.startsWith(prefix))
+                .map(id -> id.substring(prefix.length()))
+                .sorted()
+                .toList();
+    }
+
     public PkIndexEntry getPkIndexAdminCollEntry(String collIdentifier) {
         return collectionsPkIndex.get(collIdentifier);
     }
