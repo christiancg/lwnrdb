@@ -12,7 +12,7 @@
         <maven.compiler.source>25</maven.compiler.source>
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <minimumCoverage>0.80</minimumCoverage>
+        <minimumCoverage>0.95</minimumCoverage>
     </properties>
 
     <dependencies>
@@ -102,7 +102,7 @@
                                     <element>BUNDLE</element>
                                     <limits>
                                         <limit>
-                                            <counter>LINE</counter>
+                                            <counter>INSTRUCTION</counter>
                                             <value>COVEREDRATIO</value>
                                             <minimum>${minimumCoverage}</minimum>
                                         </limit>
