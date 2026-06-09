@@ -7,7 +7,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
-
 import java.util.HashSet;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -16,9 +15,7 @@ import java.util.stream.Collectors;
 @Data
 public class AdminCollEntry extends DbEntry {
     private static final String INDEXES_FIELD_NAME = "indexes";
-    private static final String ENTRY_COUNT_FIELD_NAME = "entryCount";
     private Set<String> indexes;
-    private int entryCount;
 
     private AdminCollEntry() {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -26,20 +23,18 @@ public class AdminCollEntry extends DbEntry {
     }
 
     public AdminCollEntry(String dbName, String collName) {
-        this(dbName, collName, new HashSet<>(), 0);
+        this(dbName, collName, new HashSet<>());
     }
 
-    public AdminCollEntry(String dbName, String collName, Set<String> indexes, int entryCount) {
+    public AdminCollEntry(String dbName, String collName, Set<String> indexes) {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
         super.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         this.set_id(Cache.getCollectionIdentifier(dbName, collName));
         this.indexes = indexes;
-        this.entryCount = entryCount;
         final var json = new JsonObject();
         final var arr = new JsonArray();
         indexes.forEach(arr::add);
         json.add(INDEXES_FIELD_NAME, arr);
-        json.addProperty(ENTRY_COUNT_FIELD_NAME, entryCount);
         this.setData(json);
     }
 
@@ -52,8 +47,6 @@ public class AdminCollEntry extends DbEntry {
                 .stream().map(element -> element.asJsonString().getValue())
                 .collect(Collectors.toSet());
         result.setIndexes(collections);
-        final var entryCount = object.get(ENTRY_COUNT_FIELD_NAME).asJsonNumber().asInteger();
-        result.setEntryCount(entryCount);
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         return result;
@@ -67,16 +60,4 @@ public class AdminCollEntry extends DbEntry {
         data.add(INDEXES_FIELD_NAME, arr);
         this.setData(data);
     }
-
-    public void setEntryCount(int entryCount) {
-        this.entryCount = entryCount;
-        final var data = getData();
-        data.addProperty(ENTRY_COUNT_FIELD_NAME, entryCount);
-        this.setData(data);
-    }
-
-    @Override
-    public void setDatabaseName(String value) {}
-    @Override
-    public void setCollectionName(String value) {}
 }

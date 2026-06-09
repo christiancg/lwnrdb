@@ -12,6 +12,8 @@ public class Configuration {
     private int backgroundProcessingThreads;
     private String logPath;
     private int maxLogFiles;
+    private int maxPageSizeBytes;
+    private int maxEntrySizeBytes;
 
     private Configuration() {
     }
@@ -26,6 +28,8 @@ public class Configuration {
                 case "backgroundProcessingThreads" -> backgroundProcessingThreads = Integer.parseInt(config.getValue());
                 case "logPath" -> logPath = config.getValue();
                 case "maxLogFiles" -> maxLogFiles = Integer.parseInt(config.getValue());
+                case "maxPageSizeBytes" -> maxPageSizeBytes = Integer.parseInt(config.getValue());
+                case "maxEntrySizeBytes" -> maxEntrySizeBytes = Integer.parseInt(config.getValue());
             }
         }
     }

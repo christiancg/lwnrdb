@@ -46,6 +46,8 @@ public class TestUtils {
         TestUtils.setPrivateField( cache, "collectionMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "fieldIndexMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "pkIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "pagesPkIndexes", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) {
@@ -66,6 +68,12 @@ public class TestUtils {
         FileSystem fs = IocContainer.get(FileSystem.class);
         fs.createDatabaseFolder(TestGlobals.DB);
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+    }
+
+    public static void createTestJoinCollection() throws IOException, InterruptedException {
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.JOIN_COLL));
+        FileSystem fs = IocContainer.get(FileSystem.class);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.JOIN_COLL);
     }
 
     public static <U, T> T getPrivateField(U object, String fieldName, ReflectionUtils.TypeToken<T> fieldType) throws NoSuchFieldException, IllegalAccessException {

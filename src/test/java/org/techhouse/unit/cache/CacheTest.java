@@ -53,7 +53,7 @@ public class CacheTest {
         arrDb.add("test_create_collection");
         jsonDb.add("collections", arrDb);
         final var adminDbEntry = AdminDbEntry.fromJsonObject(jsonDb);
-        final var pkIndexEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "test_create", 0, 100);
+        final var pkIndexEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "test_create", 0, 100,0);
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
         final var jsonColl = new JsonObject();
@@ -165,7 +165,7 @@ public class CacheTest {
         String dbName = "testDb";
         String collName = "testColl";
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10));
+        List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10,0));
         final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(collectionIdentifier, expectedPkIndex);
@@ -467,7 +467,7 @@ public class CacheTest {
         // Arrange
         String dbName = "testDb";
         String collName = "testColl";
-        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100);
+        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100,0);
         Cache cache = new Cache();
         DbEntry expectedEntry = new DbEntry();
         expectedEntry.setDatabaseName(dbName);
@@ -495,7 +495,7 @@ public class CacheTest {
         // Arrange
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
-        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100);
+        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100,0);
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
         Field fsField = Cache.class.getDeclaredField("fs");
@@ -525,13 +525,14 @@ public class CacheTest {
         String collName = "testColl";
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
 
-        AdminCollEntry adminCollEntry = mock(AdminCollEntry.class);
-        when(adminCollEntry.getEntryCount()).thenReturn(2);
+        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry(dbName, collName, 0);
+        pageEntry.setEntryCount(2);
+        final var pageList = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
+        pageList.add(pageEntry);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
-        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-
-        collections.put(collectionIdentifier, adminCollEntry);
+        final var typePages = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var pagesMap = TestUtils.getPrivateField(cache, "pages", typePages);
+        pagesMap.put(collectionIdentifier, pageList);
 
         DbEntry entry1 = new DbEntry();
         entry1.set_id("1");
@@ -564,16 +565,8 @@ public class CacheTest {
 
         String dbName = "testDb";
         String collName = "testColl";
-        String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
 
-        AdminCollEntry adminCollEntry = mock(AdminCollEntry.class);
-        when(adminCollEntry.getEntryCount()).thenReturn(2);
-
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
-        final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-        collections.put(collectionIdentifier, adminCollEntry);
-
-        when(fsMock.readWholeCollection(dbName, collName)).thenThrow(new IOException("File not found"));
+        when(fsMock.streamPages(dbName, collName)).thenThrow(new IOException("File not found"));
 
         assertThrows(RuntimeException.class, () -> cache.getWholeCollection(dbName, collName));
     }
@@ -582,7 +575,7 @@ public class CacheTest {
     @Test
     public void test_retrieve_pkindexentry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L);
+        PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L,0);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
@@ -609,7 +602,7 @@ public class CacheTest {
     @Test
     public void test_add_valid_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L,0);
         cache.putPkIndexAdminDbEntry(entry);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
@@ -623,7 +616,7 @@ public class CacheTest {
     @Disabled // This one will fail because we're not checking that the pk index value shouldn't be null. We should probably do it
     public void test_add_null_value_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", null, 0L, 100L);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", null, 0L, 100L,0);
         cache.putPkIndexAdminDbEntry(entry);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
@@ -663,7 +656,7 @@ public class CacheTest {
     @Test
     public void test_retrieve_existing_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L);
+        PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L,0);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
@@ -680,7 +673,7 @@ public class CacheTest {
     @Test
     public void test_adds_pkindexentry_to_map() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L,0);
         cache.putPkIndexAdminCollEntry(entry);
 
         final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
@@ -727,7 +720,7 @@ public class CacheTest {
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminDbEntry adminDbEntry = new AdminDbEntry("testDb");
-        PkIndexEntry pkIndexEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L,0);
 
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
@@ -746,7 +739,7 @@ public class CacheTest {
         Cache cache = new Cache();
         String dbName = "testDb";
         AdminDbEntry adminDbEntry = new AdminDbEntry(dbName);
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L,0);
 
         final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
@@ -767,7 +760,7 @@ public class CacheTest {
     public void test_successfully_adds_entries_to_collections_maps() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminCollEntry dbEntry = new AdminCollEntry("testDb", "testColl");
-        PkIndexEntry indexEntry = new PkIndexEntry("testDb", "testColl", "testValue", 1L, 100L);
+        PkIndexEntry indexEntry = new PkIndexEntry("testDb", "testColl", "testValue", 1L, 100L,0);
 
         cache.putAdminCollectionEntry(dbEntry, indexEntry);
 
@@ -786,7 +779,7 @@ public class CacheTest {
         Cache cache = new Cache();
         String collIdentifier = "testCollection";
         AdminCollEntry adminCollEntry = new AdminCollEntry(TestGlobals.DB, collIdentifier);
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L,0);
 
         final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
@@ -865,7 +858,7 @@ public class CacheTest {
         String dbName = "testDb";
         String collectionName = dbName + "_collection";
 
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100,0);
         DbEntry dbEntry = new DbEntry();
 
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
@@ -889,7 +882,7 @@ public class CacheTest {
         String dbName = "";
         String collectionName = dbName + "_collection";
 
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100,0);
         DbEntry dbEntry = new DbEntry();
 
         final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
@@ -963,7 +956,7 @@ public class CacheTest {
         fsField.setAccessible(true);
         fsField.set(cache, fsMock);
 
-        when(fsMock.readWholeCollection(anyString())).thenThrow(IOException.class);
+        when(fsMock.streamPages(anyString(), anyString())).thenThrow(IOException.class);
         assertThrows(IOException.class, () -> cache.initializeStreamIfNecessary(null, "dbName", "collName"));
     }
 
@@ -980,7 +973,7 @@ public class CacheTest {
         final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
         final var collections = TestUtils.getPrivateField(cache, "collections", type);
 
-        var coll = new AdminCollEntry(dbName, collName, indexes, 0);
+        var coll = new AdminCollEntry(dbName, collName, indexes);
 
         collections.put(Cache.getCollectionIdentifier(dbName, collName), coll);
 
@@ -1041,5 +1034,105 @@ public class CacheTest {
         expectedIndexes.add("index2");
         Set<String> actualIndexes = cache.getIndexesForCollection("testDb", "testColl");
         assertEquals(expectedIndexes, actualIndexes);
+    }
+
+    @Test
+    public void test_select_page_for_insert_returns_zero_when_empty() {
+        Cache cache = new Cache();
+        long target = cache.selectPageForInsert("myDb", "myColl", 100);
+        assertEquals(0L, target);
+    }
+
+    @Test
+    public void test_select_page_for_insert_first_fit_picks_first_page_with_room() throws NoSuchFieldException, IllegalAccessException {
+        Cache cache = new Cache();
+        final var p0 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L);
+        p0.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097150"))); // near-full
+        p0.setEntryCount(10);
+        final var p1 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 1L);
+        p1.setPageSize(200L);
+        p1.setEntryCount(1);
+        final var p2 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 2L);
+        p2.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097100"))); // also near-full
+        p2.setEntryCount(5);
+
+        final var list = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
+        list.add(p0); list.add(p1); list.add(p2);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
+        pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
+
+        long target = cache.selectPageForInsert("myDb", "myColl", 100);
+        assertEquals(1L, target, "Should pick first page with room");
+    }
+
+    @Test
+    public void test_select_page_for_insert_allocates_new_page_when_none_fit() throws NoSuchFieldException, IllegalAccessException {
+        Cache cache = new Cache();
+        final var p0 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L);
+        p0.setPageSize(2_097_150L); // 2MB-2 bytes, very near max default of 2MB
+        p0.setEntryCount(10);
+        final var p1 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 1L);
+        p1.setPageSize(2_097_150L);
+        p1.setEntryCount(10);
+
+        final var list = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
+        list.add(p0); list.add(p1);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
+        pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
+
+        long target = cache.selectPageForInsert("myDb", "myColl", 100_000); // 100KB, doesn't fit anywhere
+        assertEquals(2L, target, "Should allocate new page when no existing page has room");
+    }
+
+    @Test
+    public void test_select_page_for_insert_with_pending_bytes() throws NoSuchFieldException, IllegalAccessException {
+        Cache cache = new Cache();
+        final var p0 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L);
+        p0.setPageSize(1_000_000L);
+        p0.setEntryCount(10);
+
+        final var list = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
+        list.add(p0);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
+        pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
+
+        // 1MB existing + 500KB pending + 100KB new = 1.6MB, still under 2MB cap
+        long target = cache.selectPageForInsert("myDb", "myColl", 100_000,
+                Map.of(0L, 500_000L));
+        assertEquals(0L, target, "Within-batch pending bytes still leave room on page 0");
+
+        // 1MB existing + 1.5MB pending + 100KB new = 2.6MB, exceeds 2MB cap
+        long target2 = cache.selectPageForInsert("myDb", "myColl", 100_000,
+                Map.of(0L, 1_500_000L));
+        assertEquals(1L, target2, "Pending bytes can push selection to a new page");
+    }
+
+    @Test
+    public void test_remove_admin_page_entries_clears_both_maps() {
+        Cache cache = new Cache();
+        cache.addAdminPageEntries("myDb", "myColl",
+                new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L));
+        cache.getAdminPagePkIndexes("myDb", "myColl")
+                .add(new PkIndexEntry("admin", "pages_myColl", "myDb|myColl|0", 0L, 10L, 0L));
+
+        assertNotNull(cache.getAdminPageEntries("myDb", "myColl"));
+        cache.removeAdminPageEntries("myDb", "myColl");
+        assertNull(cache.getAdminPageEntries("myDb", "myColl"));
+    }
+
+    @Test
+    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing() {
+        Cache cache = new Cache();
+        String dbName = "myDb";
+        String collName = "myColl";
+        DbEntry e = new DbEntry();
+        e.set_id("1");
+        cache.addEntryToCache(dbName, collName, e);
+
+        Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
+        assertEquals(1, result.size());
     }
 }

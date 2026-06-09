@@ -211,4 +211,23 @@ public class OperationProcessorTest {
         assertInstanceOf(DropCollectionResponse.class, dropResponse);
         assertEquals(OperationStatus.OK, dropResponse.getStatus());
     }
+
+    // After a save, the entry's PkIndexEntry carries the page assigned by selectPageForInsert
+    @Test
+    public void test_save_operation_assigns_page() throws Exception {
+        SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, "testPageAssignedId");
+        saveRequest.setObject(obj);
+
+        SaveResponse response = (SaveResponse) processor.processMessage(saveRequest);
+        assertEquals(OperationStatus.OK, response.getStatus());
+
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var pkIdx = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
+        final var saved = pkIdx.stream().filter(p -> p.getValue().equals("testPageAssignedId")).findFirst();
+        assertTrue(saved.isPresent());
+        // First insert into a small collection lands on page 0
+        assertEquals(0L, saved.get().getPage());
+    }
 }
