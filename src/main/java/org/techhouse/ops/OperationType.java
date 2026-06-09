@@ -8,6 +8,7 @@ public enum OperationType {
     DELETE,
     CREATE_DATABASE,
     DROP_DATABASE,
+    LIST_DATABASES,
     CREATE_COLLECTION,
     DROP_COLLECTION,
     CREATE_INDEX,

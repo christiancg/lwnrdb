@@ -37,6 +37,7 @@ public class RequestParser {
                 case DELETE -> eJson.fromJson(message, DeleteRequest.class);
                 case CREATE_DATABASE -> eJson.fromJson(message, CreateDatabaseRequest.class);
                 case DROP_DATABASE -> eJson.fromJson(message, DropDatabaseRequest.class);
+                case LIST_DATABASES -> eJson.fromJson(message, ListDatabasesRequest.class);
                 case CREATE_COLLECTION -> eJson.fromJson(message, CreateCollectionRequest.class);
                 case DROP_COLLECTION -> eJson.fromJson(message, DropCollectionRequest.class);
                 case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);

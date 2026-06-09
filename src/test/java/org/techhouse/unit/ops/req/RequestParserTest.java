@@ -69,6 +69,22 @@ public class RequestParserTest {
         assertEquals("newDb", createDbResult.getDatabaseName());
     }
 
+    // Successfully parse LIST_DATABASES request
+    @Test
+    public void test_parse_list_databases_request() {
+        String listDatabasesRequest = """
+            {
+                "type": "LIST_DATABASES"
+            }""";
+
+        OperationRequest result = RequestParser.parseRequest(listDatabasesRequest);
+
+        assertInstanceOf(ListDatabasesRequest.class, result);
+        assertEquals(OperationType.LIST_DATABASES, result.getType());
+        assertNull(result.getDatabaseName());
+        assertNull(result.getCollectionName());
+    }
+
     // Handle null values in JSON fields
     @Test
     public void test_handle_null_json_fields() {
