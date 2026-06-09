@@ -49,7 +49,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Better file locks
 - [x] 95% test coverage
-- [ ] Request validation
+- [x] Request validation
 - [ ] Iterative read depending on available memory and document count
 - [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
@@ -57,6 +57,119 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
+
+## Wire Protocol / Message Reference
+
+All messages are line-delimited JSON sent over a TCP connection. Every request must include a `type` field. Responses always contain `type`, `status` (`OK`, `ERROR`, `NOT_FOUND`), and `message`.
+
+### Naming rules
+
+- **Database / collection names**: 3–64 characters, alphanumeric + `_` and `-`. The name `admin` is reserved.
+- **IDs (`_id`)**: 1–64 characters, alphanumeric + `_` and `-`.
+
+### Operations
+
+#### `LIST_DATABASES`
+```json
+{"type":"LIST_DATABASES"}
+```
+
+#### `CREATE_DATABASE`
+```json
+{"type":"CREATE_DATABASE","databaseName":"my_db"}
+```
+
+#### `DROP_DATABASE`
+```json
+{"type":"DROP_DATABASE","databaseName":"my_db"}
+```
+
+#### `LIST_COLLECTIONS`
+```json
+{"type":"LIST_COLLECTIONS","databaseName":"my_db"}
+```
+
+#### `CREATE_COLLECTION`
+```json
+{"type":"CREATE_COLLECTION","databaseName":"my_db","collectionName":"my_coll"}
+```
+
+#### `DROP_COLLECTION`
+```json
+{"type":"DROP_COLLECTION","databaseName":"my_db","collectionName":"my_coll"}
+```
+
+#### `SAVE` (insert or update)
+`_id` is optional. If provided and the document exists it is updated; if it does not exist it is created with that id. If `_id` is omitted a UUID is auto-assigned.
+```json
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"name":"Alice"}}
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"_id":"user-1","name":"Alice"}}
+```
+
+#### `BULK_SAVE`
+At least one object required.
+```json
+{"type":"BULK_SAVE","databaseName":"my_db","collectionName":"my_coll","objects":[{"name":"Alice"},{"_id":"user-2","name":"Bob"}]}
+```
+
+#### `FIND_BY_ID`
+```json
+{"type":"FIND_BY_ID","databaseName":"my_db","collectionName":"my_coll","_id":"user-1"}
+```
+
+#### `DELETE`
+```json
+{"type":"DELETE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1"}
+```
+
+#### `AGGREGATE`
+Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents).
+
+```json
+{
+  "type": "AGGREGATE",
+  "databaseName": "my_db",
+  "collectionName": "my_coll",
+  "aggregationSteps": [
+    {"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"status","value":"active"}},
+    {"type":"SORT","fieldName":"name","ascending":true},
+    {"type":"LIMIT","limit":10}
+  ]
+}
+```
+
+**Aggregation step types:**
+
+| Step | Required fields | Notes |
+|---|---|---|
+| `FILTER` | `operator` | Field or conjunction operator |
+| `MAP` | `operators` (non-empty) | Each operator needs `fieldName` |
+| `GROUP_BY` | `fieldName` | |
+| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules |
+| `COUNT` | — | Returns `{"count": N}` |
+| `DISTINCT` | — | `fieldName` is optional; omitting it deduplicates whole documents |
+| `LIMIT` | `limit` (> 0) | |
+| `SKIP` | `skip` (>= 0) | |
+| `SORT` | `fieldName`, `ascending` | |
+
+**Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
+
+**Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### `CREATE_INDEX`
+```json
+{"type":"CREATE_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
+```
+
+#### `DROP_INDEX`
+```json
+{"type":"DROP_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
+```
+
+#### `CLOSE_CONNECTION`
+```json
+{"type":"CLOSE_CONNECTION"}
+```
 
 ## Q&A
 

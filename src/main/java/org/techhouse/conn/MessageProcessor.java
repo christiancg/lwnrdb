@@ -8,6 +8,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
 
 import java.io.*;
@@ -44,12 +45,19 @@ public class MessageProcessor implements Runnable {
                         var response = "";
                         try {
                             final var parsedMessage = RequestParser.parseRequest(message);
-                            final var responseObj = operationProcessor.processMessage(parsedMessage);
-                            if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
-                                close = true;
-                                clientTracker.removeById(clientId);
+                            final var validationResult = RequestValidator.validate(parsedMessage);
+                            if (!validationResult.isValid()) {
+                                response = eJson.toJson(new OperationResponse(
+                                        parsedMessage.getType(), OperationStatus.ERROR,
+                                        validationResult.getErrorMessage()));
+                            } else {
+                                final var responseObj = operationProcessor.processMessage(parsedMessage);
+                                if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
+                                    close = true;
+                                    clientTracker.removeById(clientId);
+                                }
+                                response = eJson.toJson(responseObj);
                             }
-                            response = eJson.toJson(responseObj);
                         } catch (InvalidCommandException exception) {
                             response = exception.getMessage();
                         }
