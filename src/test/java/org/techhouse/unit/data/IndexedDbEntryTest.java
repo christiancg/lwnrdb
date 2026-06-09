@@ -128,7 +128,7 @@ public class IndexedDbEntryTest {
         indexedDbEntry.set_id("123");
         indexedDbEntry.setDatabaseName("testDatabase");
         indexedDbEntry.setCollectionName("testCollection");
-        final var pkIndexEntry = new PkIndexEntry("testDatabase", "testCollection", "123", 0, 1);
+        final var pkIndexEntry = new PkIndexEntry("testDatabase", "testCollection", "123", 0, 1, 0);
         indexedDbEntry.setIndex(pkIndexEntry);
         JsonObject data = new JsonObject();
         data.addProperty("key", "value");

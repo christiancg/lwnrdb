@@ -6,6 +6,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 @Data
@@ -15,6 +16,10 @@ public class DbEntry {
     private String databaseName;
     private String collectionName;
     private JsonObject data;
+    private long page;
+    // Pre-update byte size for the corresponding file entry. Only set for updates,
+    // so that page-size accounting can compute the size delta after an update.
+    private long previousByteSize;
 
     public static DbEntry fromJsonObject(String databaseName, String collectionName, JsonObject jsonObject) {
         final var entry = new DbEntry();
@@ -41,5 +46,12 @@ public class DbEntry {
         }
         data.addProperty(Globals.PK_FIELD, _id);
         return eJson.toJson(data);
+    }
+
+    public int byteSize() {
+        if (data == null) {
+            return 0;
+        }
+        return (toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8).length;
     }
 }

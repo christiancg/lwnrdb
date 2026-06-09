@@ -55,7 +55,7 @@ public class IndexHelperTest {
 
         Cache cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100);
+        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100,0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
@@ -91,7 +91,7 @@ public class IndexHelperTest {
     
         Cache cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100);
+        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100,0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
@@ -154,7 +154,7 @@ public class IndexHelperTest {
 
         Cache cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100);
+        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100,0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
         final var dbEntry1 = DbEntry.fromJsonObject(dbName, collName, obj1);
         cache.addEntryToCache(dbName, collName, dbEntry1);

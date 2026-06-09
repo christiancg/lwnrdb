@@ -9,7 +9,10 @@ import org.techhouse.bckg_ops.events.*;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.cache.Cache;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -81,8 +84,10 @@ public class EventProcessorHelperTest {
         List<DbEntry> insertedEntries = new ArrayList<>(){{ add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, testObj)); }};
         final var bulkEntityEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, insertedEntries, new ArrayList<>());
         EventProcessorHelper.processEvent(bulkEntityEvent);
-        final var adminCollEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        Assertions.assertEquals(adminCollEntry.getEntryCount(), insertedEntries.size(), "Entry count doesn't match");
+        final var cache = IocContainer.get(Cache.class);
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        final var totalCount = pageEntries == null ? 0 : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+        Assertions.assertEquals(insertedEntries.size(), totalCount, "Entry count doesn't match");
     }
 
     @Test
@@ -93,7 +98,10 @@ public class EventProcessorHelperTest {
         EventProcessorHelper.processEvent(entityEvent);
         final var collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(1, collEntry.getEntryCount(), "Entry count should be 1");
+        final var cache = IocContainer.get(Cache.class);
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        final var totalCount = pageEntries == null ? 0 : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+        Assertions.assertEquals(1, totalCount, "Entry count should be 1");
     }
 
     @Test

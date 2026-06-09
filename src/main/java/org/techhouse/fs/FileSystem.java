@@ -19,6 +19,7 @@ import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class FileSystem {
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -39,6 +40,10 @@ public class FileSystem {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
+        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
     }
 
     public boolean createDatabaseFolder(String dbName) {
@@ -75,14 +80,14 @@ public class FileSystem {
         return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName);
     }
 
-    private File getCollectionFile(String dbName, String collectionName) {
+    private File getCollectionFile(String dbName, String collectionName, long page) {
         return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName +
-                Globals.FILE_SEPARATOR + collectionName + Globals.DB_FILE_EXTENSION);
+                Globals.FILE_SEPARATOR + collectionName + Globals.FILE_PAGE_SEPARATOR + page + Globals.DB_FILE_EXTENSION);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName)
             throws IOException {
-        final var collectionFile = getCollectionFile(dbName, collectionName);
+        final var collectionFile = getCollectionFile(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
             if (collectionFolder.mkdir()) {
@@ -99,7 +104,7 @@ public class FileSystem {
     }
 
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
-        final var collectionFile = getCollectionFile(dbName, collectionName);
+        final var collectionFile = getCollectionFile(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         final var fileDeletionResult = new ArrayList<Boolean>();
         if (collectionFolder.exists()) {
@@ -119,7 +124,7 @@ public class FileSystem {
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
-        final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName());
+        final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getPage());
         try (final var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
             reader.seek(pkIndexEntry.getPosition());
             final var entryLength = (int) pkIndexEntry.getLength();
@@ -137,50 +142,69 @@ public class FileSystem {
         }
     }
 
-    public List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<DbEntry> entries) throws IOException {
-        final var file = getCollectionFile(dbName, collName);
+    public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<T> entries) throws IOException {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
-        try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
-            for (var entry : entries) {
-                final var strData = entry.toFileEntry();
-                final var length = strData.length();
-                final var totalFileLength = file.length();
-                writer.append(strData);
-                writer.flush();
-                final var entryId = entry.get_id();
-                final var indexEntry = indexNewPKValue(dbName, collName, entryId, totalFileLength, length);
-                final var indexedEntry = new IndexedDbEntry();
-                indexedEntry.setIndex(indexEntry);
-                indexedEntry.setCollectionName(collName);
-                indexedEntry.setDatabaseName(dbName);
-                indexedEntry.set_id(entryId);
-                indexedEntry.setData(entry.getData());
-                indexEntries.add(indexedEntry);
+        final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
+        final var entrySet = entries.stream().collect(Collectors.groupingBy(DbEntry::getPage)).entrySet();
+        for (var groupedEntry : entrySet) {
+            final var page = groupedEntry.getKey();
+            final var pageEntries = groupedEntry.getValue();
+            final var file = getCollectionFile(dbName, collName, page);
+            var currentOffset = file.length();
+            try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+                for (var entry : pageEntries) {
+                    final var strData = entry.toFileEntry() + Globals.NEWLINE;
+                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+                    final var length = bytes.length;
+                    writer.append(strData);
+                    final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length, page);
+                    pkEntriesToIndex.add(pkEntry);
+                    final var indexedEntry = new IndexedDbEntry();
+                    indexedEntry.setIndex(pkEntry);
+                    indexedEntry.setCollectionName(collName);
+                    indexedEntry.setDatabaseName(dbName);
+                    indexedEntry.set_id(entry.get_id());
+                    indexedEntry.setData(entry.getData());
+                    indexEntries.add(indexedEntry);
+                    currentOffset += length;
+                }
             }
         }
+        bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
         return indexEntries;
+    }
+
+    private void bulkIndexNewPKValues(String dbName, String collName, List<PkIndexEntry> pkEntries) throws IOException {
+        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        try (final var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
+            for (var pkEntry : pkEntries) {
+                writer.append(pkEntry.toFileEntry());
+                writer.newLine();
+            }
+        }
     }
 
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
-        final var file = getCollectionFile(dbName, collName);
+        final var page = entry.getPage();
+        final var file = getCollectionFile(dbName, collName, page);
         try (final var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
-            final var strData = entry.toFileEntry();
-            final var length = strData.length();
-            final var totalFileLength = file.length();
+            final var strData = entry.toFileEntry() + Globals.NEWLINE;
+            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+            final var length = bytes.length;
+            var totalFileLength = file.length();
             writer.append(strData);
-            writer.flush();
             final var entryId = entry.get_id();
-            return indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId, totalFileLength, length);
+            return indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId, totalFileLength, length, page);
         }
     }
 
-    private PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length)
+    private PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length, long page)
             throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
         try (final var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-            final var indexEntry = new PkIndexEntry(dbName, collectionName, value, position, length);
+            final var indexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page);
             writer.append(indexEntry.toFileEntry());
             writer.newLine();
             return indexEntry;
@@ -190,8 +214,9 @@ public class FileSystem {
     public void deleteFromCollection(PkIndexEntry pkIndexEntry) {
         final var dbName = pkIndexEntry.getDatabaseName();
         final var collName = pkIndexEntry.getCollectionName();
-        final var file = getCollectionFile(dbName, collName);
-        final int totalFileLength = (int) file.length();
+        final var page = pkIndexEntry.getPage();
+        final var file = getCollectionFile(dbName, collName, page);
+        final long totalFileLength = file.length();
         try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
@@ -206,7 +231,7 @@ public class FileSystem {
                 null);
     }
 
-    private void shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, int totalFileLength)
+    private void shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
             throws IOException {
         writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
         final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
@@ -218,27 +243,41 @@ public class FileSystem {
 
     public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
-        final var file = getCollectionFile(dbName, collName);
-        int totalFileLength = (int) file.length();
         final var result = new ArrayList<IndexedDbEntry>();
-        try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            for (var entry : entries) {
-                shiftOtherEntriesToStart(writer, entry.getIndex(), totalFileLength);
-                writer.seek(totalFileLength - entry.getIndex().getLength());
-                final var strData = entry.toFileEntry();
-                final var length = strData.length();
-                writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
-                writer.setLength(totalFileLength - entry.getIndex().getLength() + strData.length());
-                final var updatedIndex = updateIndexValues(dbName, collName, entry.get_id(), totalFileLength, length);
-                final var updatedIndexEntry = new IndexedDbEntry();
-                updatedIndexEntry.setIndex(updatedIndex);
-                updatedIndexEntry.set_id(entry.get_id());
-                updatedIndexEntry.setCollectionName(collName);
-                updatedIndexEntry.setDatabaseName(dbName);
-                updatedIndexEntry.setData(entry.getData());
-                result.add(updatedIndexEntry);
-                totalFileLength = (int) file.length();
+        final var entrySet = entries.stream().collect(Collectors.groupingBy(indexedDbEntry -> indexedDbEntry.getIndex().getPage())).entrySet();
+        for (var groupedEntry : entrySet) {
+            final var page = groupedEntry.getKey();
+            final var pageEntries = groupedEntry.getValue();
+            final var file = getCollectionFile(dbName, collName, page);
+            long totalFileLength = file.length();
+            final var newPkEntries = new ArrayList<PkIndexEntry>();
+            final var oldLengths = new LinkedHashMap<String, Long>();
+            try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+                for (var entry : pageEntries) {
+                    shiftOtherEntriesToStart(writer, entry.getIndex(), totalFileLength);
+                    writer.seek(totalFileLength - entry.getIndex().getLength());
+                    final var strData = entry.toFileEntry() + Globals.NEWLINE;
+                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+                    final var length = bytes.length;
+                    writer.write(bytes, 0, length);
+                    final var newLength = totalFileLength - entry.getIndex().getLength() + length;
+                    writer.setLength(newLength);
+                    final var newPosition = totalFileLength - entry.getIndex().getLength();
+                    final var newPkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), newPosition, length, page);
+                    newPkEntries.add(newPkEntry);
+                    oldLengths.put(entry.get_id(), entry.getIndex().getLength());
+                    final var updatedIndexEntry = new IndexedDbEntry();
+                    updatedIndexEntry.setIndex(newPkEntry);
+                    updatedIndexEntry.set_id(entry.get_id());
+                    updatedIndexEntry.setCollectionName(collName);
+                    updatedIndexEntry.setDatabaseName(dbName);
+                    updatedIndexEntry.setData(entry.getData());
+                    updatedIndexEntry.setPreviousByteSize(entry.getIndex().getLength());
+                    result.add(updatedIndexEntry);
+                    totalFileLength = newLength;
+                }
             }
+            bulkUpdateIndexValues(dbName, collName, newPkEntries, oldLengths);
         }
         return result;
     }
@@ -247,24 +286,58 @@ public class FileSystem {
             throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
-        final var file = getCollectionFile(dbName, collName);
-        final int totalFileLength = (int) file.length();
+        final var page = entry.getPage();
+        final var file = getCollectionFile(dbName, collName, page);
+        final long totalFileLength = file.length();
         try (final var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
-            final var strData = entry.toFileEntry();
-            final var length = strData.length();
-            writer.write(strData.getBytes(StandardCharsets.UTF_8), 0, length);
-            writer.setLength(totalFileLength - pkIndexEntry.getLength() + strData.length());
-            return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(), totalFileLength, length);
+            final var strData = entry.toFileEntry() + Globals.NEWLINE;
+            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+            final var length = bytes.length;
+            writer.write(bytes, 0, length);
+            writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
+            entry.setPreviousByteSize(pkIndexEntry.getLength());
+            return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(), totalFileLength, length, page);
         }
     }
 
-    private PkIndexEntry updateIndexValues(String dbName, String collectionName, String value, long position, int length)
+    private PkIndexEntry updateIndexValues(String dbName, String collectionName, String value, long position, int length, long page)
             throws IOException {
-        final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length);
+        final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page);
         internalUpdatePKIndex(dbName, collectionName, value, newIndexEntry);
         return newIndexEntry;
+    }
+
+    private void bulkUpdateIndexValues(String dbName, String collName,
+                                       List<PkIndexEntry> newEntries,
+                                       LinkedHashMap<String, Long> oldLengths) throws IOException {
+        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        final var newEntriesMap = newEntries.stream().collect(Collectors.toMap(PkIndexEntry::getValue, e -> e));
+        try (final var raf = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
+            final int fileLength = (int) raf.length();
+            byte[] buffer = new byte[fileLength];
+            raf.readFully(buffer, 0, fileLength);
+            final var lines = new String(buffer).split(Globals.NEWLINE_REGEX);
+            long cumulativeShift = 0;
+            final var updatedLines = new ArrayList<String>();
+            for (final var line : lines) {
+                if (line.isBlank()) continue;
+                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collName, line);
+                if (newEntriesMap.containsKey(entry.getValue())) {
+                    updatedLines.add(newEntriesMap.get(entry.getValue()).toFileEntry());
+                    cumulativeShift += oldLengths.get(entry.getValue());
+                } else {
+                    entry.setPosition(entry.getPosition() - cumulativeShift);
+                    updatedLines.add(entry.toFileEntry());
+                }
+            }
+            final var newContent = String.join(Globals.NEWLINE, updatedLines) + Globals.NEWLINE;
+            final var newContentBytes = newContent.getBytes(StandardCharsets.UTF_8);
+            raf.seek(0);
+            raf.write(newContentBytes);
+            raf.setLength(newContentBytes.length);
+        }
     }
 
     private void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)
@@ -280,8 +353,7 @@ public class FileSystem {
             var indexLine = 0;
             var oldIndexLine = "";
             for (int i = 0; i < lines.length; i++) {
-                final var parts = lines[i].split(Globals.INDEX_ENTRY_SEPARATOR_REGEX);
-                if (parts[0].equals(value)) {
+                if (!lines[i].isBlank() && PkIndexEntry.fromIndexFileEntry(dbName, collectionName, lines[i]).getValue().equals(value)) {
                     indexLine = i;
                     oldIndexLine = lines[i];
                     break;
@@ -327,7 +399,6 @@ public class FileSystem {
                 var strData = indexTypeList.getValue().stream().map(FieldIndexEntry::toFileEntry).collect(Collectors.joining(Globals.NEWLINE));
                 strData += Globals.NEWLINE;
                 writer.append(strData);
-                writer.flush();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -335,11 +406,21 @@ public class FileSystem {
     }
 
     private int searchIndexValue(String strWholeFile, String value) {
-        if (strWholeFile.startsWith(value + Globals.INDEX_ENTRY_SEPARATOR)) {
-            return 0;
-        } else {
-            return strWholeFile.indexOf(Globals.NEWLINE + value + Globals.INDEX_ENTRY_SEPARATOR);
+        int lineStart = 0;
+        while (lineStart < strWholeFile.length()) {
+            final int lineEnd = strWholeFile.indexOf(Globals.NEWLINE, lineStart);
+            final int effectiveEnd = lineEnd == -1 ? strWholeFile.length() : lineEnd;
+            final var line = strWholeFile.substring(lineStart, effectiveEnd);
+            if (!line.isBlank()) {
+                final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
+                if (separatorIdx >= 0 && line.substring(0, separatorIdx).equals(value)) {
+                    return lineStart == 0 ? 0 : lineStart - Globals.NEWLINE_CHAR_LENGTH;
+                }
+            }
+            if (lineEnd == -1) break;
+            lineStart = lineEnd + Globals.NEWLINE_CHAR_LENGTH;
         }
+        return -1;
     }
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
@@ -371,15 +452,11 @@ public class FileSystem {
                 final var strValue = getStringValue(removedEntry);
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 if (indexOfExisting >= 0) {
-                    final var otherEntriesLength = shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
                     if (!removedEntry.getIds().isEmpty()) {
                         final var toWriteLine = removedEntry.toFileEntry();
                         writer.writeBytes(toWriteLine);
                         writer.writeBytes(Globals.NEWLINE);
-                    } else if (otherEntriesLength == 0) {
-                        final var indexOfNewline = strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting);
-                        final var newFileLength = strWholeFile.length() - (indexOfNewline - indexOfExisting) - Globals.NEWLINE_CHAR_LENGTH;
-                        writer.setLength(newFileLength);
                     }
                 }
             }
@@ -394,7 +471,7 @@ public class FileSystem {
                 final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
                 final var toWriteLine = insertedEntry.toFileEntry();
                 if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting, strWholeFile.indexOf(Globals.NEWLINE, indexOfExisting));
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
                 } else {
                     writer.seek(strWholeFile.length());
                 }
@@ -404,7 +481,7 @@ public class FileSystem {
         }
     }
 
-    private Integer shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting, int lengthOfExisting)
+    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
             throws IOException {
         var replacementIndex = indexOfExisting;
         var fromExistingEntry = strWholeFile.substring(indexOfExisting);
@@ -418,8 +495,7 @@ public class FileSystem {
         }
         writer.seek(replacementIndex);
         writer.writeBytes(otherEntries);
-        writer.setLength(writer.length() - lengthOfExisting - Globals.NEWLINE_CHAR_LENGTH);
-        return otherEntries.length();
+        writer.setLength(replacementIndex + otherEntries.length());
     }
 
     private String readFully(RandomAccessFile writer) throws IOException {
@@ -508,10 +584,11 @@ public class FileSystem {
         }
     }
 
-    public Map<String, DbEntry> readWholeCollection(String dbName, String collectionName) throws IOException {
-        final var collectionFile = getCollectionFile(dbName, collectionName);
+    public Map<String, DbEntry> readWholeCollectionPage(String dbName, String collectionName, long page) throws IOException {
+        final var collectionFile = getCollectionFile(dbName, collectionName, page);
         if (collectionFile.exists()) {
-            return Arrays.stream(Files.readString(collectionFile.toPath()).split(Globals.READ_WHOLE_COLLECTION_REGEX))
+            return Files.readAllLines(collectionFile.toPath())
+                    .stream()
                     .filter(s -> !s.isEmpty())
                     .map(s -> {
                         try {
@@ -526,10 +603,38 @@ public class FileSystem {
         }
     }
 
-    public Map<String, DbEntry> readWholeCollection(String collectionIdentifier) throws IOException {
-        final var parts = collectionIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
-        final var dbName = parts[0];
-        final var collName = parts[1];
-        return readWholeCollection(dbName, collName);
+    public Stream<Map<String, DbEntry>> streamPages(String dbName, String collName) throws IOException {
+        final var collectionFolder = getCollectionFolder(dbName, collName).toPath();
+        if (!Files.exists(collectionFolder)) {
+            return Stream.empty();
+        }
+        final var pathStream = Files.list(collectionFolder);
+        return pathStream
+                .filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION))
+                .map(path -> {
+                    final var fileName = path.toFile().getName();
+                    final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "")
+                            .split(Globals.FILE_PAGE_SEPARATOR);
+                    final var page = Long.parseLong(fileParts[fileParts.length - 1]);
+                    try {
+                        return readWholeCollectionPage(dbName, collName, page);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
+                .onClose(pathStream::close);
+    }
+
+    public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
+        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        if (!indexFile.exists()) {
+            return null;
+        }
+        return Files.readAllLines(indexFile.toPath()).stream()
+                .filter(line -> !line.isEmpty())
+                .map(line -> PkIndexEntry.fromIndexFileEntry(dbName, collName, line))
+                .filter(entry -> entry.getValue().equals(id))
+                .findFirst()
+                .orElse(null);
     }
 }

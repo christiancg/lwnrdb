@@ -5,12 +5,12 @@ import org.techhouse.data.Client;
 
 import java.net.Socket;
 import java.time.LocalDateTime;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ClientTracker {
-    private final Map<UUID, Client> clients = new HashMap<>();
+    private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
 
     public UUID addClient(Socket socket) {
         if (Configuration.getInstance().getMaxConnections() > clients.size()) {
@@ -26,6 +26,7 @@ public class ClientTracker {
     }
 
     public void updateLastCommandTime(UUID clientId) {
+        if (clientId == null) return;
         final var client = clients.get(clientId);
         if (client != null) {
             client.setLastCommandTime(LocalDateTime.now());

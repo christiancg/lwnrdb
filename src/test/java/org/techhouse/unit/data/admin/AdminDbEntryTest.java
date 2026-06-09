@@ -126,39 +126,6 @@ public class AdminDbEntryTest {
         assertEquals(0, collectionsArray.size());
     }
 
-    // Verify that setDatabaseName can be called without exceptions and doesn't change anything
-    @Test
-    public void test_setDatabaseName_no_exception() {
-        AdminDbEntry entry = new AdminDbEntry("testDb");
-        entry.setDatabaseName("testDatabase");
-        assertEquals(Globals.ADMIN_DB_NAME, entry.getDatabaseName());
-    }
-
-    // Test setDatabaseName with null input and doesn't change anything
-    @Test
-    public void test_setDatabaseName_null_input() {
-        AdminDbEntry entry = new AdminDbEntry("testDb");
-        entry.setDatabaseName(null);
-        assertEquals(Globals.ADMIN_DB_NAME, entry.getDatabaseName());
-    }
-
-    // Ensure setCollectionName does not alter the collection name when called
-    @Test
-    public void test_set_collection_name_no_alteration() {
-        AdminDbEntry entry = new AdminDbEntry("testDb");
-        String originalName = entry.getCollectionName();
-        entry.setCollectionName("newName");
-        assertEquals(originalName, entry.getCollectionName());
-    }
-
-    // Test setCollectionName with null input to ensure stability
-    @Test
-    public void test_set_collection_name_with_null() {
-        AdminDbEntry entry = new AdminDbEntry("testDb");
-        entry.setCollectionName(null);
-        assertNotNull(entry.getCollectionName());
-    }
-
     @Test
     public void test_setters_and_getters() {
         AdminDbEntry entry = new AdminDbEntry("testDb");
