@@ -53,7 +53,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Iterative read depending on available memory and document count
 - [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
-- [ ] Users and permissions
+- [x] Users and permissions
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
@@ -169,6 +169,79 @@ Queries run through a pipeline of steps. `aggregationSteps` may be empty (return
 #### `CLOSE_CONNECTION`
 ```json
 {"type":"CLOSE_CONNECTION"}
+```
+
+### Users & Permissions
+
+Every connection must authenticate before sending any protected operation. `LIST_DATABASES`, `AUTHENTICATE`, and `CLOSE_CONNECTION` are the only operations that do not require authentication.
+
+#### `AUTHENTICATE`
+```json
+{"type":"AUTHENTICATE","username":"alice","password":"secret"}
+```
+
+#### `CREATE_USER` (admin only)
+`globalPermissions`, `databasePermissions`, and `collectionPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format.
+```json
+{
+  "type": "CREATE_USER",
+  "username": "bob",
+  "password": "secret1234",
+  "admin": false,
+  "globalPermissions": ["CREATE_DATABASE"],
+  "databasePermissions": {"ordersDb": "READ_WRITE"},
+  "collectionPermissions": {"analyticsDb|events": "READ"}
+}
+```
+
+#### `DELETE_USER` (admin only)
+```json
+{"type":"DELETE_USER","username":"bob"}
+```
+
+#### `CHANGE_PERMISSIONS` (admin only)
+Replaces all permissions for the user in full.
+```json
+{
+  "type": "CHANGE_PERMISSIONS",
+  "username": "bob",
+  "admin": false,
+  "globalPermissions": [],
+  "databasePermissions": {"ordersDb": "READ"},
+  "collectionPermissions": {}
+}
+```
+
+### Permission model
+
+| Concept | Description |
+|---|---|
+| `admin` flag | Superadmin — bypasses all permission checks |
+| `globalPermissions` | `CREATE_DATABASE`, `DROP_DATABASE` |
+| `databasePermissions` | Grants `READ` or `READ_WRITE` to all collections in a database |
+| `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection` |
+
+A database-level grant cascades to every collection within that database. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
+
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`.  
+Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.
+
+### Authentication errors
+
+| Situation | `status` | `message` |
+|---|---|---|
+| Request sent before authenticating | `UNAUTHENTICATED` | `Must authenticate first` |
+| Wrong username or password | `ERROR` | `The user doesn't exist or the wrong credentials have been provided` |
+| Insufficient permissions | `FORBIDDEN` | `action is forbidden, no permissions` |
+
+### Bootstrap
+
+On first startup, if no admin user exists and `defaultAdminUsername` / `defaultAdminPassword` are set in `lwnrdb.cfg`, the server creates that user as superadmin. The password must be at least 8 characters. If neither an existing admin nor valid credentials are configured, the server starts but no privileged operations can be performed until an admin user is created directly.
+
+**New `lwnrdb.cfg` keys:**
+```
+defaultAdminUsername=admin
+defaultAdminPassword=
 ```
 
 ## Q&A
