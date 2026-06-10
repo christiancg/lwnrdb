@@ -100,20 +100,22 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     }
 
     private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
+        final var isFinal = field.accessFlags().contains(java.lang.reflect.AccessFlag.FINAL);
         final var fieldValue = ReflectionUtils.getFieldValue(field, obj);
-        if (fieldValue == null || field.getType().isPrimitive()) {
-            TypeAdapter<?> typeAdapter;
-            if (field.getType().getTypeParameters().length > 0) {
-                typeAdapter = TypeAdapterFactory.getAdapter(field.getGenericType());
-            } else {
-                typeAdapter = TypeAdapterFactory.getAdapter(field.getType());
-            }
-            if (typeAdapter != null) {
-                final var value = typeAdapter.fromJson(parsed);
-                if (value != null) {
-                    final var casted = ReflectionUtils.cast(field.getType(), parsed, field.getGenericType());
-                    ReflectionUtils.setFieldValue(field, obj, casted);
-                }
+        // Skip final fields already set by a constructor call — only assign them if null (UnsafeAllocator path)
+        if (isFinal && fieldValue != null) {
+            return;
+        }
+        TypeAdapter<?> typeAdapter;
+        if (field.getType().getTypeParameters().length > 0) {
+            typeAdapter = TypeAdapterFactory.getAdapter(field.getGenericType());
+        } else {
+            typeAdapter = TypeAdapterFactory.getAdapter(field.getType());
+        }
+        if (typeAdapter != null) {
+            final var casted = ReflectionUtils.cast(field.getType(), parsed, field.getGenericType());
+            if (casted != null) {
+                ReflectionUtils.setFieldValue(field, obj, casted);
             }
         }
     }
