@@ -6,8 +6,8 @@ import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateUserRequest;
 
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -48,8 +48,7 @@ public class CreateUserRequestTest {
     @Test
     public void test_global_permissions_setter_getter() {
         final var req = new CreateUserRequest();
-        final var perms = new HashSet<GlobalPermissionType>();
-        perms.add(GlobalPermissionType.CREATE_DATABASE);
+        final var perms = Set.of(GlobalPermissionType.CREATE_DATABASE);
         req.setGlobalPermissions(perms);
         assertEquals(perms, req.getGlobalPermissions());
     }
@@ -57,8 +56,7 @@ public class CreateUserRequestTest {
     @Test
     public void test_database_permissions_setter_getter() {
         final var req = new CreateUserRequest();
-        final var perms = new HashMap<String, PermissionLevel>();
-        perms.put("db1", PermissionLevel.READ);
+        final var perms = Map.of("db1", PermissionLevel.READ);
         req.setDatabasePermissions(perms);
         assertEquals(perms, req.getDatabasePermissions());
     }
@@ -66,8 +64,7 @@ public class CreateUserRequestTest {
     @Test
     public void test_collection_permissions_setter_getter() {
         final var req = new CreateUserRequest();
-        final var perms = new HashMap<String, PermissionLevel>();
-        perms.put("db|coll", PermissionLevel.READ_WRITE);
+        final var perms = Map.of("db|coll", PermissionLevel.READ_WRITE);
         req.setCollectionPermissions(perms);
         assertEquals(perms, req.getCollectionPermissions());
     }

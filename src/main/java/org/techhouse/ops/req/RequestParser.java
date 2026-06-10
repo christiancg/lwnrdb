@@ -146,4 +146,5 @@ public class RequestParser {
         }
         return parsedOperator;
     }
+
 }

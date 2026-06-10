@@ -2,27 +2,31 @@ package org.techhouse.ops.req;
 
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.OperationType;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public class CreateUserRequest extends OperationRequest {
     private String username;
     private String password;
     private Boolean admin;
-    private Set<GlobalPermissionType> globalPermissions;
-    private Map<String, PermissionLevel> databasePermissions;
-    private Map<String, PermissionLevel> collectionPermissions;
+    private JsonArray globalPermissions;
+    private JsonObject databasePermissions;
+    private JsonObject collectionPermissions;
 
     public CreateUserRequest() {
         super(OperationType.CREATE_USER, null, null);
         this.admin = false;
-        this.globalPermissions = new HashSet<>();
-        this.databasePermissions = new HashMap<>();
-        this.collectionPermissions = new HashMap<>();
+        this.globalPermissions = new JsonArray();
+        this.databasePermissions = new JsonObject();
+        this.collectionPermissions = new JsonObject();
     }
 
     public String getUsername() {
@@ -50,26 +54,50 @@ public class CreateUserRequest extends OperationRequest {
     }
 
     public Set<GlobalPermissionType> getGlobalPermissions() {
-        return globalPermissions;
-    }
-
-    public void setGlobalPermissions(Set<GlobalPermissionType> globalPermissions) {
-        this.globalPermissions = globalPermissions;
+        if (globalPermissions == null) return new HashSet<>();
+        return globalPermissions.asList().stream()
+                .map(e -> GlobalPermissionType.valueOf(e.asJsonString().getValue()))
+                .collect(Collectors.toSet());
     }
 
     public Map<String, PermissionLevel> getDatabasePermissions() {
-        return databasePermissions;
-    }
-
-    public void setDatabasePermissions(Map<String, PermissionLevel> databasePermissions) {
-        this.databasePermissions = databasePermissions;
+        if (databasePermissions == null) return new HashMap<>();
+        final var result = new HashMap<String, PermissionLevel>();
+        for (var entry : databasePermissions.entrySet()) {
+            result.put(entry.getKey(), PermissionLevel.valueOf(entry.getValue().asJsonString().getValue()));
+        }
+        return result;
     }
 
     public Map<String, PermissionLevel> getCollectionPermissions() {
-        return collectionPermissions;
+        if (collectionPermissions == null) return new HashMap<>();
+        final var result = new HashMap<String, PermissionLevel>();
+        for (var entry : collectionPermissions.entrySet()) {
+            result.put(entry.getKey(), PermissionLevel.valueOf(entry.getValue().asJsonString().getValue()));
+        }
+        return result;
     }
 
-    public void setCollectionPermissions(Map<String, PermissionLevel> collectionPermissions) {
-        this.collectionPermissions = collectionPermissions;
+    public void setGlobalPermissions(Set<GlobalPermissionType> perms) {
+        this.globalPermissions = new JsonArray();
+        perms.forEach(p -> this.globalPermissions.add(new JsonString(p.name())));
+    }
+
+    public void setDatabasePermissions(Map<String, PermissionLevel> perms) {
+        this.databasePermissions = new JsonObject();
+        perms.forEach((k, v) -> this.databasePermissions.add(k, new JsonString(v.name())));
+    }
+
+    public void setCollectionPermissions(Map<String, PermissionLevel> perms) {
+        this.collectionPermissions = new JsonObject();
+        perms.forEach((k, v) -> this.collectionPermissions.add(k, new JsonString(v.name())));
+    }
+
+    public JsonObject getRawDatabasePermissions() {
+        return databasePermissions;
+    }
+
+    public JsonObject getRawCollectionPermissions() {
+        return collectionPermissions;
     }
 }
