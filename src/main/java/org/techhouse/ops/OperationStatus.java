@@ -4,5 +4,7 @@ public enum OperationStatus {
     OK,
     ERROR,
     NOT_FOUND,
-    NO_OPERATION
+    NO_OPERATION,
+    UNAUTHENTICATED,
+    FORBIDDEN
 }

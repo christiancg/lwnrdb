@@ -32,4 +32,18 @@ public class ClientTracker {
             client.setLastCommandTime(LocalDateTime.now());
         }
     }
+
+    public void setAuthenticatedUser(UUID clientId, String username) {
+        if (clientId == null) return;
+        final var client = clients.get(clientId);
+        if (client != null) {
+            client.setAuthenticatedUsername(username);
+        }
+    }
+
+    public String getAuthenticatedUsername(UUID clientId) {
+        if (clientId == null) return null;
+        final var client = clients.get(clientId);
+        return client != null ? client.getAuthenticatedUsername() : null;
+    }
 }

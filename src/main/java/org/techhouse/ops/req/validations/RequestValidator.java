@@ -1,11 +1,16 @@
 package org.techhouse.ops.req.validations;
 
 import org.techhouse.config.Globals;
+import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ops.req.*;
+
+import java.util.Map;
 
 public class RequestValidator {
     static final String NAME_PATTERN = "^[a-zA-Z0-9_-]{3,64}$";
     private static final String ID_PATTERN = "^[a-zA-Z0-9_-]{1,64}$";
+    private static final String USERNAME_PATTERN = NAME_PATTERN;
+    private static final int PASSWORD_MIN_LENGTH = 8;
 
     public static ValidationResult validate(OperationRequest request) {
         return switch (request.getType()) {
@@ -22,6 +27,10 @@ public class RequestValidator {
             case CREATE_INDEX     -> validateCreateIndex((CreateIndexRequest) request);
             case DROP_INDEX       -> validateDropIndex((DropIndexRequest) request);
             case CLOSE_CONNECTION -> ValidationResult.ok();
+            case AUTHENTICATE    -> validateAuthenticate((AuthenticateRequest) request);
+            case CREATE_USER     -> validateCreateUser((CreateUserRequest) request);
+            case DELETE_USER     -> validateDeleteUser((DeleteUserRequest) request);
+            case CHANGE_PERMISSIONS -> validateChangePermissions((ChangePermissionsRequest) request);
         };
     }
 
@@ -156,6 +165,96 @@ public class RequestValidator {
         }
         if (!collectionName.matches(NAME_PATTERN)) {
             return ValidationResult.fail("collectionName must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateAuthenticate(AuthenticateRequest request) {
+        if (request.getUsername() == null || request.getUsername().isBlank()) {
+            return ValidationResult.fail("username is required");
+        }
+        if (!request.getUsername().matches(USERNAME_PATTERN)) {
+            return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        if (request.getPassword() == null || request.getPassword().isBlank()) {
+            return ValidationResult.fail("password is required");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateCreateUser(CreateUserRequest request) {
+        if (request.getUsername() == null || request.getUsername().isBlank()) {
+            return ValidationResult.fail("username is required");
+        }
+        if (!request.getUsername().matches(USERNAME_PATTERN)) {
+            return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        if (request.getPassword() == null || request.getPassword().length() < PASSWORD_MIN_LENGTH) {
+            return ValidationResult.fail("password must be at least " + PASSWORD_MIN_LENGTH + " characters");
+        }
+        final var dbPermsResult = validatePermissionMaps(request.getDatabasePermissions(), request.getCollectionPermissions());
+        if (!dbPermsResult.isValid()) {
+            return dbPermsResult;
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateDeleteUser(DeleteUserRequest request) {
+        if (request.getUsername() == null || request.getUsername().isBlank()) {
+            return ValidationResult.fail("username is required");
+        }
+        if (!request.getUsername().matches(USERNAME_PATTERN)) {
+            return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateChangePermissions(ChangePermissionsRequest request) {
+        if (request.getUsername() == null || request.getUsername().isBlank()) {
+            return ValidationResult.fail("username is required");
+        }
+        if (!request.getUsername().matches(USERNAME_PATTERN)) {
+            return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        final var dbPermsResult = validatePermissionMaps(request.getDatabasePermissions(), request.getCollectionPermissions());
+        if (!dbPermsResult.isValid()) {
+            return dbPermsResult;
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validatePermissionMaps(Map<String, PermissionLevel> databasePermissions,
+                                                          Map<String, PermissionLevel> collectionPermissions) {
+        if (databasePermissions != null) {
+            for (var entry : databasePermissions.entrySet()) {
+                final var dbName = entry.getKey();
+                if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+                    return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+                }
+                if (!dbName.matches(NAME_PATTERN)) {
+                    return ValidationResult.fail("database name in permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
+                }
+            }
+        }
+        if (collectionPermissions != null) {
+            for (var entry : collectionPermissions.entrySet()) {
+                final var collKey = entry.getKey();
+                final var parts = collKey.split("\\|");
+                if (parts.length != 2) {
+                    return ValidationResult.fail("collection permission key must be in format 'database|collection'");
+                }
+                final var dbName = parts[0];
+                final var collName = parts[1];
+                if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+                    return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+                }
+                if (!dbName.matches(NAME_PATTERN)) {
+                    return ValidationResult.fail("database name in collection permission must be 3-64 alphanumeric characters, underscores, or hyphens");
+                }
+                if (!collName.matches(NAME_PATTERN)) {
+                    return ValidationResult.fail("collection name in permission must be 3-64 alphanumeric characters, underscores, or hyphens");
+                }
+            }
         }
         return ValidationResult.ok();
     }
