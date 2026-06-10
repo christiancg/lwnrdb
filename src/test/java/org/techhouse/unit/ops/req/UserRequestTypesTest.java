@@ -7,8 +7,8 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 
-import java.util.HashMap;
-import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -51,16 +51,13 @@ public class UserRequestTypesTest {
         req.setUsername("user");
         req.setAdmin(true);
 
-        final var globalPerms = new HashSet<GlobalPermissionType>();
-        globalPerms.add(GlobalPermissionType.DROP_DATABASE);
+        final var globalPerms = Set.of(GlobalPermissionType.DROP_DATABASE);
         req.setGlobalPermissions(globalPerms);
 
-        final var dbPerms = new HashMap<String, PermissionLevel>();
-        dbPerms.put("db1", PermissionLevel.READ_WRITE);
+        final var dbPerms = Map.of("db1", PermissionLevel.READ_WRITE);
         req.setDatabasePermissions(dbPerms);
 
-        final var collPerms = new HashMap<String, PermissionLevel>();
-        collPerms.put("db1|coll", PermissionLevel.READ);
+        final var collPerms = Map.of("db1|coll", PermissionLevel.READ);
         req.setCollectionPermissions(collPerms);
 
         assertEquals("user", req.getUsername());

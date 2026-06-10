@@ -2,9 +2,8 @@ package org.techhouse.ops.req.validations;
 
 import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.req.*;
-
-import java.util.Map;
 
 public class RequestValidator {
     static final String NAME_PATTERN = "^[a-zA-Z0-9_-]{3,64}$";
@@ -192,7 +191,7 @@ public class RequestValidator {
         if (request.getPassword() == null || request.getPassword().length() < PASSWORD_MIN_LENGTH) {
             return ValidationResult.fail("password must be at least " + PASSWORD_MIN_LENGTH + " characters");
         }
-        final var dbPermsResult = validatePermissionMaps(request.getDatabasePermissions(), request.getCollectionPermissions());
+        final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
         }
@@ -216,15 +215,15 @@ public class RequestValidator {
         if (!request.getUsername().matches(USERNAME_PATTERN)) {
             return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
-        final var dbPermsResult = validatePermissionMaps(request.getDatabasePermissions(), request.getCollectionPermissions());
+        final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
         }
         return ValidationResult.ok();
     }
 
-    private static ValidationResult validatePermissionMaps(Map<String, PermissionLevel> databasePermissions,
-                                                          Map<String, PermissionLevel> collectionPermissions) {
+    private static ValidationResult validateRawPermissionMaps(JsonObject databasePermissions,
+                                                              JsonObject collectionPermissions) {
         if (databasePermissions != null) {
             for (var entry : databasePermissions.entrySet()) {
                 final var dbName = entry.getKey();
@@ -233,6 +232,11 @@ public class RequestValidator {
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
                     return ValidationResult.fail("database name in permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
+                }
+                try {
+                    PermissionLevel.valueOf(entry.getValue().asJsonString().getValue());
+                } catch (Exception e) {
+                    return ValidationResult.fail("invalid permission level for database '" + dbName + "'");
                 }
             }
         }
@@ -253,6 +257,11 @@ public class RequestValidator {
                 }
                 if (!collName.matches(NAME_PATTERN)) {
                     return ValidationResult.fail("collection name in permission must be 3-64 alphanumeric characters, underscores, or hyphens");
+                }
+                try {
+                    PermissionLevel.valueOf(entry.getValue().asJsonString().getValue());
+                } catch (Exception e) {
+                    return ValidationResult.fail("invalid permission level for collection '" + collKey + "'");
                 }
             }
         }
