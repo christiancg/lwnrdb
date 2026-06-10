@@ -105,4 +105,77 @@ public class UserRequestValidationTest {
         req.getDatabasePermissions().put("admin", org.techhouse.data.auth.PermissionLevel.READ);
         assertFalse(RequestValidator.validate(req).isValid());
     }
+
+    @Test
+    public void test_create_user_requires_username() {
+        final var req = new CreateUserRequest();
+        req.setUsername(null);
+        req.setPassword("password123");
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_validates_username_pattern() {
+        final var req = new CreateUserRequest();
+        req.setUsername("ab");
+        req.setPassword("password123");
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_delete_user_requires_username_not_null() {
+        final var req = new DeleteUserRequest();
+        req.setUsername(null);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_requires_username() {
+        final var req = new ChangePermissionsRequest();
+        req.setUsername(null);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_validates_username_pattern() {
+        final var req = new ChangePermissionsRequest();
+        req.setUsername("ab");
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_bad_db_name_in_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.getDatabasePermissions().put("ab", org.techhouse.data.auth.PermissionLevel.READ);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_admin_db_in_collection_permission() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.getCollectionPermissions().put("admin|mycoll", org.techhouse.data.auth.PermissionLevel.READ);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_bad_db_name_in_collection_permission() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.getCollectionPermissions().put("ab|mycoll", org.techhouse.data.auth.PermissionLevel.READ);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_bad_collection_name_in_permission() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.getCollectionPermissions().put("mydb|ab", org.techhouse.data.auth.PermissionLevel.READ);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
 }

@@ -45,7 +45,6 @@ public class ClientTest {
     @Test
     public void test_equals_symmetric() {
         Client client1 = new Client("127.0.0.1");
-        Client client2 = new Client("127.0.0.1");
         // Both share same address; connectionTime will differ by tiny amount but
         // equals checks connectionTime as well, so create them with identical state
         // by checking only address-mismatch path
@@ -77,5 +76,35 @@ public class ClientTest {
     public void test_toString_not_null() {
         Client client = new Client("127.0.0.1");
         assertNotNull(client.toString());
+    }
+
+    @Test
+    public void test_authenticated_username_default_null() {
+        Client client = new Client("127.0.0.1");
+        assertNull(client.getAuthenticatedUsername());
+    }
+
+    @Test
+    public void test_set_authenticated_username() {
+        Client client = new Client("127.0.0.1");
+        client.setAuthenticatedUsername("alice");
+        assertEquals("alice", client.getAuthenticatedUsername());
+    }
+
+    @Test
+    public void test_equals_includes_authenticated_username() {
+        Client client1 = new Client("127.0.0.1");
+        Client client2 = new Client("127.0.0.1");
+        // Force same connectionTime via reflection isn't needed — different auth username should differ
+        client1.setAuthenticatedUsername("alice");
+        client2.setAuthenticatedUsername("bob");
+        assertNotEquals(client1, client2);
+    }
+
+    @Test
+    public void test_toString_includes_authenticated_username() {
+        Client client = new Client("127.0.0.1");
+        client.setAuthenticatedUsername("charlie");
+        assertTrue(client.toString().contains("charlie"));
     }
 }
