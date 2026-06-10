@@ -11,6 +11,8 @@ public class Configuration {
     private int maxLogFiles;
     private int maxPageSizeBytes;
     private int maxEntrySizeBytes;
+    private String defaultAdminUsername;
+    private String defaultAdminPassword;
 
     private Configuration() {
     }
@@ -27,6 +29,8 @@ public class Configuration {
                 case "maxLogFiles" -> maxLogFiles = Integer.parseInt(config.getValue());
                 case "maxPageSizeBytes" -> maxPageSizeBytes = Integer.parseInt(config.getValue());
                 case "maxEntrySizeBytes" -> maxEntrySizeBytes = Integer.parseInt(config.getValue());
+                case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
+                case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
             }
         }
     }
@@ -68,5 +72,13 @@ public class Configuration {
 
     public int getMaxEntrySizeBytes() {
         return maxEntrySizeBytes;
+    }
+
+    public String getDefaultAdminUsername() {
+        return defaultAdminUsername;
+    }
+
+    public String getDefaultAdminPassword() {
+        return defaultAdminPassword;
     }
 }

@@ -14,6 +14,8 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
 import org.techhouse.ops.resp.*;
 
+import java.util.UUID;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -27,6 +29,10 @@ public class OperationProcessor {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
+        return processMessage(operationRequest, null);
+    }
+
+    public OperationResponse processMessage(OperationRequest operationRequest, UUID clientId) {
         return switch (operationRequest.getType()) {
             case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest);
             case SAVE -> processSaveOperation((SaveRequest) operationRequest);
@@ -42,6 +48,10 @@ public class OperationProcessor {
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
+            case AUTHENTICATE -> UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
+            case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
+            case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest);
+            case CHANGE_PERMISSIONS -> UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
         };
     }
 

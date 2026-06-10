@@ -44,6 +44,10 @@ public class RequestParser {
                 case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
                 case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
+                case AUTHENTICATE -> eJson.fromJson(message, AuthenticateRequest.class);
+                case CREATE_USER -> eJson.fromJson(message, CreateUserRequest.class);
+                case DELETE_USER -> eJson.fromJson(message, DeleteUserRequest.class);
+                case CHANGE_PERMISSIONS -> eJson.fromJson(message, ChangePermissionsRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

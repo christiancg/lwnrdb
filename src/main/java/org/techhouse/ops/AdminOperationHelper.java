@@ -10,6 +10,7 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
@@ -362,6 +363,54 @@ public class AdminOperationHelper {
                         EventType.UPDATED, List.of(adminCollEntry));
             } finally {
                 releaseAdminCollectionsCollection();
+            }
+        }
+    }
+
+    private static void lockAdminUsersCollection() throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+    }
+
+    private static void releaseAdminUsersCollection() {
+        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+    }
+
+    public static void saveUserEntry(AdminUserEntry userEntry)
+            throws IOException, InterruptedException {
+        lockAdminUsersCollection();
+        try {
+            var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(userEntry.get_id());
+            PkIndexEntry adminUserEntry;
+            if (adminIndexPkUserEntry != null) {
+                userEntry.setPage(adminIndexPkUserEntry.getPage());
+                adminUserEntry = fs.updateFromCollection(userEntry, adminIndexPkUserEntry);
+            } else {
+                userEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME,
+                        Globals.ADMIN_USERS_COLLECTION_NAME, userEntry.byteSize()));
+                adminUserEntry = fs.insertIntoCollection(userEntry);
+                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
+                        EventType.CREATED, List.of(userEntry));
+            }
+            cache.putAdminUserEntry(userEntry, adminUserEntry);
+        } finally {
+            releaseAdminUsersCollection();
+        }
+    }
+
+    public static void deleteUserEntry(String username)
+            throws IOException, InterruptedException {
+        var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(username);
+        if (adminIndexPkUserEntry != null) {
+            lockAdminUsersCollection();
+            try {
+                final var adminUserEntry = cache.getAdminUserEntry(username);
+                adminUserEntry.setPreviousByteSize(adminIndexPkUserEntry.getLength());
+                fs.deleteFromCollection(adminIndexPkUserEntry);
+                cache.removeAdminUserEntry(username);
+                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
+                        EventType.DELETED, List.of(adminUserEntry));
+            } finally {
+                releaseAdminUsersCollection();
             }
         }
     }
