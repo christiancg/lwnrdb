@@ -49,6 +49,7 @@ public class RequestParser {
                 case DELETE_USER -> eJson.fromJson(message, DeleteUserRequest.class);
                 case CHANGE_PERMISSIONS -> eJson.fromJson(message, ChangePermissionsRequest.class);
                 case SET_DATABASE_OWNERS -> eJson.fromJson(message, SetDatabaseOwnersRequest.class);
+                case LIST_USERS -> parseListUsersRequest(message);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -148,4 +149,26 @@ public class RequestParser {
         return parsedOperator;
     }
 
+    private static ListUsersRequest parseListUsersRequest(final String message) {
+        final var req = eJson.fromJson(message, ListUsersRequest.class);
+        final var raw = eJson.fromJson(message, JsonObject.class);
+        final var stepsEl = raw.get("aggregationSteps");
+        if (stepsEl == null || stepsEl.isJsonNull()) {
+            return req;
+        }
+        final var jsonArray = stepsEl.asJsonArray();
+        if (jsonArray.asList().isEmpty()) {
+            return req;
+        }
+        final var roughSteps = req.getAggregationSteps();
+        if (roughSteps == null || roughSteps.isEmpty()) {
+            return req;
+        }
+        final var steps = new ArrayList<BaseAggregationStep>();
+        for (var i = 0; i < roughSteps.size(); i++) {
+            steps.add(parseAggregationStep(roughSteps.get(i).getType(), jsonArray, i));
+        }
+        req.setAggregationSteps(steps);
+        return req;
+    }
 }

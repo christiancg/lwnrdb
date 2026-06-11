@@ -10,6 +10,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -99,6 +100,30 @@ public class AdminUserEntry extends DbEntry {
         json.add(COLLECTION_PERMISSIONS_FIELD, collPermsObj);
 
         this.setData(json);
+    }
+
+    public JsonObject toResponseJson(List<String> ownedDatabases) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(get_id()));
+        obj.add("admin", new JsonBoolean(admin));
+
+        final var globalPermsArr = new JsonArray();
+        globalPermissions.forEach(p -> globalPermsArr.add(new JsonString(p.name())));
+        obj.add("globalPermissions", globalPermsArr);
+
+        final var dbPermsObj = new JsonObject();
+        databasePermissions.forEach((k, v) -> dbPermsObj.add(k, new JsonString(v.name())));
+        obj.add("databasePermissions", dbPermsObj);
+
+        final var collPermsObj = new JsonObject();
+        collectionPermissions.forEach((k, v) -> collPermsObj.add(k, new JsonString(v.name())));
+        obj.add("collectionPermissions", collPermsObj);
+
+        final var ownedDbsArr = new JsonArray();
+        ownedDatabases.forEach(ownedDbsArr::add);
+        obj.add("ownedDatabases", ownedDbsArr);
+
+        return obj;
     }
 
     public String getPasswordHash() {

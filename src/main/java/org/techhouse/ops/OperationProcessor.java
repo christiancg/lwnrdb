@@ -56,6 +56,7 @@ public class OperationProcessor {
             case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest);
             case CHANGE_PERMISSIONS -> UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
             case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
+            case LIST_USERS -> processListUsers((ListUsersRequest) operationRequest);
         };
     }
 
@@ -362,6 +363,24 @@ public class OperationProcessor {
             return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
         } catch (Exception e) {
             return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());
+        }
+    }
+
+    private ListUsersResponse processListUsers(ListUsersRequest request) {
+        try {
+            final var userStream = cache.getAllAdminUserEntries().stream()
+                    .map(user -> user.toResponseJson(
+                            cache.getAllAdminDbEntries().stream()
+                                    .filter(db -> db.isOwner(user.get_id()))
+                                    .map(DbEntry::get_id)
+                                    .toList()));
+            final var results = AggregationOperationHelper.processStepsOnStream(
+                    request.getAggregationSteps(), userStream);
+            return results.isEmpty()
+                    ? new ListUsersResponse(OperationStatus.NOT_FOUND, "No users found", null)
+                    : new ListUsersResponse(OperationStatus.OK, "Ok", results);
+        } catch (Exception e) {
+            return new ListUsersResponse(OperationStatus.ERROR, "Error listing users: " + e.getMessage(), null);
         }
     }
 

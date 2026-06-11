@@ -34,6 +34,7 @@ public class RequestValidator {
             case DELETE_USER     -> validateDeleteUser((DeleteUserRequest) request);
             case CHANGE_PERMISSIONS -> validateChangePermissions((ChangePermissionsRequest) request);
             case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
+            case LIST_USERS         -> validateListUsers((ListUsersRequest) request);
         };
     }
 
@@ -222,6 +223,16 @@ public class RequestValidator {
         final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateListUsers(ListUsersRequest request) {
+        for (var step : request.getAggregationSteps()) {
+            final var result = AggregationStepValidator.validate(step);
+            if (!result.isValid()) {
+                return result;
+            }
         }
         return ValidationResult.ok();
     }

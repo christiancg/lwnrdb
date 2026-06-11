@@ -23,21 +23,31 @@ public class AggregationOperationHelper {
     private static final String COUNT_FIELD_NAME = "count";
     private static final Cache cache = IocContainer.get(Cache.class);
 
+    public static List<JsonObject> processStepsOnStream(
+            List<BaseAggregationStep> steps, Stream<JsonObject> initialStream) throws IOException {
+        return applySteps(steps, initialStream, "", "");
+    }
+
     public static List<JsonObject> processAggregation(AggregateRequest request) throws IOException {
-        Stream<JsonObject> resultStream = null;
-        final var dbName = request.getDatabaseName();
-        final var collName = request.getCollectionName();
-        for (var step : request.getAggregationSteps()) {
+        return applySteps(request.getAggregationSteps(), null,
+                request.getDatabaseName(), request.getCollectionName());
+    }
+
+    private static List<JsonObject> applySteps(
+            List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
+            String dbName, String collName) throws IOException {
+        Stream<JsonObject> resultStream = initialStream;
+        for (var step : steps) {
             resultStream = switch (step.getType()) {
-                case FILTER -> processFilterStep(step, resultStream, dbName, collName);
-                case MAP -> processMapStep(step, resultStream, dbName, collName);
+                case FILTER   -> processFilterStep(step, resultStream, dbName, collName);
+                case MAP      -> processMapStep(step, resultStream, dbName, collName);
                 case GROUP_BY -> processGroupByStep(step, resultStream, dbName, collName);
-                case JOIN -> processJoinStep(step, resultStream, dbName, collName);
-                case COUNT -> processCountStep(resultStream, dbName, collName);
+                case JOIN     -> processJoinStep(step, resultStream, dbName, collName);
+                case COUNT    -> processCountStep(resultStream, dbName, collName);
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName);
-                case LIMIT -> processLimitStep(step, resultStream, dbName, collName);
-                case SKIP -> processSkipStep(step, resultStream, dbName, collName);
-                case SORT -> processSortStep(step, resultStream, dbName, collName);
+                case LIMIT    -> processLimitStep(step, resultStream, dbName, collName);
+                case SKIP     -> processSkipStep(step, resultStream, dbName, collName);
+                case SORT     -> processSortStep(step, resultStream, dbName, collName);
             };
         }
         return resultStream != null ? resultStream.toList() : new ArrayList<>();
@@ -79,7 +89,7 @@ public class AggregationOperationHelper {
                     final var values = jsonElementListEntry.getValue().stream().reduce(new JsonArray(), (jsonArray, jsonObject) -> {
                         jsonArray.add(jsonObject);
                         return jsonArray;
-                    }, (jsonArray, jsonArray2) -> jsonArray);
+                    }, (jsonArray, _) -> jsonArray);
                     groupedEntry.add(GROUP_FIELD_NAME, values);
                     return groupedEntry;
                 });

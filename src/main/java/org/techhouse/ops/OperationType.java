@@ -19,5 +19,6 @@ public enum OperationType {
     CREATE_USER,
     DELETE_USER,
     CHANGE_PERMISSIONS,
-    SET_DATABASE_OWNERS
+    SET_DATABASE_OWNERS,
+    LIST_USERS
 }
