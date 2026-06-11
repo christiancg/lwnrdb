@@ -48,6 +48,7 @@ public class RequestParser {
                 case CREATE_USER -> eJson.fromJson(message, CreateUserRequest.class);
                 case DELETE_USER -> eJson.fromJson(message, DeleteUserRequest.class);
                 case CHANGE_PERMISSIONS -> eJson.fromJson(message, ChangePermissionsRequest.class);
+                case SET_DATABASE_OWNERS -> eJson.fromJson(message, SetDatabaseOwnersRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

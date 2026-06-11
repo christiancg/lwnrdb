@@ -89,6 +89,10 @@ def change_permissions(s, f, username, admin=False, global_perms=None, db_perms=
     })
 
 
+def set_database_owners(s, f, database_name: str, owners: list) -> dict:
+    return send(s, f, {"type": "SET_DATABASE_OWNERS", "databaseName": database_name, "owners": owners})
+
+
 # ── setup: create the fixtures we need ─────────────────────────────────────
 
 def setup_fixtures(s, f):
@@ -104,8 +108,8 @@ def setup_fixtures(s, f):
 
 
 def teardown_fixtures(s, f):
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": "authdb"})
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": "newdb"})
+    for db in ("authdb", "newdb", "transferdb", "nodropdb"):
+        send(s, f, {"type": "DROP_DATABASE", "databaseName": db})
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -340,6 +344,117 @@ def test_user_management(s, f):
           "FORBIDDEN")
 
 
+def test_ownership(s, f):
+    section("Database ownership — creation, transfer, and access control")
+
+    # ── Auto-ownership: the user who creates a database becomes its owner ──
+
+    check("AUTHENTICATE as 'dbmaker' (has CREATE_DATABASE permission)",
+          authenticate(s, f, "dbmaker", "dbmaker1234"),
+          "OK")
+
+    check("CREATE_DATABASE 'owneddb' — dbmaker becomes owner automatically",
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "owneddb"}),
+          "OK")
+
+    check("Owner can CREATE_COLLECTION with no explicit db/coll permissions",
+          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "owneddb",
+                      "collectionName": "mycoll"}),
+          "OK")
+
+    check("Owner can SAVE with no explicit db/coll permissions",
+          send(s, f, {"type": "SAVE", "databaseName": "owneddb", "collectionName": "mycoll",
+                      "object": {"_id": "o1", "val": 1}}),
+          "OK")
+
+    check("Owner can FIND_BY_ID",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "owneddb",
+                      "collectionName": "mycoll", "_id": "o1"}),
+          "OK")
+
+    check("Owner can DROP_DATABASE their own database",
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "owneddb"}),
+          "OK")
+
+    # ── DROP_DATABASE requires ownership, not just global permission ───────
+
+    check("AUTHENTICATE as admin",
+          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    check("Admin creates 'nodropdb'",
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "nodropdb"}),
+          "OK")
+
+    check("AUTHENTICATE as 'dbmaker' (has CREATE_DATABASE global perm, not owner of nodropdb)",
+          authenticate(s, f, "dbmaker", "dbmaker1234"),
+          "OK")
+
+    check("DROP_DATABASE without ownership is FORBIDDEN even with global perm",
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "nodropdb"}),
+          "FORBIDDEN")
+
+    check("AUTHENTICATE as admin to clean up nodropdb",
+          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    send(s, f, {"type": "DROP_DATABASE", "databaseName": "nodropdb"})
+
+    # ── SET_DATABASE_OWNERS transfers ownership ────────────────────────────
+
+    check("Admin creates 'transferdb' (admin is owner)",
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "transferdb"}),
+          "OK")
+
+    check("Admin creates a collection in 'transferdb'",
+          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "transferdb",
+                      "collectionName": "stuff"}),
+          "OK")
+
+    check("SET_DATABASE_OWNERS — transfer ownership to 'newowner'",
+          set_database_owners(s, f, "transferdb", ["newowner"]),
+          "OK")
+
+    check("SET_DATABASE_OWNERS with non-existent user returns ERROR",
+          set_database_owners(s, f, "transferdb", ["ghostuser999"]),
+          "ERROR")
+
+    # ── New owner has full access, non-owner is denied ─────────────────────
+
+    check("AUTHENTICATE as 'newowner'",
+          authenticate(s, f, "newowner", "newowner1234"),
+          "OK")
+
+    check("SET_DATABASE_OWNERS as non-admin (FORBIDDEN)",
+          set_database_owners(s, f, "transferdb", ["dbmaker"]),
+          "FORBIDDEN")
+
+    check("New owner can SAVE with no explicit permissions",
+          send(s, f, {"type": "SAVE", "databaseName": "transferdb", "collectionName": "stuff",
+                      "object": {"_id": "t1", "val": 42}}),
+          "OK")
+
+    check("New owner can FIND_BY_ID",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "transferdb",
+                      "collectionName": "stuff", "_id": "t1"}),
+          "OK")
+
+    check("New owner can DROP_DATABASE 'transferdb'",
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "transferdb"}),
+          "OK")
+
+    # ── Former owner (admin) loses ownership when replaced; dbmaker never had it ─
+
+    check("AUTHENTICATE as 'dbmaker'",
+          authenticate(s, f, "dbmaker", "dbmaker1234"),
+          "OK")
+
+    check("'dbmaker' has no access to 'authdb' (not owner, no permissions)",
+          send(s, f, {"type": "SAVE", "databaseName": "authdb", "collectionName": "allowed",
+                      "object": {"x": 99}}),
+          "FORBIDDEN")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -367,6 +482,9 @@ def main():
         create_user(s, f, "dbreader", "dbreader1234", db_perms={"authdb": "READ"})
         create_user(s, f, "collreader", "collreader1234",
                     coll_perms={"authdb|allowed": "READ"})
+        create_user(s, f, "dbmaker", "dbmaker1234",
+                    global_perms=["CREATE_DATABASE"])
+        create_user(s, f, "newowner", "newowner1234")
 
     # ── run each test group on a fresh connection ──────────────────────
     with new_conn() as (s, f):
@@ -390,11 +508,14 @@ def main():
     with new_conn() as (s, f):
         test_user_management(s, f)
 
+    with new_conn() as (s, f):
+        test_ownership(s, f)
+
     # ── cleanup ────────────────────────────────────────────────────────
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(s, f)
-        for u in ("noperms", "dbreader", "collreader"):
+        for u in ("noperms", "dbreader", "collreader", "dbmaker", "newowner"):
             delete_user(s, f, u)
 
     # ── summary ───────────────────────────────────────────────────────

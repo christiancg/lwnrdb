@@ -198,6 +198,58 @@ public class UserRequestValidationTest {
     }
 
     @Test
+    public void test_set_database_owners_valid() {
+        final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_set_database_owners_requires_db_name() {
+        final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest(null);
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_set_database_owners_rejects_admin_db() {
+        final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("admin");
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_set_database_owners_with_valid_owners() {
+        // Create the user in the cache first so the existence check passes
+        final var cache = org.techhouse.ioc.IocContainer.get(org.techhouse.cache.Cache.class);
+        final var userEntry = new org.techhouse.data.admin.AdminUserEntry(
+                "validowner", "hash", false,
+                new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
+        final var pkEntry = new org.techhouse.data.PkIndexEntry(
+                org.techhouse.config.Globals.ADMIN_DB_NAME,
+                org.techhouse.config.Globals.ADMIN_USERS_COLLECTION_NAME,
+                "validowner", 0, 10, 0);
+        cache.putAdminUserEntry(userEntry, pkEntry);
+
+        final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
+        req.setOwners(java.util.List.of("validowner"));
+        assertTrue(RequestValidator.validate(req).isValid());
+
+        cache.removeAdminUserEntry("validowner");
+    }
+
+    @Test
+    public void test_set_database_owners_rejects_nonexistent_user() {
+        final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
+        req.setOwners(java.util.List.of("ghostuser"));
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_set_database_owners_rejects_bad_username() {
+        final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
+        req.setOwners(java.util.List.of("ab")); // too short
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
     public void test_create_user_invalid_coll_permission_level() {
         // Build a raw JsonObject with an invalid PermissionLevel string
         final var req = new CreateUserRequest();
