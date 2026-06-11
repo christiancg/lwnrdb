@@ -35,6 +35,7 @@ public class RequestValidator {
             case CHANGE_PERMISSIONS -> validateChangePermissions((ChangePermissionsRequest) request);
             case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
             case LIST_USERS         -> validateListUsers((ListUsersRequest) request);
+            case SET_PASSWORD       -> validateSetPassword((SetPasswordRequest) request);
         };
     }
 
@@ -223,6 +224,19 @@ public class RequestValidator {
         final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateSetPassword(SetPasswordRequest request) {
+        if (request.getUsername() == null || request.getUsername().isBlank()) {
+            return ValidationResult.fail("username is required");
+        }
+        if (!request.getUsername().matches(USERNAME_PATTERN)) {
+            return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        if (request.getNewPassword() == null || request.getNewPassword().length() < PASSWORD_MIN_LENGTH) {
+            return ValidationResult.fail("newPassword must be at least " + PASSWORD_MIN_LENGTH + " characters");
         }
         return ValidationResult.ok();
     }

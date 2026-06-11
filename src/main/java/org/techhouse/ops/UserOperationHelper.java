@@ -5,14 +5,16 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
-import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.resp.AuthenticateResponse;
 import org.techhouse.ops.resp.ChangePermissionsResponse;
 import org.techhouse.ops.resp.CreateUserResponse;
 import org.techhouse.ops.resp.DeleteUserResponse;
+import org.techhouse.ops.resp.SetPasswordResponse;
 
 import java.io.IOException;
 import java.util.UUID;
@@ -80,6 +82,38 @@ public class UserOperationHelper {
             return new DeleteUserResponse(OperationStatus.OK, "User deleted successfully");
         } catch (IOException | InterruptedException e) {
             return new DeleteUserResponse(OperationStatus.ERROR, "Error deleting user: " + e.getMessage());
+        }
+    }
+
+    public static SetPasswordResponse processSetPassword(SetPasswordRequest request, UUID clientId) {
+        try {
+            final var callerUsername = clientTracker.getAuthenticatedUsername(clientId);
+            final var targetUsername = request.getUsername();
+            final var caller = cache.getAdminUserEntry(callerUsername);
+            final var target = cache.getAdminUserEntry(targetUsername);
+
+            if (target == null) {
+                return new SetPasswordResponse(OperationStatus.NOT_FOUND, "User not found");
+            }
+
+            if (!caller.isAdmin()) {
+                if (!callerUsername.equals(targetUsername)) {
+                    return new SetPasswordResponse(OperationStatus.FORBIDDEN, "action is forbidden, no permissions");
+                }
+                if (!PasswordHasher.verify(request.getCurrentPassword(), target.getPasswordHash())) {
+                    return new SetPasswordResponse(OperationStatus.ERROR, "Current password is incorrect");
+                }
+            }
+
+            final var newHash = PasswordHasher.hash(request.getNewPassword());
+            final var updated = new AdminUserEntry(
+                    target.get_id(), newHash, target.isAdmin(),
+                    target.getGlobalPermissions(), target.getDatabasePermissions(),
+                    target.getCollectionPermissions());
+            AdminOperationHelper.saveUserEntry(updated);
+            return new SetPasswordResponse(OperationStatus.OK, "Password changed successfully");
+        } catch (IOException | InterruptedException e) {
+            return new SetPasswordResponse(OperationStatus.ERROR, "Error changing password: " + e.getMessage());
         }
     }
 

@@ -50,6 +50,7 @@ public class RequestParser {
                 case CHANGE_PERMISSIONS -> eJson.fromJson(message, ChangePermissionsRequest.class);
                 case SET_DATABASE_OWNERS -> eJson.fromJson(message, SetDatabaseOwnersRequest.class);
                 case LIST_USERS -> parseListUsersRequest(message);
+                case SET_PASSWORD -> eJson.fromJson(message, SetPasswordRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

@@ -93,6 +93,13 @@ def set_database_owners(s, f, database_name: str, owners: list) -> dict:
     return send(s, f, {"type": "SET_DATABASE_OWNERS", "databaseName": database_name, "owners": owners})
 
 
+def set_password(s, f, username: str, new_password: str, current_password: str = None) -> dict:
+    payload = {"type": "SET_PASSWORD", "username": username, "newPassword": new_password}
+    if current_password is not None:
+        payload["currentPassword"] = current_password
+    return send(s, f, payload)
+
+
 # ── setup: create the fixtures we need ─────────────────────────────────────
 
 def setup_fixtures(s, f):
@@ -351,6 +358,70 @@ def list_users(s, f, steps=None) -> dict:
     return send(s, f, payload)
 
 
+def test_set_password(s, f):
+    section("SET_PASSWORD — own password with verification, admin changes any")
+
+    check("AUTHENTICATE as admin",
+          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    check("Create test user 'pwduser'",
+          create_user(s, f, "pwduser", "originalpass1"),
+          "OK")
+
+    # ── Non-admin changing own password ────────────────────────────────────
+
+    check("AUTHENTICATE as 'pwduser'",
+          authenticate(s, f, "pwduser", "originalpass1"),
+          "OK")
+
+    check("User can change own password with correct currentPassword",
+          set_password(s, f, "pwduser", "changedpass1", current_password="originalpass1"),
+          "OK")
+
+    check("Old password no longer authenticates after change",
+          authenticate(s, f, "pwduser", "originalpass1"),
+          "ERROR")
+
+    check("New password authenticates successfully",
+          authenticate(s, f, "pwduser", "changedpass1"),
+          "OK")
+
+    check("User cannot change own password with wrong currentPassword",
+          set_password(s, f, "pwduser", "anothernew1", current_password="wrongpassword"),
+          "ERROR")
+
+    check("User cannot change another user's password (FORBIDDEN)",
+          set_password(s, f, ADMIN_USERNAME, "hacked12345", current_password="changedpass1"),
+          "FORBIDDEN")
+
+    # ── Admin changing another user's password ────────────────────────────
+
+    check("AUTHENTICATE as admin",
+          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    check("Admin can change another user's password without currentPassword",
+          set_password(s, f, "pwduser", "adminreset1"),
+          "OK")
+
+    check("Admin-reset password works for login",
+          authenticate(s, f, "pwduser", "adminreset1"),
+          "OK")
+
+    check("AUTHENTICATE as admin (re-auth after pwduser session)",
+          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    check("Admin can change their own password",
+          set_password(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    check("SET_PASSWORD for non-existent user returns NOT_FOUND",
+          set_password(s, f, "nobody999", "newpassword1"),
+          "NOT_FOUND")
+
+
 def test_list_users(s, f):
     section("LIST_USERS — admin-only, supports filtering")
 
@@ -577,6 +648,9 @@ def main():
         test_user_management(s, f)
 
     with new_conn() as (s, f):
+        test_set_password(s, f)
+
+    with new_conn() as (s, f):
         test_list_users(s, f)
 
     with new_conn() as (s, f):
@@ -586,7 +660,7 @@ def main():
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(s, f)
-        for u in ("noperms", "dbreader", "collreader", "dbmaker", "newowner"):
+        for u in ("noperms", "dbreader", "collreader", "dbmaker", "newowner", "pwduser"):
             delete_user(s, f, u)
 
     # ── summary ───────────────────────────────────────────────────────
