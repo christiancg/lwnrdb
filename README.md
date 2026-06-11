@@ -214,6 +214,24 @@ Replaces all permissions for the user in full.
 }
 ```
 
+#### `SET_PASSWORD`
+A user can change their own password by providing `currentPassword` for verification. An admin can change any user's password without supplying `currentPassword`. Non-admins cannot change another user's password.
+
+| Field | Required | Notes |
+|---|---|---|
+| `username` | yes | Target user |
+| `newPassword` | yes | Minimum 8 characters |
+| `currentPassword` | for non-admins changing own password | Not required when an admin changes another user's password |
+
+```json
+{"type":"SET_PASSWORD","username":"alice","currentPassword":"oldpass","newPassword":"newpass1234"}
+```
+
+Admin changing another user's password (no `currentPassword` needed):
+```json
+{"type":"SET_PASSWORD","username":"alice","newPassword":"newpass1234"}
+```
+
 #### `SET_DATABASE_OWNERS` (admin only)
 Replaces the full owners list for a database. All usernames must already exist. The creator of a database is automatically set as its first owner.
 ```json

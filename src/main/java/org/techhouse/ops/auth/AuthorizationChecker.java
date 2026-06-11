@@ -32,7 +32,8 @@ public final class AuthorizationChecker {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        if (type == OperationType.LIST_DATABASES || type == OperationType.CLOSE_CONNECTION) {
+        if (type == OperationType.LIST_DATABASES || type == OperationType.CLOSE_CONNECTION
+                || type == OperationType.SET_PASSWORD) {
             return AuthorizationResult.allow();
         }
 
