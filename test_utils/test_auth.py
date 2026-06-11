@@ -15,7 +15,10 @@ failures = 0
 
 
 def send(s, f, payload: dict) -> dict:
-    s.sendall((json.dumps(payload) + "\n").encode())
+    try:
+        s.sendall((json.dumps(payload) + "\n").encode())
+    except (BrokenPipeError, OSError):
+        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
     raw = f.readline().decode().strip()
     if not raw:
         return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
