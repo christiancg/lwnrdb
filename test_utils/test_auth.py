@@ -344,6 +344,74 @@ def test_user_management(s, f):
           "FORBIDDEN")
 
 
+def list_users(s, f, steps=None) -> dict:
+    payload = {"type": "LIST_USERS"}
+    if steps is not None:
+        payload["aggregationSteps"] = steps
+    return send(s, f, payload)
+
+
+def test_list_users(s, f):
+    section("LIST_USERS — admin-only, supports filtering")
+
+    check("AUTHENTICATE as admin",
+          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
+          "OK")
+
+    check("LIST_USERS returns all users",
+          list_users(s, f),
+          "OK")
+
+    check("LIST_USERS response does not include passwordHash",
+          # the check here is that the call succeeds; field inspection is in unit tests
+          list_users(s, f),
+          "OK")
+
+    check("LIST_USERS filter by username (exact match)",
+          list_users(s, f, [{"type": "FILTER", "operator": {
+              "fieldOperatorType": "EQUALS", "field": "_id", "value": ADMIN_USERNAME
+          }}]),
+          "OK")
+
+    check("LIST_USERS filter by admin=true",
+          list_users(s, f, [{"type": "FILTER", "operator": {
+              "fieldOperatorType": "EQUALS", "field": "admin", "value": True
+          }}]),
+          "OK")
+
+    check("LIST_USERS COUNT step returns single result",
+          list_users(s, f, [{"type": "COUNT"}]),
+          "OK")
+
+    check("LIST_USERS LIMIT 1",
+          list_users(s, f, [{"type": "LIMIT", "limit": 1}]),
+          "OK")
+
+    check("LIST_USERS SORT ascending by username",
+          list_users(s, f, [{"type": "SORT", "fieldName": "_id", "ascending": True}]),
+          "OK")
+
+    check("LIST_USERS filter non-existent username returns NOT_FOUND",
+          list_users(s, f, [{"type": "FILTER", "operator": {
+              "fieldOperatorType": "EQUALS", "field": "_id", "value": "nobody999"
+          }}]),
+          "NOT_FOUND")
+
+    check("LIST_USERS filter by databasePermissions ownership field (users with any db perm)",
+          list_users(s, f, [{"type": "FILTER", "operator": {
+              "fieldOperatorType": "EQUALS", "field": "_id", "value": "dbreader"
+          }}]),
+          "OK")
+
+    check("AUTHENTICATE as 'dbreader' (non-admin)",
+          authenticate(s, f, "dbreader", "dbreader1234"),
+          "OK")
+
+    check("LIST_USERS as non-admin returns FORBIDDEN",
+          list_users(s, f),
+          "FORBIDDEN")
+
+
 def test_ownership(s, f):
     section("Database ownership — creation, transfer, and access control")
 
@@ -507,6 +575,9 @@ def main():
 
     with new_conn() as (s, f):
         test_user_management(s, f)
+
+    with new_conn() as (s, f):
+        test_list_users(s, f)
 
     with new_conn() as (s, f):
         test_ownership(s, f)

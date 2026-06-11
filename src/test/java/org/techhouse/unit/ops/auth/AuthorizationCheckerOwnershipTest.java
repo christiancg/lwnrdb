@@ -102,4 +102,21 @@ public class AuthorizationCheckerOwnershipTest {
         final var req = new DropDatabaseRequest("nonexistentdb");
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
+
+    @Test
+    public void test_drop_database_db_exists_but_user_not_owner_forbidden() {
+        setOwnerInCache("otherownersdb");
+        // "user2" is NOT in the owners list (only "user" is)
+        final var user2 = new AdminUserEntry("user2", "hash", false,
+                new HashSet<>(), new HashMap<>(), new HashMap<>());
+        final var req = new DropDatabaseRequest("otherownersdb");
+        assertFalse(AuthorizationChecker.check(req, user2).isAllowed());
+    }
+
+    @Test
+    public void test_list_users_forbidden_for_non_admin() {
+        final var user = nonAdminNoPerms();
+        final var req = new org.techhouse.ops.req.ListUsersRequest();
+        assertFalse(AuthorizationChecker.check(req, user).isAllowed());
+    }
 }

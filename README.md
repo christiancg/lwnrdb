@@ -220,6 +220,44 @@ Replaces the full owners list for a database. All usernames must already exist. 
 {"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
 ```
 
+#### `LIST_USERS` (admin only)
+Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
+
+Each user object in the response contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `_id` | string | Username |
+| `admin` | boolean | Whether the user is a superadmin |
+| `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
+| `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
+| `collectionPermissions` | object | e.g. `{"mydb\|coll": "READ"}` |
+| `ownedDatabases` | array | Databases where this user is an owner |
+
+```json
+{"type":"LIST_USERS"}
+```
+
+Supports the same `aggregationSteps` as `AGGREGATE` for filtering, sorting, counting, etc.:
+```json
+{
+  "type": "LIST_USERS",
+  "aggregationSteps": [
+    {"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"admin","value":true}},
+    {"type":"SORT","fieldName":"_id","ascending":true}
+  ]
+}
+```
+
+Example filters:
+
+| Goal | Step |
+|---|---|
+| Find user by username | `FILTER` with `_id EQUALS "alice"` |
+| Find all admins | `FILTER` with `admin EQUALS true` |
+| Find owners of a database | `FILTER` with `ownedDatabases CONTAINS "mydb"` |
+| Count users | `COUNT` |
+
 ### Permission model
 
 | Concept | Description |

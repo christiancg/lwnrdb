@@ -360,6 +360,10 @@ public class Cache {
         return databases.get(dbName);
     }
 
+    public Collection<AdminDbEntry> getAllAdminDbEntries() {
+        return databases.values();
+    }
+
     public List<String> getUserDatabaseNames() {
         return databases.keySet().stream()
                 .filter(name -> !Globals.ADMIN_DB_NAME.equals(name))

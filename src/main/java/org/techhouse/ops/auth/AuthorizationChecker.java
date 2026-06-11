@@ -27,7 +27,8 @@ public final class AuthorizationChecker {
 
         // Admin-only operations
         if (type == OperationType.CREATE_USER || type == OperationType.DELETE_USER
-                || type == OperationType.CHANGE_PERMISSIONS || type == OperationType.SET_DATABASE_OWNERS) {
+                || type == OperationType.CHANGE_PERMISSIONS || type == OperationType.SET_DATABASE_OWNERS
+                || type == OperationType.LIST_USERS) {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
