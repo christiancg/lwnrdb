@@ -8,7 +8,6 @@ import org.techhouse.data.Client;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
-import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.Map;
@@ -57,7 +56,7 @@ public class ClientTrackerTest {
 
     // Successfully removes a client when a valid UUID is provided
     @Test
-    public void test_remove_client_with_valid_uuid() throws NoSuchFieldException, IllegalAccessException, IOException {
+    public void test_remove_client_with_valid_uuid() throws NoSuchFieldException, IllegalAccessException {
         ClientTracker clientTracker = new ClientTracker();
         UUID clientId = UUID.randomUUID();
         Socket mockSocket = Mockito.mock(Socket.class);
@@ -103,5 +102,54 @@ public class ClientTrackerTest {
         ClientTracker clientTracker = new ClientTracker();
 
         assertDoesNotThrow(() -> clientTracker.updateLastCommandTime(null));
+    }
+
+    @Test
+    public void test_set_authenticated_user_stores_username() throws NoSuchFieldException, IllegalAccessException {
+        Configuration config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "maxConnections", 10);
+        ClientTracker clientTracker = new ClientTracker();
+        Socket mockSocket = Mockito.mock(Socket.class);
+        InetAddress mockInetAddress = Mockito.mock(InetAddress.class);
+        Mockito.when(mockSocket.getInetAddress()).thenReturn(mockInetAddress);
+        Mockito.when(mockInetAddress.getHostAddress()).thenReturn("127.0.0.1");
+
+        UUID clientId = clientTracker.addClient(mockSocket);
+        clientTracker.setAuthenticatedUser(clientId, "alice");
+
+        assertEquals("alice", clientTracker.getAuthenticatedUsername(clientId));
+    }
+
+    @Test
+    public void test_get_authenticated_username_returns_null_when_not_set() throws NoSuchFieldException, IllegalAccessException {
+        Configuration config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "maxConnections", 10);
+        ClientTracker clientTracker = new ClientTracker();
+        Socket mockSocket = Mockito.mock(Socket.class);
+        InetAddress mockInetAddress = Mockito.mock(InetAddress.class);
+        Mockito.when(mockSocket.getInetAddress()).thenReturn(mockInetAddress);
+        Mockito.when(mockInetAddress.getHostAddress()).thenReturn("127.0.0.1");
+
+        UUID clientId = clientTracker.addClient(mockSocket);
+
+        assertNull(clientTracker.getAuthenticatedUsername(clientId));
+    }
+
+    @Test
+    public void test_get_authenticated_username_returns_null_for_unknown_id() {
+        ClientTracker clientTracker = new ClientTracker();
+        assertNull(clientTracker.getAuthenticatedUsername(UUID.randomUUID()));
+    }
+
+    @Test
+    public void test_set_authenticated_user_null_client_id_no_throw() {
+        ClientTracker clientTracker = new ClientTracker();
+        assertDoesNotThrow(() -> clientTracker.setAuthenticatedUser(null, "alice"));
+    }
+
+    @Test
+    public void test_get_authenticated_username_null_client_id() {
+        ClientTracker clientTracker = new ClientTracker();
+        assertNull(clientTracker.getAuthenticatedUsername(null));
     }
 }

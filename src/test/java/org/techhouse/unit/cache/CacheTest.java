@@ -1297,6 +1297,25 @@ public class CacheTest {
         assertNull(result);
     }
 
+    @Test
+    public void test_load_admin_data_with_existing_users_populates_users_map() throws Exception {
+        // Persist a user to disk
+        final var userEntry = new org.techhouse.data.admin.AdminUserEntry(
+                "cachetestuser", "hash", false,
+                new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
+        org.techhouse.ops.AdminOperationHelper.saveUserEntry(userEntry);
+
+        // Clear in-memory user maps so loadAdminData must reload from disk
+        Cache cache = IocContainer.get(Cache.class);
+        TestUtils.setPrivateField(cache, "users", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "usersPkIndex", new ConcurrentHashMap<>());
+
+        // Reload — should find the persisted user
+        cache.loadAdminData();
+
+        assertNotNull(cache.getAdminUserEntry("cachetestuser"));
+    }
+
     // loadAdminData with pre-existing databases and collections populates all maps (L49-67, L92-98)
     @Test
     public void test_load_admin_data_with_existing_databases_and_collections() throws Exception {

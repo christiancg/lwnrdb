@@ -8,6 +8,7 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.fs.FileSystem;
@@ -28,14 +29,17 @@ public class Cache {
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
     private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
     private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
+    private final Map<String, AdminUserEntry> users = new ConcurrentHashMap<>();
     private final Map<String, List<AdminPageEntry>> pages = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> databasesPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         final var pkIndexAdminDbEntries =
                 fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -46,6 +50,11 @@ public class Cache {
         final var pkIndexAdminCollEntriesMap = pkIndexAdminCollEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         collectionsPkIndex.putAll(pkIndexAdminCollEntriesMap);
+        final var pkIndexAdminUserEntries =
+                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+        final var pkIndexAdminUserEntriesMap = pkIndexAdminUserEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
+        usersPkIndex.putAll(pkIndexAdminUserEntriesMap);
         if (!pkIndexAdminDbEntriesMap.isEmpty()) {
             final var adminDatabasesColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
             final var adminDatabasesCollMap = adminDatabasesColl.entrySet().stream()
@@ -59,6 +68,13 @@ public class Cache {
                     .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
                             e -> AdminCollEntry.fromJsonObject(e.getValue().getData())));
             collections.putAll(adminCollectionsCollMap);
+        }
+        if (!pkIndexAdminUserEntriesMap.isEmpty()) {
+            final var adminUsersColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+            final var adminUsersCollMap = adminUsersColl.entrySet().stream()
+                    .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
+                            e -> AdminUserEntry.fromJsonObject(e.getValue().getData())));
+            users.putAll(adminUsersCollMap);
         }
         for (var collEntry : collections.values()) {
             final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
@@ -344,6 +360,10 @@ public class Cache {
         return databases.get(dbName);
     }
 
+    public Collection<AdminDbEntry> getAllAdminDbEntries() {
+        return databases.values();
+    }
+
     public List<String> getUserDatabaseNames() {
         return databases.keySet().stream()
                 .filter(name -> !Globals.ADMIN_DB_NAME.equals(name))
@@ -487,5 +507,27 @@ public class Cache {
     public Set<String> getIndexesForCollection(String dbName, String collName) {
         final var collection = collections.get(getCollectionIdentifier(dbName, collName));
         return collection.getIndexes();
+    }
+
+    public AdminUserEntry getAdminUserEntry(String username) {
+        return users.get(username);
+    }
+
+    public Collection<AdminUserEntry> getAllAdminUserEntries() {
+        return users.values();
+    }
+
+    public void putAdminUserEntry(AdminUserEntry userEntry, PkIndexEntry indexEntry) {
+        users.put(userEntry.get_id(), userEntry);
+        usersPkIndex.put(userEntry.get_id(), indexEntry);
+    }
+
+    public void removeAdminUserEntry(String username) {
+        users.remove(username);
+        usersPkIndex.remove(username);
+    }
+
+    public PkIndexEntry getPkIndexAdminUserEntry(String username) {
+        return usersPkIndex.get(username);
     }
 }

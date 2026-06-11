@@ -44,6 +44,13 @@ public class RequestParser {
                 case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
                 case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
+                case AUTHENTICATE -> eJson.fromJson(message, AuthenticateRequest.class);
+                case CREATE_USER -> eJson.fromJson(message, CreateUserRequest.class);
+                case DELETE_USER -> eJson.fromJson(message, DeleteUserRequest.class);
+                case CHANGE_PERMISSIONS -> eJson.fromJson(message, ChangePermissionsRequest.class);
+                case SET_DATABASE_OWNERS -> eJson.fromJson(message, SetDatabaseOwnersRequest.class);
+                case LIST_USERS -> parseListUsersRequest(message);
+                case SET_PASSWORD -> eJson.fromJson(message, SetPasswordRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -141,5 +148,28 @@ public class RequestParser {
             parsedOperator = new ConjunctionOperator(conjunctionType, operators);
         }
         return parsedOperator;
+    }
+
+    private static ListUsersRequest parseListUsersRequest(final String message) {
+        final var req = eJson.fromJson(message, ListUsersRequest.class);
+        final var raw = eJson.fromJson(message, JsonObject.class);
+        final var stepsEl = raw.get("aggregationSteps");
+        if (stepsEl == null || stepsEl.isJsonNull()) {
+            return req;
+        }
+        final var jsonArray = stepsEl.asJsonArray();
+        if (jsonArray.asList().isEmpty()) {
+            return req;
+        }
+        final var roughSteps = req.getAggregationSteps();
+        if (roughSteps == null || roughSteps.isEmpty()) {
+            return req;
+        }
+        final var steps = new ArrayList<BaseAggregationStep>();
+        for (var i = 0; i < roughSteps.size(); i++) {
+            steps.add(parseAggregationStep(roughSteps.get(i).getType(), jsonArray, i));
+        }
+        req.setAggregationSteps(steps);
+        return req;
     }
 }

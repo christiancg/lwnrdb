@@ -95,6 +95,28 @@ public class ConfigurationTest {
         return newConfigFile;
     }
 
+    @Test
+    public void test_loads_default_admin_credentials() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try(final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("defaultAdminUsername=adminuser");
+            writer.newLine();
+            writer.write("defaultAdminPassword=secretpass");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals("adminuser", config.getDefaultAdminUsername());
+            assertEquals("secretpass", config.getDefaultAdminPassword());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
     // Configuration file is missing or unreadable
     @Test
     public void test_configuration_file_missing_or_unreadable() {

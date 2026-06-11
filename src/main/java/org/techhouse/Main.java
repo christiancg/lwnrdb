@@ -4,10 +4,18 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.data.auth.GlobalPermissionType;
+import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.LogWriter;
+import org.techhouse.log.Logger;
+import org.techhouse.ops.AdminOperationHelper;
+
+import java.util.HashSet;
+import java.util.HashMap;
 
 import java.io.IOException;
 
@@ -34,10 +42,59 @@ public class Main {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         cache.loadAdminData();
+        bootstrapDefaultAdmin();
         final var port = getPort(args);
         final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
         backgroundTaskManager.startBackgroundWorkers();
         final var server = new SocketServer(port);
         server.serve();
+    }
+
+    private static void bootstrapDefaultAdmin() throws IOException {
+        final var existingAdmins = cache.getAllAdminUserEntries().stream()
+                .filter(AdminUserEntry::isAdmin)
+                .count();
+
+        if (existingAdmins > 0) {
+            return;
+        }
+
+        final var defaultUsername = config.getDefaultAdminUsername();
+        final var defaultPassword = config.getDefaultAdminPassword();
+
+        if (defaultUsername == null || defaultUsername.isBlank() ||
+            defaultPassword == null || defaultPassword.isBlank()) {
+            Logger.logFor(Main.class).warning(
+                    "No admin user found and no default admin configured. " +
+                    "Set defaultAdminUsername and defaultAdminPassword in lwnrdb.cfg to bootstrap.");
+            return;
+        }
+
+        if (defaultPassword.length() < 8) {
+            Logger.logFor(Main.class).warning(
+                    "Default admin password must be at least 8 characters. Not bootstrapping.");
+            return;
+        }
+
+        final var passwordHash = PasswordHasher.hash(defaultPassword);
+        final var globalPerms = new HashSet<GlobalPermissionType>();
+        globalPerms.add(GlobalPermissionType.CREATE_DATABASE);
+        globalPerms.add(GlobalPermissionType.DROP_DATABASE);
+
+        final var adminUser = new AdminUserEntry(
+                defaultUsername,
+                passwordHash,
+                true,
+                globalPerms,
+                new HashMap<>(),
+                new HashMap<>()
+        );
+
+        try {
+            AdminOperationHelper.saveUserEntry(adminUser);
+            Logger.logFor(Main.class).info("Bootstrapped default admin user: " + defaultUsername);
+        } catch (InterruptedException e) {
+            throw new RuntimeException("Failed to bootstrap admin user", e);
+        }
     }
 }

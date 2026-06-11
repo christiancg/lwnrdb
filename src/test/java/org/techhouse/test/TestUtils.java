@@ -41,8 +41,10 @@ public class TestUtils {
         Cache cache = IocContainer.get(Cache.class);
         TestUtils.setPrivateField( cache, "collections", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "databases", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "users", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "databasesPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "collectionsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "usersPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "collectionMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "fieldIndexMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "pkIndexMap", new ConcurrentHashMap<>());
