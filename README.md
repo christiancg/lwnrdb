@@ -103,6 +103,8 @@ All messages are line-delimited JSON sent over a TCP connection. Every request m
 `_id` is optional. If provided and the document exists it is updated; if it does not exist it is created with that id. If `_id` is omitted a UUID is auto-assigned.
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"name":"Alice"}}
+```
+```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"_id":"user-1","name":"Alice"}}
 ```
 
@@ -212,16 +214,25 @@ Replaces all permissions for the user in full.
 }
 ```
 
+#### `SET_DATABASE_OWNERS` (admin only)
+Replaces the full owners list for a database. All usernames must already exist. The creator of a database is automatically set as its first owner.
+```json
+{"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
+```
+
 ### Permission model
 
 | Concept | Description |
 |---|---|
 | `admin` flag | Superadmin — bypasses all permission checks |
-| `globalPermissions` | `CREATE_DATABASE`, `DROP_DATABASE` |
+| Database ownership | Full access to the database and all its collections, including the ability to drop it |
+| `globalPermissions` | `CREATE_DATABASE` — required to create new databases |
 | `databasePermissions` | Grants `READ` or `READ_WRITE` to all collections in a database |
 | `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection` |
 
-A database-level grant cascades to every collection within that database. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
+Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
+
+`DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
 Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.

@@ -6,27 +6,30 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
 import org.techhouse.ops.resp.*;
 
+import java.util.List;
 import java.util.UUID;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.List;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -39,7 +42,7 @@ public class OperationProcessor {
             case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest);
             case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest);
             case DELETE -> processDeleteOperation((DeleteRequest) operationRequest);
-            case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest);
+            case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest, clientId);
             case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
             case LIST_DATABASES -> processListDatabasesOperation();
             case CREATE_COLLECTION -> processCreateCollectionOperation((CreateCollectionRequest) operationRequest);
@@ -52,6 +55,7 @@ public class OperationProcessor {
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
             case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest);
             case CHANGE_PERMISSIONS -> UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
+            case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
         };
     }
 
@@ -234,17 +238,34 @@ public class OperationProcessor {
         }
     }
 
-    private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest) {
+    private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest, UUID clientId) {
         try {
             final var dbName = createDatabaseRequest.getDatabaseName();
             final var result = fs.createDatabaseFolder(dbName);
             if (result) {
+                final var username = clientTracker.getAuthenticatedUsername(clientId);
+                final var owners = username != null ? List.of(username) : List.<String>of();
+                final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(), new java.util.ArrayList<>(owners));
+                AdminOperationHelper.saveDatabaseEntry(newEntry);
                 taskManager.submitBackgroundTask(new DatabaseEvent(EventType.CREATED, dbName));
                 return new CreateDatabaseResponse(OperationStatus.OK, "Database created successfully");
             }
             return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
         } catch (Exception exception) {
             return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
+        }
+    }
+
+    private SetDatabaseOwnersResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
+        try {
+            final var dbName = request.getDatabaseName();
+            if (cache.getAdminDbEntry(dbName) == null) {
+                return new SetDatabaseOwnersResponse(OperationStatus.NOT_FOUND, "Database '" + dbName + "' not found");
+            }
+            AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
+            return new SetDatabaseOwnersResponse(OperationStatus.OK, "Database owners updated successfully");
+        } catch (Exception e) {
+            return new SetDatabaseOwnersResponse(OperationStatus.ERROR, "Error updating database owners: " + e.getMessage());
         }
     }
 

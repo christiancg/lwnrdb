@@ -248,6 +248,15 @@ public class AdminOperationHelper {
         return cache.getAdminDbEntry(dbName);
     }
 
+    public static void updateDatabaseOwners(String dbName, java.util.List<String> owners)
+            throws IOException, InterruptedException {
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        if (dbEntry != null) {
+            dbEntry.setOwners(owners);
+            saveDatabaseEntry(dbEntry);
+        }
+    }
+
     public static void createPageCollections(String dbName, String collName) throws IOException {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         fs.createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollName);

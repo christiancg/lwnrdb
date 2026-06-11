@@ -1,12 +1,15 @@
 package org.techhouse.ops.auth;
 
+import org.techhouse.cache.Cache;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
 
 public final class AuthorizationChecker {
+    private static final Cache cache = IocContainer.get(Cache.class);
 
     private AuthorizationChecker() {
     }
@@ -22,7 +25,9 @@ public final class AuthorizationChecker {
 
         final var type = req.getType();
 
-        if (type == OperationType.CREATE_USER || type == OperationType.DELETE_USER || type == OperationType.CHANGE_PERMISSIONS) {
+        // Admin-only operations
+        if (type == OperationType.CREATE_USER || type == OperationType.DELETE_USER
+                || type == OperationType.CHANGE_PERMISSIONS || type == OperationType.SET_DATABASE_OWNERS) {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
@@ -36,15 +41,24 @@ public final class AuthorizationChecker {
                     AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
+        // DROP_DATABASE requires ownership — global permission alone is not sufficient
         if (type == OperationType.DROP_DATABASE) {
-            return user.getGlobalPermissions().contains(GlobalPermissionType.DROP_DATABASE) ?
-                    AuthorizationResult.allow() :
-                    AuthorizationResult.deny("action is forbidden, no permissions");
+            final var dbEntry = cache.getAdminDbEntry(req.getDatabaseName());
+            if (dbEntry != null && dbEntry.isOwner(user.get_id())) {
+                return AuthorizationResult.allow();
+            }
+            return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
         final var dbName = req.getDatabaseName();
         if (dbName == null || dbName.isBlank()) {
             return AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
+        // Owners have full access to their database and all its collections
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        if (dbEntry != null && dbEntry.isOwner(user.get_id())) {
+            return AuthorizationResult.allow();
         }
 
         final var requiredLevel = getRequiredPermissionLevel(type);

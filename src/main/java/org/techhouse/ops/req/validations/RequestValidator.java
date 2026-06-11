@@ -1,11 +1,14 @@
 package org.techhouse.ops.req.validations;
 
+import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
 
 public class RequestValidator {
+    private static final Cache cache = IocContainer.get(Cache.class);
     static final String NAME_PATTERN = "^[a-zA-Z0-9_-]{3,64}$";
     private static final String ID_PATTERN = "^[a-zA-Z0-9_-]{1,64}$";
     private static final String USERNAME_PATTERN = NAME_PATTERN;
@@ -30,6 +33,7 @@ public class RequestValidator {
             case CREATE_USER     -> validateCreateUser((CreateUserRequest) request);
             case DELETE_USER     -> validateDeleteUser((DeleteUserRequest) request);
             case CHANGE_PERMISSIONS -> validateChangePermissions((ChangePermissionsRequest) request);
+            case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
         };
     }
 
@@ -218,6 +222,22 @@ public class RequestValidator {
         final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateSetDatabaseOwners(SetDatabaseOwnersRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        for (var owner : request.getOwners()) {
+            if (!owner.matches(NAME_PATTERN)) {
+                return ValidationResult.fail("owner username must be 3-64 alphanumeric characters, underscores, or hyphens");
+            }
+            if (cache.getAdminUserEntry(owner) == null) {
+                return ValidationResult.fail("user '" + owner + "' does not exist");
+            }
         }
         return ValidationResult.ok();
     }
