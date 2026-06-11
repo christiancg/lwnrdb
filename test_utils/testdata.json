@@ -1,3 +1,6 @@
+// Authenticate (must be done before any protected operation)
+{"type": "AUTHENTICATE", "username": "admin", "password": "adminstrator"}
+
 // Create database
 {"type": "CREATE_DATABASE", "databaseName": "test"}
 
@@ -291,6 +294,42 @@
 
 // Close connection
 {"type": "CLOSE_CONNECTION"}
+
+
+
+// Users and permissions
+// Re-authenticate after reconnecting
+{"type": "AUTHENTICATE", "username": "admin", "password": "adminstrator"}
+
+// Create a non-admin user with read-write access to one database
+{"type": "CREATE_USER", "username": "alice", "password": "secret1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
+
+// Create a read-only user scoped to a single collection
+{"type": "CREATE_USER", "username": "readonly", "password": "readonly1234", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {"test|testCollection": "READ"}}
+
+// Create a user that can create and drop databases
+{"type": "CREATE_USER", "username": "dbadmin", "password": "dbadmin1234", "admin": false, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
+
+// Grant alice admin rights and update her permissions
+{"type": "CHANGE_PERMISSIONS", "username": "alice", "admin": true, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
+
+// Downgrade alice back to a regular user
+{"type": "CHANGE_PERMISSIONS", "username": "alice", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
+
+// Authenticate as alice
+{"type": "AUTHENTICATE", "username": "alice", "password": "secret1234"}
+
+// Authenticate back as admin
+{"type": "AUTHENTICATE", "username": "admin", "password": "adminstrator"}
+
+// Delete alice
+{"type": "DELETE_USER", "username": "alice"}
+
+// Delete readonly
+{"type": "DELETE_USER", "username": "readonly"}
+
+// Delete dbadmin
+{"type": "DELETE_USER", "username": "dbadmin"}
 
 
 

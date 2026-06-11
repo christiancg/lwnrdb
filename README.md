@@ -53,7 +53,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Iterative read depending on available memory and document count
 - [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
-- [ ] Users and permissions
+- [x] Users and permissions
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
@@ -103,6 +103,8 @@ All messages are line-delimited JSON sent over a TCP connection. Every request m
 `_id` is optional. If provided and the document exists it is updated; if it does not exist it is created with that id. If `_id` is omitted a UUID is auto-assigned.
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"name":"Alice"}}
+```
+```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"_id":"user-1","name":"Alice"}}
 ```
 
@@ -169,6 +171,144 @@ Queries run through a pipeline of steps. `aggregationSteps` may be empty (return
 #### `CLOSE_CONNECTION`
 ```json
 {"type":"CLOSE_CONNECTION"}
+```
+
+### Users & Permissions
+
+Every connection must authenticate before sending any protected operation. `LIST_DATABASES`, `AUTHENTICATE`, and `CLOSE_CONNECTION` are the only operations that do not require authentication.
+
+#### `AUTHENTICATE`
+```json
+{"type":"AUTHENTICATE","username":"alice","password":"secret"}
+```
+
+#### `CREATE_USER` (admin only)
+`globalPermissions`, `databasePermissions`, and `collectionPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format.
+```json
+{
+  "type": "CREATE_USER",
+  "username": "bob",
+  "password": "secret1234",
+  "admin": false,
+  "globalPermissions": ["CREATE_DATABASE"],
+  "databasePermissions": {"ordersDb": "READ_WRITE"},
+  "collectionPermissions": {"analyticsDb|events": "READ"}
+}
+```
+
+#### `DELETE_USER` (admin only)
+```json
+{"type":"DELETE_USER","username":"bob"}
+```
+
+#### `CHANGE_PERMISSIONS` (admin only)
+Replaces all permissions for the user in full.
+```json
+{
+  "type": "CHANGE_PERMISSIONS",
+  "username": "bob",
+  "admin": false,
+  "globalPermissions": [],
+  "databasePermissions": {"ordersDb": "READ"},
+  "collectionPermissions": {}
+}
+```
+
+#### `SET_PASSWORD`
+A user can change their own password by providing `currentPassword` for verification. An admin can change any user's password without supplying `currentPassword`. Non-admins cannot change another user's password.
+
+| Field | Required | Notes |
+|---|---|---|
+| `username` | yes | Target user |
+| `newPassword` | yes | Minimum 8 characters |
+| `currentPassword` | for non-admins changing own password | Not required when an admin changes another user's password |
+
+```json
+{"type":"SET_PASSWORD","username":"alice","currentPassword":"oldpass","newPassword":"newpass1234"}
+```
+
+Admin changing another user's password (no `currentPassword` needed):
+```json
+{"type":"SET_PASSWORD","username":"alice","newPassword":"newpass1234"}
+```
+
+#### `SET_DATABASE_OWNERS` (admin only)
+Replaces the full owners list for a database. All usernames must already exist. The creator of a database is automatically set as its first owner.
+```json
+{"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
+```
+
+#### `LIST_USERS` (admin only)
+Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
+
+Each user object in the response contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `_id` | string | Username |
+| `admin` | boolean | Whether the user is a superadmin |
+| `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
+| `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
+| `collectionPermissions` | object | e.g. `{"mydb\|coll": "READ"}` |
+| `ownedDatabases` | array | Databases where this user is an owner |
+
+```json
+{"type":"LIST_USERS"}
+```
+
+Supports the same `aggregationSteps` as `AGGREGATE` for filtering, sorting, counting, etc.:
+```json
+{
+  "type": "LIST_USERS",
+  "aggregationSteps": [
+    {"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"admin","value":true}},
+    {"type":"SORT","fieldName":"_id","ascending":true}
+  ]
+}
+```
+
+Example filters:
+
+| Goal | Step |
+|---|---|
+| Find user by username | `FILTER` with `_id EQUALS "alice"` |
+| Find all admins | `FILTER` with `admin EQUALS true` |
+| Find owners of a database | `FILTER` with `ownedDatabases CONTAINS "mydb"` |
+| Count users | `COUNT` |
+
+### Permission model
+
+| Concept | Description |
+|---|---|
+| `admin` flag | Superadmin — bypasses all permission checks |
+| Database ownership | Full access to the database and all its collections, including the ability to drop it |
+| `globalPermissions` | `CREATE_DATABASE` — required to create new databases |
+| `databasePermissions` | Grants `READ` or `READ_WRITE` to all collections in a database |
+| `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection` |
+
+Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
+
+`DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
+
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`.  
+Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.
+
+### Authentication errors
+
+| Situation | `status` | `message` |
+|---|---|---|
+| Request sent before authenticating | `UNAUTHENTICATED` | `Must authenticate first` |
+| Wrong username or password | `ERROR` | `The user doesn't exist or the wrong credentials have been provided` |
+| Insufficient permissions | `FORBIDDEN` | `action is forbidden, no permissions` |
+
+### Bootstrap
+
+On first startup, if no admin user exists and `defaultAdminUsername` / `defaultAdminPassword` are set in `lwnrdb.cfg`, the server creates that user as superadmin. The password must be at least 8 characters. If neither an existing admin nor valid credentials are configured, the server starts but no privileged operations can be performed until an admin user is created directly.
+
+**New `lwnrdb.cfg` keys:**
+```
+defaultAdminUsername=admin
+defaultAdminPassword=
 ```
 
 ## Q&A

@@ -6,11 +6,15 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
+import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestUtils;
 
 import java.io.*;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.HashMap;
+import java.util.HashSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -139,6 +143,112 @@ public class MessageProcessorTest {
         String response = out.toString();
         assertTrue(response.contains("ERROR"), "Validation failure should return ERROR status");
         assertTrue(response.contains("SAVE"), "Response type should echo the operation type");
+    }
+
+    // Unauthenticated protected request returns UNAUTHENTICATED
+    @Test
+    public void test_unauthenticated_request_returns_unauthenticated() throws Exception {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String msg = "{\"type\":\"SAVE\",\"databaseName\":\"testDb\",\"collectionName\":\"testColl\",\"object\":{}}\n";
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+
+        MessageProcessor mp = new MessageProcessor(socket);
+        Thread t = new Thread(mp);
+        t.start();
+        t.join(3000);
+
+        String response = out.toString();
+        assertTrue(response.contains("UNAUTHENTICATED"), "Should return UNAUTHENTICATED for protected op");
+    }
+
+    // Authenticate then send a protected request — should be allowed
+    @Test
+    public void test_authenticated_request_is_processed() throws Exception {
+        // Create an admin user first
+        final var createReq = new CreateUserRequest();
+        createReq.setUsername("msgproceadmin");
+        createReq.setPassword("password123");
+        createReq.setAdmin(true);
+        createReq.setGlobalPermissions(new HashSet<>());
+        createReq.setDatabasePermissions(new HashMap<>());
+        createReq.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(createReq);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        // Use a protected op (SAVE) to exercise the authenticated+authorized dispatch path
+        String msgs =
+                """
+                        {"type":"AUTHENTICATE","username":"msgproceadmin","password":"password123"}
+                        {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
+                        """;
+        Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
+
+        MessageProcessor mp = new MessageProcessor(socket);
+        Thread t = new Thread(mp);
+        t.start();
+        t.join(3000);
+
+        String response = out.toString();
+        assertTrue(response.contains("AUTHENTICATE"), "Should include AUTHENTICATE response");
+        assertTrue(response.contains("SAVE"), "Should include SAVE response");
+    }
+
+    // Authenticate then CLOSE_CONNECTION from the authenticated path
+    @Test
+    public void test_authenticated_close_connection() throws Exception {
+        final var createReq = new CreateUserRequest();
+        createReq.setUsername("msgcloser");
+        createReq.setPassword("password123");
+        createReq.setAdmin(true);
+        createReq.setGlobalPermissions(new HashSet<>());
+        createReq.setDatabasePermissions(new HashMap<>());
+        createReq.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(createReq);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String msgs =
+                """
+                        {"type":"AUTHENTICATE","username":"msgcloser","password":"password123"}
+                        {"type":"CLOSE_CONNECTION"}
+                        """;
+        Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
+
+        MessageProcessor mp = new MessageProcessor(socket);
+        Thread t = new Thread(mp);
+        t.start();
+        t.join(3000);
+
+        assertFalse(t.isAlive(), "Thread should exit after CLOSE_CONNECTION");
+    }
+
+    // Authenticated but forbidden request returns FORBIDDEN
+    @Test
+    public void test_authenticated_forbidden_request_returns_forbidden() throws Exception {
+        // Create a non-admin user with no permissions
+        final var createReq = new CreateUserRequest();
+        createReq.setUsername("noPermsUser");
+        createReq.setPassword("password123");
+        createReq.setAdmin(false);
+        createReq.setGlobalPermissions(new HashSet<>());
+        createReq.setDatabasePermissions(new HashMap<>());
+        createReq.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(createReq);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        String msgs =
+                """
+                        {"type":"AUTHENTICATE","username":"noPermsUser","password":"password123"}
+                        {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{}}
+                        """;
+        Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
+
+        MessageProcessor mp = new MessageProcessor(socket);
+        Thread t = new Thread(mp);
+        t.start();
+        t.join(3000);
+
+        String response = out.toString();
+        assertTrue(response.contains("FORBIDDEN"), "Should return FORBIDDEN for unauthorized op");
     }
 
     // An IOException on the output stream is handled without crashing
