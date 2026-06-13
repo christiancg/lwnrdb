@@ -51,12 +51,13 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] 95% test coverage
 - [x] Request validation
 - [ ] Iterative read depending on available memory and document count
-- [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
+- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
+- [ ] Check that in join aggregations, the user should have permissions to the collection that is being joined
 
 ## Wire Protocol / Message Reference
 
