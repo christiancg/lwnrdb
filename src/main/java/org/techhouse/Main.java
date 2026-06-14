@@ -2,6 +2,7 @@ package org.techhouse;
 
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -23,6 +24,7 @@ public class Main {
     private static final Configuration config = Configuration.getInstance();
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
     private static int getPort(String[] args) {
         if (args.length > 0) {
@@ -46,6 +48,8 @@ public class Main {
         final var port = getPort(args);
         final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
         backgroundTaskManager.startBackgroundWorkers();
+        memoryManagement.loadProfileFromAdmin();
+        memoryManagement.startSweepThread();
         final var server = new SocketServer(port);
         server.serve();
     }

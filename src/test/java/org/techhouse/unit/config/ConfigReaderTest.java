@@ -57,6 +57,11 @@ public class ConfigReaderTest {
         expectedConfig.put("maxLogFiles", "7");
         expectedConfig.put("maxPageSizeBytes", "2097152");
         expectedConfig.put("maxEntrySizeBytes", "1048576");
+        expectedConfig.put("defaultAdminUsername", "admin");
+        expectedConfig.put("defaultAdminPassword", "adminstrator");
+        expectedConfig.put("maxCollectionCache", "512mb");
+        expectedConfig.put("usageProfileRetentionSeconds", "86400");
+        expectedConfig.put("memoryManagementSweepIntervalSeconds", "10");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

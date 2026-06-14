@@ -1,5 +1,7 @@
 package org.techhouse.cache;
 
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -23,6 +25,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Cache {
+    private static final long ESTIMATED_PK_ENTRY_BYTES = 96L;
+    private static final long ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES = 64L;
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
@@ -35,11 +39,41 @@ public class Cache {
     private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
+    // Lazily initialized because Cache <-> MemoryManagement is a construction-time cycle:
+    // MemoryManagement holds Cache eagerly, so we cannot hold MemoryManagement eagerly here
+    // without recursing through the IoC container during static init.
+    private MemoryManagement memoryManagement;
+    private BackgroundTaskManager taskManager;
+
+    private MemoryManagement memoryManagement() {
+        var mm = memoryManagement;
+        if (mm == null) {
+            mm = IocContainer.get(MemoryManagement.class);
+            memoryManagement = mm;
+        }
+        return mm;
+    }
+
+    private BackgroundTaskManager taskManager() {
+        var tm = taskManager;
+        if (tm == null) {
+            tm = IocContainer.get(BackgroundTaskManager.class);
+            taskManager = tm;
+        }
+        return tm;
+    }
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        final var pkIndexCollectionUsageEntries =
+                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
+        collectionUsagePkIndex.putAll(pkIndexCollectionUsageEntriesMap);
         final var pkIndexAdminDbEntries =
                 fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -138,9 +172,41 @@ public class Cache {
         var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
             primaryKeyIndex = fs.readWholePkIndexFile(dbName, collName);
-            pkIndexMap.put(collectionIdentifier, primaryKeyIndex);
+            if (shouldCache(dbName, estimatePkIndexSize(primaryKeyIndex))) {
+                pkIndexMap.put(collectionIdentifier, primaryKeyIndex);
+            }
         }
         return primaryKeyIndex;
+    }
+
+    private boolean isCachingDisabled(String dbName) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return false;
+        }
+        return Configuration.getInstance().isCachingDisabled();
+    }
+
+    private boolean shouldCache(String dbName, long estimatedBytes) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return true;
+        }
+        final var config = Configuration.getInstance();
+        if (config.isCachingDisabled()) {
+            return false;
+        }
+        if (config.isCacheUnlimited()) {
+            return true;
+        }
+        final var maxBytes = config.getMaxCollectionCacheBytes();
+        return currentUserCacheBytes() + estimatedBytes <= maxBytes;
+    }
+
+    private long currentUserCacheBytes() {
+        long total = 0L;
+        for (var r : listCacheableResources()) {
+            total += r.estimatedSizeBytes();
+        }
+        return total;
     }
 
     public Map<String, List<FieldIndexEntry<?>>> getAllFieldIndexesAndLoadIfNecessary(String dbName, String collName,
@@ -151,7 +217,13 @@ public class Cache {
         if (indexes == null) {
             final var allIndexesForField = fs.readAllWholeFieldIndexFiles(dbName, collName, fieldName);
             indexMap = new ConcurrentHashMap<>(allIndexesForField);
-            fieldIndexMap.put(collectionIdentifier, indexMap);
+            long total = 0L;
+            for (var list : indexMap.values()) {
+                total += estimateFieldIndexSize(list);
+            }
+            if (shouldCache(dbName, total)) {
+                fieldIndexMap.put(collectionIdentifier, indexMap);
+            }
             return allIndexesForField;
         } else {
             indexMap = indexes;
@@ -175,8 +247,11 @@ public class Cache {
             } else if (index == null) {
                 index = new ConcurrentHashMap<>();
             }
-            index.put(indexIdentifier, new ArrayList<>(indexEntries));
-            fieldIndexMap.put(collectionIdentifier, index);
+            final var asWildcard = new ArrayList<FieldIndexEntry<?>>(indexEntries);
+            if (shouldCache(dbName, estimateFieldIndexSize(asWildcard))) {
+                index.put(indexIdentifier, new ArrayList<>(indexEntries));
+                fieldIndexMap.put(collectionIdentifier, index);
+            }
         } else {
             final var existingIndex = index.get(indexIdentifier);
             if (existingIndex != null) {
@@ -191,6 +266,21 @@ public class Cache {
     }
 
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
+            throws IOException {
+        final var result = doGetIdsFromIndex(dbName, collName, fieldName, operator, value);
+        if (result != null && !Globals.ADMIN_DB_NAME.equals(dbName)) {
+            recordFieldIndexAccess(dbName, collName, fieldName);
+        }
+        return result;
+    }
+
+    private void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
+        memoryManagement().recordAccess(AccessKind.FIELD_INDEX, dbName, collName, fieldName);
+        taskManager().submitBackgroundTask(new CollectionUsageEvent(AccessKind.FIELD_INDEX, dbName, collName,
+                fieldName, System.currentTimeMillis()));
+    }
+
+    private <T> Set<String> doGetIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
             throws IOException {
         return switch (value) {
             case Number n -> {
@@ -284,12 +374,22 @@ public class Cache {
     }
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
+        if (!shouldCache(dbName, entry.byteSize())) {
+            return;
+        }
         final var collId = getCollectionIdentifier(dbName, collName);
         var coll = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         coll.put(entry.get_id(), entry);
     }
 
     public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
+        long total = 0L;
+        for (var e : entries) {
+            total += e.byteSize();
+        }
+        if (!shouldCache(dbName, total)) {
+            return;
+        }
         final var collId = getCollectionIdentifier(dbName, collName);
         var coll = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         coll.putAll(entries.stream().collect(Collectors.toMap(DbEntry::get_id, o -> o)));
@@ -297,12 +397,17 @@ public class Cache {
 
     public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        if (isCachingDisabled(dbName)) {
+            return fs.getById(idxEntry);
+        }
         final var coll = collectionMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>());
         final var pk = idxEntry.getValue();
         var entry = coll.get(pk);
         if (entry == null) {
             entry = fs.getById(idxEntry);
-            coll.put(pk, entry);
+            if (shouldCache(dbName, entry.byteSize())) {
+                coll.put(pk, entry);
+            }
         }
         return entry;
     }
@@ -478,16 +583,104 @@ public class Cache {
         collectionMap.remove(collIdentifier);
     }
 
+    public void evictCollectionDocuments(String dbName, String collName) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return;
+        }
+        final var collIdentifier = getCollectionIdentifier(dbName, collName);
+        collectionMap.remove(collIdentifier);
+    }
+
+    public void evictPkIndex(String dbName, String collName) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return;
+        }
+        final var collIdentifier = getCollectionIdentifier(dbName, collName);
+        pkIndexMap.remove(collIdentifier);
+    }
+
+    public void evictFieldIndex(String dbName, String collName, String indexKey) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return;
+        }
+        final var collIdentifier = getCollectionIdentifier(dbName, collName);
+        final var indexes = fieldIndexMap.get(collIdentifier);
+        if (indexes != null) {
+            indexes.remove(indexKey);
+            if (indexes.isEmpty()) {
+                fieldIndexMap.remove(collIdentifier);
+            }
+        }
+    }
+
+    public List<CacheableResource> listCacheableResources() {
+        final var result = new ArrayList<CacheableResource>();
+        for (var entry : pkIndexMap.entrySet()) {
+            final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0])) continue;
+            result.add(new CacheableResource(AccessKind.PK_INDEX, parts[0], parts[1], null,
+                    estimatePkIndexSize(entry.getValue())));
+        }
+        for (var entry : collectionMap.entrySet()) {
+            final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0])) continue;
+            result.add(new CacheableResource(AccessKind.COLLECTION, parts[0], parts[1], null,
+                    estimateCollectionSize(entry.getValue())));
+        }
+        for (var entry : fieldIndexMap.entrySet()) {
+            final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0])) continue;
+            for (var inner : entry.getValue().entrySet()) {
+                result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(),
+                        estimateFieldIndexSize(inner.getValue())));
+            }
+        }
+        return result;
+    }
+
+    private long estimatePkIndexSize(List<PkIndexEntry> entries) {
+        if (entries == null) return 0L;
+        return (long) entries.size() * ESTIMATED_PK_ENTRY_BYTES;
+    }
+
+    private long estimateCollectionSize(Map<String, DbEntry> entries) {
+        if (entries == null) return 0L;
+        long total = 0L;
+        for (var e : entries.values()) {
+            total += e.byteSize();
+        }
+        return total;
+    }
+
+    private long estimateFieldIndexSize(List<FieldIndexEntry<?>> entries) {
+        if (entries == null) return 0L;
+        long total = 0L;
+        for (var e : entries) {
+            final var value = e.getValue();
+            final var valueLen = value == null ? 0 : value.toString().length() * 2L;
+            final var ids = e.getIds();
+            final var idsLen = ids == null ? 0L : ids.size() * ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES;
+            total += valueLen + idsLen + ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES;
+        }
+        return total;
+    }
+
     public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName, String collName)
             throws IOException {
         if (resultStream != null) {
             return resultStream;
         }
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        if (isCachingDisabled(dbName)) {
+            return readWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
+        }
         var coll = collectionMap.get(collectionIdentifier);
         if (coll == null) {
-            coll = new ConcurrentHashMap<>(readWholeCollection(dbName, collName));
-            collectionMap.put(collectionIdentifier, coll);
+            final var loaded = readWholeCollection(dbName, collName);
+            coll = new ConcurrentHashMap<>(loaded);
+            if (shouldCache(dbName, estimateCollectionSize(coll))) {
+                collectionMap.put(collectionIdentifier, coll);
+            }
         }
         return coll.values().stream().map(DbEntry::getData);
     }
@@ -529,5 +722,21 @@ public class Cache {
 
     public PkIndexEntry getPkIndexAdminUserEntry(String username) {
         return usersPkIndex.get(username);
+    }
+
+    public PkIndexEntry getPkIndexCollectionUsage(String usageId) {
+        return collectionUsagePkIndex.get(usageId);
+    }
+
+    public void putPkIndexCollectionUsage(PkIndexEntry indexEntry) {
+        collectionUsagePkIndex.put(indexEntry.getValue(), indexEntry);
+    }
+
+    public void removePkIndexCollectionUsage(String usageId) {
+        collectionUsagePkIndex.remove(usageId);
+    }
+
+    public Map<String, PkIndexEntry> getCollectionUsagePkIndexes() {
+        return collectionUsagePkIndex;
     }
 }

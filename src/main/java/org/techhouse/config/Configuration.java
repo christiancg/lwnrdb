@@ -1,7 +1,10 @@
 package org.techhouse.config;
 
+import org.techhouse.log.Logger;
+
 public class Configuration {
     private static final Configuration config = new Configuration();
+    private static final Logger logger = Logger.logFor(Configuration.class);
 
     private int port;
     private int maxConnections;
@@ -13,6 +16,9 @@ public class Configuration {
     private int maxEntrySizeBytes;
     private String defaultAdminUsername;
     private String defaultAdminPassword;
+    private long maxCollectionCacheBytes;
+    private long usageProfileRetentionMillis = 86_400_000L;
+    private long memoryManagementSweepIntervalSeconds = 10L;
 
     private Configuration() {
     }
@@ -31,6 +37,31 @@ public class Configuration {
                 case "maxEntrySizeBytes" -> maxEntrySizeBytes = Integer.parseInt(config.getValue());
                 case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
                 case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
+                case "maxCollectionCache" -> {
+                    try {
+                        maxCollectionCacheBytes = SizeParser.parse(config.getValue());
+                    } catch (IllegalArgumentException e) {
+                        logger.warning("Invalid maxCollectionCache value '" + config.getValue() +
+                                "', falling back to unlimited (0)");
+                        maxCollectionCacheBytes = 0L;
+                    }
+                }
+                case "usageProfileRetentionSeconds" -> {
+                    try {
+                        usageProfileRetentionMillis = Long.parseLong(config.getValue()) * 1000L;
+                    } catch (NumberFormatException e) {
+                        logger.warning("Invalid usageProfileRetentionSeconds value '" + config.getValue() +
+                                "', falling back to 86400");
+                    }
+                }
+                case "memoryManagementSweepIntervalSeconds" -> {
+                    try {
+                        memoryManagementSweepIntervalSeconds = Long.parseLong(config.getValue());
+                    } catch (NumberFormatException e) {
+                        logger.warning("Invalid memoryManagementSweepIntervalSeconds value '" + config.getValue() +
+                                "', falling back to 30");
+                    }
+                }
             }
         }
     }
@@ -80,5 +111,25 @@ public class Configuration {
 
     public String getDefaultAdminPassword() {
         return defaultAdminPassword;
+    }
+
+    public long getMaxCollectionCacheBytes() {
+        return maxCollectionCacheBytes;
+    }
+
+    public boolean isCachingDisabled() {
+        return maxCollectionCacheBytes == Globals.CACHE_DISABLED;
+    }
+
+    public boolean isCacheUnlimited() {
+        return maxCollectionCacheBytes == Globals.CACHE_UNLIMITED;
+    }
+
+    public long getUsageProfileRetentionMillis() {
+        return usageProfileRetentionMillis;
+    }
+
+    public long getMemoryManagementSweepIntervalSeconds() {
+        return memoryManagementSweepIntervalSeconds;
     }
 }

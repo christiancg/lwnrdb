@@ -50,6 +50,7 @@ public class TestUtils {
         TestUtils.setPrivateField( cache, "pkIndexMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField( cache, "pagesPkIndexes", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField( cache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) {

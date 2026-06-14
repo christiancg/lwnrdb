@@ -6,6 +6,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.events.*;
+import org.techhouse.cache.AccessKind;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -102,6 +104,29 @@ public class EventProcessorHelperTest {
         final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
         final var totalCount = pageEntries == null ? 0 : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
         Assertions.assertEquals(1, totalCount, "Entry count should be 1");
+    }
+
+    @Test
+    public void processCollectionUsageEventUpsertsUsageEntry() throws IOException, InterruptedException {
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.recordAccess(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var event = new CollectionUsageEvent(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
+                System.currentTimeMillis());
+        EventProcessorHelper.processEvent(event);
+        final var cache = IocContainer.get(Cache.class);
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
+        Assertions.assertNotNull(cache.getPkIndexCollectionUsage(id));
+    }
+
+    @Test
+    public void processCollectionUsageEventIgnoresAdminDb() throws IOException, InterruptedException {
+        final var event = new CollectionUsageEvent(AccessKind.COLLECTION, org.techhouse.config.Globals.ADMIN_DB_NAME,
+                "databases", null, System.currentTimeMillis());
+        EventProcessorHelper.processEvent(event);
+        final var cache = IocContainer.get(Cache.class);
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(
+                org.techhouse.config.Globals.ADMIN_DB_NAME, "databases", "");
+        Assertions.assertNull(cache.getPkIndexCollectionUsage(id));
     }
 
     @Test

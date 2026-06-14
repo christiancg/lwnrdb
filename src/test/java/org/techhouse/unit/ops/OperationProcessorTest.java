@@ -453,4 +453,45 @@ public class OperationProcessorTest {
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
     }
+
+    @Test
+    public void test_save_records_collection_usage() {
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        final var before = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var beforeCount = before == null ? 0L : before.getAccessCount();
+        SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("usage-id-1"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+        final var after = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        assertNotNull(after);
+        assertTrue(after.getAccessCount() > beforeCount);
+    }
+
+    @Test
+    public void test_find_by_id_records_pk_index_access() {
+        SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("usage-id-2"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        final var before = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL, null);
+        final var beforeCount = before == null ? 0L : before.getAccessCount();
+        FindByIdRequest request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("usage-id-2");
+        processor.processMessage(request);
+        final var after = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL, null);
+        assertNotNull(after);
+        assertTrue(after.getAccessCount() > beforeCount);
+    }
+
+    @Test
+    public void test_save_admin_collection_does_not_record_usage() {
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        // admin saves go through helpers, but explicitly verify recordAccess noops:
+        mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null);
+        assertNull(mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null));
+    }
 }
