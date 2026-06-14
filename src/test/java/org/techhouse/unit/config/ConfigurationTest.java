@@ -140,4 +140,143 @@ public class ConfigurationTest {
     public void test_globals_instantiation() {
         assertNotNull(new Globals());
     }
+
+    @Test
+    public void test_default_memory_management_intervals() throws NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        TestUtils.setPrivateField(configInstance, "usageProfileRetentionMillis", 86_400_000L);
+        TestUtils.setPrivateField(configInstance, "memoryManagementSweepIntervalSeconds", 30L);
+        final var minimalConfig = new HashMap<String, String>();
+        minimalConfig.put("port", "8989");
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(minimalConfig);
+            final var config = Configuration.getInstance();
+            assertEquals(86_400_000L, config.getUsageProfileRetentionMillis());
+            assertEquals(30L, config.getMemoryManagementSweepIntervalSeconds());
+        }
+    }
+
+    @Test
+    public void test_loads_maxCollectionCache_humanReadable() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("maxCollectionCache=512Mb");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(512L * 1024L * 1024L, config.getMaxCollectionCacheBytes());
+            assertFalse(config.isCachingDisabled());
+            assertFalse(config.isCacheUnlimited());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_maxCollectionCache_defaults_to_unlimited_when_missing() throws NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        TestUtils.setPrivateField(configInstance, "maxCollectionCacheBytes", 0L);
+        final var minimalConfig = new HashMap<String, String>();
+        minimalConfig.put("port", "8989");
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(minimalConfig);
+            final var config = Configuration.getInstance();
+            assertEquals(0L, config.getMaxCollectionCacheBytes());
+            assertTrue(config.isCacheUnlimited());
+            assertFalse(config.isCachingDisabled());
+        }
+    }
+
+    @Test
+    public void test_maxCollectionCache_disabled_when_minus_one() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("maxCollectionCache=-1");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(-1L, config.getMaxCollectionCacheBytes());
+            assertTrue(config.isCachingDisabled());
+            assertFalse(config.isCacheUnlimited());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_maxCollectionCache_invalid_falls_back_to_unlimited() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("maxCollectionCache=nonsense");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(0L, config.getMaxCollectionCacheBytes());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_loads_usageProfileRetentionSeconds() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("usageProfileRetentionSeconds=120");
+            writer.newLine();
+            writer.write("memoryManagementSweepIntervalSeconds=5");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(120_000L, config.getUsageProfileRetentionMillis());
+            assertEquals(5L, config.getMemoryManagementSweepIntervalSeconds());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_invalid_usageProfileRetention_falls_back() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        TestUtils.setPrivateField(configInstance, "usageProfileRetentionMillis", 86_400_000L);
+        TestUtils.setPrivateField(configInstance, "memoryManagementSweepIntervalSeconds", 30L);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("usageProfileRetentionSeconds=abc");
+            writer.newLine();
+            writer.write("memoryManagementSweepIntervalSeconds=xyz");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(86_400_000L, config.getUsageProfileRetentionMillis());
+            assertEquals(30L, config.getMemoryManagementSweepIntervalSeconds());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
 }

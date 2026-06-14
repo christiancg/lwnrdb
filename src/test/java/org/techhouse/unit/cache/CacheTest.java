@@ -3,6 +3,7 @@ package org.techhouse.unit.cache;
 import org.junit.jupiter.api.*;
 
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -1337,5 +1338,375 @@ public class CacheTest {
         // Verify databases and collections were loaded
         assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
+    public void test_evictPkIndex_removes_only_pk_for_target_collection() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
+        pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
+                List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
+        pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c2"),
+                List.of(new PkIndexEntry("db1", "c2", "id1", 0, 1, 0)));
+        cache.evictPkIndex("db1", "c1");
+        assertFalse(pkIndexMap.containsKey(Cache.getCollectionIdentifier("db1", "c1")));
+        assertTrue(pkIndexMap.containsKey(Cache.getCollectionIdentifier("db1", "c2")));
+    }
+
+    @Test
+    public void test_evictPkIndex_noop_for_admin() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
+        pkIndexMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"),
+                List.of(new PkIndexEntry(Globals.ADMIN_DB_NAME, "databases", "id1", 0, 1, 0)));
+        cache.evictPkIndex(Globals.ADMIN_DB_NAME, "databases");
+        assertTrue(pkIndexMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
+    }
+
+    @Test
+    public void test_evictFieldIndex_removes_only_target_index() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
+        indexes.put("field|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
+        indexes.put("other|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
+        fieldIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"), indexes);
+        cache.evictFieldIndex("db1", "c1", "field|String");
+        assertFalse(indexes.containsKey("field|String"));
+        assertTrue(indexes.containsKey("other|String"));
+    }
+
+    @Test
+    public void test_evictFieldIndex_removes_collection_entry_when_last_index_evicted() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
+        indexes.put("field|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
+        fieldIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"), indexes);
+        cache.evictFieldIndex("db1", "c1", "field|String");
+        assertFalse(fieldIndexMap.containsKey(Cache.getCollectionIdentifier("db1", "c1")));
+    }
+
+    @Test
+    public void test_evictFieldIndex_noop_for_admin() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
+        indexes.put("field|String", List.of(new FieldIndexEntry<>(Globals.ADMIN_DB_NAME, "databases", "v", Set.of("id1"))));
+        fieldIndexMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), indexes);
+        cache.evictFieldIndex(Globals.ADMIN_DB_NAME, "databases", "field|String");
+        assertTrue(fieldIndexMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
+    }
+
+    @Test
+    public void test_evictCollectionDocuments_removes_only_documents_not_pk() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", pkType);
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+        pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
+                List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
+        collectionMap.put(Cache.getCollectionIdentifier("db1", "c1"), new ConcurrentHashMap<>());
+        cache.evictCollectionDocuments("db1", "c1");
+        assertTrue(pkIndexMap.containsKey(Cache.getCollectionIdentifier("db1", "c1")));
+        assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("db1", "c1")));
+    }
+
+    @Test
+    public void test_evictCollectionDocuments_noop_for_admin() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+        collectionMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), new ConcurrentHashMap<>());
+        cache.evictCollectionDocuments(Globals.ADMIN_DB_NAME, "databases");
+        assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
+    }
+
+    @Test
+    public void test_listCacheableResources_excludes_admin_entries() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+        final var inner = new ConcurrentHashMap<String, DbEntry>();
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "id1");
+        inner.put("id1", DbEntry.fromJsonObject("userDb", "c1", obj));
+        collectionMap.put(Cache.getCollectionIdentifier("userDb", "c1"), inner);
+        collectionMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), new ConcurrentHashMap<>());
+        final var resources = cache.listCacheableResources();
+        assertTrue(resources.stream().anyMatch(r -> r.dbName().equals("userDb")));
+        assertTrue(resources.stream().noneMatch(r -> r.dbName().equals(Globals.ADMIN_DB_NAME)));
+    }
+
+    @Test
+    public void test_listCacheableResources_includes_pk_and_field_indexes() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", pkType);
+        pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
+                List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
+        final var fieldType = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", fieldType);
+        final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
+        indexes.put("f|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
+        fieldIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"), indexes);
+        final var resources = cache.listCacheableResources();
+        assertTrue(resources.stream().anyMatch(r -> r.kind() == org.techhouse.cache.AccessKind.PK_INDEX));
+        assertTrue(resources.stream().anyMatch(r -> r.kind() == org.techhouse.cache.AccessKind.FIELD_INDEX));
+    }
+
+    @Test
+    public void test_addEntryToCache_skips_when_caching_disabled() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var obj = new JsonObject();
+            obj.addProperty(Globals.PK_FIELD, "id1");
+            cache.addEntryToCache("userDb", "c1", DbEntry.fromJsonObject("userDb", "c1", obj));
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_addEntryToCache_caches_admin_even_when_disabled() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var obj = new JsonObject();
+            obj.addProperty(Globals.PK_FIELD, "id1");
+            cache.addEntryToCache(Globals.ADMIN_DB_NAME, "databases", DbEntry.fromJsonObject(Globals.ADMIN_DB_NAME, "databases", obj));
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_addEntriesToCache_skips_when_caching_disabled() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var obj = new JsonObject();
+            obj.addProperty(Globals.PK_FIELD, "id1");
+            cache.addEntriesToCache("userDb", "c1",
+                    List.of(DbEntry.fromJsonObject("userDb", "c1", obj)));
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_collection_usage_pk_index_round_trip() {
+        Cache cache = IocContainer.get(Cache.class);
+        final var pk = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
+                "usage-id", 0, 10, 0);
+        cache.putPkIndexCollectionUsage(pk);
+        assertEquals(pk, cache.getPkIndexCollectionUsage("usage-id"));
+        assertTrue(cache.getCollectionUsagePkIndexes().containsKey("usage-id"));
+        cache.removePkIndexCollectionUsage("usage-id");
+        assertNull(cache.getPkIndexCollectionUsage("usage-id"));
+    }
+
+    @Test
+    public void test_addEntryToCache_refuses_when_over_cap() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        // Tight cap that an entry's byteSize will exceed.
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            collectionMap.clear();
+            final var obj = new JsonObject();
+            obj.addProperty(Globals.PK_FIELD, "id1");
+            obj.addProperty("v", "x".repeat(128));
+            cache.addEntryToCache("userDb", "c1", DbEntry.fromJsonObject("userDb", "c1", obj));
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")),
+                    "entry should not be admitted when it exceeds the cap");
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_addEntryToCache_admits_when_within_cap() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1024L * 1024L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            collectionMap.clear();
+            final var obj = new JsonObject();
+            obj.addProperty(Globals.PK_FIELD, "id1");
+            cache.addEntryToCache("userDb", "c1", DbEntry.fromJsonObject("userDb", "c1", obj));
+            assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")),
+                    "small entry should be admitted under a generous cap");
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_addEntriesToCache_refuses_when_total_over_cap() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            collectionMap.clear();
+            final var obj1 = new JsonObject();
+            obj1.addProperty(Globals.PK_FIELD, "id1");
+            obj1.addProperty("v", "x".repeat(128));
+            final var obj2 = new JsonObject();
+            obj2.addProperty(Globals.PK_FIELD, "id2");
+            obj2.addProperty("v", "y".repeat(128));
+            cache.addEntriesToCache("userDb", "c1",
+                    List.of(DbEntry.fromJsonObject("userDb", "c1", obj1),
+                            DbEntry.fromJsonObject("userDb", "c1", obj2)));
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_getById_skips_cache_when_disabled() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            FileSystem fsMock = mock(FileSystem.class);
+            final var fsField = Cache.class.getDeclaredField("fs");
+            fsField.setAccessible(true);
+            final var originalFs = fsField.get(cache);
+            fsField.set(cache, fsMock);
+            try {
+                final var stub = new DbEntry();
+                stub.set_id("id1");
+                final var pk = new PkIndexEntry("userDb", "c1", "id1", 0, 10, 0);
+                when(fsMock.getById(pk)).thenReturn(stub);
+                final var result = cache.getById("userDb", "c1", pk);
+                assertEquals("id1", result.get_id());
+                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+                final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+                assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
+            } finally {
+                fsField.set(cache, originalFs);
+            }
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_getById_admission_check_when_over_cap() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            FileSystem fsMock = mock(FileSystem.class);
+            final var fsField = Cache.class.getDeclaredField("fs");
+            fsField.setAccessible(true);
+            final var originalFs = fsField.get(cache);
+            fsField.set(cache, fsMock);
+            try {
+                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+                final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+                collectionMap.clear();
+                final var obj = new JsonObject();
+                obj.addProperty(Globals.PK_FIELD, "id1");
+                obj.addProperty("v", "x".repeat(128));
+                final var entry = DbEntry.fromJsonObject("userDb", "c1", obj);
+                final var pk = new PkIndexEntry("userDb", "c1", "id1", 0, 10, 0);
+                when(fsMock.getById(pk)).thenReturn(entry);
+                final var result = cache.getById("userDb", "c1", pk);
+                assertEquals("id1", result.get_id());
+                final var collection = collectionMap.get(Cache.getCollectionIdentifier("userDb", "c1"));
+                assertTrue(collection == null || !collection.containsKey("id1"),
+                        "oversized entry must not be admitted to the cache");
+            } finally {
+                fsField.set(cache, originalFs);
+            }
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_initializeStreamIfNecessary_skips_cache_when_disabled() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            // Create the collection on disk so readWholeCollection works.
+            TestUtils.createTestDatabaseAndCollection();
+            final var stream = cache.initializeStreamIfNecessary(null, TestGlobals.DB, TestGlobals.COLL);
+            assertNotNull(stream);
+            stream.close();
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
+    }
+
+    @Test
+    public void test_shouldCache_refuses_new_entry_when_over_cap() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxCollectionCacheBytes();
+        // Cap smaller than the seeded "old" collection — adding "new" should be refused.
+        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 100L);
+        try {
+            Cache cache = IocContainer.get(Cache.class);
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
+            collectionMap.clear();
+            // Seed an existing cached collection that already exceeds the cap (~217B > 100B).
+            final var existing = new java.util.concurrent.ConcurrentHashMap<String, DbEntry>();
+            final var seed = new JsonObject();
+            seed.addProperty(Globals.PK_FIELD, "seed");
+            seed.addProperty("v", "z".repeat(200));
+            existing.put("seed", DbEntry.fromJsonObject("userDb", "old", seed));
+            collectionMap.put(Cache.getCollectionIdentifier("userDb", "old"), existing);
+            // Admission check is pure: it does not run a sweep — the async sweep thread does that.
+            // So "new" is refused while the cache is over cap.
+            final var obj = new JsonObject();
+            obj.addProperty(Globals.PK_FIELD, "id1");
+            cache.addEntryToCache("userDb", "new", DbEntry.fromJsonObject("userDb", "new", obj));
+            assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "old")));
+            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "new")));
+        } finally {
+            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+        }
     }
 }

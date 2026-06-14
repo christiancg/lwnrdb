@@ -51,13 +51,14 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] 95% test coverage
 - [x] Request validation
 - [ ] Iterative read depending on available memory and document count
-- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
+- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxCollectionCache` configuration)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
 - [ ] Check that in join aggregations, the user should have permissions to the collection that is being joined
+- [ ] Validation of configurations
 
 ## Wire Protocol / Message Reference
 
@@ -309,8 +310,19 @@ On first startup, if no admin user exists and `defaultAdminUsername` / `defaultA
 **New `lwnrdb.cfg` keys:**
 ```
 defaultAdminUsername=admin
-defaultAdminPassword=
+defaultAdminPassword=adminstrator
+maxCollectionCache=512Mb
+usageProfileRetentionSeconds=86400
+memoryManagementSweepIntervalSeconds=10
 ```
+
+### Memory management
+
+`maxCollectionCache` caps the estimated bytes used by the user-collection cache (PK indexes, field indexes, document maps). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+- `0` — unlimited (no eviction, current behavior).
+- `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
+
+Eviction is LFU (least-frequently-used). Access counts are recorded asynchronously via the background task system and persisted in the `admin/collection_usage` collection. Stale usage records older than `usageProfileRetentionSeconds` are removed by a periodic cleanup task. The sweep that enforces the cap runs every `memoryManagementSweepIntervalSeconds`. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
 
 ## Q&A
 

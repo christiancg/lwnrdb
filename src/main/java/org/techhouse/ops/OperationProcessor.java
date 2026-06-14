@@ -2,7 +2,9 @@ package org.techhouse.ops;
 
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.*;
+import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -30,6 +32,25 @@ public class OperationProcessor {
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+
+    private void recordCollectionAccess(String dbName, String collName) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return;
+        }
+        memoryManagement.recordAccess(AccessKind.COLLECTION, dbName, collName, null);
+        taskManager.submitBackgroundTask(new CollectionUsageEvent(AccessKind.COLLECTION, dbName, collName, null,
+                System.currentTimeMillis()));
+    }
+
+    private void recordPkIndexAccess(String dbName, String collName) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return;
+        }
+        memoryManagement.recordAccess(AccessKind.PK_INDEX, dbName, collName, null);
+        taskManager.submitBackgroundTask(new CollectionUsageEvent(AccessKind.PK_INDEX, dbName, collName, null,
+                System.currentTimeMillis()));
+    }
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -130,6 +151,7 @@ public class OperationProcessor {
             final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
             cache.addEntriesToCache(dbName, collName, insertedDbEntries);
             taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
+            recordCollectionAccess(dbName, collName);
             final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
             final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
             return new BulkSaveResponse(OperationStatus.OK, "Successfully saved entries", insertedIds, updatedIds);
@@ -176,6 +198,7 @@ public class OperationProcessor {
             primaryKeyIndex.add(insertAt, savedPkIndexEntry);
             cache.addEntryToCache(dbName, collName, entry);
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
+            recordCollectionAccess(dbName, collName);
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
             return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
@@ -194,6 +217,8 @@ public class OperationProcessor {
             if (foundIndexEntry >= 0) {
                 final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
                 final var entry = cache.getById(dbName, collName, primaryKeyIndexEntry);
+                recordPkIndexAccess(dbName, collName);
+                recordCollectionAccess(dbName, collName);
                 return new FindByIdResponse(OperationStatus.OK, "Ok", entry.getData());
             } else {
                 return new FindByIdResponse(OperationStatus.NOT_FOUND, "Not found", null);
@@ -206,6 +231,7 @@ public class OperationProcessor {
     private AggregateResponse processAggregateOperation(AggregateRequest aggregateRequest) {
         try {
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
+            recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
             return results.isEmpty() ?
                     new AggregateResponse(OperationStatus.NOT_FOUND, "No results", null) :
                     new AggregateResponse(OperationStatus.OK, "Ok", results);
@@ -229,6 +255,7 @@ public class OperationProcessor {
                 primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
                 cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
                 taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
+                recordCollectionAccess(dbName, collName);
                 return new DeleteResponse(OperationStatus.OK, "Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
                 return new DeleteResponse(OperationStatus.NOT_FOUND, "Entry with id " + deleteRequest.get_id() + " not found");
