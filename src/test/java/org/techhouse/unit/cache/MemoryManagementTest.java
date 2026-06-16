@@ -34,6 +34,7 @@ public class MemoryManagementTest {
 
     private static final class FakeMemoryPressureMonitor implements MemoryPressureMonitor {
         volatile double heapRatio = 0.1;
+        volatile long heapUsedBytes = 0L;
         volatile double osFreeRatio = 0.9;
         volatile boolean osAvailable = true;
         volatile boolean throwOnSnapshot = false;
@@ -43,7 +44,7 @@ public class MemoryManagementTest {
             if (throwOnSnapshot) {
                 throw new RuntimeException("forced");
             }
-            return new Snapshot(heapRatio, osFreeRatio, osAvailable);
+            return new Snapshot(heapRatio, heapUsedBytes, osFreeRatio, osAvailable);
         }
     }
 
@@ -147,6 +148,7 @@ public class MemoryManagementTest {
     @Test
     public void test_runEvictionSweep_evicts_lowest_LFU_first() throws Exception {
         setCacheCap(1L);
+        fakePressure.heapUsedBytes = 1_000_000L; // way over cap → budget exceeded
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "hot", 10);
         seedCollectionCache(cache, "cold", 10);
@@ -163,9 +165,11 @@ public class MemoryManagementTest {
 
     @Test
     public void test_runEvictionSweep_respects_priority_tier() throws Exception {
-        // PK_INDEX entry is ~96B; with 10 large COLLECTION docs the collection is several KB.
-        // Cap at 200B: enough to keep the PK_INDEX but force evicting the COLLECTION.
+        // Cap is 200B; fake heap reports 201B so overage is 1B. The first evicted
+        // resource (COLLECTION, by tier ordering) covers it and the sweep stops,
+        // leaving the PK_INDEX in place.
         setCacheCap(200L);
+        fakePressure.heapUsedBytes = 201L;
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "coll", 10);
         seedPkIndex(cache, "coll");
@@ -268,6 +272,7 @@ public class MemoryManagementTest {
     @Test
     public void test_runEvictionSweep_handles_field_index_tier() throws Exception {
         setCacheCap(1L);
+        fakePressure.heapUsedBytes = 1_000_000L;
         final var cache = IocContainer.get(Cache.class);
         seedFieldIndex(cache, "coll");
         final var mm = IocContainer.get(MemoryManagement.class);
@@ -331,6 +336,7 @@ public class MemoryManagementTest {
     public void test_tier_ordinal_covers_all_kinds() throws Exception {
         // Exercise all branches of tierOrdinal via runEvictionSweep with one resource per kind.
         setCacheCap(1L);
+        fakePressure.heapUsedBytes = 1_000_000L;
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "coll1", 5);
         seedPkIndex(cache, "coll2");

@@ -35,11 +35,11 @@ public class DefaultMemoryPressureMonitor implements MemoryPressureMonitor {
                 logger.warning("Host OS memory metrics unavailable on this JVM; the OS-free-RAM " +
                         "pressure signal will be ignored.");
             }
-            return new Snapshot(heapUsedRatio, 1.0, false);
+            return new Snapshot(heapUsedRatio, used, 1.0, false);
         }
         final var freeOs = osBean.getFreeMemorySize();
         final var totalOs = osBean.getTotalMemorySize();
         final double osFreeRatio = totalOs > 0 ? (double) freeOs / (double) totalOs : 1.0;
-        return new Snapshot(heapUsedRatio, osFreeRatio, true);
+        return new Snapshot(heapUsedRatio, used, osFreeRatio, true);
     }
 }

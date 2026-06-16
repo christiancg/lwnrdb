@@ -50,8 +50,24 @@ public class Main {
         backgroundTaskManager.startBackgroundWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
+        warnIfXmxExceedsCacheCap();
         final var server = new SocketServer(port);
         server.serve();
+    }
+
+    static void warnIfXmxExceedsCacheCap() {
+        if (config.isCachingDisabled() || config.isCacheUnlimited()) {
+            return;
+        }
+        final var xmx = Runtime.getRuntime().maxMemory();
+        final var cap = config.getMaxCollectionCacheBytes();
+        if (xmx > cap * 2L) {
+            Logger.logFor(Main.class).warning(
+                    "JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxCollectionCache (" + cap +
+                    " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps " +
+                    "committed; set -Xmx close to maxCollectionCache so the OS-visible process size " +
+                    "matches the configured budget.");
+        }
     }
 
     private static void bootstrapDefaultAdmin() throws IOException {
