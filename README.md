@@ -240,6 +240,65 @@ Replaces the full owners list for a database. All usernames must already exist. 
 {"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
 ```
 
+#### `GET_DATABASE_STATS` (admin only)
+Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxCollectionCache`.
+
+```json
+{"type":"GET_DATABASE_STATS"}
+```
+
+Response shape:
+
+```json
+{
+  "type": "GET_DATABASE_STATS",
+  "status": "OK",
+  "stats": {
+    "memory": {
+      "heapUsedBytes": 123456789,
+      "heapMaxBytes": 6442450944,
+      "heapCommittedBytes": 268435456,
+      "heapUsedRatio": 0.019,
+      "osMetricsAvailable": true,
+      "osFreeRatio": 0.42,
+      "userCacheBytes": 2097152,
+      "maxCollectionCacheBytes": 536870912,
+      "cachingDisabled": false,
+      "cacheUnlimited": false
+    },
+    "totals": {
+      "userCount": 3,
+      "databaseCount": 1,
+      "collectionCount": 2,
+      "indexCount": 1,
+      "pageCount": 4,
+      "entryCount": 5000,
+      "sizeBytes": 2560000
+    },
+    "databases": [
+      {
+        "name": "my_db",
+        "collectionCount": 2,
+        "indexCount": 1,
+        "pageCount": 4,
+        "entryCount": 5000,
+        "sizeBytes": 2560000,
+        "collections": [
+          {
+            "name": "my_coll",
+            "indexCount": 1,
+            "indexes": ["email"],
+            "pageCount": 2,
+            "entryCount": 3000,
+            "sizeBytes": 1536000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 #### `LIST_USERS` (admin only)
 Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
 
@@ -307,22 +366,36 @@ Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COL
 
 On first startup, if no admin user exists and `defaultAdminUsername` / `defaultAdminPassword` are set in `lwnrdb.cfg`, the server creates that user as superadmin. The password must be at least 8 characters. If neither an existing admin nor valid credentials are configured, the server starts but no privileged operations can be performed until an admin user is created directly.
 
-**New `lwnrdb.cfg` keys:**
+**`lwnrdb.cfg` keys:**
 ```
 defaultAdminUsername=admin
 defaultAdminPassword=adminstrator
 maxCollectionCache=512Mb
 usageProfileRetentionSeconds=86400
 memoryManagementSweepIntervalSeconds=10
+heapHighWatermarkPercent=80
+heapLowWatermarkPercent=65
+osFreeLowWatermarkPercent=10
+osFreeHighWatermarkPercent=20
+osFreeCriticalPercent=5
+pressurePollIntervalSeconds=2
 ```
 
 ### Memory management
 
-`maxCollectionCache` caps the estimated bytes used by the user-collection cache (PK indexes, field indexes, document maps). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
-- `0` — unlimited (no eviction, current behavior).
+`maxCollectionCache` is the **JVM heap-used budget**: when the heap actually consumed by the process exceeds this value, the eviction sweep drops least-frequently-used user collections/indexes until heap drops back to the budget. Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+- `0` — unlimited (cap-based eviction off; pressure-based eviction still runs).
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
-Eviction is LFU (least-frequently-used). Access counts are recorded asynchronously via the background task system and persisted in the `admin/collection_usage` collection. Stale usage records older than `usageProfileRetentionSeconds` are removed by a periodic cleanup task. The sweep that enforces the cap runs every `memoryManagementSweepIntervalSeconds`. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
+Beyond the absolute cap, two relative pressure signals also drive eviction:
+- **JVM heap watermarks** — `heapHighWatermarkPercent` / `heapLowWatermarkPercent` (percent of `-Xmx`). Hysteresis: evict when heap exceeds high, stop when it drops below low.
+- **Host OS free memory** — `osFreeLowWatermarkPercent` / `osFreeHighWatermarkPercent` trigger and stop eviction. `osFreeCriticalPercent` is the hard floor below which new cache admissions are rejected so the database never forces the host into swap.
+
+A fast pressure poll runs every `pressurePollIntervalSeconds` (default 2s) and invokes the sweep on demand; a steady sweep runs every `memoryManagementSweepIntervalSeconds` (default 10s).
+
+Eviction order is LFU. Access counts are recorded asynchronously via the background task system and persisted in the `admin/collection_usage` collection. Stale usage records older than `usageProfileRetentionSeconds` are removed by a periodic cleanup task. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
+
+**Aligning RSS with the cap.** `maxCollectionCache` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxCollectionCache`. Startup logs a warning when `-Xmx > maxCollectionCache × 2`.
 
 ## Q&A
 
