@@ -257,6 +257,109 @@ public class ConfigurationTest {
     }
 
     @Test
+    public void test_pressure_thresholds_have_defaults() throws NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        TestUtils.setPrivateField(configInstance, "heapHighWatermarkPercent", 80);
+        TestUtils.setPrivateField(configInstance, "heapLowWatermarkPercent", 65);
+        TestUtils.setPrivateField(configInstance, "osFreeLowWatermarkPercent", 10);
+        TestUtils.setPrivateField(configInstance, "osFreeHighWatermarkPercent", 20);
+        TestUtils.setPrivateField(configInstance, "osFreeCriticalPercent", 5);
+        TestUtils.setPrivateField(configInstance, "pressurePollIntervalSeconds", 2L);
+        final var minimalConfig = new HashMap<String, String>();
+        minimalConfig.put("port", "8989");
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(minimalConfig);
+            final var config = Configuration.getInstance();
+            assertEquals(80, config.getHeapHighWatermarkPercent());
+            assertEquals(65, config.getHeapLowWatermarkPercent());
+            assertEquals(10, config.getOsFreeLowWatermarkPercent());
+            assertEquals(20, config.getOsFreeHighWatermarkPercent());
+            assertEquals(5, config.getOsFreeCriticalPercent());
+            assertEquals(2L, config.getPressurePollIntervalSeconds());
+            assertEquals(0.80, config.getHeapHighWatermarkRatio(), 1e-9);
+            assertEquals(0.65, config.getHeapLowWatermarkRatio(), 1e-9);
+            assertEquals(0.10, config.getOsFreeLowWatermarkRatio(), 1e-9);
+            assertEquals(0.20, config.getOsFreeHighWatermarkRatio(), 1e-9);
+            assertEquals(0.05, config.getOsFreeCriticalRatio(), 1e-9);
+        }
+    }
+
+    @Test
+    public void test_pressure_thresholds_loaded_from_file() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("heapHighWatermarkPercent=70");
+            writer.newLine();
+            writer.write("heapLowWatermarkPercent=50");
+            writer.newLine();
+            writer.write("osFreeLowWatermarkPercent=15");
+            writer.newLine();
+            writer.write("osFreeHighWatermarkPercent=25");
+            writer.newLine();
+            writer.write("osFreeCriticalPercent=3");
+            writer.newLine();
+            writer.write("pressurePollIntervalSeconds=4");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(70, config.getHeapHighWatermarkPercent());
+            assertEquals(50, config.getHeapLowWatermarkPercent());
+            assertEquals(15, config.getOsFreeLowWatermarkPercent());
+            assertEquals(25, config.getOsFreeHighWatermarkPercent());
+            assertEquals(3, config.getOsFreeCriticalPercent());
+            assertEquals(4L, config.getPressurePollIntervalSeconds());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_invalid_pressure_thresholds_fall_back() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        TestUtils.setPrivateField(configInstance, "heapHighWatermarkPercent", 80);
+        TestUtils.setPrivateField(configInstance, "heapLowWatermarkPercent", 65);
+        TestUtils.setPrivateField(configInstance, "osFreeLowWatermarkPercent", 10);
+        TestUtils.setPrivateField(configInstance, "osFreeHighWatermarkPercent", 20);
+        TestUtils.setPrivateField(configInstance, "osFreeCriticalPercent", 5);
+        TestUtils.setPrivateField(configInstance, "pressurePollIntervalSeconds", 2L);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("heapHighWatermarkPercent=abc");
+            writer.newLine();
+            writer.write("heapLowWatermarkPercent=150");
+            writer.newLine();
+            writer.write("osFreeLowWatermarkPercent=-5");
+            writer.newLine();
+            writer.write("osFreeHighWatermarkPercent=xyz");
+            writer.newLine();
+            writer.write("osFreeCriticalPercent=200");
+            writer.newLine();
+            writer.write("pressurePollIntervalSeconds=foo");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(80, config.getHeapHighWatermarkPercent());
+            assertEquals(65, config.getHeapLowWatermarkPercent());
+            assertEquals(10, config.getOsFreeLowWatermarkPercent());
+            assertEquals(20, config.getOsFreeHighWatermarkPercent());
+            assertEquals(5, config.getOsFreeCriticalPercent());
+            assertEquals(2L, config.getPressurePollIntervalSeconds());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
     public void test_invalid_usageProfileRetention_falls_back() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
