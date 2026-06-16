@@ -299,6 +299,10 @@ def test_admin_operations(s, f):
           send(s, f, {"type": "DROP_DATABASE", "databaseName": "newdb"}),
           "OK")
 
+    check("GET_DATABASE_STATS as admin returns OK",
+          send(s, f, {"type": "GET_DATABASE_STATS"}),
+          "OK")
+
 
 def test_user_management(s, f):
     section("User management as admin (CREATE, CHANGE_PERMISSIONS, DELETE)")
@@ -351,6 +355,10 @@ def test_user_management(s, f):
 
     check("CHANGE_PERMISSIONS as non-admin (FORBIDDEN)",
           change_permissions(s, f, "dbreader", admin=True),
+          "FORBIDDEN")
+
+    check("GET_DATABASE_STATS as non-admin (FORBIDDEN)",
+          send(s, f, {"type": "GET_DATABASE_STATS"}),
           "FORBIDDEN")
 
 

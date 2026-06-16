@@ -51,6 +51,7 @@ public class RequestParser {
                 case SET_DATABASE_OWNERS -> eJson.fromJson(message, SetDatabaseOwnersRequest.class);
                 case LIST_USERS -> parseListUsersRequest(message);
                 case SET_PASSWORD -> eJson.fromJson(message, SetPasswordRequest.class);
+                case GET_DATABASE_STATS -> eJson.fromJson(message, GetDatabaseStatsRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
