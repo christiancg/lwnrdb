@@ -15,6 +15,11 @@ public class ResourceLocking {
         lock(collIdentifier);
     }
 
+    public boolean tryLock(String dbName, String collName) {
+        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        return locks.computeIfAbsent(collIdentifier, _ -> new Semaphore(1)).tryAcquire();
+    }
+
     private String getIndexIdentifier(String dbName, String collName, String fieldName) {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldName;
     }

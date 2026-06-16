@@ -62,6 +62,12 @@ public class ConfigReaderTest {
         expectedConfig.put("maxCollectionCache", "512mb");
         expectedConfig.put("usageProfileRetentionSeconds", "86400");
         expectedConfig.put("memoryManagementSweepIntervalSeconds", "10");
+        expectedConfig.put("heapHighWatermarkPercent", "80");
+        expectedConfig.put("heapLowWatermarkPercent", "65");
+        expectedConfig.put("osFreeLowWatermarkPercent", "10");
+        expectedConfig.put("osFreeHighWatermarkPercent", "20");
+        expectedConfig.put("osFreeCriticalPercent", "5");
+        expectedConfig.put("pressurePollIntervalSeconds", "2");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

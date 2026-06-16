@@ -194,6 +194,9 @@ public class Cache {
         if (config.isCachingDisabled()) {
             return false;
         }
+        if (memoryManagement().admissionCheck() == AdmissionDecision.REJECT) {
+            return false;
+        }
         if (config.isCacheUnlimited()) {
             return true;
         }
