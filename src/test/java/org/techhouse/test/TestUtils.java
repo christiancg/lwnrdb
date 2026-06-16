@@ -38,7 +38,7 @@ public class TestUtils {
     public static void installPermissivePressureMonitor() throws NoSuchFieldException, IllegalAccessException {
         final var mm = IocContainer.get(MemoryManagement.class);
         final MemoryPressureMonitor permissive = () ->
-                new MemoryPressureMonitor.Snapshot(0.0, 1.0, true);
+                new MemoryPressureMonitor.Snapshot(0.0, 0L, 1.0, true);
         setPrivateField(mm, "pressure", permissive);
     }
 

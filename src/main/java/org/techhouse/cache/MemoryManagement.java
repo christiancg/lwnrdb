@@ -10,7 +10,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Map;
@@ -83,17 +82,23 @@ public class MemoryManagement {
             try (final var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME)) {
                 pagesStream.forEach(map -> {
                     for (var e : map.values()) {
-                        final var data = e.getData();
-                        data.addProperty(Globals.PK_FIELD, e.get_id());
-                        final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
-                        final var counter = new UsageCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
-                                usage.getIndexKey(), usage.getAccessCount(), usage.getLastAccessMillis());
-                        counters.put(buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()), counter);
+                        try {
+                            final var data = e.getData();
+                            data.addProperty(Globals.PK_FIELD, e.get_id());
+                            final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
+                            final var counter = new UsageCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
+                                    usage.getIndexKey(), usage.getAccessCount(), usage.getLastAccessMillis());
+                            counters.put(buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()), counter);
+                        } catch (Exception inner) {
+                            logger.warning("Skipping malformed collection_usage entry '" + e.get_id() + "': " +
+                                    inner.getMessage());
+                        }
                     }
                 });
             }
-        } catch (IOException e) {
-            logger.warning("Failed to load collection usage profile: " + e.getMessage());
+        } catch (Exception e) {
+            logger.warning("Failed to load collection usage profile, continuing with empty counters: " +
+                    e.getMessage());
         }
     }
 
@@ -162,6 +167,9 @@ public class MemoryManagement {
         if (isPressureHigh(snapshot)) {
             return AdmissionDecision.REJECT;
         }
+        if (heapBudgetExceeded(snapshot)) {
+            return AdmissionDecision.REJECT;
+        }
         return AdmissionDecision.ADMIT;
     }
 
@@ -174,23 +182,19 @@ public class MemoryManagement {
         }
         try {
             final var snapshot = safeSnapshot();
-            final var ownBudgetExceeded = ownBudgetExceeded();
-            if (!ownBudgetExceeded && !isPressureHigh(snapshot)) {
+            if (!isPressureHigh(snapshot) && !heapBudgetExceeded(snapshot)) {
                 return;
             }
-            final var maxBytes = config.getMaxCollectionCacheBytes();
+            final var overage = heapOverage(snapshot);
             final var resources = cache.listCacheableResources();
-            long currentTotal = 0L;
-            for (var resource : resources) {
-                currentTotal += resource.estimatedSizeBytes();
-            }
             final var ranked = new ArrayList<>(resources);
             ranked.sort(Comparator
                     .comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
                     .thenComparingLong(this::counterAccessCount)
                     .thenComparingLong(this::counterLastAccess));
+            long evicted = 0L;
             for (var resource : ranked) {
-                if (shouldStop(currentTotal, maxBytes)) {
+                if (shouldStop(evicted, overage)) {
                     break;
                 }
                 if (!locks.tryLock(resource.dbName(), resource.collName())) {
@@ -203,7 +207,7 @@ public class MemoryManagement {
                                 resource.indexKey());
                         case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
                     }
-                    currentTotal -= resource.estimatedSizeBytes();
+                    evicted += resource.estimatedSizeBytes();
                 } finally {
                     locks.release(resource.dbName(), resource.collName());
                 }
@@ -213,16 +217,18 @@ public class MemoryManagement {
         }
     }
 
-    private boolean ownBudgetExceeded() {
+    private boolean heapBudgetExceeded(MemoryPressureMonitor.Snapshot snapshot) {
         if (config.isCacheUnlimited()) {
             return false;
         }
-        final var maxBytes = config.getMaxCollectionCacheBytes();
-        long currentTotal = 0L;
-        for (var resource : cache.listCacheableResources()) {
-            currentTotal += resource.estimatedSizeBytes();
+        return snapshot.heapUsedBytes() > config.getMaxCollectionCacheBytes();
+    }
+
+    private long heapOverage(MemoryPressureMonitor.Snapshot snapshot) {
+        if (config.isCacheUnlimited()) {
+            return 0L;
         }
-        return currentTotal > maxBytes;
+        return Math.max(0L, snapshot.heapUsedBytes() - config.getMaxCollectionCacheBytes());
     }
 
     private boolean isPressureHigh(MemoryPressureMonitor.Snapshot snapshot) {
@@ -232,7 +238,7 @@ public class MemoryManagement {
         return heapHigh || osLow;
     }
 
-    private boolean shouldStop(long currentTotal, long maxBytes) {
+    private boolean shouldStop(long evicted, long heapOverage) {
         final var snapshot = safeSnapshot();
         if (snapshot.heapUsedRatio() > config.getHeapLowWatermarkRatio()) {
             return false;
@@ -241,7 +247,7 @@ public class MemoryManagement {
                 snapshot.osFreeRatio() < config.getOsFreeHighWatermarkRatio()) {
             return false;
         }
-        return config.isCacheUnlimited() || currentTotal <= maxBytes;
+        return heapOverage <= 0L || evicted >= heapOverage;
     }
 
     public MemoryPressureMonitor.Snapshot pressureSnapshot() {
@@ -253,7 +259,7 @@ public class MemoryManagement {
             return pressure.snapshot();
         } catch (Exception e) {
             logger.warning("Pressure snapshot failed: " + e.getMessage());
-            return new MemoryPressureMonitor.Snapshot(0.0, 1.0, false);
+            return new MemoryPressureMonitor.Snapshot(0.0, 0L, 1.0, false);
         }
     }
 
