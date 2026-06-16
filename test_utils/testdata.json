@@ -331,6 +331,10 @@
 // Delete dbadmin
 {"type": "DELETE_USER", "username": "dbadmin"}
 
+// Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM,
+// totals across databases/collections, plus per-collection page/index/entry breakdown)
+{"type": "GET_DATABASE_STATS"}
+
 
 
 // Custom types
