@@ -79,6 +79,7 @@ public class OperationProcessor {
             case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
             case LIST_USERS -> processListUsers((ListUsersRequest) operationRequest);
             case SET_PASSWORD -> UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
+            case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
         };
     }
 

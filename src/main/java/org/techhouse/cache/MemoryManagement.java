@@ -244,6 +244,10 @@ public class MemoryManagement {
         return config.isCacheUnlimited() || currentTotal <= maxBytes;
     }
 
+    public MemoryPressureMonitor.Snapshot pressureSnapshot() {
+        return safeSnapshot();
+    }
+
     private MemoryPressureMonitor.Snapshot safeSnapshot() {
         try {
             return pressure.snapshot();

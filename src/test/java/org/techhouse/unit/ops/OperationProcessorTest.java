@@ -494,4 +494,55 @@ public class OperationProcessorTest {
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null);
         assertNull(mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null));
     }
+
+    @Test
+    public void test_get_database_stats_returns_populated_payload() {
+        // Make sure there's at least one user document so totals are non-trivial.
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "stats_seed");
+        obj.addProperty("v", 1);
+        save.setObject(obj);
+        save.set_id("stats_seed");
+        processor.processMessage(save);
+
+        final var response = (GetDatabaseStatsResponse) processor.processMessage(new GetDatabaseStatsRequest());
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(OperationType.GET_DATABASE_STATS, response.getType());
+        final var stats = response.getStats();
+        assertNotNull(stats);
+        assertTrue(stats.has("memory"));
+        assertTrue(stats.has("totals"));
+        assertTrue(stats.has("databases"));
+
+        final var memory = stats.get("memory").asJsonObject();
+        assertTrue(memory.has("heapUsedBytes"));
+        assertTrue(memory.has("heapUsedRatio"));
+        assertTrue(memory.has("osMetricsAvailable"));
+        assertTrue(memory.has("userCacheBytes"));
+        assertTrue(memory.has("maxCollectionCacheBytes"));
+
+        final var totals = stats.get("totals").asJsonObject();
+        assertTrue(totals.get("userCount").asJsonNumber().getValue().longValue() >= 0L);
+        assertTrue(totals.get("databaseCount").asJsonNumber().getValue().longValue() >= 1L);
+        assertTrue(totals.get("collectionCount").asJsonNumber().getValue().longValue() >= 1L);
+        assertTrue(totals.get("entryCount").asJsonNumber().getValue().longValue() >= 0L);
+
+        final var dbs = stats.get("databases").asJsonArray().asList();
+        assertFalse(dbs.isEmpty(), "expected at least one user database in the stats payload");
+        final var firstDb = dbs.getFirst().asJsonObject();
+        assertTrue(firstDb.has("name"));
+        assertTrue(firstDb.has("collectionCount"));
+        assertTrue(firstDb.has("collections"));
+        final var firstColls = firstDb.get("collections").asJsonArray().asList();
+        if (!firstColls.isEmpty()) {
+            final var firstColl = firstColls.getFirst().asJsonObject();
+            assertTrue(firstColl.has("name"));
+            assertTrue(firstColl.has("indexCount"));
+            assertTrue(firstColl.has("indexes"));
+            assertTrue(firstColl.has("pageCount"));
+            assertTrue(firstColl.has("entryCount"));
+            assertTrue(firstColl.has("sizeBytes"));
+        }
+    }
 }

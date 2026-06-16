@@ -21,5 +21,6 @@ public enum OperationType {
     CHANGE_PERMISSIONS,
     SET_DATABASE_OWNERS,
     LIST_USERS,
-    SET_PASSWORD
+    SET_PASSWORD,
+    GET_DATABASE_STATS
 }

@@ -36,6 +36,7 @@ public class RequestValidator {
             case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
             case LIST_USERS         -> validateListUsers((ListUsersRequest) request);
             case SET_PASSWORD       -> validateSetPassword((SetPasswordRequest) request);
+            case GET_DATABASE_STATS -> ValidationResult.ok();
         };
     }
 
