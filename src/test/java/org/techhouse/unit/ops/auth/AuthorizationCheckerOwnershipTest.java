@@ -1,5 +1,11 @@
 package org.techhouse.unit.ops.auth;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -13,13 +19,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.*;
 import org.techhouse.test.TestUtils;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AuthorizationCheckerOwnershipTest {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -46,7 +45,8 @@ public class AuthorizationCheckerOwnershipTest {
 
     private void setOwnerInCache(String dbName) {
         final var entry = new AdminDbEntry(dbName, new ArrayList<>(), List.of("user"));
-        final var pkEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, dbName, 0, 10, 0);
+        final var pkEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, dbName, 0,
+                10, 0);
         cache.putAdminDbEntry(entry, pkEntry);
     }
 
@@ -107,8 +107,7 @@ public class AuthorizationCheckerOwnershipTest {
     public void test_drop_database_db_exists_but_user_not_owner_forbidden() {
         setOwnerInCache("otherownersdb");
         // "user2" is NOT in the owners list (only "user" is)
-        final var user2 = new AdminUserEntry("user2", "hash", false,
-                new HashSet<>(), new HashMap<>(), new HashMap<>());
+        final var user2 = new AdminUserEntry("user2", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>());
         final var req = new DropDatabaseRequest("otherownersdb");
         assertFalse(AuthorizationChecker.check(req, user2).isAllowed());
     }

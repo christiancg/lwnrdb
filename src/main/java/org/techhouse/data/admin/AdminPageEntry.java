@@ -1,10 +1,9 @@
 package org.techhouse.data.admin;
 
+import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
-
-import java.util.Objects;
 
 public class AdminPageEntry extends DbEntry {
     private static final String PAGE_FIELD_NAME = "page";
@@ -82,9 +81,12 @@ public class AdminPageEntry extends DbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof AdminPageEntry that)) return false;
-        if (!super.equals(o)) return false;
+        if (this == o)
+            return true;
+        if (!(o instanceof AdminPageEntry that))
+            return false;
+        if (!super.equals(o))
+            return false;
         return page == that.page && entryCount == that.entryCount && pageSize == that.pageSize;
     }
 
@@ -95,6 +97,7 @@ public class AdminPageEntry extends DbEntry {
 
     @Override
     public String toString() {
-        return "AdminPageEntry(super=" + super.toString() + ", page=" + page + ", entryCount=" + entryCount + ", pageSize=" + pageSize + ")";
+        return "AdminPageEntry(super=" + super.toString() + ", page=" + page + ", entryCount=" + entryCount
+                + ", pageSize=" + pageSize + ")";
     }
 }

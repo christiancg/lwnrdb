@@ -1,10 +1,9 @@
 package org.techhouse.ops.req.agg.operators;
 
+import java.util.List;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
-
-import java.util.List;
 
 public class ConjunctionOperator extends BaseOperator {
     private ConjunctionOperatorType conjunctionType;

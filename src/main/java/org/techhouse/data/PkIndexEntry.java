@@ -1,8 +1,7 @@
 package org.techhouse.data;
 
-import org.techhouse.config.Globals;
-
 import java.util.Objects;
+import org.techhouse.config.Globals;
 
 public class PkIndexEntry implements Comparable<String> {
     private String databaseName;
@@ -12,7 +11,8 @@ public class PkIndexEntry implements Comparable<String> {
     private long length;
     private long page;
 
-    public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length, long page) {
+    public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length,
+            long page) {
         this.databaseName = databaseName;
         this.collectionName = collectionName;
         this.value = value;
@@ -22,17 +22,17 @@ public class PkIndexEntry implements Comparable<String> {
     }
 
     public String toFileEntry() {
-        return value + Globals.INDEX_ENTRY_SEPARATOR + position + Globals.INDEX_ENTRY_SEPARATOR + length + Globals.INDEX_ENTRY_SEPARATOR + page;
+        return value + Globals.INDEX_ENTRY_SEPARATOR + position + Globals.INDEX_ENTRY_SEPARATOR + length
+                + Globals.INDEX_ENTRY_SEPARATOR + page;
     }
 
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
         final var cleaned = line.trim().replace("\r", "").replace("\n", "");
         final var sep = Globals.INDEX_ENTRY_SEPARATOR;
-        final var lastPipe       = cleaned.lastIndexOf(sep);
+        final var lastPipe = cleaned.lastIndexOf(sep);
         final var secondLastPipe = cleaned.lastIndexOf(sep, lastPipe - 1);
-        final var thirdLastPipe  = cleaned.lastIndexOf(sep, secondLastPipe - 1);
-        return new PkIndexEntry(databaseName, collectionName,
-                cleaned.substring(0, thirdLastPipe),
+        final var thirdLastPipe = cleaned.lastIndexOf(sep, secondLastPipe - 1);
+        return new PkIndexEntry(databaseName, collectionName, cleaned.substring(0, thirdLastPipe),
                 Long.parseLong(cleaned.substring(thirdLastPipe + sep.length(), secondLastPipe)),
                 Long.parseLong(cleaned.substring(secondLastPipe + sep.length(), lastPipe)),
                 Long.parseLong(cleaned.substring(lastPipe + sep.length())));
@@ -94,9 +94,13 @@ public class PkIndexEntry implements Comparable<String> {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof PkIndexEntry that)) return false;
-        return position == that.position && length == that.length && page == that.page && Objects.equals(databaseName, that.databaseName) && Objects.equals(collectionName, that.collectionName) && Objects.equals(value, that.value);
+        if (this == o)
+            return true;
+        if (!(o instanceof PkIndexEntry that))
+            return false;
+        return position == that.position && length == that.length && page == that.page
+                && Objects.equals(databaseName, that.databaseName)
+                && Objects.equals(collectionName, that.collectionName) && Objects.equals(value, that.value);
     }
 
     @Override
@@ -106,6 +110,7 @@ public class PkIndexEntry implements Comparable<String> {
 
     @Override
     public String toString() {
-        return "PkIndexEntry(databaseName=" + databaseName + ", collectionName=" + collectionName + ", value=" + value + ", position=" + position + ", length=" + length + ", page=" + page + ")";
+        return "PkIndexEntry(databaseName=" + databaseName + ", collectionName=" + collectionName + ", value=" + value
+                + ", position=" + position + ", length=" + length + ", page=" + page + ")";
     }
 }

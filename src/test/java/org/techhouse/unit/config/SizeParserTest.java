@@ -1,9 +1,9 @@
 package org.techhouse.unit.config;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.SizeParser;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class SizeParserTest {
 

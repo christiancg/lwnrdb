@@ -1,10 +1,10 @@
 package org.techhouse.unit.ioc;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ex.DependencyInjectionFailed;
 import org.techhouse.ioc.IocContainer;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class IocContainerTest {
     // Get instance of a class that hasn't been registered returns new singleton instance

@@ -1,5 +1,9 @@
 package org.techhouse.unit.ejson.custom_types;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Locale;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
@@ -7,11 +11,6 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
-
-import java.util.Locale;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class CustomTypeFactoryTest {
     @BeforeEach
@@ -63,7 +62,8 @@ public class CustomTypeFactoryTest {
     // Register custom type class without default constructor
     @Test
     public void test_register_invalid_custom_type_without_default_constructor() {
-        assertThrows(BadImplementationCustomTypeException.class, () -> CustomTypeFactory.registerCustomType(InvalidCustomType.class));
+        assertThrows(BadImplementationCustomTypeException.class,
+                () -> CustomTypeFactory.registerCustomType(InvalidCustomType.class));
     }
 
     private static class InvalidCustomType extends JsonCustom<Locale> {
@@ -121,20 +121,25 @@ public class CustomTypeFactoryTest {
         public TestCustomType() {
             super();
         }
+
         public TestCustomType(String value) {
             super(value);
         }
+
         public TestCustomType(Locale value) {
             super(value);
         }
+
         @Override
         public String getCustomTypeName() {
             return "test";
         }
+
         @Override
         protected Locale parse() {
             return Locale.getDefault();
         }
+
         @Override
         public Integer compare(Locale another) {
             return 0;
@@ -169,10 +174,8 @@ public class CustomTypeFactoryTest {
         String invalidInput = "#unknown(value)";
 
         // Execute and verify exception
-        NonRegisteredCustomTypeException exception = assertThrows(
-                NonRegisteredCustomTypeException.class,
-                () -> CustomTypeFactory.getCustomTypeInstance(invalidInput)
-        );
+        NonRegisteredCustomTypeException exception = assertThrows(NonRegisteredCustomTypeException.class,
+                () -> CustomTypeFactory.getCustomTypeInstance(invalidInput));
 
         assertEquals("The custom type unknown has not been registered", exception.getMessage());
     }

@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DeleteRequest;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class DeleteRequestTest {
     // Constructor correctly sets DELETE operation type

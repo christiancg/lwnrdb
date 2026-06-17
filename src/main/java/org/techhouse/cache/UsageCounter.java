@@ -10,8 +10,8 @@ public class UsageCounter {
     private final AtomicLong accessCount;
     private final AtomicLong lastAccessMillis;
 
-    public UsageCounter(AccessKind kind, String dbName, String collName, String indexKey,
-                        long initialAccessCount, long initialLastAccessMillis) {
+    public UsageCounter(AccessKind kind, String dbName, String collName, String indexKey, long initialAccessCount,
+            long initialLastAccessMillis) {
         this.kind = kind;
         this.dbName = dbName;
         this.collName = collName;

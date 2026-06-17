@@ -1,13 +1,12 @@
 package org.techhouse.ejson.internal;
 
-import org.techhouse.ejson.elements.*;
-import org.techhouse.ejson.exceptions.NoConstructorException;
-import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
-
 import java.lang.reflect.*;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.exceptions.NoConstructorException;
+import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
 public class ReflectionUtils {
     private record ClassSpecification(Constructor<?>[] constructors, Field[] fields) {
@@ -122,7 +121,7 @@ public class ReflectionUtils {
             Object value = valueOf.invoke(null, jsonValue.toString());
             return parameterType.cast(value);
         } else if (genericType != null && parameterType.isAssignableFrom(List.class)) {
-            final var typeArguments = ((ParameterizedType)genericType).getActualTypeArguments();
+            final var typeArguments = ((ParameterizedType) genericType).getActualTypeArguments();
             if (typeArguments.length == 1) {
                 final var actualType = typeArguments[0];
                 final var actualClass = Class.forName(actualType.getTypeName());
@@ -134,7 +133,8 @@ public class ReflectionUtils {
                 return parameterType.cast(listInstance);
             }
             return null;
-        } else if (jsonValue != null && !parameterType.isAssignableFrom(jsonValue.getClass()) && Number.class.isAssignableFrom(parameterType)) {
+        } else if (jsonValue != null && !parameterType.isAssignableFrom(jsonValue.getClass())
+                && Number.class.isAssignableFrom(parameterType)) {
             final var numberClass = Number.class;
             if (parameterType == Integer.class) {
                 return parameterType.cast(numberClass.cast(jsonValue).intValue());
@@ -146,7 +146,7 @@ public class ReflectionUtils {
                 return parameterType.cast(numberClass.cast(jsonValue).longValue());
             }
         } else if (parameterType.isPrimitive()) {
-            return (T)jsonValue;
+            return (T) jsonValue;
         } else if (jsonValue != null && fieldValue.isJsonObject()) {
             final var adapter = TypeAdapterFactory.getAdapter(parameterType);
             return adapter.fromJson(fieldValue);

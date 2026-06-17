@@ -3,8 +3,7 @@ package org.techhouse.config;
 import java.util.regex.Pattern;
 
 public class SizeParser {
-    private static final Pattern SIZE_PATTERN =
-            Pattern.compile("^\\s*(-?\\d+)\\s*([a-zA-Z]*)\\s*$");
+    private static final Pattern SIZE_PATTERN = Pattern.compile("^\\s*(-?\\d+)\\s*([a-zA-Z]*)\\s*$");
 
     public static long parse(String input) {
         if (input == null) {

@@ -1,5 +1,9 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.util.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,11 +26,6 @@ import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-import java.io.IOException;
-import java.util.*;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 public class AggregationOperationHelperTest {
     @BeforeEach
     public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
@@ -47,19 +46,19 @@ public class AggregationOperationHelperTest {
         // Arrange
         var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         var steps = new ArrayList<BaseAggregationStep>();
-    
-        var filterOp = new FieldOperator(FieldOperatorType.EQUALS, "field1",new JsonString("value1"));
+
+        var filterOp = new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonString("value1"));
         steps.add(new FilterAggregationStep(filterOp));
-    
-        var mapOps = List.of(new MapOperator(MapOperationType.ADD_FIELD,"field2", null));
+
+        var mapOps = List.of(new MapOperator(MapOperationType.ADD_FIELD, "field2", null));
         steps.add(new MapAggregationStep(mapOps));
-    
+
         steps.add(new GroupByAggregationStep("newField2"));
         request.setAggregationSteps(steps);
-    
+
         // Act
         var result = AggregationOperationHelper.processAggregation(request);
-    
+
         // Assert
         assertNotNull(result);
         assertEquals(0, result.size());
@@ -93,16 +92,13 @@ public class AggregationOperationHelperTest {
         // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         List<BaseAggregationStep> steps = List.of(
-                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonString("value1"))),
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonString("value1"))),
                 new MapAggregationStep(List.of(new MapOperator(MapOperationType.ADD_FIELD, "field", null))),
                 new GroupByAggregationStep("fieldName"),
                 new JoinAggregationStep("joinCollection", "localField", "remoteField", "asField"),
-                new CountAggregationStep(),
-                new DistinctAggregationStep("fieldName"),
-                new LimitAggregationStep(10),
-                new SkipAggregationStep(5),
-                new SortAggregationStep("fieldName", true)
-        );
+                new CountAggregationStep(), new DistinctAggregationStep("fieldName"), new LimitAggregationStep(10),
+                new SkipAggregationStep(5), new SortAggregationStep("fieldName", true));
         request.setAggregationSteps(steps);
 
         // Act
@@ -177,11 +173,12 @@ public class AggregationOperationHelperTest {
     @Test
     public void test_handle_invalid_field_names_in_operations() throws IOException {
         System.out.println("Running test_handle_invalid_field_names_in_operations");
-        
+
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         GroupByAggregationStep groupByStep = new GroupByAggregationStep("invalidField");
         SortAggregationStep sortStep = new SortAggregationStep("invalidField", true);
-        JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "invalidLocalField", "invalidRemoteField", "asField");
+        JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "invalidLocalField",
+                "invalidRemoteField", "asField");
         request.setAggregationSteps(List.of(groupByStep, sortStep, joinStep));
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
@@ -196,7 +193,8 @@ public class AggregationOperationHelperTest {
         System.out.println("Running test_handle_empty_collections_in_join");
         // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "localField", "remoteField", "asField");
+        JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "localField", "remoteField",
+                "asField");
         request.setAggregationSteps(List.of(joinStep));
 
         // Act
@@ -228,8 +226,10 @@ public class AggregationOperationHelperTest {
     private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
-        if (fieldValue instanceof String s) obj.addProperty(fieldName, s);
-        else if (fieldValue instanceof Number n) obj.addProperty(fieldName, n);
+        if (fieldValue instanceof String s)
+            obj.addProperty(fieldName, s);
+        else if (fieldValue instanceof Number n)
+            obj.addProperty(fieldName, n);
         DbEntry entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
@@ -333,10 +333,7 @@ public class AggregationOperationHelperTest {
         insertEntry(cache, "sk3", "n", 3);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(
-                new SortAggregationStep("n", true),
-                new SkipAggregationStep(2)
-        ));
+        request.setAggregationSteps(List.of(new SortAggregationStep("n", true), new SkipAggregationStep(2)));
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
@@ -353,10 +350,7 @@ public class AggregationOperationHelperTest {
         insertEntry(cache, "lim3", "n", 3);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(
-                new SortAggregationStep("n", true),
-                new LimitAggregationStep(2)
-        ));
+        request.setAggregationSteps(List.of(new SortAggregationStep("n", true), new LimitAggregationStep(2)));
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
@@ -384,9 +378,7 @@ public class AggregationOperationHelperTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.JOIN_COLL, joinEntry);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(
-                new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")
-        ));
+        request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
@@ -441,9 +433,8 @@ public class AggregationOperationHelperTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(
-                new JoinAggregationStep(TestGlobals.JOIN_COLL, "missingField", "refKey", "joined")
-        ));
+        request.setAggregationSteps(
+                List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "missingField", "refKey", "joined")));
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
         assertNotNull(result);
@@ -467,11 +458,10 @@ public class AggregationOperationHelperTest {
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("score"));
         operands.add(new JsonNumber(5));
-        org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator sumOp =
-                new org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator(
-                        org.techhouse.ops.req.agg.mid_operators.MidOperationType.SUM, operands);
-        org.techhouse.ops.req.agg.step.map.AddFieldMapOperator mapOp =
-                new org.techhouse.ops.req.agg.step.map.AddFieldMapOperator("total", null, sumOp);
+        org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator sumOp = new org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator(
+                org.techhouse.ops.req.agg.mid_operators.MidOperationType.SUM, operands);
+        org.techhouse.ops.req.agg.step.map.AddFieldMapOperator mapOp = new org.techhouse.ops.req.agg.step.map.AddFieldMapOperator(
+                "total", null, sumOp);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(new MapAggregationStep(List.of(mapOp))));
@@ -487,7 +477,7 @@ public class AggregationOperationHelperTest {
     @Test
     public void test_handle_missing_fields() throws IOException {
         System.out.println("Running test_handle_missing_fields");
-        
+
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         List<BaseAggregationStep> steps = new ArrayList<>();
         steps.add(new GroupByAggregationStep("nonExistentField"));

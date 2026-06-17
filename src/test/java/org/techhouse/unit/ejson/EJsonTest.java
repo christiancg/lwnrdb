@@ -1,5 +1,7 @@
 package org.techhouse.unit.ejson;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -8,8 +10,6 @@ import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class EJsonTest {
     // Serialize and deserialize primitive types (boolean, number, string) correctly

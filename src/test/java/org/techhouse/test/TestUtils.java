@@ -1,5 +1,12 @@
 package org.techhouse.test;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -9,14 +16,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.utils.ReflectionUtils;
-
-import java.io.File;
-import java.io.IOException;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class TestUtils {
     public static void standardInitialSetup() throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -38,18 +37,18 @@ public class TestUtils {
 
     private static void clearCache() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = IocContainer.get(Cache.class);
-        TestUtils.setPrivateField( cache, "collections", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "databases", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "users", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "databasesPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "collectionsPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "usersPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "collectionMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "fieldIndexMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "pkIndexMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "pages", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "pagesPkIndexes", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField( cache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "collections", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "databases", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "users", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "databasesPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "collectionsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "usersPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "collectionMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "fieldIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "pkIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "pagesPkIndexes", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(cache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) {
@@ -78,20 +77,23 @@ public class TestUtils {
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.JOIN_COLL);
     }
 
-    public static <U, T> T getPrivateField(U object, String fieldName, ReflectionUtils.TypeToken<T> fieldType) throws NoSuchFieldException, IllegalAccessException {
+    public static <U, T> T getPrivateField(U object, String fieldName, ReflectionUtils.TypeToken<T> fieldType)
+            throws NoSuchFieldException, IllegalAccessException {
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         final var tClass = fieldType.getTypeParameter();
         return tClass.cast(field.get(object));
     }
 
-    public static <U, T> T getPrivateField(U object, String fieldName, Class<T> fieldType) throws NoSuchFieldException, IllegalAccessException {
+    public static <U, T> T getPrivateField(U object, String fieldName, Class<T> fieldType)
+            throws NoSuchFieldException, IllegalAccessException {
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return fieldType.cast(field.get(object));
     }
 
-    public static <U, T> void setPrivateField(U object, String fieldName, T fieldValue) throws NoSuchFieldException, IllegalAccessException {
+    public static <U, T> void setPrivateField(U object, String fieldName, T fieldValue)
+            throws NoSuchFieldException, IllegalAccessException {
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(object, fieldValue);
@@ -99,9 +101,9 @@ public class TestUtils {
 
     public static void deleteFolder(File folder) {
         File[] files = folder.listFiles();
-        if(files!=null) { //some JVMs return null for empty dirs
-            for(File f: files) {
-                if(f.isDirectory()) {
+        if (files != null) { //some JVMs return null for empty dirs
+            for (File f : files) {
+                if (f.isDirectory()) {
                     deleteFolder(f);
                 } else {
                     assertTrue(f.delete());
@@ -113,7 +115,8 @@ public class TestUtils {
 
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {
         final var locker = IocContainer.get(ResourceLocking.class);
-        final var locksType = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {};
+        final var locksType = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {
+        };
         final var locks = TestUtils.getPrivateField(locker, "locks", locksType);
         for (var lock : locks.values()) {
             while (lock.isWriteLockedByCurrentThread()) {

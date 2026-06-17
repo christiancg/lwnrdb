@@ -1,5 +1,8 @@
 package org.techhouse.unit.ops.req.validations;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -9,10 +12,6 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.validations.RequestValidator;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class RequestValidatorTest {
 

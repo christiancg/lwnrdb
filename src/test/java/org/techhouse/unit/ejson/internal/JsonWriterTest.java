@@ -1,11 +1,11 @@
 package org.techhouse.unit.ejson.internal;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.internal.JsonWriter;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class JsonWriterTest {
     @BeforeEach
@@ -15,7 +15,7 @@ public class JsonWriterTest {
     // Convert simple POJO to JSON string using reflection adapter
     @Test
     public void test_convert_pojo_to_json_string() {
-                class TestPojo {
+        class TestPojo {
             private String name;
             private int value;
 
@@ -42,7 +42,7 @@ public class JsonWriterTest {
     public void test_convert_null_to_json_string() {
         JsonWriter writer = new JsonWriter();
         String json = writer.toJson(null, String.class);
-    
+
         assertEquals("null", json);
     }
 

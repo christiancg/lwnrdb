@@ -1,8 +1,5 @@
 package org.techhouse.log;
 
-import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
-
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -11,12 +8,13 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 
 public class LogWriter {
     private static final Configuration config = Configuration.getInstance();
 
-    public static void createLogPathAndRemoveOldFiles()
-            throws IOException {
+    public static void createLogPathAndRemoveOldFiles() throws IOException {
         final var logPath = config.getLogPath();
         final var logDirectory = new File(logPath);
         if (!logDirectory.exists()) {
@@ -31,8 +29,7 @@ public class LogWriter {
         }
     }
 
-    private static void createCurrentLogFileIfNecessary()
-            throws IOException {
+    private static void createCurrentLogFileIfNecessary() throws IOException {
         final var currentLogFile = currentLogFile();
         if (!currentLogFile.exists()) {
             if (!currentLogFile.createNewFile()) {
@@ -48,7 +45,7 @@ public class LogWriter {
             final var now = LocalDate.now();
             final var fileNames = new ArrayList<String>();
             fileNames.add(logFileName(LocalDate.now()));
-            for(var i = 1; i <= maxLogFiles; i++) {
+            for (var i = 1; i <= maxLogFiles; i++) {
                 fileNames.add(logFileName(now.minusDays(i)));
             }
             final var toDelete = Arrays.stream(allFiles).filter(file -> !fileNames.contains(file.getName())).toList();

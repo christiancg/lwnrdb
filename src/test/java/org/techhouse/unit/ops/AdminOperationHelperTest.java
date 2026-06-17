@@ -1,5 +1,10 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,12 +18,6 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
-
-import java.io.IOException;
-import java.util.Map;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AdminOperationHelperTest {
     @BeforeEach
@@ -39,17 +38,17 @@ public class AdminOperationHelperTest {
 
         org.techhouse.ejson.elements.JsonObject d = new org.techhouse.ejson.elements.JsonObject();
         d.addProperty("foo", "bar");
-        org.techhouse.data.DbEntry entry = org.techhouse.data.DbEntry.fromJsonObject(
-                org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, d);
+        org.techhouse.data.DbEntry entry = org.techhouse.data.DbEntry.fromJsonObject(org.techhouse.test.TestGlobals.DB,
+                org.techhouse.test.TestGlobals.COLL, d);
         entry.set_id("entryA");
         entry.setPage(0L);
 
-        AdminOperationHelper.bulkUpdateEntryCount(
-                org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL,
-                org.techhouse.bckg_ops.events.EventType.CREATED, java.util.List.of(entry));
+        AdminOperationHelper.bulkUpdateEntryCount(org.techhouse.test.TestGlobals.DB,
+                org.techhouse.test.TestGlobals.COLL, org.techhouse.bckg_ops.events.EventType.CREATED,
+                java.util.List.of(entry));
 
-        final var pageEntries = cache.getAdminPageEntries(
-                org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL);
+        final var pageEntries = cache.getAdminPageEntries(org.techhouse.test.TestGlobals.DB,
+                org.techhouse.test.TestGlobals.COLL);
         assertNotNull(pageEntries);
         final var pageZero = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
         assertTrue(pageZero.isPresent());
@@ -69,9 +68,11 @@ public class AdminOperationHelperTest {
         AdminOperationHelper.saveDatabaseEntry(dbEntry);
 
         // Assert
-        final var typeToken = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {};
+        final var typeToken = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {
+        };
         final var actualLocks = TestUtils.getPrivateField(locks, "locks", typeToken);
-        assertNotNull(actualLocks.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME)));
+        assertNotNull(actualLocks
+                .get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME)));
         final var inserted = cache.getAdminDbEntry(Globals.ADMIN_DB_NAME);
         assertNotNull(inserted);
     }
@@ -152,7 +153,8 @@ public class AdminOperationHelperTest {
                 org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null,
                 System.currentTimeMillis());
         AdminOperationHelper.upsertCollectionUsage(event);
-        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(Globals.ADMIN_DB_NAME, "databases", "");
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(Globals.ADMIN_DB_NAME, "databases",
+                "");
         Cache cache = IocContainer.get(Cache.class);
         assertNull(cache.getPkIndexCollectionUsage(id));
     }

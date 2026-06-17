@@ -1,11 +1,11 @@
 package org.techhouse.unit.ejson.internal;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.Assigner;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AssignerTest {
     static class Person {

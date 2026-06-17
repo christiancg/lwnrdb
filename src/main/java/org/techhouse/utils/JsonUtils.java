@@ -49,13 +49,14 @@ public class JsonUtils {
                 if (o2Field.isJsonPrimitive()) {
                     final var o1Primitive = o1Field.asJsonPrimitive();
                     final var o2Primitive = o2Field.asJsonPrimitive();
-                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom() &&
-                            o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
+                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
+                            && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
                         return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
                     } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
                         return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
                     } else if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-                        return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(), o2Primitive.asJsonNumber().getValue().doubleValue());
+                        return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(),
+                                o2Primitive.asJsonNumber().getValue().doubleValue());
                     } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
                         return o1Primitive.asJsonBoolean().getValue() ? -1 : 1;
                     }
@@ -83,13 +84,14 @@ public class JsonUtils {
                 if (o2Field.isJsonPrimitive()) {
                     final var o1Primitive = o1Field.asJsonPrimitive();
                     final var o2Primitive = o2Field.asJsonPrimitive();
-                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom() &&
-                            o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
+                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
+                            && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
                         return o2Primitive.asJsonCustom().getValue().compareTo(o1Primitive.asJsonCustom().getValue());
                     } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
                         return o2Primitive.asJsonString().getValue().compareTo(o1Primitive.asJsonString().getValue());
                     } else if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-                        return Double.compare(o2Primitive.asJsonNumber().getValue().doubleValue(), o1Primitive.asJsonNumber().getValue().doubleValue());
+                        return Double.compare(o2Primitive.asJsonNumber().getValue().doubleValue(),
+                                o1Primitive.asJsonNumber().getValue().doubleValue());
                     } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
                         return o2Primitive.asJsonBoolean().getValue() ? 1 : -1;
                     }

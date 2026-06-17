@@ -1,10 +1,10 @@
 package org.techhouse.unit.ejson.elements;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonNullTest {
     // Singleton instance INSTANCE is accessible and returns same object on multiple accesses
@@ -12,7 +12,7 @@ public class JsonNullTest {
     public void test_singleton_instance_returns_same_object() {
         JsonNull instance1 = JsonNull.INSTANCE;
         JsonNull instance2 = JsonNull.INSTANCE;
-    
+
         assertSame(instance1, instance2);
     }
 

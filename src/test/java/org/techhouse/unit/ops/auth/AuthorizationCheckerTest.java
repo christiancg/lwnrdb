@@ -1,5 +1,11 @@
 package org.techhouse.unit.ops.auth;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
@@ -9,13 +15,6 @@ import org.techhouse.ops.req.*;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
-
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AuthorizationCheckerTest {
     private AdminUserEntry createAdminUser() {

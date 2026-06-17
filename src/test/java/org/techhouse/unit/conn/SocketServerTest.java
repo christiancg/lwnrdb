@@ -1,16 +1,15 @@
 package org.techhouse.unit.conn;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.conn.SocketServer;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
+import org.junit.jupiter.api.Test;
+import org.techhouse.conn.SocketServer;
 
 public class SocketServerTest {
     // Server starts and listens on the specified port
@@ -34,7 +33,7 @@ public class SocketServerTest {
     @Test
     public void test_port_already_in_use_when_starting_server() {
         int port = 8080;
-        try(ExecutorService executor = Executors.newSingleThreadExecutor()) {
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
             try (ServerSocket ignored = new ServerSocket(port)) {
                 SocketServer server = new SocketServer(port);
                 executor.submit(server::serve);

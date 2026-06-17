@@ -1,5 +1,7 @@
 package org.techhouse.ejson;
 
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
@@ -8,9 +10,6 @@ import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ejson.type_adapters.impl.*;
-
-import java.math.BigDecimal;
-import java.math.BigInteger;
 
 public class EJson {
     private final JsonReader reader = new JsonReader();

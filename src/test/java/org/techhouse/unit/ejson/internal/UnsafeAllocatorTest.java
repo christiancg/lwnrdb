@@ -1,9 +1,9 @@
 package org.techhouse.unit.ejson.internal;
 
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.internal.UnsafeAllocator;
-
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 public class UnsafeAllocatorTest {
     @Test
@@ -19,6 +19,7 @@ public class UnsafeAllocatorTest {
     public void test_creates_class_with_constructor() throws Exception {
         class TestClassWithConstructor {
             private String testField;
+
             public TestClassWithConstructor(String testField) {
                 this.testField = testField;
             }

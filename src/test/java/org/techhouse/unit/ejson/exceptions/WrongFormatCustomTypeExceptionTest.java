@@ -1,10 +1,10 @@
 package org.techhouse.unit.ejson.exceptions;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public class WrongFormatCustomTypeExceptionTest {
     // Create exception with className and cause exception parameters

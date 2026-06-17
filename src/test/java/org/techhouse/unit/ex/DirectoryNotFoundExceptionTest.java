@@ -1,9 +1,9 @@
 package org.techhouse.unit.ex;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ex.DirectoryNotFoundException;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class DirectoryNotFoundExceptionTest {
     // Create exception with valid directory path string
@@ -12,8 +12,7 @@ public class DirectoryNotFoundExceptionTest {
         String directoryPath = "/some/test/path";
         DirectoryNotFoundException exception = new DirectoryNotFoundException(directoryPath);
 
-        assertEquals("The specified directory couldn't be found or created: /some/test/path", 
-            exception.getMessage());
+        assertEquals("The specified directory couldn't be found or created: /some/test/path", exception.getMessage());
     }
 
     // Create exception with empty directory string
@@ -22,7 +21,6 @@ public class DirectoryNotFoundExceptionTest {
         String emptyDirectory = "";
         DirectoryNotFoundException exception = new DirectoryNotFoundException(emptyDirectory);
 
-        assertEquals("The specified directory couldn't be found or created: ", 
-            exception.getMessage());
+        assertEquals("The specified directory couldn't be found or created: ", exception.getMessage());
     }
 }

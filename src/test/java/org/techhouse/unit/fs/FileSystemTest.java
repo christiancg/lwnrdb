@@ -1,5 +1,14 @@
 package org.techhouse.unit.fs;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.concurrent.ConcurrentMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -14,16 +23,6 @@ import org.techhouse.ex.DirectoryNotFoundException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.*;
-import java.util.concurrent.ConcurrentMap;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 public class FileSystemTest {
     @BeforeEach
@@ -41,7 +40,8 @@ public class FileSystemTest {
     @AfterEach
     public void tearDown() {
         File dbDir = new File(TestGlobals.PATH);
-        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite() && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
+        if (dbDir.exists() && dbDir.isDirectory() && dbDir.canRead() && dbDir.canWrite()
+                && Objects.requireNonNull(dbDir.listFiles()).length > 0) {
             TestUtils.deleteFolder(dbDir);
         }
     }
@@ -79,10 +79,12 @@ public class FileSystemTest {
         File adminDbFolder = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME);
         assertTrue(adminDbFolder.exists());
 
-        File databasesCollection = new File(adminDbFolder.getPath() + Globals.FILE_SEPARATOR + Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        File databasesCollection = new File(
+                adminDbFolder.getPath() + Globals.FILE_SEPARATOR + Globals.ADMIN_DATABASES_COLLECTION_NAME);
         assertTrue(databasesCollection.exists());
 
-        File collectionsCollection = new File(adminDbFolder.getPath() + Globals.FILE_SEPARATOR + Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        File collectionsCollection = new File(
+                adminDbFolder.getPath() + Globals.FILE_SEPARATOR + Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         assertTrue(collectionsCollection.exists());
     }
 
@@ -172,7 +174,7 @@ public class FileSystemTest {
         String dbName = "nonExistentDb";
         String collectionName = "nonExistentCollection";
         String id = "123";
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, id, 0L, 100L,0);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, id, 0L, 100L, 0);
 
         // Act & Assert
         assertThrows(FileNotFoundException.class, () -> fileSystem.getById(pkIndexEntry));
@@ -214,7 +216,8 @@ public class FileSystemTest {
 
     // Successfully inserts multiple DbEntry objects into collection file
     @Test
-    public void test_bulk_insert_multiple_entries_success() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_bulk_insert_multiple_entries_success()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
@@ -246,7 +249,8 @@ public class FileSystemTest {
 
     // bulkInsert with entries on different pages writes each entry to its own page only
     @Test
-    public void test_bulk_insert_groups_entries_by_page() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_bulk_insert_groups_entries_by_page()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
@@ -255,12 +259,14 @@ public class FileSystemTest {
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
         List<DbEntry> entries = new ArrayList<>();
-        JsonObject d1 = new JsonObject(); d1.addProperty("f", "p0");
+        JsonObject d1 = new JsonObject();
+        d1.addProperty("f", "p0");
         DbEntry e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d1);
         e1.setPage(0);
         e1.set_id("p0-1");
 
-        JsonObject d2 = new JsonObject(); d2.addProperty("f", "p1");
+        JsonObject d2 = new JsonObject();
+        d2.addProperty("f", "p1");
         DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d2);
         e2.setPage(1);
         e2.set_id("p1-1");
@@ -314,18 +320,21 @@ public class FileSystemTest {
         assertTrue(result.getLength() > 0);
 
         final var filePath = TestUtils.getPrivateField(fs, "dbPath", String.class);
-        File collFile = new File(filePath + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
+        File collFile = new File(filePath + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         assertTrue(collFile.exists());
     }
 
     // Successfully deletes entry by shifting remaining entries and updating file length
     @Test
-    public void test_delete_entry_shifts_remaining_entries() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_delete_entry_shifts_remaining_entries()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Setup
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
-        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
+        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
 
         JsonObject data = new JsonObject();
         data.addProperty("name", "test");
@@ -345,9 +354,10 @@ public class FileSystemTest {
 
         // Verify
         try (RandomAccessFile reader = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            byte[] content = new byte[(int)reader.length()];
+            byte[] content = new byte[(int) reader.length()];
             reader.readFully(content);
-            assertEquals(entry2.toFileEntry(), new String(content, StandardCharsets.UTF_8).replace(Globals.NEWLINE, ""));
+            assertEquals(entry2.toFileEntry(),
+                    new String(content, StandardCharsets.UTF_8).replace(Globals.NEWLINE, ""));
         }
 
         assertTrue(file.delete());
@@ -355,7 +365,8 @@ public class FileSystemTest {
 
     // Successfully updates multiple entries in collection and returns updated IndexedDbEntry list
     @Test
-    public void test_bulk_update_multiple_entries_success() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_bulk_update_multiple_entries_success()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
@@ -366,8 +377,10 @@ public class FileSystemTest {
         data1.addProperty("_id", "2");
         data2.addProperty("field", "value");
 
-        final var newEntries = List.of(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data1), DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data2));
-        List<IndexedDbEntry> entries = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, newEntries);
+        final var newEntries = List.of(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data1),
+                DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data2));
+        List<IndexedDbEntry> entries = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL,
+                newEntries);
 
         final var first = entries.get(0);
         first.getData().get("field").asJsonString().setValue("changed");
@@ -402,7 +415,8 @@ public class FileSystemTest {
     public void test_update_file_length() throws NoSuchFieldException, IllegalAccessException, IOException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
-        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
+        final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         final var jsonObject = new JsonObject();
         jsonObject.addProperty("name", "test");
         final var dbEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, jsonObject);
@@ -443,8 +457,10 @@ public class FileSystemTest {
                 }
             }));
         }
-        for (var t : threads) t.start();
-        for (var t : threads) t.join(15000);
+        for (var t : threads)
+            t.start();
+        for (var t : threads)
+            t.join(15000);
         assertTrue(errors.isEmpty(), "no errors expected under concurrent insert/read: " + errors);
         final var page = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0);
         assertEquals(writers * perWriter, page.size());
@@ -459,14 +475,14 @@ public class FileSystemTest {
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
         List<FieldIndexEntry<?>> stringEntries = List.of(
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", Set.of("id1", "id2")),
-                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3"))
-        );
+                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3")));
         indexEntryMap.put(String.class, stringEntries);
         fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
-        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1") ||
-                fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2"));
+        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1")
+                || fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2"));
         assertTrue(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3"));
         assertTrue(fileContent.endsWith(Globals.NEWLINE));
     }
@@ -479,13 +495,15 @@ public class FileSystemTest {
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> emptyMap = new HashMap<>();
         fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, emptyMap);
-        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
+                String.class);
         assertNull(index);
     }
 
     // Successfully update index file when both insertedEntry and removedEntry are provided
     @Test
-    public void test_update_index_files_with_insert_and_remove() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_update_index_files_with_insert_and_remove()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
@@ -497,18 +515,20 @@ public class FileSystemTest {
         FieldIndexEntry<String> removeEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", ids2);
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, insertEntry, removeEntry);
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
 
-        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2") ||
-                fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1"));
-        assertFalse(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3" + Globals.ID_SEPARATOR + "id4") ||
-                fileContent.contains("value2" + Globals.ID_SEPARATOR + "id4" + Globals.ID_SEPARATOR + "id3"));
+        assertTrue(fileContent.contains("value1" + Globals.ID_SEPARATOR + "id1" + Globals.ID_SEPARATOR + "id2")
+                || fileContent.contains("value1" + Globals.ID_SEPARATOR + "id2" + Globals.ID_SEPARATOR + "id1"));
+        assertFalse(fileContent.contains("value2" + Globals.ID_SEPARATOR + "id3" + Globals.ID_SEPARATOR + "id4")
+                || fileContent.contains("value2" + Globals.ID_SEPARATOR + "id4" + Globals.ID_SEPARATOR + "id3"));
     }
 
     // Handle case when removedEntry has empty ids set
     @Test
-    public void test_update_index_files_with_empty_ids_remove() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_update_index_files_with_empty_ids_remove()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
@@ -519,59 +539,71 @@ public class FileSystemTest {
 
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, removeEntry);
 
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
         String fileContent = Files.readString(indexFile.toPath());
 
         assertFalse(fileContent.contains("123" + Globals.INDEX_ENTRY_SEPARATOR));
     }
 
     @Test
-    public void test_update_index_files_with_pipe_in_field_value() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_update_index_files_with_pipe_in_field_value()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
 
-        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar", Set.of("id1"));
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar",
+                Set.of("id1"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
         assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id1"));
     }
 
     @Test
-    public void test_search_does_not_match_prefix_when_value_contains_pipe() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_search_does_not_match_prefix_when_value_contains_pipe()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
 
         // Write two entries: "foo" and "foo|bar" — the search for "foo" must not hit "foo|bar"
-        FieldIndexEntry<String> fooBar = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar", Set.of("id2"));
-        FieldIndexEntry<String> foo    = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo",     Set.of("id1"));
+        FieldIndexEntry<String> fooBar = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar",
+                Set.of("id2"));
+        FieldIndexEntry<String> foo = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo", Set.of("id1"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, fooBar, null);
-        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, foo,    null);
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, foo, null);
 
         // Remove "foo" — should only remove the exact "foo" entry, leaving "foo|bar" intact
         FieldIndexEntry<String> fooEmpty = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo", Set.of());
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, fooEmpty);
 
-        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
+        File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-String.idx");
         String fileContent = Files.readString(indexFile.toPath());
 
-        assertFalse(fileContent.contains("foo" + Globals.ID_SEPARATOR + "id1"), "exact 'foo' entry should have been removed");
-        assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id2"), "'foo|bar' entry must not be affected");
+        assertFalse(fileContent.contains("foo" + Globals.ID_SEPARATOR + "id1"),
+                "exact 'foo' entry should have been removed");
+        assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id2"),
+                "'foo|bar' entry must not be affected");
     }
 
     @Test
-    public void test_field_index_roundtrip_with_pipe_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_field_index_roundtrip_with_pipe_in_id()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
 
-        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", Set.of("doc|id|one", "doc|id|two"));
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue",
+                Set.of("doc|id|one", "doc|id|two"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
-        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
+                fieldName, String.class);
         assertNotNull(index);
         assertEquals(1, index.size());
         assertEquals("someValue", index.getFirst().getValue());
@@ -580,15 +612,18 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_field_index_roundtrip_with_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_field_index_roundtrip_with_semicolon_in_id()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
 
-        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", Set.of("doc;id;one", "doc;id;two"));
+        FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue",
+                Set.of("doc;id;one", "doc;id;two"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
-        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
+                fieldName, String.class);
         assertNotNull(index);
         assertEquals(1, index.size());
         assertEquals("someValue", index.getFirst().getValue());
@@ -597,7 +632,8 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_field_index_roundtrip_with_pipe_and_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_field_index_roundtrip_with_pipe_and_semicolon_in_id()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
@@ -606,28 +642,34 @@ public class FileSystemTest {
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue", ids);
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
 
-        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
+                fieldName, String.class);
         assertNotNull(index);
         assertEquals(1, index.size());
         assertEquals(ids, index.getFirst().getIds());
     }
 
     @Test
-    public void test_field_index_update_id_with_special_chars() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_field_index_update_id_with_special_chars()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         String fieldName = "testField";
 
         // Insert initial entry pointing to a document with special-char ID
-        FieldIndexEntry<String> initial = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue", Set.of("doc|one", "doc;two"));
+        FieldIndexEntry<String> initial = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
+                Set.of("doc|one", "doc;two"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, initial, null);
 
         // Remove one ID, keep the other
-        FieldIndexEntry<String> removed = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue", Set.of("doc;two"));
-        FieldIndexEntry<String> updated = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue", Set.of("doc|one"));
+        FieldIndexEntry<String> removed = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
+                Set.of("doc;two"));
+        FieldIndexEntry<String> updated = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
+                Set.of("doc|one"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, updated, removed);
 
-        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        List<FieldIndexEntry<String>> index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
+                fieldName, String.class);
         assertNotNull(index);
         assertEquals(1, index.size());
         assertTrue(index.getFirst().getIds().contains("doc|one"));
@@ -635,7 +677,8 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_pk_index_roundtrip_with_pipe_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_pk_index_roundtrip_with_pipe_in_id()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
@@ -655,7 +698,8 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_pk_index_roundtrip_with_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_pk_index_roundtrip_with_semicolon_in_id()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
@@ -675,7 +719,8 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_pk_index_roundtrip_with_pipe_and_semicolon_in_id() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_pk_index_roundtrip_with_pipe_and_semicolon_in_id()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
@@ -702,10 +747,13 @@ public class FileSystemTest {
 
         String fieldName = "testField";
 
-        File mockCollFolder = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
+        File mockCollFolder = new File(
+                TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
 
-        File indexFile1 = new File(mockCollFolder, "1" + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR + "idx" + Globals.INDEX_FILE_EXTENSION);
-        File indexFile2 = new File(mockCollFolder, "2" + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR + "idx" + Globals.INDEX_FILE_EXTENSION);
+        File indexFile1 = new File(mockCollFolder, "1" + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
+                + Globals.INDEX_FILE_NAME_SEPARATOR + "idx" + Globals.INDEX_FILE_EXTENSION);
+        File indexFile2 = new File(mockCollFolder, "2" + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
+                + Globals.INDEX_FILE_NAME_SEPARATOR + "idx" + Globals.INDEX_FILE_EXTENSION);
 
         assertTrue(indexFile1.createNewFile());
         assertTrue(indexFile2.createNewFile());
@@ -743,13 +791,13 @@ public class FileSystemTest {
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
         List<FieldIndexEntry<?>> stringEntries = List.of(
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", Set.of("id1", "id2")),
-                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3"))
-        );
+                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3")));
         indexEntryMap.put(String.class, stringEntries);
         fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
 
         // Act
-        ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName);
+        ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
+                TestGlobals.COLL, fieldName);
 
         assertNotNull(result);
         assertNotNull(result.get("String"));
@@ -765,7 +813,8 @@ public class FileSystemTest {
         String fieldName = "age";
 
         // Act
-        ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB, "unexistantCollection", fieldName);
+        ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
+                "unexistantCollection", fieldName);
 
         // Assert
         assertNull(result);
@@ -781,12 +830,12 @@ public class FileSystemTest {
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
         List<FieldIndexEntry<?>> stringEntries = List.of(
                 new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", Set.of("id1", "id2")),
-                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3"))
-        );
+                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3")));
         indexEntryMap.put(String.class, stringEntries);
         fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
 
-        List<FieldIndexEntry<String>> entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        List<FieldIndexEntry<String>> entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName,
+                String.class);
 
         assertNotNull(entries);
         assertEquals(2, entries.size());
@@ -796,32 +845,38 @@ public class FileSystemTest {
 
     // Handle empty index files
     @Test
-    public void test_empty_index_file_returns_empty_list() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_empty_index_file_returns_empty_list()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
 
-        List<FieldIndexEntry<String>> entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, "emptyField", String.class);
+        List<FieldIndexEntry<String>> entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
+                "emptyField", String.class);
 
         assertNull(entries);
     }
 
     // Returns sorted list of PkIndexEntry objects when index file exists and contains entries
     @Test
-    public void test_read_index_file_returns_sorted_entries() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_read_index_file_returns_sorted_entries()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
 
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(true);
-        Path path = Path.of(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +Globals.FILE_SEPARATOR+ TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-_id-String.idx");
+        Path path = Path.of(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-_id-String.idx");
         when(mockIndexFile.toPath()).thenReturn(path);
 
         List<String> fileLines = Arrays.asList(
-                "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "0",
-                "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "0",
-                "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "0"
-        );
+                "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100"
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100"
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100"
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0");
         Files.write(path, fileLines);
 
         // Act
@@ -836,7 +891,8 @@ public class FileSystemTest {
 
     // Handle empty index file
     @Test
-    public void test_empty_index_file_returns_empty_list_2() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_empty_index_file_returns_empty_list_2()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -853,7 +909,8 @@ public class FileSystemTest {
 
     // streamPages yields one map per page file
     @Test
-    public void test_stream_pages_yields_one_map_per_page() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_stream_pages_yields_one_map_per_page()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         fileSystem.createDatabaseFolder(TestGlobals.DB);
@@ -878,14 +935,16 @@ public class FileSystemTest {
         final var pages = fileSystem.streamPages(TestGlobals.DB, TestGlobals.COLL).toList();
         assertEquals(2, pages.size());
         final var allIds = new java.util.HashSet<String>();
-        for (var p : pages) allIds.addAll(p.keySet());
+        for (var p : pages)
+            allIds.addAll(p.keySet());
         assertTrue(allIds.contains("1"));
         assertTrue(allIds.contains("2"));
     }
 
     // streamPages on a non-existent collection folder returns an empty stream
     @Test
-    public void test_stream_pages_missing_folder_empty() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_stream_pages_missing_folder_empty()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
@@ -928,11 +987,11 @@ public class FileSystemTest {
         fs.insertIntoCollection(entry);
 
         // Append a torn/garbage line, simulating a crash mid-write.
-        final var pageFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +
-                Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR +
-                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
-        Files.writeString(pageFile.toPath(), "\nthis-is-not-json{partial",
-                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+        final var pageFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
+                + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
+                + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
+        Files.writeString(pageFile.toPath(), "\nthis-is-not-json{partial", StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
 
         // The malformed line is skipped in-memory; the file is left untouched
         // so the .idx file's byte offsets remain valid (rewriting the .dat
@@ -960,12 +1019,12 @@ public class FileSystemTest {
         fs.insertIntoCollection(entry);
 
         // Compose the PK index file path manually and append a garbage line.
-        final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +
-                Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR +
-                TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD +
-                Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
-        Files.writeString(indexFile.toPath(), "\nthis is not a valid pk index line",
-                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+        final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
+                + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
+        Files.writeString(indexFile.toPath(), "\nthis is not a valid pk index line", StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
 
         final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, firstRead.size());
@@ -981,7 +1040,8 @@ public class FileSystemTest {
 
     // getByIndexEntries returns an empty list for null or empty input
     @Test
-    public void test_get_by_index_entries_empty_input() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_get_by_index_entries_empty_input()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
 
@@ -991,7 +1051,8 @@ public class FileSystemTest {
 
     // getByIndexEntries reads only the requested entries across multiple pages
     @Test
-    public void test_get_by_index_entries_reads_requested_across_pages() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_get_by_index_entries_reads_requested_across_pages()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
@@ -1035,7 +1096,8 @@ public class FileSystemTest {
 
     // getByIndexEntries reads multiple entries from a single page in position order
     @Test
-    public void test_get_by_index_entries_single_page_multiple() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_get_by_index_entries_single_page_multiple()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
@@ -1052,7 +1114,8 @@ public class FileSystemTest {
             entries.add(e);
         }
         final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);
-        final var pkEntries = indexed.stream().map(IndexedDbEntry::getIndex).collect(java.util.stream.Collectors.toList());
+        final var pkEntries = indexed.stream().map(IndexedDbEntry::getIndex)
+                .collect(java.util.stream.Collectors.toList());
 
         final var result = fs.getByIndexEntries(pkEntries);
         assertEquals(3, result.size());
@@ -1062,7 +1125,8 @@ public class FileSystemTest {
 
     // streamEntries on a missing/empty collection yields an empty stream
     @Test
-    public void test_stream_entries_empty_collection() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_stream_entries_empty_collection()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
@@ -1074,7 +1138,8 @@ public class FileSystemTest {
 
     // streamEntries yields all entries across pages
     @Test
-    public void test_stream_entries_yields_all_across_pages() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_stream_entries_yields_all_across_pages()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
@@ -1083,12 +1148,16 @@ public class FileSystemTest {
         fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
         final var entries = new ArrayList<DbEntry>();
-        JsonObject d1 = new JsonObject(); d1.addProperty("f", "a");
+        JsonObject d1 = new JsonObject();
+        d1.addProperty("f", "a");
         DbEntry e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d1);
-        e1.set_id("a"); e1.setPage(0);
-        JsonObject d2 = new JsonObject(); d2.addProperty("f", "b");
+        e1.set_id("a");
+        e1.setPage(0);
+        JsonObject d2 = new JsonObject();
+        d2.addProperty("f", "b");
         DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d2);
-        e2.set_id("b"); e2.setPage(1);
+        e2.set_id("b");
+        e2.setPage(1);
         entries.add(e1);
         entries.add(e2);
         fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);

@@ -1,12 +1,11 @@
 package org.techhouse.bckg_ops;
 
-import org.techhouse.bckg_ops.events.Event;
-import org.techhouse.config.Configuration;
-import org.techhouse.log.Logger;
-
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.config.Configuration;
+import org.techhouse.log.Logger;
 
 public class BackgroundTaskManager {
     private final Logger logger = Logger.logFor(BackgroundTaskManager.class);

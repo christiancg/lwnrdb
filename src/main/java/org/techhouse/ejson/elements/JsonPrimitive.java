@@ -36,7 +36,7 @@ public class JsonPrimitive<T> extends JsonBaseElement {
         if (obj == null || getClass() != obj.getClass()) {
             return false;
         }
-        JsonPrimitive<?> other = (JsonPrimitive<?>)obj;
+        JsonPrimitive<?> other = (JsonPrimitive<?>) obj;
         if (value == null) {
             return other.value == null;
         }
@@ -56,7 +56,7 @@ public class JsonPrimitive<T> extends JsonBaseElement {
             case JsonString ignored -> new JsonString((String) getValue());
             default -> {
                 if (JsonCustom.class.isAssignableFrom(getClass())) {
-                    yield CustomTypeFactory.getCustomTypeInstance((String)this.getValue());
+                    yield CustomTypeFactory.getCustomTypeInstance((String) this.getValue());
                 } else {
                     yield null;
                 }

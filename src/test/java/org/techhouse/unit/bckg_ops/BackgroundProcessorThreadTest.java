@@ -1,13 +1,12 @@
 package org.techhouse.unit.bckg_ops;
 
-import org.techhouse.bckg_ops.BackgroundProcessorThread;
-import org.techhouse.bckg_ops.events.Event;
-import org.junit.jupiter.api.Test;
-import org.techhouse.bckg_ops.events.EventType;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.concurrent.LinkedBlockingQueue;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundProcessorThread;
+import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.bckg_ops.events.EventType;
 
 public class BackgroundProcessorThreadTest {
 

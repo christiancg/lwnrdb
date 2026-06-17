@@ -1,11 +1,10 @@
 package org.techhouse.log;
 
-import org.techhouse.config.Globals;
-
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.stream.Collectors;
+import org.techhouse.config.Globals;
 
 public class Logger {
     private static final String MESSAGE_SEPARATOR = " - ";
@@ -50,8 +49,8 @@ public class Logger {
     }
 
     private void internalWriteLog(LogSeverity severity, String message, Exception exception) {
-        String logEntry = LocalTime.now().format(DateTimeFormatter.ISO_LOCAL_TIME) + LOG_ENTRY_SEPARATOR + severity.name() +
-                LOG_ENTRY_SEPARATOR + tClass.getName() + MESSAGE_SEPARATOR + message;
+        String logEntry = LocalTime.now().format(DateTimeFormatter.ISO_LOCAL_TIME) + LOG_ENTRY_SEPARATOR
+                + severity.name() + LOG_ENTRY_SEPARATOR + tClass.getName() + MESSAGE_SEPARATOR + message;
         if (exception != null) {
             final var exceptionMessage = exception.getMessage();
             if (exceptionMessage != null) {
@@ -59,7 +58,8 @@ public class Logger {
             }
             final var stackTrace = exception.getStackTrace();
             if (stackTrace != null) {
-                logEntry += Arrays.stream(stackTrace).map(StackTraceElement::toString).collect(Collectors.joining(Globals.NEWLINE));
+                logEntry += Arrays.stream(stackTrace).map(StackTraceElement::toString)
+                        .collect(Collectors.joining(Globals.NEWLINE));
             }
         }
         LogWriter.writeLogEntry(logEntry);

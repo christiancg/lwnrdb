@@ -1,15 +1,14 @@
 package org.techhouse.ejson.type_adapters;
 
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.HashMap;
+import java.util.Map;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.type_adapters.impl.EnumTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.IterableTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.JsonCustomTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
-
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
-import java.util.HashMap;
-import java.util.Map;
 
 public class TypeAdapterFactory {
     private static final Map<Class<?>, TypeAdapter<?>> _adapters = new HashMap<>();

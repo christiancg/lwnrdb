@@ -1,16 +1,15 @@
 package org.techhouse.unit.config;
 
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-import org.techhouse.config.ConfigurationValidator;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.config.ConfigurationValidator;
 
 public class ConfigurationValidatorTest {
 
@@ -148,8 +147,8 @@ public class ConfigurationValidatorTest {
         final var config = baseValid(tempDir);
         config.put(key, value);
         final var errors = ConfigurationValidator.validate(config);
-        assertTrue(errors.stream().anyMatch(e -> e.contains(expectedFragment)),
-                "Expected an error mentioning '" + expectedFragment + "' for " + key + "=" + value + ", got: " + errors);
+        assertTrue(errors.stream().anyMatch(e -> e.contains(expectedFragment)), "Expected an error mentioning '"
+                + expectedFragment + "' for " + key + "=" + value + ", got: " + errors);
     }
 
     private void assertMissingKeyFails(Path tempDir) {

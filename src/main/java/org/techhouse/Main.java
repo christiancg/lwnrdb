@@ -1,5 +1,8 @@
 package org.techhouse;
 
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.HashSet;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
@@ -15,11 +18,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-
-import java.util.HashSet;
-import java.util.HashMap;
-
-import java.io.IOException;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -40,8 +38,7 @@ public class Main {
         }
     }
 
-    public static void main(String[] args)
-            throws IOException {
+    public static void main(String[] args) throws IOException {
         LogWriter.createLogPathAndRemoveOldFiles();
         fs.createBaseDbPath();
         fs.createAdminDatabase();
@@ -60,10 +57,9 @@ public class Main {
 
     static void warnIfDefaultAdminPassword() {
         if (Globals.DEFAULT_ADMIN_PASSWORD.equals(config.getDefaultAdminPassword())) {
-            logger.warning(
-                    "SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. " +
-                    "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid " +
-                    "unauthorized access.");
+            logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
+                    + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
+                    + "unauthorized access.");
         }
     }
 
@@ -74,18 +70,15 @@ public class Main {
         final var xmx = Runtime.getRuntime().maxMemory();
         final var cap = config.getMaxMemoryBytes();
         if (xmx > cap * 2L) {
-            logger.warning(
-                    "JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxMemory (" + cap +
-                    " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps " +
-                    "committed; set -Xmx close to maxMemory so the OS-visible process size " +
-                    "matches the configured budget.");
+            logger.warning("JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxMemory (" + cap
+                    + " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps "
+                    + "committed; set -Xmx close to maxMemory so the OS-visible process size "
+                    + "matches the configured budget.");
         }
     }
 
     private static void bootstrapDefaultAdmin() throws IOException {
-        final var existingAdmins = cache.getAllAdminUserEntries().stream()
-                .filter(AdminUserEntry::isAdmin)
-                .count();
+        final var existingAdmins = cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count();
 
         if (existingAdmins > 0) {
             return;
@@ -102,14 +95,8 @@ public class Main {
         globalPerms.add(GlobalPermissionType.CREATE_DATABASE);
         globalPerms.add(GlobalPermissionType.DROP_DATABASE);
 
-        final var adminUser = new AdminUserEntry(
-                defaultUsername,
-                passwordHash,
-                true,
-                globalPerms,
-                new HashMap<>(),
-                new HashMap<>()
-        );
+        final var adminUser = new AdminUserEntry(defaultUsername, passwordHash, true, globalPerms, new HashMap<>(),
+                new HashMap<>());
 
         try {
             AdminOperationHelper.saveUserEntry(adminUser);

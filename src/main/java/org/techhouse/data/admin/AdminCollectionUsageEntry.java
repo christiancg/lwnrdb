@@ -1,11 +1,10 @@
 package org.techhouse.data.admin;
 
+import java.util.Objects;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
-
-import java.util.Objects;
 
 public class AdminCollectionUsageEntry extends DbEntry {
     private static final String KIND_FIELD = "kind";
@@ -28,8 +27,8 @@ public class AdminCollectionUsageEntry extends DbEntry {
         setData(new JsonObject());
     }
 
-    public AdminCollectionUsageEntry(AccessKind kind, String dbName, String collName, String indexKey,
-                                     long accessCount, long lastAccessMillis) {
+    public AdminCollectionUsageEntry(AccessKind kind, String dbName, String collName, String indexKey, long accessCount,
+            long lastAccessMillis) {
         setDatabaseName(Globals.ADMIN_DB_NAME);
         setCollectionName(Globals.ADMIN_COLLECTION_USAGE_NAME);
         this.kind = kind;
@@ -110,12 +109,15 @@ public class AdminCollectionUsageEntry extends DbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof AdminCollectionUsageEntry that)) return false;
-        if (!super.equals(o)) return false;
-        return accessCount == that.accessCount && lastAccessMillis == that.lastAccessMillis &&
-                kind == that.kind && Objects.equals(dbName, that.dbName) &&
-                Objects.equals(collName, that.collName) && Objects.equals(indexKey, that.indexKey);
+        if (this == o)
+            return true;
+        if (!(o instanceof AdminCollectionUsageEntry that))
+            return false;
+        if (!super.equals(o))
+            return false;
+        return accessCount == that.accessCount && lastAccessMillis == that.lastAccessMillis && kind == that.kind
+                && Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName)
+                && Objects.equals(indexKey, that.indexKey);
     }
 
     @Override
@@ -125,8 +127,8 @@ public class AdminCollectionUsageEntry extends DbEntry {
 
     @Override
     public String toString() {
-        return "AdminCollectionUsageEntry(super=" + super.toString() + ", kind=" + kind +
-                ", dbName=" + dbName + ", collName=" + collName + ", indexKey=" + indexKey +
-                ", accessCount=" + accessCount + ", lastAccessMillis=" + lastAccessMillis + ")";
+        return "AdminCollectionUsageEntry(super=" + super.toString() + ", kind=" + kind + ", dbName=" + dbName
+                + ", collName=" + collName + ", indexKey=" + indexKey + ", accessCount=" + accessCount
+                + ", lastAccessMillis=" + lastAccessMillis + ")";
     }
 }

@@ -1,9 +1,9 @@
 package org.techhouse.unit.ejson.exceptions;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.MissingEndOfStringException;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class MissingEndOfStringExceptionTest {
     // Verify exception is thrown with correct default message

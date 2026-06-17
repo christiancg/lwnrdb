@@ -26,11 +26,11 @@ public class Configuration {
         final var configs = ConfigReader.loadConfiguration();
         final var errors = ConfigurationValidator.validate(configs);
         if (!errors.isEmpty()) {
-            logger.fatal("Configuration validation failed, the application will not start:" +
-                    Globals.NEWLINE + String.join(Globals.NEWLINE, errors));
+            logger.fatal("Configuration validation failed, the application will not start:" + Globals.NEWLINE
+                    + String.join(Globals.NEWLINE, errors));
             throw new InvalidConfigurationException(errors);
         }
-        for (var config: configs.entrySet()) {
+        for (var config : configs.entrySet()) {
             switch (config.getKey()) {
                 case "port" -> port = Integer.parseInt(config.getValue());
                 case "maxConnections" -> maxConnections = Integer.parseInt(config.getValue());

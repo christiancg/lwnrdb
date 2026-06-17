@@ -1,5 +1,8 @@
 package org.techhouse.unit.ops.req.validations;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonString;
@@ -12,10 +15,6 @@ import org.techhouse.ops.req.agg.step.*;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AggregationStepValidatorTest {
 
@@ -172,39 +171,39 @@ public class AggregationStepValidatorTest {
     // JOIN
     @Test
     public void validate_joinStep_allFieldsPresent_returnsOk() {
-        assertTrue(AggregationStepValidator.validate(
-                new JoinAggregationStep("other_coll", "localId", "remoteId", "joined")).isValid());
+        assertTrue(AggregationStepValidator
+                .validate(new JoinAggregationStep("other_coll", "localId", "remoteId", "joined")).isValid());
     }
 
     @Test
     public void validate_joinStep_nullJoinCollection_returnsFail() {
-        assertFalse(AggregationStepValidator.validate(
-                new JoinAggregationStep(null, "localId", "remoteId", "joined")).isValid());
+        assertFalse(AggregationStepValidator.validate(new JoinAggregationStep(null, "localId", "remoteId", "joined"))
+                .isValid());
     }
 
     @Test
     public void validate_joinStep_invalidCollectionName_returnsFail() {
         // too short to match NAME_PATTERN
-        assertFalse(AggregationStepValidator.validate(
-                new JoinAggregationStep("ab", "localId", "remoteId", "joined")).isValid());
+        assertFalse(AggregationStepValidator.validate(new JoinAggregationStep("ab", "localId", "remoteId", "joined"))
+                .isValid());
     }
 
     @Test
     public void validate_joinStep_blankLocalField_returnsFail() {
-        assertFalse(AggregationStepValidator.validate(
-                new JoinAggregationStep("other_coll", "  ", "remoteId", "joined")).isValid());
+        assertFalse(AggregationStepValidator.validate(new JoinAggregationStep("other_coll", "  ", "remoteId", "joined"))
+                .isValid());
     }
 
     @Test
     public void validate_joinStep_blankRemoteField_returnsFail() {
-        assertFalse(AggregationStepValidator.validate(
-                new JoinAggregationStep("other_coll", "localId", "", "joined")).isValid());
+        assertFalse(AggregationStepValidator.validate(new JoinAggregationStep("other_coll", "localId", "", "joined"))
+                .isValid());
     }
 
     @Test
     public void validate_joinStep_blankAsField_returnsFail() {
-        assertFalse(AggregationStepValidator.validate(
-                new JoinAggregationStep("other_coll", "localId", "remoteId", null)).isValid());
+        assertFalse(AggregationStepValidator
+                .validate(new JoinAggregationStep("other_coll", "localId", "remoteId", null)).isValid());
     }
 
     // COUNT
@@ -309,20 +308,21 @@ public class AggregationStepValidatorTest {
         final var operands = new JsonArray();
         operands.add(new JsonString("field1"));
         operands.add(new JsonString("field2"));
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.SUM, operands)).isValid());
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.SUM, operands)).isValid());
     }
 
     @Test
     public void validate_arrayParamMidOperator_emptyOperands_returnsFail() {
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.SUM, new JsonArray())).isValid() == false);
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.SUM, new JsonArray()))
+                .isValid() == false);
     }
 
     @Test
     public void validate_arrayParamMidOperator_nullOperands_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.AVG, null)).isValid());
+        assertFalse(AggregationStepValidator.validateMidOperator(new ArrayParamMidOperator(MidOperationType.AVG, null))
+                .isValid());
     }
 
     // Mid-operator: binary operators require 2+ operands
@@ -330,8 +330,8 @@ public class AggregationStepValidatorTest {
     public void validate_arrayParamMidOperator_divideOneOperand_returnsFail() {
         final var operands = new JsonArray();
         operands.add(new JsonString("field1"));
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.DIVIDE, operands)).isValid());
+        assertFalse(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.DIVIDE, operands)).isValid());
     }
 
     @Test
@@ -339,68 +339,67 @@ public class AggregationStepValidatorTest {
         final var operands = new JsonArray();
         operands.add(new JsonString("a"));
         operands.add(new JsonString("b"));
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.SUBS, operands)).isValid());
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.SUBS, operands)).isValid());
     }
 
     @Test
     public void validate_arrayParamMidOperator_powOneOperand_returnsFail() {
         final var operands = new JsonArray();
         operands.add(new JsonString("base"));
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.POW, operands)).isValid());
+        assertFalse(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.POW, operands)).isValid());
     }
 
     @Test
     public void validate_arrayParamMidOperator_rootOneOperand_returnsFail() {
         final var operands = new JsonArray();
         operands.add(new JsonString("base"));
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.ROOT, operands)).isValid());
+        assertFalse(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.ROOT, operands)).isValid());
     }
 
     // Mid-operator: OneParam (ABS, SIZE)
     @Test
     public void validate_oneParamMidOperator_validOperand_returnsOk() {
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new OneParamMidOperator(MidOperationType.ABS, "myField")).isValid());
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new OneParamMidOperator(MidOperationType.ABS, "myField")).isValid());
     }
 
     @Test
     public void validate_oneParamMidOperator_blankOperand_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new OneParamMidOperator(MidOperationType.SIZE, "  ")).isValid());
+        assertFalse(AggregationStepValidator.validateMidOperator(new OneParamMidOperator(MidOperationType.SIZE, "  "))
+                .isValid());
     }
 
     @Test
     public void validate_oneParamMidOperator_nullOperand_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new OneParamMidOperator(MidOperationType.ABS, null)).isValid());
+        assertFalse(AggregationStepValidator.validateMidOperator(new OneParamMidOperator(MidOperationType.ABS, null))
+                .isValid());
     }
 
     // Mid-operator: CAST
     @Test
     public void validate_castMidOperator_valid_returnsOk() {
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new CastMidOperator("score", CastToType.STRING)).isValid());
+        assertTrue(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", CastToType.STRING))
+                .isValid());
     }
 
     @Test
     public void validate_castMidOperator_blankFieldName_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new CastMidOperator("  ", CastToType.NUMBER)).isValid());
+        assertFalse(
+                AggregationStepValidator.validateMidOperator(new CastMidOperator("  ", CastToType.NUMBER)).isValid());
     }
 
     @Test
     public void validate_castMidOperator_nullFieldName_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new CastMidOperator(null, CastToType.BOOLEAN)).isValid());
+        assertFalse(
+                AggregationStepValidator.validateMidOperator(new CastMidOperator(null, CastToType.BOOLEAN)).isValid());
     }
 
     @Test
     public void validate_castMidOperator_nullToType_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new CastMidOperator("score", null)).isValid());
+        assertFalse(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", null)).isValid());
     }
 
     // Mid-operator: MAX, MIN, MULTIPLY, CONCAT
@@ -408,29 +407,29 @@ public class AggregationStepValidatorTest {
     public void validate_maxOperator_withOperands_returnsOk() {
         final var operands = new JsonArray();
         operands.add(new JsonString("a"));
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.MAX, operands)).isValid());
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.MAX, operands)).isValid());
     }
 
     @Test
     public void validate_minOperator_emptyOperands_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.MIN, new JsonArray())).isValid());
+        assertFalse(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.MIN, new JsonArray())).isValid());
     }
 
     @Test
     public void validate_multiplyOperator_withOperands_returnsOk() {
         final var operands = new JsonArray();
         operands.add(new JsonString("a"));
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.MULTIPLY, operands)).isValid());
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.MULTIPLY, operands)).isValid());
     }
 
     @Test
     public void validate_concatOperator_withOperands_returnsOk() {
         final var operands = new JsonArray();
         operands.add(new JsonString("hello"));
-        assertTrue(AggregationStepValidator.validateMidOperator(
-                new ArrayParamMidOperator(MidOperationType.CONCAT, operands)).isValid());
+        assertTrue(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.CONCAT, operands)).isValid());
     }
 }

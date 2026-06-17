@@ -1,12 +1,11 @@
 package org.techhouse.unit.ejson.custom_types;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.time.LocalTime;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
-
-import java.time.LocalTime;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonTimeTest {
     // Create JsonTime with valid LocalTime object

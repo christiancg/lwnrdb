@@ -1,16 +1,15 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
-
-import java.util.Map;
-import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class UserRequestTypesTest {
     @Test

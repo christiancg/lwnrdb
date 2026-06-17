@@ -1,10 +1,9 @@
 package org.techhouse.ejson.type_adapters.impl;
 
+import java.lang.reflect.Method;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.log.Logger;
-
-import java.lang.reflect.Method;
 
 public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
 

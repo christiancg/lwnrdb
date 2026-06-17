@@ -1,14 +1,13 @@
 package org.techhouse.data.admin;
 
-import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonObject;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
+import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonObject;
 
 public class AdminDbEntry extends DbEntry {
     private static final String COLLECTIONS_FIELD_NAME = "collections";
@@ -45,14 +44,12 @@ public class AdminDbEntry extends DbEntry {
         result.set_id(id);
         final var collectionsEl = object.get(COLLECTIONS_FIELD_NAME);
         result.collections = collectionsEl != null && !collectionsEl.isJsonNull()
-                ? collectionsEl.asJsonArray().asList().stream()
-                        .map(element -> element.asJsonString().getValue())
+                ? collectionsEl.asJsonArray().asList().stream().map(element -> element.asJsonString().getValue())
                         .collect(Collectors.toList())
                 : new ArrayList<>();
         final var ownersEl = object.get(OWNERS_FIELD_NAME);
         result.owners = ownersEl != null && !ownersEl.isJsonNull()
-                ? ownersEl.asJsonArray().asList().stream()
-                        .map(element -> element.asJsonString().getValue())
+                ? ownersEl.asJsonArray().asList().stream().map(element -> element.asJsonString().getValue())
                         .collect(Collectors.toList())
                 : new ArrayList<>();
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -98,9 +95,12 @@ public class AdminDbEntry extends DbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof AdminDbEntry that)) return false;
-        if (!super.equals(o)) return false;
+        if (this == o)
+            return true;
+        if (!(o instanceof AdminDbEntry that))
+            return false;
+        if (!super.equals(o))
+            return false;
         return Objects.equals(collections, that.collections) && Objects.equals(owners, that.owners);
     }
 

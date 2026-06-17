@@ -1,9 +1,8 @@
 package org.techhouse.ops.resp;
 
+import java.util.List;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
-
-import java.util.List;
 
 public class ListCollectionsResponse extends OperationResponse {
     private final List<String> collections;

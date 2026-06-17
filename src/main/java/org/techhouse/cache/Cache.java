@@ -1,5 +1,10 @@
 package org.techhouse.cache;
 
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.config.Configuration;
@@ -18,12 +23,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.SearchUtils;
-
-import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 public class Cache {
     private static final Logger logger = Logger.logFor(Cache.class);
@@ -72,57 +71,59 @@ public class Cache {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pkIndexCollectionUsageEntries =
-                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        final var pkIndexCollectionUsageEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_COLLECTION_USAGE_NAME);
         final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         collectionUsagePkIndex.putAll(pkIndexCollectionUsageEntriesMap);
-        final var pkIndexAdminDbEntries =
-                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        final var pkIndexAdminDbEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         databasesPkIndex.putAll(pkIndexAdminDbEntriesMap);
-        final var pkIndexAdminCollEntries =
-                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+        final var pkIndexAdminCollEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         final var pkIndexAdminCollEntriesMap = pkIndexAdminCollEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         collectionsPkIndex.putAll(pkIndexAdminCollEntriesMap);
-        final var pkIndexAdminUserEntries =
-                fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+        final var pkIndexAdminUserEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_USERS_COLLECTION_NAME);
         final var pkIndexAdminUserEntriesMap = pkIndexAdminUserEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         usersPkIndex.putAll(pkIndexAdminUserEntriesMap);
         if (!pkIndexAdminDbEntriesMap.isEmpty()) {
-            final var adminDatabasesColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-            loadAdminEntries(adminDatabasesColl, Globals.ADMIN_DATABASES_COLLECTION_NAME,
-                    AdminDbEntry::fromJsonObject, databases);
+            final var adminDatabasesColl = readWholeCollection(Globals.ADMIN_DB_NAME,
+                    Globals.ADMIN_DATABASES_COLLECTION_NAME);
+            loadAdminEntries(adminDatabasesColl, Globals.ADMIN_DATABASES_COLLECTION_NAME, AdminDbEntry::fromJsonObject,
+                    databases);
         }
         if (!pkIndexAdminCollEntries.isEmpty()) {
-            final var adminCollectionsColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+            final var adminCollectionsColl = readWholeCollection(Globals.ADMIN_DB_NAME,
+                    Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             loadAdminEntries(adminCollectionsColl, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
                     AdminCollEntry::fromJsonObject, collections);
         }
         if (!pkIndexAdminUserEntriesMap.isEmpty()) {
             final var adminUsersColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-            loadAdminEntries(adminUsersColl, Globals.ADMIN_USERS_COLLECTION_NAME,
-                    AdminUserEntry::fromJsonObject, users);
+            loadAdminEntries(adminUsersColl, Globals.ADMIN_USERS_COLLECTION_NAME, AdminUserEntry::fromJsonObject,
+                    users);
         }
         for (var collEntry : collections.values()) {
             final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
-            if (parts.length < 2) continue;
+            if (parts.length < 2)
+                continue;
             loadAdminPagesForCollection(parts[0], parts[1]);
         }
     }
 
     private <V> void loadAdminEntries(Map<String, DbEntry> source, String adminCollName,
-                                      java.util.function.Function<JsonObject, V> mapper,
-                                      Map<String, V> target) {
+            java.util.function.Function<JsonObject, V> mapper, Map<String, V> target) {
         for (var entry : source.entrySet()) {
             try {
                 target.put(entry.getKey(), mapper.apply(entry.getValue().getData()));
             } catch (Exception e) {
-                logger.warning("Skipping malformed admin entry '" + entry.getKey() +
-                        "' in " + adminCollName + ": " + e.getMessage());
+                logger.warning("Skipping malformed admin entry '" + entry.getKey() + "' in " + adminCollName + ": "
+                        + e.getMessage());
             }
         }
     }
@@ -138,8 +139,7 @@ public class Cache {
         final var pageEntries = new ArrayList<AdminPageEntry>();
         try (final var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, pagesCollName)) {
             pagesStream.forEach(map -> map.values().stream()
-                    .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData()))
-                    .forEach(pageEntries::add));
+                    .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
         }
         pages.put(collId, pageEntries);
         rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
@@ -176,8 +176,7 @@ public class Cache {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + parts[parts.length - 1];
     }
 
-    public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName)
-            throws IOException {
+    public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
@@ -204,7 +203,7 @@ public class Cache {
     }
 
     public Map<String, List<FieldIndexEntry<?>>> getAllFieldIndexesAndLoadIfNecessary(String dbName, String collName,
-                                                                                  String fieldName) {
+            String fieldName) {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         var indexes = fieldIndexMap.get(collectionIdentifier);
         Map<String, List<FieldIndexEntry<?>>> indexMap;
@@ -226,15 +225,12 @@ public class Cache {
     }
 
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
-                                                                        String fieldName, Class<T> indexType)
-            throws IOException {
+            String fieldName, Class<T> indexType) throws IOException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
         final var indexIdentifier = getIndexIdentifier(fieldName, indexType);
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<T>> indexEntries = null;
-        if (index == null || index.keySet().stream().noneMatch(string ->
-                string.contains(indexIdentifier))
-        ) {
+        if (index == null || index.keySet().stream().noneMatch(string -> string.contains(indexIdentifier))) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
                 return null;
@@ -259,8 +255,8 @@ public class Cache {
         return indexEntries;
     }
 
-    public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
-            throws IOException {
+    public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
+            T value) throws IOException {
         final var result = doGetIdsFromIndex(dbName, collName, fieldName, operator, value);
         if (result != null && !Globals.ADMIN_DB_NAME.equals(dbName)) {
             recordFieldIndexAccess(dbName, collName, fieldName);
@@ -270,12 +266,12 @@ public class Cache {
 
     private void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
         memoryManagement().recordAccess(AccessKind.FIELD_INDEX, dbName, collName, fieldName);
-        taskManager().submitBackgroundTask(new CollectionUsageEvent(AccessKind.FIELD_INDEX, dbName, collName,
-                fieldName, System.currentTimeMillis()));
+        taskManager().submitBackgroundTask(new CollectionUsageEvent(AccessKind.FIELD_INDEX, dbName, collName, fieldName,
+                System.currentTimeMillis()));
     }
 
-    private <T> Set<String> doGetIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator, T value)
-            throws IOException {
+    private <T> Set<String> doGetIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
+            T value) throws IOException {
         return switch (value) {
             case Number n -> {
                 final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
@@ -304,7 +300,8 @@ public class Cache {
             case JsonCustom<?> c -> {
                 final var customTypes = CustomTypeFactory.getCustomTypes();
                 final var customClass = customTypes.get(c.getCustomTypeName());
-                final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, (Class<T>) customClass);
+                final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                        (Class<T>) customClass);
                 if (customIndex != null) {
                     yield SearchUtils.findingByOperator(customIndex, operator.getFieldOperatorType(), (T) c);
                 } else {
@@ -320,16 +317,19 @@ public class Cache {
                         case JsonCustom<?> c -> {
                             final var customTypes = CustomTypeFactory.getCustomTypes();
                             final var customClass = customTypes.get(c.getCustomTypeName());
-                            final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, (Class<T>) customClass);
+                            final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                                    (Class<T>) customClass);
                             if (customIndex != null) {
                                 final var custList = listStream.map(JsonBaseElement::asJsonCustom).toList();
-                                yield SearchUtils.findingInNotIn(customIndex, operator.getFieldOperatorType(), (List<T>) custList);
+                                yield SearchUtils.findingInNotIn(customIndex, operator.getFieldOperatorType(),
+                                        (List<T>) custList);
                             } else {
                                 yield null;
                             }
                         }
                         case JsonString ignored -> {
-                            final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
+                            final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                                    String.class);
                             if (stringIndex != null) {
                                 final var strList = listStream.map(x -> x.asJsonString().getValue()).toList();
                                 yield SearchUtils.findingInNotIn(stringIndex, operator.getFieldOperatorType(), strList);
@@ -338,19 +338,23 @@ public class Cache {
                             }
                         }
                         case JsonNumber ignored -> {
-                            final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
+                            final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                                    Number.class);
                             if (numberIndex != null) {
                                 final var numberList = listStream.map(x -> x.asJsonNumber().getValue()).toList();
-                                yield SearchUtils.findingInNotIn(numberIndex, operator.getFieldOperatorType(), numberList);
+                                yield SearchUtils.findingInNotIn(numberIndex, operator.getFieldOperatorType(),
+                                        numberList);
                             } else {
                                 yield null;
                             }
                         }
                         case JsonBoolean ignored -> {
-                            final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class);
+                            final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                                    Boolean.class);
                             if (booleanIndex != null) {
                                 final var booleanList = listStream.map(x -> x.asJsonBoolean().getValue()).toList();
-                                yield SearchUtils.findingInNotIn(booleanIndex, operator.getFieldOperatorType(), booleanList);
+                                yield SearchUtils.findingInNotIn(booleanIndex, operator.getFieldOperatorType(),
+                                        booleanList);
                             } else {
                                 yield null;
                             }
@@ -515,9 +519,7 @@ public class Cache {
             return fs.streamEntries(dbName, collName);
         }
         final var maxPageBytes = configuration.getMaxPageSize();
-        final var sortedPages = collPages.stream()
-                .sorted(Comparator.comparingLong(AdminPageEntry::getPage))
-                .toList();
+        final var sortedPages = collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
         // flatMap pulls one page at a time: the headroom check + page read happen lazily
         // as the previous page's entries are exhausted downstream, so each page map is
         // released for GC before the next is read.
@@ -537,12 +539,12 @@ public class Cache {
     }
 
     public long selectPageForInsert(String dbName, String collName, int entryByteSize,
-                                    Map<Long, Long> pendingPageBytes) {
+            Map<Long, Long> pendingPageBytes) {
         final var maxPageBytes = configuration.getMaxPageSize();
-        final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
-        final var fit = pageEntries.stream()
-                .sorted(Comparator.comparingLong(AdminPageEntry::getPage))
-                .filter(p -> p.getPageSize() + pendingPageBytes.getOrDefault(p.getPage(), 0L) + entryByteSize <= maxPageBytes)
+        final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName),
+                _ -> new ArrayList<>());
+        final var fit = pageEntries.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).filter(
+                p -> p.getPageSize() + pendingPageBytes.getOrDefault(p.getPage(), 0L) + entryByteSize <= maxPageBytes)
                 .findFirst();
         if (fit.isPresent()) {
             return fit.get().getPage();
@@ -569,19 +571,13 @@ public class Cache {
     }
 
     public List<String> getUserDatabaseNames() {
-        return databases.keySet().stream()
-                .filter(name -> !Globals.ADMIN_DB_NAME.equals(name))
-                .sorted()
-                .toList();
+        return databases.keySet().stream().filter(name -> !Globals.ADMIN_DB_NAME.equals(name)).sorted().toList();
     }
 
     public List<String> getCollectionNamesForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        return collections.keySet().stream()
-                .filter(id -> id.startsWith(prefix))
-                .map(id -> id.substring(prefix.length()))
-                .sorted()
-                .toList();
+        return collections.keySet().stream().filter(id -> id.startsWith(prefix))
+                .map(id -> id.substring(prefix.length())).sorted().toList();
     }
 
     public PkIndexEntry getPkIndexAdminCollEntry(String collIdentifier) {
@@ -602,7 +598,8 @@ public class Cache {
 
     public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
         final var entries = pages.get(getCollectionIdentifier(dbName, collName));
-        if (entries == null) return null;
+        if (entries == null)
+            return null;
         return entries.stream().filter(p -> p.getPage() == page).findFirst().orElse(null);
     }
 
@@ -611,12 +608,12 @@ public class Cache {
     }
 
     public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
-        pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
-                .add(adminPageEntry);
+        pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>()).add(adminPageEntry);
     }
 
     public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
-        final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
+        final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName),
+                _ -> new ArrayList<>());
         final var existing = pageEntries.stream().filter(p -> p.getPage() == page).findFirst();
         if (existing.isPresent()) {
             existing.get().setPageSize(existing.get().getPageSize() + bytesDelta);
@@ -716,19 +713,22 @@ public class Cache {
         final var result = new ArrayList<CacheableResource>();
         for (var entry : pkIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0])) continue;
+            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0]))
+                continue;
             result.add(new CacheableResource(AccessKind.PK_INDEX, parts[0], parts[1], null,
                     estimatePkIndexSize(entry.getValue())));
         }
         for (var entry : collectionMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0])) continue;
+            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0]))
+                continue;
             result.add(new CacheableResource(AccessKind.COLLECTION, parts[0], parts[1], null,
                     estimateCollectionSize(entry.getValue())));
         }
         for (var entry : fieldIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0])) continue;
+            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0]))
+                continue;
             for (var inner : entry.getValue().entrySet()) {
                 result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(),
                         estimateFieldIndexSize(inner.getValue())));
@@ -738,12 +738,14 @@ public class Cache {
     }
 
     private long estimatePkIndexSize(List<PkIndexEntry> entries) {
-        if (entries == null) return 0L;
+        if (entries == null)
+            return 0L;
         return (long) entries.size() * ESTIMATED_PK_ENTRY_BYTES;
     }
 
     private long estimateCollectionSize(Map<String, DbEntry> entries) {
-        if (entries == null) return 0L;
+        if (entries == null)
+            return 0L;
         long total = 0L;
         for (var e : entries.values()) {
             total += e.byteSize();
@@ -752,7 +754,8 @@ public class Cache {
     }
 
     private long estimateFieldIndexSize(List<FieldIndexEntry<?>> entries) {
-        if (entries == null) return 0L;
+        if (entries == null)
+            return 0L;
         long total = 0L;
         for (var e : entries) {
             final var value = e.getValue();
@@ -764,8 +767,8 @@ public class Cache {
         return total;
     }
 
-    public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName, String collName)
-            throws IOException {
+    public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName,
+            String collName) throws IOException {
         if (resultStream != null) {
             return resultStream;
         }

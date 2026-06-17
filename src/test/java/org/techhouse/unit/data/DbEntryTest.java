@@ -1,11 +1,11 @@
 package org.techhouse.unit.data;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class DbEntryTest {
     // Successfully creates DbEntry from a valid JsonObject
@@ -92,8 +92,7 @@ public class DbEntryTest {
         int size = entry.byteSize();
         String expected = entry.toFileEntry() + Globals.NEWLINE;
         assertEquals(expected.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, size);
-        assertTrue(size > expected.length(),
-                "Multi-byte chars should make byte count exceed char count");
+        assertTrue(size > expected.length(), "Multi-byte chars should make byte count exceed char count");
     }
 
     // byteSize returns 0 when data is null

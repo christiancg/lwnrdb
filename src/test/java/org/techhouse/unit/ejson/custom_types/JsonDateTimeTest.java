@@ -1,19 +1,18 @@
 package org.techhouse.unit.ejson.custom_types;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.time.LocalDateTime;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
-
-import java.time.LocalDateTime;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonDateTimeTest {
     // Create JsonDateTime with valid LocalDateTime object
     @Test
     public void test_create_with_valid_local_date_time() {
         LocalDateTime dateTime = LocalDateTime.of(2023, 12, 25, 10, 30);
-    
+
         JsonDateTime jsonDateTime = new JsonDateTime("#datetime(2023-12-25T10:30:00)");
 
         assertEquals(dateTime, jsonDateTime.getCustomValue());
