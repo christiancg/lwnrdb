@@ -77,7 +77,7 @@ public class ConfigurationTest {
 
     private File getFile() throws IOException {
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("port=1111");
             writer.newLine();
             writer.write("maxConnections=1");
@@ -100,7 +100,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("defaultAdminUsername=adminuser");
             writer.newLine();
             writer.write("defaultAdminPassword=secretpass");
@@ -172,7 +172,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("maxMemory=512Mb");
             writer.newLine();
         }
@@ -210,7 +210,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("maxMemory=-1");
             writer.newLine();
         }
@@ -231,7 +231,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("maxMemory=nonsense");
             writer.newLine();
         }

@@ -3,7 +3,11 @@ package org.techhouse.unit.ejson.elements;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonPrimitive;
+import org.techhouse.ejson.elements.JsonString;
 
 public class JsonPrimitiveTest {
     // Set and get primitive values of different types (String, Number, Boolean)

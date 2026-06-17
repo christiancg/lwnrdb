@@ -7,7 +7,11 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.internal.ReflectionUtils;
 
 public class ReflectionUtilsTest {
@@ -32,7 +36,7 @@ public class ReflectionUtilsTest {
     // Access private fields and constructors by setting accessible flag
     @Test
     public void test_access_private_members() {
-        class PrivateClass {
+        final class PrivateClass {
             private final String privateField;
 
             private PrivateClass(String value) {
@@ -134,7 +138,7 @@ public class ReflectionUtilsTest {
     @Test
     public void test_create_instance_with_public_no_args_constructor() throws Exception {
         class TestClass {
-            public TestClass() {
+            TestClass() {
             }
         }
 
@@ -150,7 +154,7 @@ public class ReflectionUtilsTest {
     // Handle class with no public constructors
     @Test
     public void test_create_instance_with_no_public_constructors() {
-        class TestClass {
+        final class TestClass {
             private TestClass() {
             }
         }

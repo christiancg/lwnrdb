@@ -1,6 +1,6 @@
 package org.techhouse.ejson.internal;
 
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
 public class Assigner {

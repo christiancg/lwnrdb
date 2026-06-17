@@ -5,7 +5,21 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.ChangePermissionsRequest;
+import org.techhouse.ops.req.CreateIndexRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.DropIndexRequest;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ListUsersRequest;
+import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SetDatabaseOwnersRequest;
+import org.techhouse.ops.req.SetPasswordRequest;
 
 public class RequestValidator {
     private static final Cache cache = IocContainer.get(Cache.class);

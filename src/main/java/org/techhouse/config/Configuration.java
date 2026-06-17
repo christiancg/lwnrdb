@@ -3,7 +3,7 @@ package org.techhouse.config;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.log.Logger;
 
-public class Configuration {
+public final class Configuration {
     private static final Configuration config = new Configuration();
     private static final Logger logger = Logger.logFor(Configuration.class);
 
@@ -43,6 +43,8 @@ public class Configuration {
                 case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
                 case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
                 case "maxMemory" -> maxMemoryBytes = SizeParser.parse(config.getValue());
+                default -> {
+                }
             }
         }
     }

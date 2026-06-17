@@ -1,6 +1,6 @@
 package org.techhouse.ops.auth;
 
-public class AuthorizationResult {
+public final class AuthorizationResult {
     private final boolean allowed;
     private final String reason;
 

@@ -84,7 +84,7 @@ public class MemoryManagement {
             return;
         }
         try {
-            try (final var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME)) {
+            try (var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME)) {
                 pagesStream.forEach(map -> {
                     for (var e : map.values()) {
                         try {
@@ -209,6 +209,8 @@ public class MemoryManagement {
                     case FIELD_INDEX ->
                         cache.evictFieldIndex(resource.dbName(), resource.collName(), resource.indexKey());
                     case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
+                    default -> {
+                    }
                 }
             } finally {
                 locks.releaseWrite(resource.dbName(), resource.collName());

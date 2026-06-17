@@ -7,7 +7,10 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.techhouse.log.Logger;
 
 public class ConfigReader {
@@ -51,7 +54,7 @@ public class ConfigReader {
     }
 
     private static Map<String, String> loadDefaultConfig() {
-        try (final var inputStream = ConfigReader.class.getResourceAsStream(DEFAULT_CONFIG_PATH)) {
+        try (var inputStream = ConfigReader.class.getResourceAsStream(DEFAULT_CONFIG_PATH)) {
             if (inputStream != null) {
                 final var allLines = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))
                         .lines().toList();

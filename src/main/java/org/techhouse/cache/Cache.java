@@ -1,7 +1,14 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -17,7 +24,13 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -137,7 +150,7 @@ public class Cache {
         // that's where insertAdminPages / updateTouchedPagesInFileSystem look it up.
         pagesPkIndexes.put(getCollectionIdentifier(Globals.ADMIN_DB_NAME, pagesCollName), new ArrayList<>(pkIdx));
         final var pageEntries = new ArrayList<AdminPageEntry>();
-        try (final var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, pagesCollName)) {
+        try (var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, pagesCollName)) {
             pagesStream.forEach(map -> map.values().stream()
                     .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
         }
@@ -161,7 +174,7 @@ public class Cache {
 
     private Map<String, DbEntry> readWholeCollection(String dbName, String collName) throws IOException {
         final var result = new HashMap<String, DbEntry>();
-        try (final var pagesStream = fs.streamPages(dbName, collName)) {
+        try (var pagesStream = fs.streamPages(dbName, collName)) {
             pagesStream.forEach(result::putAll);
         }
         return result;

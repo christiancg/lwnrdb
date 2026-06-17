@@ -1,10 +1,17 @@
 package org.techhouse.ejson.internal;
 
-import java.lang.reflect.*;
+import java.lang.reflect.AccessFlag;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.NoConstructorException;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 

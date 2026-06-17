@@ -8,10 +8,22 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
-import org.techhouse.ops.req.agg.mid_operators.*;
+import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastToType;
+import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
+import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
-import org.techhouse.ops.req.agg.step.*;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
+import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
+import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.SkipAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
@@ -314,9 +326,8 @@ public class AggregationStepValidatorTest {
 
     @Test
     public void validate_arrayParamMidOperator_emptyOperands_returnsFail() {
-        assertTrue(AggregationStepValidator
-                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.SUM, new JsonArray()))
-                .isValid() == false);
+        assertFalse(AggregationStepValidator
+                .validateMidOperator(new ArrayParamMidOperator(MidOperationType.SUM, new JsonArray())).isValid());
     }
 
     @Test

@@ -58,7 +58,7 @@ public class JsonTimeTest {
     @Test
     public void subclass_returns_same_type_name() {
         class CustomJsonTime extends JsonTime {
-            public CustomJsonTime(LocalTime time) {
+            CustomJsonTime(LocalTime time) {
                 super(time);
             }
         }

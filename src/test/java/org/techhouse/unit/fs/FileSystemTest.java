@@ -3,11 +3,21 @@ package org.techhouse.unit.fs;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import java.io.*;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -1131,7 +1141,7 @@ public class FileSystemTest {
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
         fs.createBaseDbPath();
 
-        try (final var stream = fs.streamEntries(TestGlobals.DB, "nonExistentColl")) {
+        try (var stream = fs.streamEntries(TestGlobals.DB, "nonExistentColl")) {
             assertEquals(0, stream.count());
         }
     }
@@ -1163,7 +1173,7 @@ public class FileSystemTest {
         fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);
 
         final Set<String> ids;
-        try (final var stream = fs.streamEntries(TestGlobals.DB, TestGlobals.COLL)) {
+        try (var stream = fs.streamEntries(TestGlobals.DB, TestGlobals.COLL)) {
             ids = stream.map(DbEntry::get_id).collect(java.util.stream.Collectors.toSet());
         }
         assertEquals(Set.of("a", "b"), ids);

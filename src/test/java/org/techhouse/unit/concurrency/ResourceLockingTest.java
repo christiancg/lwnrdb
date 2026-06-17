@@ -39,6 +39,7 @@ public class ResourceLockingTest {
                 rl.lockRead("db", "coll");
                 acquired.set(true);
             } catch (InterruptedException ignored) {
+                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -61,6 +62,7 @@ public class ResourceLockingTest {
                 acquired.set(true);
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
+                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -82,6 +84,7 @@ public class ResourceLockingTest {
                 release.await();
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
+                // test thread interrupted while awaiting release; nothing to clean up
             }
         });
         reader.start();

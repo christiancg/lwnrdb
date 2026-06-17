@@ -12,7 +12,10 @@ import org.techhouse.cache.Cache;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
-import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.ChangePermissionsRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.test.TestUtils;
 
 public class UserOperationHelperTest {
