@@ -48,7 +48,7 @@ public class JsonReader {
         }
         for (;;) {
             firstToken = tokens.getFirst();
-            var propertyName = "";
+            String propertyName;
             if (firstToken.getJsonType() == JsonBaseElement.JsonType.STRING) {
                 propertyName = ((JsonString) firstToken).getValue();
                 tokens = skipOneToken(tokens);

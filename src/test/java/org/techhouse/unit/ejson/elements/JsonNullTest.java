@@ -56,7 +56,7 @@ public class JsonNullTest {
     public void test_json_null_equals_null() {
         JsonNull jsonNull = JsonNull.INSTANCE;
 
-        boolean result = jsonNull.equals(null);
+        boolean result = jsonNull.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }

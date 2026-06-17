@@ -152,7 +152,7 @@ public class AggregationOperationHelper {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var distinctStep = (DistinctAggregationStep) baseDistinctStep;
         final var fieldName = distinctStep.getFieldName();
-        if (fieldName == null || fieldName.isEmpty() || fieldName.trim().isEmpty()) {
+        if (fieldName == null || fieldName.isEmpty() || fieldName.isBlank()) {
             return resultStream.map(jsonObject -> {
                 final var result = jsonObject.deepCopy();
                 if (result.has(Globals.PK_FIELD)) {

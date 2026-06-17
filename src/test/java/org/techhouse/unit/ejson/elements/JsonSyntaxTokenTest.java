@@ -68,7 +68,7 @@ public class JsonSyntaxTokenTest {
     public void test_equals_with_null_returns_false() {
         JsonSyntaxToken token = JsonSyntaxToken.COLON;
 
-        boolean result = token.equals(null);
+        boolean result = token.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }

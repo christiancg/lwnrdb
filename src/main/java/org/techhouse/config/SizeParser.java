@@ -1,5 +1,6 @@
 package org.techhouse.config;
 
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 public class SizeParser {
@@ -14,7 +15,7 @@ public class SizeParser {
             throw new IllegalArgumentException("Invalid size value: " + input);
         }
         final var numericPart = Long.parseLong(matcher.group(1));
-        final var unitPart = matcher.group(2).toLowerCase();
+        final var unitPart = matcher.group(2).toLowerCase(Locale.ROOT);
         if (numericPart < 0) {
             if (numericPart == -1L && unitPart.isEmpty()) {
                 return -1L;

@@ -241,8 +241,8 @@ public class LinkedTreeMapTest {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("key", 1);
         // Pass an Integer as key to a String-keyed map — ClassCastException caught internally
-        assertNull(map.get(42));
-        assertFalse(map.containsKey(42));
+        assertNull(map.get(42)); // NOPMD - intentional type-mismatch test
+        assertFalse(map.containsKey(42)); // NOPMD - intentional type-mismatch test
     }
 
     // findByEntry and equal() are exercised via entrySet().contains() (L141-148)
@@ -256,7 +256,7 @@ public class LinkedTreeMapTest {
         assertTrue(map.entrySet().contains(matching));
         assertFalse(map.entrySet().contains(wrongValue));
         assertFalse(map.entrySet().contains(wrongKey));
-        assertFalse(map.entrySet().contains("not_an_entry"));
+        assertFalse(map.entrySet().contains("not_an_entry")); // NOPMD - intentional type-mismatch test
     }
 
     // removeInternal with a node that has both left and right children (L152-184)
@@ -402,7 +402,7 @@ public class LinkedTreeMapTest {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("a", 1);
         assertFalse(map.entrySet().remove(Map.entry("a", 99)));
-        assertFalse(map.entrySet().remove("not_an_entry"));
+        assertFalse(map.entrySet().remove("not_an_entry")); // NOPMD - intentional type-mismatch test
     }
 
     // KeySet.size() returns correct count (L504)

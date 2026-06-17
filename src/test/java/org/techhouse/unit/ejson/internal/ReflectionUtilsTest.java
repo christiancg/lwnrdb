@@ -19,7 +19,7 @@ public class ReflectionUtilsTest {
     @Test
     public void test_get_set_field_values() throws IllegalAccessException {
         class TestClass {
-            private String testField = "initial";
+            private String testField = "initial"; // NOPMD - reflection/serialization test fixture
         }
 
         TestClass instance = new TestClass();
@@ -37,7 +37,7 @@ public class ReflectionUtilsTest {
     @Test
     public void test_access_private_members() {
         final class PrivateClass {
-            private final String privateField;
+            private final String privateField; // NOPMD - reflection/serialization test fixture
 
             private PrivateClass(String value) {
                 this.privateField = value;
