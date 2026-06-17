@@ -136,6 +136,25 @@ public class MemoryManagementTest {
     }
 
     @Test
+    public void test_runEvictionSweep_skips_resource_held_by_reader() throws Exception {
+        setMaxMemory(1L);
+        final var cache = IocContainer.get(Cache.class);
+        seedCollectionCache(cache, "lockedColl", 10);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.recordAccess(AccessKind.COLLECTION, "userDb", "lockedColl", null);
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        locks.lockRead("userDb", "lockedColl");
+        try {
+            mm.runEvictionSweep();
+            final var remaining = cache.listCacheableResources();
+            assertTrue(remaining.stream().anyMatch(r -> r.collName().equals("lockedColl")),
+                    "a resource held by a reader must not be evicted");
+        } finally {
+            locks.releaseRead("userDb", "lockedColl");
+        }
+    }
+
+    @Test
     public void test_runEvictionSweep_respects_priority_tier() throws Exception {
         // PK index sizes by ESTIMATED_PK_ENTRY_BYTES (small); collection by entry bytes.
         // Set cap so PK index alone fits, but collection + PK index together do not.

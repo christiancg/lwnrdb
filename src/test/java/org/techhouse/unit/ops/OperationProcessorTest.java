@@ -10,15 +10,21 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.*;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -543,5 +549,99 @@ public class OperationProcessorTest {
             assertTrue(firstColl.has("entryCount"));
             assertTrue(firstColl.has("sizeBytes"));
         }
+    }
+
+    // A successful FIND_BY_ID releases its collection read lock (a writer can lock afterward).
+    @Test
+    public void test_find_by_id_releases_read_lock() {
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("lock-id-1"));
+        save.setObject(obj);
+        processor.processMessage(save);
+
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("lock-id-1");
+        final var response = (FindByIdResponse) processor.processMessage(request);
+        assertEquals(OperationStatus.OK, response.getStatus());
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL),
+                "read lock must be released after FIND_BY_ID completes");
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+    }
+
+    // A dirty read proceeds even while another thread holds the collection write lock.
+    @Test
+    public void test_dirty_read_proceeds_while_collection_write_locked() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            final var json = "{\"type\":\"FIND_BY_ID\",\"databaseName\":\"" + TestGlobals.DB +
+                    "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"_id\":\"missing\",\"dirtyRead\":true}";
+            final var request = RequestParser.parseRequest(json);
+            assertTrue(request.isDirtyRead());
+
+            final var result = new AtomicReference<OperationResponse>();
+            final var done = new CountDownLatch(1);
+            final var worker = new Thread(() -> {
+                result.set(processor.processMessage(request));
+                done.countDown();
+            });
+            worker.start();
+            assertTrue(done.await(2, TimeUnit.SECONDS),
+                    "dirty read must not block on the collection write lock");
+            assertNotNull(result.get());
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    // A normal (locking) read blocks while a writer holds the collection, then proceeds once released.
+    @Test
+    public void test_normal_read_blocks_until_write_released() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("missing");
+        final var done = new CountDownLatch(1);
+        final var worker = new Thread(() -> {
+            processor.processMessage(request);
+            done.countDown();
+        });
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        boolean releasedWrite = false;
+        try {
+            worker.start();
+            assertFalse(done.await(300, TimeUnit.MILLISECONDS),
+                    "a locking read must block while a writer holds the collection");
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+            releasedWrite = true;
+            assertTrue(done.await(2, TimeUnit.SECONDS),
+                    "the read must proceed once the writer releases the collection");
+        } finally {
+            if (!releasedWrite) {
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            }
+        }
+    }
+
+    // An AGGREGATE with a JOIN read-locks both collections and releases them when finished.
+    @Test
+    public void test_aggregate_with_join_releases_both_collection_locks() {
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.JOIN_COLL));
+
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        final List<BaseAggregationStep> steps = new ArrayList<>();
+        steps.add(new JoinAggregationStep(TestGlobals.JOIN_COLL, "_id", "_id", "joined"));
+        request.setAggregationSteps(steps);
+        processor.processMessage(request);
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL),
+                "primary collection read lock must be released after AGGREGATE");
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.JOIN_COLL),
+                "joined collection read lock must be released after AGGREGATE");
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.JOIN_COLL);
     }
 }

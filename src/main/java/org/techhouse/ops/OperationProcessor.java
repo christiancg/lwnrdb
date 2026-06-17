@@ -16,6 +16,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.*;
 
 import java.util.List;
@@ -51,6 +52,44 @@ public class OperationProcessor {
         memoryManagement.recordAccess(AccessKind.PK_INDEX, dbName, collName, null);
         taskManager.submitBackgroundTask(new CollectionUsageEvent(AccessKind.PK_INDEX, dbName, collName, null,
                 System.currentTimeMillis()));
+    }
+
+    // Acquire shared read locks on the given collection identifiers in a deterministic (sorted)
+    // order so two overlapping multi-collection reads can never deadlock. Returns the identifiers
+    // actually locked (in acquisition order); a dirty read takes no collection lock and returns an
+    // empty list, relying on FileSystem's per-file locks for read validity.
+    private List<String> acquireReadLocks(boolean dirtyRead, List<String> collIdentifiers)
+            throws InterruptedException {
+        if (dirtyRead) {
+            return List.of();
+        }
+        final var sorted = collIdentifiers.stream().distinct().sorted().toList();
+        final var acquired = new ArrayList<String>();
+        for (var identifier : sorted) {
+            locks.lockReadByName(identifier);
+            acquired.add(identifier);
+        }
+        return acquired;
+    }
+
+    private void releaseReadLocks(List<String> acquired) {
+        for (var i = acquired.size() - 1; i >= 0; i--) {
+            locks.releaseReadByName(acquired.get(i));
+        }
+    }
+
+    private List<String> aggregateLockSet(AggregateRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var identifiers = new ArrayList<String>();
+        identifiers.add(Cache.getCollectionIdentifier(dbName, request.getCollectionName()));
+        if (request.getAggregationSteps() != null) {
+            for (var step : request.getAggregationSteps()) {
+                if (step instanceof JoinAggregationStep joinStep) {
+                    identifiers.add(Cache.getCollectionIdentifier(dbName, joinStep.getJoinCollection()));
+                }
+            }
+        }
+        return identifiers;
     }
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
@@ -213,7 +252,10 @@ public class OperationProcessor {
         final var dbName = findbyIdRequest.getDatabaseName();
         final var collName = findbyIdRequest.getCollectionName();
         final var id = findbyIdRequest.get_id();
+        List<String> readLocks = List.of();
         try {
+            readLocks = acquireReadLocks(findbyIdRequest.isDirtyRead(),
+                    List.of(Cache.getCollectionIdentifier(dbName, collName)));
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
             if (foundIndexEntry >= 0) {
@@ -227,11 +269,15 @@ public class OperationProcessor {
             }
         } catch (Exception exception) {
             return new FindByIdResponse(OperationStatus.ERROR, "Error while retrieving entry: " + exception.getMessage(), null);
+        } finally {
+            releaseReadLocks(readLocks);
         }
     }
 
     private AggregateResponse processAggregateOperation(AggregateRequest aggregateRequest) {
+        List<String> readLocks = List.of();
         try {
+            readLocks = acquireReadLocks(aggregateRequest.isDirtyRead(), aggregateLockSet(aggregateRequest));
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
             recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
             return results.isEmpty() ?
@@ -239,6 +285,8 @@ public class OperationProcessor {
                     new AggregateResponse(OperationStatus.OK, "Ok", results);
         } catch (Exception e) {
             return new AggregateResponse(OperationStatus.ERROR, "An error occurred while processing the aggregation: " + e.getMessage(), null);
+        } finally {
+            releaseReadLocks(readLocks);
         }
     }
 
@@ -362,6 +410,7 @@ public class OperationProcessor {
     }
 
     private ListCollectionsResponse processListCollectionsOperation(ListCollectionsRequest request) {
+        List<String> readLocks = List.of();
         try {
             final var dbName = request.getDatabaseName();
             if (dbName == null || dbName.isBlank()) {
@@ -371,6 +420,8 @@ public class OperationProcessor {
             if (Globals.ADMIN_DB_NAME.equals(dbName)) {
                 return new ListCollectionsResponse(OperationStatus.OK, "Ok", List.of());
             }
+            readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
+                    Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME)));
             if (cache.getAdminDbEntry(dbName) == null) {
                 return new ListCollectionsResponse(OperationStatus.NOT_FOUND,
                         "Database " + dbName + " not found", null);
@@ -380,6 +431,8 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new ListCollectionsResponse(OperationStatus.ERROR,
                     "Error while listing collections: " + e.getMessage(), null);
+        } finally {
+            releaseReadLocks(readLocks);
         }
     }
 
@@ -397,7 +450,10 @@ public class OperationProcessor {
     }
 
     private ListUsersResponse processListUsers(ListUsersRequest request) {
+        List<String> readLocks = List.of();
         try {
+            readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
+                    Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME)));
             final var userStream = cache.getAllAdminUserEntries().stream()
                     .map(user -> user.toResponseJson(
                             cache.getAllAdminDbEntries().stream()
@@ -411,6 +467,8 @@ public class OperationProcessor {
                     : new ListUsersResponse(OperationStatus.OK, "Ok", results);
         } catch (Exception e) {
             return new ListUsersResponse(OperationStatus.ERROR, "Error listing users: " + e.getMessage(), null);
+        } finally {
+            releaseReadLocks(readLocks);
         }
     }
 

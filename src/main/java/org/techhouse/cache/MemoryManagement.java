@@ -201,7 +201,7 @@ public class MemoryManagement {
             if (userCacheBytes() <= targetBytes) {
                 break;
             }
-            if (!locks.tryLock(resource.dbName(), resource.collName())) {
+            if (!locks.tryLockWrite(resource.dbName(), resource.collName())) {
                 continue;
             }
             try {
@@ -212,7 +212,7 @@ public class MemoryManagement {
                     case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
                 }
             } finally {
-                locks.release(resource.dbName(), resource.collName());
+                locks.releaseWrite(resource.dbName(), resource.collName());
             }
         }
     }
