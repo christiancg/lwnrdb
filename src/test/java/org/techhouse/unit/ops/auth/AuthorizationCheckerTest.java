@@ -6,9 +6,14 @@ import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -117,5 +122,117 @@ public class AuthorizationCheckerTest {
     public void test_null_user() {
         final var req = new SaveRequest("testDb", "testColl");
         assertFalse(AuthorizationChecker.check(req, null).isAllowed());
+    }
+
+    private AggregateRequest aggregateWithSteps(List<BaseAggregationStep> steps) {
+        final var req = new AggregateRequest("testDb", "testColl");
+        req.setAggregationSteps(steps);
+        return req;
+    }
+
+    private JoinAggregationStep joinStep(String joinCollection) {
+        return new JoinAggregationStep(joinCollection, "localField", "remoteField", "asField");
+    }
+
+    @Test
+    public void test_aggregate_join_user_has_read_on_both_collections_allowed() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        collPerms.put("testDb|joinColl", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(joinStep("joinColl"));
+        final var req = aggregateWithSteps(steps);
+        assertTrue(AuthorizationChecker.check(req, user).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_join_user_lacks_join_collection_permission_denied() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(joinStep("joinColl"));
+        final var req = aggregateWithSteps(steps);
+        final var result = AuthorizationChecker.check(req, user);
+        assertFalse(result.isAllowed());
+        assertEquals("action is forbidden, no permissions", result.getReason());
+    }
+
+    @Test
+    public void test_aggregate_join_db_level_read_covers_join_collection_allowed() {
+        final var dbPerms = new HashMap<String, PermissionLevel>();
+        dbPerms.put("testDb", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), dbPerms, new HashMap<>());
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(joinStep("joinColl"));
+        final var req = aggregateWithSteps(steps);
+        assertTrue(AuthorizationChecker.check(req, user).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_join_collection_level_main_but_join_missing_denied() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(new FilterAggregationStep(null));
+        steps.add(joinStep("joinColl"));
+        final var req = aggregateWithSteps(steps);
+        assertFalse(AuthorizationChecker.check(req, user).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_multiple_joins_one_forbidden_denied() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        collPerms.put("testDb|joinCollA", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(joinStep("joinCollA"));
+        steps.add(joinStep("joinCollB"));
+        final var req = aggregateWithSteps(steps);
+        assertFalse(AuthorizationChecker.check(req, user).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_without_join_unchanged_behavior_allowed() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(new FilterAggregationStep(null));
+        final var req = aggregateWithSteps(steps);
+        assertTrue(AuthorizationChecker.check(req, user).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_null_steps_allowed() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var req = new AggregateRequest("testDb", "testColl");
+        assertTrue(AuthorizationChecker.check(req, user).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_join_admin_allowed() {
+        final var admin = createAdminUser();
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(joinStep("joinColl"));
+        final var req = aggregateWithSteps(steps);
+        assertTrue(AuthorizationChecker.check(req, admin).isAllowed());
+    }
+
+    @Test
+    public void test_aggregate_join_read_write_covers_read_allowed() {
+        final var collPerms = new HashMap<String, PermissionLevel>();
+        collPerms.put("testDb|testColl", PermissionLevel.READ);
+        collPerms.put("testDb|joinColl", PermissionLevel.READ_WRITE);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
+        final var steps = new ArrayList<BaseAggregationStep>();
+        steps.add(joinStep("joinColl"));
+        final var req = aggregateWithSteps(steps);
+        assertTrue(AuthorizationChecker.check(req, user).isAllowed());
     }
 }

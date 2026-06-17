@@ -6,7 +6,9 @@ import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
 import java.util.Set;
 
@@ -77,20 +79,34 @@ public final class AuthorizationChecker {
         final var requiredLevel = getRequiredPermissionLevel(type);
         final var collName = req.getCollectionName();
 
-        if (collName != null && !collName.isBlank()) {
-            final var collKey = dbName + "|" + collName;
-            final var collPerm = user.getCollectionPermissions().get(collKey);
-            if (collPerm != null && collPerm.covers(requiredLevel)) {
-                return AuthorizationResult.allow();
+        if (lacksCollectionAccess(user, dbName, collName, requiredLevel)) {
+            return AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
+        // Aggregations may read additional collections through JOIN steps (within the same
+        // database). The user must have READ access to every joined collection as well.
+        if (req instanceof AggregateRequest aggReq && aggReq.getAggregationSteps() != null) {
+            for (final var step : aggReq.getAggregationSteps()) {
+                if (step instanceof JoinAggregationStep joinStep
+                        && lacksCollectionAccess(user, dbName, joinStep.getJoinCollection(), PermissionLevel.READ)) {
+                    return AuthorizationResult.deny("action is forbidden, no permissions");
+                }
             }
         }
 
-        final var dbPerm = user.getDatabasePermissions().get(dbName);
-        if (dbPerm != null && dbPerm.covers(requiredLevel)) {
-            return AuthorizationResult.allow();
-        }
+        return AuthorizationResult.allow();
+    }
 
-        return AuthorizationResult.deny("action is forbidden, no permissions");
+    private static boolean lacksCollectionAccess(AdminUserEntry user, String dbName,
+                                                 String collName, PermissionLevel requiredLevel) {
+        if (collName != null && !collName.isBlank()) {
+            final var collPerm = user.getCollectionPermissions().get(dbName + "|" + collName);
+            if (collPerm != null && collPerm.covers(requiredLevel)) {
+                return false;
+            }
+        }
+        final var dbPerm = user.getDatabasePermissions().get(dbName);
+        return dbPerm == null || !dbPerm.covers(requiredLevel);
     }
 
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
