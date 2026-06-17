@@ -1,5 +1,7 @@
 package org.techhouse.unit.ops.req.agg.step.map;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
@@ -7,8 +9,6 @@ import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class AddFieldMapOperatorTest {
     // Constructor creates instance with ADD_FIELD type, fieldName, condition and operator

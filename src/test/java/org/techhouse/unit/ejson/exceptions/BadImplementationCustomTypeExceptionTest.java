@@ -1,9 +1,9 @@
 package org.techhouse.unit.ejson.exceptions;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class BadImplementationCustomTypeExceptionTest {
     // Create exception with valid class name and cause exception
@@ -14,7 +14,8 @@ public class BadImplementationCustomTypeExceptionTest {
 
         BadImplementationCustomTypeException exception = new BadImplementationCustomTypeException(className, cause);
 
-        assertEquals("The custom type with class name MyCustomType has not been properly implemented", exception.getMessage());
+        assertEquals("The custom type with class name MyCustomType has not been properly implemented",
+                exception.getMessage());
         assertEquals(cause, exception.getCause());
     }
 
@@ -24,9 +25,11 @@ public class BadImplementationCustomTypeExceptionTest {
         String veryLongClassName = "com.organization.project.module.submodule.implementation.service.handler.processor.CustomTypeImplementation";
         Exception cause = new RuntimeException();
 
-        BadImplementationCustomTypeException exception = new BadImplementationCustomTypeException(veryLongClassName, cause);
+        BadImplementationCustomTypeException exception = new BadImplementationCustomTypeException(veryLongClassName,
+                cause);
 
-        assertEquals("The custom type with class name " + veryLongClassName + " has not been properly implemented", exception.getMessage());
+        assertEquals("The custom type with class name " + veryLongClassName + " has not been properly implemented",
+                exception.getMessage());
         assertEquals(cause, exception.getCause());
     }
 }

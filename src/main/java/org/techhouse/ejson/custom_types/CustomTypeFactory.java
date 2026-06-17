@@ -1,12 +1,11 @@
 package org.techhouse.ejson.custom_types;
 
+import java.util.HashMap;
+import java.util.Map;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
-
-import java.util.HashMap;
-import java.util.Map;
 
 public class CustomTypeFactory {
     private static final Map<String, Class<? extends JsonCustom<?>>> _customTypes = new HashMap<>();

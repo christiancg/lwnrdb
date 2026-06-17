@@ -14,15 +14,15 @@ public class AggregationStepValidator {
 
     public static ValidationResult validate(BaseAggregationStep step) {
         return switch (step.getType()) {
-            case FILTER   -> validateFilter((FilterAggregationStep) step);
-            case MAP      -> validateMap((MapAggregationStep) step);
+            case FILTER -> validateFilter((FilterAggregationStep) step);
+            case MAP -> validateMap((MapAggregationStep) step);
             case GROUP_BY -> validateGroupBy((GroupByAggregationStep) step);
-            case JOIN     -> validateJoin((JoinAggregationStep) step);
-            case COUNT    -> ValidationResult.ok();
+            case JOIN -> validateJoin((JoinAggregationStep) step);
+            case COUNT -> ValidationResult.ok();
             case DISTINCT -> ValidationResult.ok();
-            case LIMIT    -> validateLimit((LimitAggregationStep) step);
-            case SKIP     -> validateSkip((SkipAggregationStep) step);
-            case SORT     -> validateSort((SortAggregationStep) step);
+            case LIMIT -> validateLimit((LimitAggregationStep) step);
+            case SKIP -> validateSkip((SkipAggregationStep) step);
+            case SORT -> validateSort((SortAggregationStep) step);
         };
     }
 
@@ -73,7 +73,8 @@ public class AggregationStepValidator {
             return ValidationResult.fail("JOIN step requires a non-blank joinCollection");
         }
         if (!step.getJoinCollection().matches(RequestValidator.NAME_PATTERN)) {
-            return ValidationResult.fail("JOIN joinCollection name must be 3-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult
+                    .fail("JOIN joinCollection name must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
         if (step.getLocalField() == null || step.getLocalField().isBlank()) {
             return ValidationResult.fail("JOIN step requires a non-blank localField");

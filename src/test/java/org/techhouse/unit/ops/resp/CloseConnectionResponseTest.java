@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.resp;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class CloseConnectionResponseTest {
     // Constructor creates instance with CLOSE_CONNECTION type

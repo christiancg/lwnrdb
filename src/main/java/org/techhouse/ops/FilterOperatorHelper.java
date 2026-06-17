@@ -1,5 +1,13 @@
 package org.techhouse.ops;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.function.BiPredicate;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -12,32 +20,21 @@ import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.function.BiPredicate;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
 public class FilterOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
-                                                     String dbName, String collName)
-            throws IOException {
+            String dbName, String collName) throws IOException {
         resultStream = switch (operator.getType()) {
             case CONJUNCTION ->
-                    processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
+                processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
             case FIELD -> processFieldOperator((FieldOperator) operator, resultStream, dbName, collName);
         };
         return resultStream;
     }
 
-    private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator, Stream<JsonObject> resultStream,
-                                                                 String dbName, String collName)
-            throws IOException {
+    private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
+            Stream<JsonObject> resultStream, String dbName, String collName) throws IOException {
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             Stream<JsonObject> partialResults;
@@ -67,29 +64,29 @@ public class FilterOperatorHelper {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
                 .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
                 .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
-                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream())
-                .distinct();
+                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream()).distinct();
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
     }
 
-    private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined, Stream<JsonObject> resultStream,
-                                                                  String dbName, String collName) {
+    private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
+            Stream<JsonObject> resultStream, String dbName, String collName) {
         if (resultStream == null) {
             // Blocking step (documented exception): NOR/NAND must diff against the full
             // collection, so it loads the whole collection rather than streaming.
             // TODO: see if we can improve this in the future, as it might cause an OOM exception when collections are too large
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD)))
-                .entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
+        return Stream.concat(resultStream, combined)
+                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
+                .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
-                                                           String dbName, String collName) throws IOException {
+            String dbName, String collName) throws IOException {
 
         final var tester = getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
@@ -113,9 +110,11 @@ public class FilterOperatorHelper {
                         final var toTestPrimitive = toTestElement.asJsonPrimitive();
                         if (operatorPrimitive.isJsonBoolean() && toTestPrimitive.isJsonBoolean()) {
                             if (operation == FieldOperatorType.EQUALS) {
-                                return operatorPrimitive.asJsonBoolean().getValue() == toTestPrimitive.asJsonBoolean().getValue();
+                                return operatorPrimitive.asJsonBoolean().getValue() == toTestPrimitive.asJsonBoolean()
+                                        .getValue();
                             } else if (operation == FieldOperatorType.NOT_EQUALS) {
-                                return operatorPrimitive.asJsonBoolean().getValue() != toTestPrimitive.asJsonBoolean().getValue();
+                                return operatorPrimitive.asJsonBoolean().getValue() != toTestPrimitive.asJsonBoolean()
+                                        .getValue();
                             }
                             return false;
                         } else if (operatorPrimitive.isJsonNumber() && toTestPrimitive.isJsonNumber()) {
@@ -130,8 +129,8 @@ public class FilterOperatorHelper {
                                 case SMALLER_THAN_EQUALS -> operatorDouble.doubleValue() >= toTestDouble.doubleValue();
                                 case IN, NOT_IN, CONTAINS -> false;
                             };
-                        } else if(operatorPrimitive.isJsonCustom() && toTestPrimitive.isJsonCustom() &&
-                                operatorPrimitive.getClass().equals(toTestPrimitive.getClass())) {
+                        } else if (operatorPrimitive.isJsonCustom() && toTestPrimitive.isJsonCustom()
+                                && operatorPrimitive.getClass().equals(toTestPrimitive.getClass())) {
                             final var operatorCustom = operatorPrimitive.asJsonCustom();
                             final var toTestCustom = toTestPrimitive.asJsonCustom();
                             return switch (operation) {
@@ -143,8 +142,8 @@ public class FilterOperatorHelper {
                                 case SMALLER_THAN_EQUALS -> compareCustom(operatorCustom, toTestCustom) >= 0;
                                 case IN, NOT_IN, CONTAINS -> false;
                             };
-                        } else if (!operatorPrimitive.isJsonCustom() && !toTestPrimitive.isJsonCustom() &&
-                                operatorPrimitive.isJsonString() && toTestPrimitive.isJsonString()) {
+                        } else if (!operatorPrimitive.isJsonCustom() && !toTestPrimitive.isJsonCustom()
+                                && operatorPrimitive.isJsonString() && toTestPrimitive.isJsonString()) {
                             final var operatorString = operatorElement.asJsonString().getValue();
                             final var toTestString = toTestElement.asJsonString().getValue();
                             return switch (operation) {
@@ -152,7 +151,7 @@ public class FilterOperatorHelper {
                                 case NOT_EQUALS -> !operatorString.equalsIgnoreCase(toTestString);
                                 case CONTAINS -> toTestString.contains(operatorString);
                                 case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN ->
-                                        false;
+                                    false;
                             };
                         } else {
                             return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
@@ -172,26 +171,28 @@ public class FilterOperatorHelper {
         };
     }
 
-    private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test, FieldOperator operator,
-                                                            Stream<JsonObject> resultStream, String dbName, String collName)
+    private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test,
+            FieldOperator operator, Stream<JsonObject> resultStream, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
         final var value = operator.getValue();
         Set<String> matchingValues;
         matchingValues = switch (value) {
             case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
-            case JsonBoolean jsonBoolean -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
-            case JsonNumber jsonNumber -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonNumber.getValue());
+            case JsonBoolean jsonBoolean ->
+                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
+            case JsonNumber jsonNumber ->
+                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonNumber.getValue());
             case JsonCustom<?> jsonCustom -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonCustom);
-            case JsonString jsonString -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
+            case JsonString jsonString ->
+                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
             default -> null;
         };
         if (matchingValues != null) {
             if (resultStream == null) {
                 // Index hit with no upstream stream: fetch only the matched entries via
                 // positioned reads instead of loading the whole collection into memory.
-                resultStream = cache.getEntriesByIds(dbName, collName, matchingValues).stream()
-                        .map(DbEntry::getData);
+                resultStream = cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData);
             } else {
                 // matchingValues already is the set of matching ids; filter the incoming
                 // stream against it directly, without loading the whole collection.

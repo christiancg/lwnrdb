@@ -1,6 +1,14 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.*;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -16,17 +24,8 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.*;
-import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class OperationProcessorTest {
     final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
@@ -119,7 +118,7 @@ public class OperationProcessorTest {
 
         JsonObject obj1 = new JsonObject();
         obj1.add(Globals.PK_FIELD, "id1");
-        JsonObject obj2 = new JsonObject(); 
+        JsonObject obj2 = new JsonObject();
         obj2.add(Globals.PK_FIELD, "id2");
 
         objects.add(obj1);
@@ -171,7 +170,6 @@ public class OperationProcessorTest {
         assertEquals(OperationStatus.OK, createIndexResponse.getStatus());
         assertEquals("Created index for field: fieldName", createIndexResponse.getMessage());
 
-
         DropIndexRequest dropIndexRequest = new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "fieldName");
         DropIndexResponse dropIndexResponse = (DropIndexResponse) processor.processMessage(dropIndexRequest);
         assertEquals(OperationStatus.OK, dropIndexResponse.getStatus());
@@ -189,7 +187,8 @@ public class OperationProcessorTest {
         processor.processMessage(saveRequest);
 
         AggregateRequest aggregateRequest = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "searchMe", new JsonString("test")))));
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "searchMe", new JsonString("test")))));
 
         AggregateResponse aggregateResponse = (AggregateResponse) processor.processMessage(aggregateRequest);
 
@@ -386,9 +385,8 @@ public class OperationProcessorTest {
     @Test
     public void test_aggregate_returns_not_found_when_no_results() {
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
-        request.setAggregationSteps(List.of(
-                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "nobody", new JsonString("nope")))
-        ));
+        request.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "nobody", new JsonString("nope")))));
 
         AggregateResponse response = (AggregateResponse) processor.processMessage(request);
 
@@ -463,14 +461,16 @@ public class OperationProcessorTest {
     @Test
     public void test_save_records_collection_usage() {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
-        final var before = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var before = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL,
+                null);
         final var beforeCount = before == null ? 0L : before.getAccessCount();
         SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString("usage-id-1"));
         saveRequest.setObject(obj);
         processor.processMessage(saveRequest);
-        final var after = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var after = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL,
+                null);
         assertNotNull(after);
         assertTrue(after.getAccessCount() > beforeCount);
     }
@@ -483,12 +483,14 @@ public class OperationProcessorTest {
         saveRequest.setObject(obj);
         processor.processMessage(saveRequest);
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
-        final var before = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL, null);
+        final var before = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL,
+                null);
         final var beforeCount = before == null ? 0L : before.getAccessCount();
         FindByIdRequest request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("usage-id-2");
         processor.processMessage(request);
-        final var after = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL, null);
+        final var after = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL,
+                null);
         assertNotNull(after);
         assertTrue(after.getAccessCount() > beforeCount);
     }
@@ -577,8 +579,8 @@ public class OperationProcessorTest {
         final var locks = IocContainer.get(ResourceLocking.class);
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
         try {
-            final var json = "{\"type\":\"FIND_BY_ID\",\"databaseName\":\"" + TestGlobals.DB +
-                    "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"_id\":\"missing\",\"dirtyRead\":true}";
+            final var json = "{\"type\":\"FIND_BY_ID\",\"databaseName\":\"" + TestGlobals.DB
+                    + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"_id\":\"missing\",\"dirtyRead\":true}";
             final var request = RequestParser.parseRequest(json);
             assertTrue(request.isDirtyRead());
 
@@ -589,8 +591,7 @@ public class OperationProcessorTest {
                 done.countDown();
             });
             worker.start();
-            assertTrue(done.await(2, TimeUnit.SECONDS),
-                    "dirty read must not block on the collection write lock");
+            assertTrue(done.await(2, TimeUnit.SECONDS), "dirty read must not block on the collection write lock");
             assertNotNull(result.get());
         } finally {
             locks.release(TestGlobals.DB, TestGlobals.COLL);

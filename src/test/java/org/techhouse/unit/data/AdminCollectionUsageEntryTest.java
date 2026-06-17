@@ -1,5 +1,7 @@
 package org.techhouse.unit.data;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.config.Globals;
@@ -7,14 +9,12 @@ import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-import static org.junit.jupiter.api.Assertions.*;
-
 public class AdminCollectionUsageEntryTest {
 
     @Test
     public void test_construct_with_all_fields() {
-        final var entry = new AdminCollectionUsageEntry(AccessKind.COLLECTION, "myDb", "myColl", "myField",
-                42L, 1_000L);
+        final var entry = new AdminCollectionUsageEntry(AccessKind.COLLECTION, "myDb", "myColl", "myField", 42L,
+                1_000L);
         assertEquals(AccessKind.COLLECTION, entry.getKind());
         assertEquals("myDb", entry.getDbName());
         assertEquals("myColl", entry.getCollName());

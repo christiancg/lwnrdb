@@ -1,5 +1,9 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.HashMap;
+import java.util.HashSet;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -7,11 +11,6 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.*;
 import org.techhouse.test.TestUtils;
-
-import java.util.HashMap;
-import java.util.HashSet;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class UserOperationHelperLastAdminTest {
 

@@ -1,20 +1,19 @@
 package org.techhouse.data.admin;
 
-import org.techhouse.config.Globals;
-import org.techhouse.data.auth.GlobalPermissionType;
-import org.techhouse.data.auth.PermissionLevel;
-import org.techhouse.data.DbEntry;
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonBoolean;
-import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.auth.GlobalPermissionType;
+import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 
 public class AdminUserEntry extends DbEntry {
     private static final String PASSWORD_HASH_FIELD = "passwordHash";
@@ -35,9 +34,8 @@ public class AdminUserEntry extends DbEntry {
     }
 
     public AdminUserEntry(String username, String passwordHash, boolean admin,
-                         Set<GlobalPermissionType> globalPermissions,
-                         Map<String, PermissionLevel> databasePermissions,
-                         Map<String, PermissionLevel> collectionPermissions) {
+            Set<GlobalPermissionType> globalPermissions, Map<String, PermissionLevel> databasePermissions,
+            Map<String, PermissionLevel> collectionPermissions) {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
         super.setCollectionName(Globals.ADMIN_USERS_COLLECTION_NAME);
         this.set_id(username);
@@ -59,8 +57,7 @@ public class AdminUserEntry extends DbEntry {
 
         final var globalPermsArray = object.get(GLOBAL_PERMISSIONS_FIELD).asJsonArray();
         result.globalPermissions = globalPermsArray.asList().stream()
-                .map(el -> GlobalPermissionType.valueOf(el.asJsonString().getValue()))
-                .collect(Collectors.toSet());
+                .map(el -> GlobalPermissionType.valueOf(el.asJsonString().getValue())).collect(Collectors.toSet());
 
         final var dbPermsObj = object.get(DATABASE_PERMISSIONS_FIELD).asJsonObject();
         result.databasePermissions = new HashMap<>();
@@ -158,24 +155,28 @@ public class AdminUserEntry extends DbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof AdminUserEntry that)) return false;
-        if (!super.equals(o)) return false;
-        return admin == that.admin && Objects.equals(passwordHash, that.passwordHash) &&
-                Objects.equals(globalPermissions, that.globalPermissions) &&
-                Objects.equals(databasePermissions, that.databasePermissions) &&
-                Objects.equals(collectionPermissions, that.collectionPermissions);
+        if (this == o)
+            return true;
+        if (!(o instanceof AdminUserEntry that))
+            return false;
+        if (!super.equals(o))
+            return false;
+        return admin == that.admin && Objects.equals(passwordHash, that.passwordHash)
+                && Objects.equals(globalPermissions, that.globalPermissions)
+                && Objects.equals(databasePermissions, that.databasePermissions)
+                && Objects.equals(collectionPermissions, that.collectionPermissions);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), passwordHash, admin, globalPermissions, databasePermissions, collectionPermissions);
+        return Objects.hash(super.hashCode(), passwordHash, admin, globalPermissions, databasePermissions,
+                collectionPermissions);
     }
 
     @Override
     public String toString() {
-        return "AdminUserEntry(super=" + super.toString() + ", passwordHash=***, admin=" + admin +
-                ", globalPermissions=" + globalPermissions + ", databasePermissions=" + databasePermissions +
-                ", collectionPermissions=" + collectionPermissions + ")";
+        return "AdminUserEntry(super=" + super.toString() + ", passwordHash=***, admin=" + admin
+                + ", globalPermissions=" + globalPermissions + ", databasePermissions=" + databasePermissions
+                + ", collectionPermissions=" + collectionPermissions + ")";
     }
 }

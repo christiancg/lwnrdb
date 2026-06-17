@@ -1,5 +1,7 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
@@ -7,7 +9,6 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
-import static org.junit.jupiter.api.Assertions.*;
 
 public class ReflectionTypeAdapterTest {
     @BeforeEach
@@ -24,12 +25,29 @@ public class ReflectionTypeAdapterTest {
             private boolean boolField = true;
             private double doubleField = 3.14;
 
-            public int getIntField() { return intField; }
-            public void setIntField(int intField) { this.intField = intField; }
-            public boolean isBoolField() { return boolField; }
-            public void setBoolField(boolean boolField) { this.boolField = boolField; }
-            public double getDoubleField() { return doubleField; }
-            public void setDoubleField(double doubleField) { this.doubleField = doubleField; }
+            public int getIntField() {
+                return intField;
+            }
+
+            public void setIntField(int intField) {
+                this.intField = intField;
+            }
+
+            public boolean isBoolField() {
+                return boolField;
+            }
+
+            public void setBoolField(boolean boolField) {
+                this.boolField = boolField;
+            }
+
+            public double getDoubleField() {
+                return doubleField;
+            }
+
+            public void setDoubleField(double doubleField) {
+                this.doubleField = doubleField;
+            }
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -47,10 +65,21 @@ public class ReflectionTypeAdapterTest {
             private String nullField = null;
             private Integer nullInteger = null;
 
-            public String getNullField() { return nullField; }
-            public void setNullField(String nullField) { this.nullField = nullField; }
-            public Integer getNullInteger() { return nullInteger; }
-            public void setNullInteger(Integer nullInteger) { this.nullInteger = nullInteger; }
+            public String getNullField() {
+                return nullField;
+            }
+
+            public void setNullField(String nullField) {
+                this.nullField = nullField;
+            }
+
+            public Integer getNullInteger() {
+                return nullInteger;
+            }
+
+            public void setNullInteger(Integer nullInteger) {
+                this.nullInteger = nullInteger;
+            }
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -92,12 +121,29 @@ public class ReflectionTypeAdapterTest {
             private String stringField = "test";
             private boolean boolField = true;
 
-            public int getIntField() { return intField; }
-            public void setIntField(int intField) { this.intField = intField; }
-            public String getStringField() { return stringField; }
-            public void setStringField(String stringField) { this.stringField = stringField; }
-            public boolean isBoolField() { return boolField; }
-            public void setBoolField(boolean boolField) { this.boolField = boolField; }
+            public int getIntField() {
+                return intField;
+            }
+
+            public void setIntField(int intField) {
+                this.intField = intField;
+            }
+
+            public String getStringField() {
+                return stringField;
+            }
+
+            public void setStringField(String stringField) {
+                this.stringField = stringField;
+            }
+
+            public boolean isBoolField() {
+                return boolField;
+            }
+
+            public void setBoolField(boolean boolField) {
+                this.boolField = boolField;
+            }
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -115,10 +161,21 @@ public class ReflectionTypeAdapterTest {
             private String nullField = null;
             private Integer nullInteger = null;
 
-            public String getNullField() { return nullField; }
-            public void setNullField(String nullField) { this.nullField = nullField; }
-            public Integer getNullInteger() { return nullInteger; }
-            public void setNullInteger(Integer nullInteger) { this.nullInteger = nullInteger; }
+            public String getNullField() {
+                return nullField;
+            }
+
+            public void setNullField(String nullField) {
+                this.nullField = nullField;
+            }
+
+            public Integer getNullInteger() {
+                return nullInteger;
+            }
+
+            public void setNullInteger(Integer nullInteger) {
+                this.nullInteger = nullInteger;
+            }
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -136,10 +193,21 @@ public class ReflectionTypeAdapterTest {
             private String stringField;
             private Integer intField;
 
-            public String getStringField() { return stringField; }
-            public void setStringField(String stringField) { this.stringField = stringField; }
-            public Integer getIntField() { return intField; }
-            public void setIntField(Integer intField) { this.intField = intField; }
+            public String getStringField() {
+                return stringField;
+            }
+
+            public void setStringField(String stringField) {
+                this.stringField = stringField;
+            }
+
+            public Integer getIntField() {
+                return intField;
+            }
+
+            public void setIntField(Integer intField) {
+                this.intField = intField;
+            }
         }
 
         JsonObject jsonObject = new JsonObject();
@@ -160,8 +228,13 @@ public class ReflectionTypeAdapterTest {
         class TestClass {
             private String field;
 
-            public String getField() { return field; }
-            public void setField(String field) { this.field = field; }
+            public String getField() {
+                return field;
+            }
+
+            public void setField(String field) {
+                this.field = field;
+            }
         }
 
         JsonArray jsonArray = new JsonArray();

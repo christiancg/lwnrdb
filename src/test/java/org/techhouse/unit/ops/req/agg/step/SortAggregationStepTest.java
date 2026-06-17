@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req.agg.step;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class SortAggregationStepTest {
     // Constructor initializes with valid field name and ascending true
@@ -12,9 +12,9 @@ public class SortAggregationStepTest {
     public void test_constructor_with_valid_params() {
         String fieldName = "name";
         boolean ascending = true;
-    
+
         SortAggregationStep step = new SortAggregationStep(fieldName, ascending);
-    
+
         assertEquals(AggregationStepType.SORT, step.getType());
         assertEquals(fieldName, step.getFieldName());
         assertEquals(ascending, step.getAscending());
@@ -25,9 +25,9 @@ public class SortAggregationStepTest {
     public void test_constructor_with_null_field_name() {
         String fieldName = null;
         boolean ascending = true;
-    
+
         SortAggregationStep step = new SortAggregationStep(fieldName, ascending);
-    
+
         assertEquals(AggregationStepType.SORT, step.getType());
         assertNull(step.getFieldName());
         assertEquals(ascending, step.getAscending());

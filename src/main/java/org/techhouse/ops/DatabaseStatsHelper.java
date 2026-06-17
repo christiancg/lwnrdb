@@ -1,5 +1,7 @@
 package org.techhouse.ops;
 
+import java.lang.management.ManagementFactory;
+import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.config.Configuration;
@@ -7,9 +9,6 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
-
-import java.lang.management.ManagementFactory;
-import java.util.Set;
 
 public class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -136,7 +135,6 @@ public class DatabaseStatsHelper {
         long sizeBytes;
     }
 
-    private record CollectionStats(JsonObject json, long indexCount, long pageCount,
-                                   long entryCount, long sizeBytes) {
+    private record CollectionStats(JsonObject json, long indexCount, long pageCount, long entryCount, long sizeBytes) {
     }
 }

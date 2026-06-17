@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.FindByIdRequest;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class FindByIdRequestTest {
     // Constructor correctly sets FIND_BY_ID operation type
@@ -12,7 +12,7 @@ public class FindByIdRequestTest {
     public void constructor_sets_find_by_id_operation_type() {
         String dbName = "testDb";
         String collName = "testCollection";
-    
+
         FindByIdRequest request = new FindByIdRequest(dbName, collName);
 
         assertEquals(OperationType.FIND_BY_ID, request.getType());

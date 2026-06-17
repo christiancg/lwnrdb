@@ -1,19 +1,20 @@
 package org.techhouse.unit.utils;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.utils.ReflectionUtils.getClassFromSimpleName;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 import org.techhouse.utils.ReflectionUtils;
 
-import static org.junit.jupiter.api.Assertions.*;
-import static org.techhouse.utils.ReflectionUtils.getClassFromSimpleName;
-
 public class ReflectionUtilsTest {
     // TypeToken correctly extracts Class<T> from direct subclass with simple generic type
     @Test
     public void test_type_token_extracts_class_from_direct_subclass() {
-        ReflectionUtils.TypeToken<String> token = new ReflectionUtils.TypeToken<>() {};
+        ReflectionUtils.TypeToken<String> token = new ReflectionUtils.TypeToken<>() {
+        };
 
         Class<String> result = token.getTypeParameter();
 
@@ -24,12 +25,10 @@ public class ReflectionUtilsTest {
     @Test
     @SuppressWarnings("rawtypes")
     public void test_type_token_throws_for_raw_type() {
-        ReflectionUtils.TypeToken<?> rawToken = new ReflectionUtils.TypeToken() {};
+        ReflectionUtils.TypeToken<?> rawToken = new ReflectionUtils.TypeToken() {
+        };
 
-        IllegalStateException exception = assertThrows(
-            IllegalStateException.class,
-            rawToken::getTypeParameter
-        );
+        IllegalStateException exception = assertThrows(IllegalStateException.class, rawToken::getTypeParameter);
 
         assertTrue(exception.getMessage().contains("TypeToken must be created with a type argument"));
     }

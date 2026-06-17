@@ -1,13 +1,13 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.JsonArrayTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonArrayTypeAdapterTest {
     // Convert empty JsonArray to JSON string returns '[]'

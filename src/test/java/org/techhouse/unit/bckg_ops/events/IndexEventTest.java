@@ -1,10 +1,10 @@
 package org.techhouse.unit.bckg_ops.events;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.IndexEvent;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class IndexEventTest {
     // Creating an IndexEvent with valid EventType and strings initializes all fields correctly
@@ -14,9 +14,9 @@ public class IndexEventTest {
         String dbName = "testDB";
         String collName = "testCollection";
         String fieldName = "testField";
-    
+
         IndexEvent indexEvent = new IndexEvent(type, dbName, collName, fieldName);
-    
+
         assertEquals(type, indexEvent.getType());
         assertEquals(dbName, indexEvent.getDbName());
         assertEquals(collName, indexEvent.getCollName());
@@ -27,9 +27,9 @@ public class IndexEventTest {
     @Test
     public void test_index_event_with_null_values() {
         EventType type = EventType.UPDATED;
-    
+
         IndexEvent indexEvent = new IndexEvent(type, null, null, null);
-    
+
         assertEquals(type, indexEvent.getType());
         assertNull(indexEvent.getDbName());
         assertNull(indexEvent.getCollName());

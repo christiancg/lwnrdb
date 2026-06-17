@@ -1,5 +1,11 @@
 package org.techhouse.ops;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.UUID;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.*;
 import org.techhouse.cache.AccessKind;
@@ -19,14 +25,6 @@ import org.techhouse.ops.req.*;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.*;
 
-import java.util.List;
-import java.util.UUID;
-
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -41,8 +39,8 @@ public class OperationProcessor {
             return;
         }
         memoryManagement.recordAccess(AccessKind.COLLECTION, dbName, collName, null);
-        taskManager.submitBackgroundTask(new CollectionUsageEvent(AccessKind.COLLECTION, dbName, collName, null,
-                System.currentTimeMillis()));
+        taskManager.submitBackgroundTask(
+                new CollectionUsageEvent(AccessKind.COLLECTION, dbName, collName, null, System.currentTimeMillis()));
     }
 
     private void recordPkIndexAccess(String dbName, String collName) {
@@ -50,16 +48,15 @@ public class OperationProcessor {
             return;
         }
         memoryManagement.recordAccess(AccessKind.PK_INDEX, dbName, collName, null);
-        taskManager.submitBackgroundTask(new CollectionUsageEvent(AccessKind.PK_INDEX, dbName, collName, null,
-                System.currentTimeMillis()));
+        taskManager.submitBackgroundTask(
+                new CollectionUsageEvent(AccessKind.PK_INDEX, dbName, collName, null, System.currentTimeMillis()));
     }
 
     // Acquire shared read locks on the given collection identifiers in a deterministic (sorted)
     // order so two overlapping multi-collection reads can never deadlock. Returns the identifiers
     // actually locked (in acquisition order); a dirty read takes no collection lock and returns an
     // empty list, relying on FileSystem's per-file locks for read validity.
-    private List<String> acquireReadLocks(boolean dirtyRead, List<String> collIdentifiers)
-            throws InterruptedException {
+    private List<String> acquireReadLocks(boolean dirtyRead, List<String> collIdentifiers) throws InterruptedException {
         if (dirtyRead) {
             return List.of();
         }
@@ -112,13 +109,16 @@ public class OperationProcessor {
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
-            case AUTHENTICATE -> UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
+            case AUTHENTICATE ->
+                UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
             case CREATE_USER -> UserOperationHelper.processCreateUser((CreateUserRequest) operationRequest);
             case DELETE_USER -> UserOperationHelper.processDeleteUser((DeleteUserRequest) operationRequest);
-            case CHANGE_PERMISSIONS -> UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
+            case CHANGE_PERMISSIONS ->
+                UserOperationHelper.processChangePermissions((ChangePermissionsRequest) operationRequest);
             case SET_DATABASE_OWNERS -> processSetDatabaseOwners((SetDatabaseOwnersRequest) operationRequest);
             case LIST_USERS -> processListUsers((ListUsersRequest) operationRequest);
-            case SET_PASSWORD -> UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
+            case SET_PASSWORD ->
+                UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
         };
     }
@@ -134,8 +134,8 @@ public class OperationProcessor {
         final var maxEntrySize = configuration.getMaxEntrySize();
         for (var entry : entries) {
             if (entry.byteSize() > maxEntrySize) {
-                return new BulkSaveResponse(OperationStatus.ERROR,
-                        "Entry size of " + entry.byteSize() + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null, null);
+                return new BulkSaveResponse(OperationStatus.ERROR, "Entry size of " + entry.byteSize()
+                        + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null, null);
             }
         }
         try {
@@ -163,14 +163,12 @@ public class OperationProcessor {
             final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
             if (!indexedDbEntriesToUpdate.isEmpty()) {
                 updatedIndexEntries.addAll(fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate));
-                primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream().anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
+                primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
+                        .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
             }
             primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
-            final var entriesToInsert = entries.stream()
-                    .filter(dbEntry ->
-                            indexedDbEntriesToUpdate.stream()
-                                    .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id())))
-                    .toList();
+            final var entriesToInsert = entries.stream().filter(dbEntry -> indexedDbEntriesToUpdate.stream()
+                    .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id()))).toList();
             List<IndexedDbEntry> insertedIndexEntries = new ArrayList<>();
             if (!entriesToInsert.isEmpty()) {
                 final var pendingPageBytes = new HashMap<Long, Long>();
@@ -191,13 +189,15 @@ public class OperationProcessor {
             cache.addEntriesToCache(dbName, collName, updatedDbEntries);
             final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
             cache.addEntriesToCache(dbName, collName, insertedDbEntries);
-            taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
+            taskManager
+                    .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
             recordCollectionAccess(dbName, collName);
             final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
             final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
             return new BulkSaveResponse(OperationStatus.OK, "Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
-            return new BulkSaveResponse(OperationStatus.ERROR, "Error while saving entries: " + exception.getMessage(), null, null);
+            return new BulkSaveResponse(OperationStatus.ERROR, "Error while saving entries: " + exception.getMessage(),
+                    null, null);
         } finally {
             locks.release(dbName, collName);
         }
@@ -209,8 +209,8 @@ public class OperationProcessor {
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         final var maxEntrySize = configuration.getMaxEntrySize();
         if (entry.byteSize() > maxEntrySize) {
-            return new SaveResponse(OperationStatus.ERROR,
-                    "Entry size of " + entry.byteSize() + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null);
+            return new SaveResponse(OperationStatus.ERROR, "Entry size of " + entry.byteSize()
+                    + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null);
         }
         try {
             locks.lock(dbName, collName);
@@ -230,7 +230,8 @@ public class OperationProcessor {
             } else {
                 entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
                 savedPkIndexEntry = fs.insertIntoCollection(entry);
-                cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(), savedPkIndexEntry.getLength());
+                cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(),
+                        savedPkIndexEntry.getLength());
             }
             int insertAt = Collections.binarySearch(primaryKeyIndex, savedPkIndexEntry.getValue());
             if (insertAt < 0) {
@@ -268,7 +269,8 @@ public class OperationProcessor {
                 return new FindByIdResponse(OperationStatus.NOT_FOUND, "Not found", null);
             }
         } catch (Exception exception) {
-            return new FindByIdResponse(OperationStatus.ERROR, "Error while retrieving entry: " + exception.getMessage(), null);
+            return new FindByIdResponse(OperationStatus.ERROR,
+                    "Error while retrieving entry: " + exception.getMessage(), null);
         } finally {
             releaseReadLocks(readLocks);
         }
@@ -280,11 +282,12 @@ public class OperationProcessor {
             readLocks = acquireReadLocks(aggregateRequest.isDirtyRead(), aggregateLockSet(aggregateRequest));
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
             recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
-            return results.isEmpty() ?
-                    new AggregateResponse(OperationStatus.NOT_FOUND, "No results", null) :
-                    new AggregateResponse(OperationStatus.OK, "Ok", results);
+            return results.isEmpty()
+                    ? new AggregateResponse(OperationStatus.NOT_FOUND, "No results", null)
+                    : new AggregateResponse(OperationStatus.OK, "Ok", results);
         } catch (Exception e) {
-            return new AggregateResponse(OperationStatus.ERROR, "An error occurred while processing the aggregation: " + e.getMessage(), null);
+            return new AggregateResponse(OperationStatus.ERROR,
+                    "An error occurred while processing the aggregation: " + e.getMessage(), null);
         } finally {
             releaseReadLocks(readLocks);
         }
@@ -296,7 +299,8 @@ public class OperationProcessor {
         try {
             locks.lock(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-            final var foundIndexEntry = primaryKeyIndex.stream().filter(pkIndexEntry -> pkIndexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
+            final var foundIndexEntry = primaryKeyIndex.stream()
+                    .filter(pkIndexEntry -> pkIndexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
             if (foundIndexEntry.isPresent()) {
                 final var idxEntry = foundIndexEntry.get();
                 final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
@@ -304,27 +308,33 @@ public class OperationProcessor {
                 primaryKeyIndex.remove(idxEntry);
                 primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
                 cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
-                taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
+                taskManager
+                        .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
                 recordCollectionAccess(dbName, collName);
-                return new DeleteResponse(OperationStatus.OK, "Entry with id " + deleteRequest.get_id() + " deleted successfully");
+                return new DeleteResponse(OperationStatus.OK,
+                        "Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
-                return new DeleteResponse(OperationStatus.NOT_FOUND, "Entry with id " + deleteRequest.get_id() + " not found");
+                return new DeleteResponse(OperationStatus.NOT_FOUND,
+                        "Entry with id " + deleteRequest.get_id() + " not found");
             }
         } catch (Exception exception) {
-            return new DeleteResponse(OperationStatus.ERROR, "Error while deleting entry with id: " + deleteRequest.get_id() + ". Error message: " + exception.getMessage());
+            return new DeleteResponse(OperationStatus.ERROR, "Error while deleting entry with id: "
+                    + deleteRequest.get_id() + ". Error message: " + exception.getMessage());
         } finally {
             locks.release(dbName, collName);
         }
     }
 
-    private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest, UUID clientId) {
+    private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest,
+            UUID clientId) {
         try {
             final var dbName = createDatabaseRequest.getDatabaseName();
             final var result = fs.createDatabaseFolder(dbName);
             if (result) {
                 final var username = clientTracker.getAuthenticatedUsername(clientId);
                 final var owners = username != null ? List.of(username) : List.<String>of();
-                final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(), new java.util.ArrayList<>(owners));
+                final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
+                        new java.util.ArrayList<>(owners));
                 AdminOperationHelper.saveDatabaseEntry(newEntry);
                 taskManager.submitBackgroundTask(new DatabaseEvent(EventType.CREATED, dbName));
                 return new CreateDatabaseResponse(OperationStatus.OK, "Database created successfully");
@@ -344,7 +354,8 @@ public class OperationProcessor {
             AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
             return new SetDatabaseOwnersResponse(OperationStatus.OK, "Database owners updated successfully");
         } catch (Exception e) {
-            return new SetDatabaseOwnersResponse(OperationStatus.ERROR, "Error updating database owners: " + e.getMessage());
+            return new SetDatabaseOwnersResponse(OperationStatus.ERROR,
+                    "Error updating database owners: " + e.getMessage());
         }
     }
 
@@ -368,8 +379,8 @@ public class OperationProcessor {
             final var names = cache.getUserDatabaseNames();
             return new ListDatabasesResponse(OperationStatus.OK, "Ok", names);
         } catch (Exception e) {
-            return new ListDatabasesResponse(OperationStatus.ERROR,
-                    "Error while listing databases: " + e.getMessage(), null);
+            return new ListDatabasesResponse(OperationStatus.ERROR, "Error while listing databases: " + e.getMessage(),
+                    null);
         }
     }
 
@@ -384,7 +395,8 @@ public class OperationProcessor {
             }
             return new CreateCollectionResponse(OperationStatus.ERROR, "Error while creating collection");
         } catch (Exception e) {
-            return new CreateCollectionResponse(OperationStatus.ERROR, "Error while creating collection: " + e.getMessage());
+            return new CreateCollectionResponse(OperationStatus.ERROR,
+                    "Error while creating collection: " + e.getMessage());
         }
     }
 
@@ -403,7 +415,8 @@ public class OperationProcessor {
             locks.removeLock(dbName, collName);
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection");
         } catch (Exception e) {
-            return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection: " + e.getMessage());
+            return new DropCollectionResponse(OperationStatus.ERROR,
+                    "Error while dropping collection: " + e.getMessage());
         } finally {
             locks.release(dbName, collName);
         }
@@ -414,8 +427,7 @@ public class OperationProcessor {
         try {
             final var dbName = request.getDatabaseName();
             if (dbName == null || dbName.isBlank()) {
-                return new ListCollectionsResponse(OperationStatus.ERROR,
-                        "Database name is required", null);
+                return new ListCollectionsResponse(OperationStatus.ERROR, "Database name is required", null);
             }
             if (Globals.ADMIN_DB_NAME.equals(dbName)) {
                 return new ListCollectionsResponse(OperationStatus.OK, "Ok", List.of());
@@ -423,8 +435,8 @@ public class OperationProcessor {
             readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
                     Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME)));
             if (cache.getAdminDbEntry(dbName) == null) {
-                return new ListCollectionsResponse(OperationStatus.NOT_FOUND,
-                        "Database " + dbName + " not found", null);
+                return new ListCollectionsResponse(OperationStatus.NOT_FOUND, "Database " + dbName + " not found",
+                        null);
             }
             final var names = cache.getCollectionNamesForDatabase(dbName);
             return new ListCollectionsResponse(OperationStatus.OK, "Ok", names);
@@ -452,16 +464,13 @@ public class OperationProcessor {
     private ListUsersResponse processListUsers(ListUsersRequest request) {
         List<String> readLocks = List.of();
         try {
-            readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
-                    Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME)));
+            readLocks = acquireReadLocks(request.isDirtyRead(),
+                    List.of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME)));
             final var userStream = cache.getAllAdminUserEntries().stream()
-                    .map(user -> user.toResponseJson(
-                            cache.getAllAdminDbEntries().stream()
-                                    .filter(db -> db.isOwner(user.get_id()))
-                                    .map(DbEntry::get_id)
-                                    .toList()));
-            final var results = AggregationOperationHelper.processStepsOnStream(
-                    request.getAggregationSteps(), userStream);
+                    .map(user -> user.toResponseJson(cache.getAllAdminDbEntries().stream()
+                            .filter(db -> db.isOwner(user.get_id())).map(DbEntry::get_id).toList()));
+            final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
+                    userStream);
             return results.isEmpty()
                     ? new ListUsersResponse(OperationStatus.NOT_FOUND, "No users found", null)
                     : new ListUsersResponse(OperationStatus.OK, "Ok", results);

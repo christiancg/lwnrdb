@@ -1,10 +1,9 @@
 package org.techhouse.ops.req;
 
-import org.techhouse.ops.OperationType;
-import org.techhouse.ops.req.agg.BaseAggregationStep;
-
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.ops.OperationType;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public class ListUsersRequest extends OperationRequest {
     private List<BaseAggregationStep> aggregationSteps;

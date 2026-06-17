@@ -1,23 +1,20 @@
 package org.techhouse.unit.data.admin;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.HashMap;
+import java.util.HashSet;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 
-import java.util.HashMap;
-import java.util.HashSet;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 public class AdminUserEntryTest {
     @Test
     public void test_constructor_sets_admin_db_and_users_collection() {
-        final var entry = new AdminUserEntry(
-                "testuser", "hash", false,
-                new HashSet<>(), new HashMap<>(), new HashMap<>()
-        );
+        final var entry = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
         assertEquals(Globals.ADMIN_DB_NAME, entry.getDatabaseName());
         assertEquals(Globals.ADMIN_USERS_COLLECTION_NAME, entry.getCollectionName());
         assertEquals("testuser", entry.get_id());
@@ -65,7 +62,8 @@ public class AdminUserEntryTest {
 
     @Test
     public void test_setters_rebuild_data() {
-        final var entry = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>());
+        final var entry = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
         entry.setAdmin(true);
         assertTrue(entry.isAdmin());
         assertTrue(entry.getData().get("admin").asJsonBoolean().getValue());
@@ -78,8 +76,10 @@ public class AdminUserEntryTest {
 
     @Test
     public void test_equals_hashcode_toString() {
-        final var entry1 = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>());
-        final var entry2 = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>());
+        final var entry1 = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
+        final var entry2 = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
 
         assertEquals(entry1, entry2);
         assertEquals(entry1.hashCode(), entry2.hashCode());

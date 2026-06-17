@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req.agg.step;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class JoinAggregationStepTest {
     // Constructor initializes all fields correctly with valid string parameters
@@ -12,7 +12,7 @@ public class JoinAggregationStepTest {
     public void test_constructor_initializes_fields_with_valid_params() {
         String joinCollection = "users";
         String localField = "userId";
-        String remoteField = "id"; 
+        String remoteField = "id";
         String asField = "userDetails";
 
         JoinAggregationStep joinStep = new JoinAggregationStep(joinCollection, localField, remoteField, asField);

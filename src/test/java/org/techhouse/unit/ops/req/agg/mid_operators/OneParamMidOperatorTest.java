@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req.agg.mid_operators;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class OneParamMidOperatorTest {
     // Create operator with valid type and operand
@@ -12,9 +12,9 @@ public class OneParamMidOperatorTest {
     public void test_create_operator_with_valid_params() {
         MidOperationType type = MidOperationType.ABS;
         String operand = "field1";
-    
+
         OneParamMidOperator operator = new OneParamMidOperator(type, operand);
-    
+
         assertEquals(type, operator.getType());
         assertEquals(operand, operator.getOperand());
     }

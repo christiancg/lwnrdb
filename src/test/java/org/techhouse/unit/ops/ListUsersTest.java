@@ -1,5 +1,9 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.HashMap;
+import java.util.HashSet;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -12,11 +16,6 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.test.TestUtils;
-
-import java.util.HashMap;
-import java.util.HashSet;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class ListUsersTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
@@ -79,9 +78,9 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_filter_by_admin_flag() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"admin\",\"value\":true}}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"admin\",\"value\":true}}"
+                + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
@@ -90,9 +89,9 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_filter_by_username() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"alice\"}}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"alice\"}}"
+                + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
@@ -121,9 +120,9 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_no_match_returns_not_found() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"nobody\"}}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"nobody\"}}"
+                + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
@@ -147,9 +146,8 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_sort_step() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"SORT\",\"fieldName\":\"_id\",\"ascending\":true}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"SORT\",\"fieldName\":\"_id\",\"ascending\":true}" + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
@@ -158,9 +156,7 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_skip_step() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"SKIP\",\"skip\":1}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" + "{\"type\":\"SKIP\",\"skip\":1}" + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         // at least 3 users created; skipping 1 should still return some
@@ -169,9 +165,8 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_distinct_step() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"DISTINCT\",\"fieldName\":\"admin\"}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"DISTINCT\",\"fieldName\":\"admin\"}" + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
@@ -179,9 +174,8 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_group_by_step() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"GROUP_BY\",\"fieldName\":\"admin\"}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"GROUP_BY\",\"fieldName\":\"admin\"}" + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
@@ -189,10 +183,9 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_map_step_adds_field() {
-        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" +
-                "{\"type\":\"MAP\",\"operators\":[{\"fieldName\":\"usernameLength\",\"condition\":null," +
-                "\"operator\":{\"type\":\"SIZE\",\"operand\":\"_id\"}}]}" +
-                "]}";
+        final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
+                + "{\"type\":\"MAP\",\"operators\":[{\"fieldName\":\"usernameLength\",\"condition\":null,"
+                + "\"operator\":{\"type\":\"SIZE\",\"operand\":\"_id\"}}]}" + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
@@ -216,8 +209,8 @@ public class ListUsersTest {
 
     @Test
     public void test_list_users_authorization_non_admin_forbidden() {
-        final var user = new org.techhouse.data.admin.AdminUserEntry(
-                "bob", "hash", false, new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
+        final var user = new org.techhouse.data.admin.AdminUserEntry("bob", "hash", false, new java.util.HashSet<>(),
+                new java.util.HashMap<>(), new java.util.HashMap<>());
         final var req = new ListUsersRequest();
         assertFalse(org.techhouse.ops.auth.AuthorizationChecker.check(req, user).isAllowed());
     }

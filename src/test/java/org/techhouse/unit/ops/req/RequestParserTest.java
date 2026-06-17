@@ -1,5 +1,8 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -21,36 +24,32 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 public class RequestParserTest {
     // Successfully parse basic operation requests like SAVE, DELETE, CREATE_DATABASE
     @Test
     public void test_parse_basic_operation_requests() {
         String saveRequest = """
-            {
-                "type": "SAVE",
-                "databaseName": "testDb",
-                "collectionName": "testCollection",
-                "object": {
-                    "name": "test"
-                }
-            }""";
+                {
+                    "type": "SAVE",
+                    "databaseName": "testDb",
+                    "collectionName": "testCollection",
+                    "object": {
+                        "name": "test"
+                    }
+                }""";
 
         String deleteRequest = """
-            {
-                "type": "DELETE",
-                "databaseName": "testDb",
-                "collectionName": "testCollection"
-            }""";
+                {
+                    "type": "DELETE",
+                    "databaseName": "testDb",
+                    "collectionName": "testCollection"
+                }""";
 
         String createDbRequest = """
-            {
-                "type": "CREATE_DATABASE",
-                "databaseName": "newDb"
-            }""";
+                {
+                    "type": "CREATE_DATABASE",
+                    "databaseName": "newDb"
+                }""";
 
         OperationRequest saveResult = RequestParser.parseRequest(saveRequest);
         OperationRequest deleteResult = RequestParser.parseRequest(deleteRequest);
@@ -73,9 +72,9 @@ public class RequestParserTest {
     @Test
     public void test_parse_list_databases_request() {
         String listDatabasesRequest = """
-            {
-                "type": "LIST_DATABASES"
-            }""";
+                {
+                    "type": "LIST_DATABASES"
+                }""";
 
         OperationRequest result = RequestParser.parseRequest(listDatabasesRequest);
 
@@ -89,16 +88,16 @@ public class RequestParserTest {
     @Test
     public void test_handle_null_json_fields() {
         String requestWithNulls = """
-            {
-                "type": "SAVE",
-                "databaseName": "testDb",
-                "collectionName": "testCollection",
-                "object": {
-                    "name": null,
-                    "age": null,
-                    "address": null
-                }
-            }""";
+                {
+                    "type": "SAVE",
+                    "databaseName": "testDb",
+                    "collectionName": "testCollection",
+                    "object": {
+                        "name": null,
+                        "age": null,
+                        "address": null
+                    }
+                }""";
 
         OperationRequest result = RequestParser.parseRequest(requestWithNulls);
 
@@ -183,26 +182,26 @@ public class RequestParserTest {
     @Test
     public void test_parse_mid_operators_with_array_parameters() {
         String jsonMessage = """
-            {
-                "type": "AGGREGATE",
-                "databaseName": "testDB",
-                "collectionName": "testCollection",
-                "aggregationSteps": [
                     {
-                        "type": "MAP",
-                        "operators": [
+                        "type": "AGGREGATE",
+                        "databaseName": "testDB",
+                        "collectionName": "testCollection",
+                        "aggregationSteps": [
                             {
-                                "fieldName": "result",
-                                "operator": {
-                                    "type": "SUM",
-                                    "operands": [1, 2, 3]
-                                }
+                                "type": "MAP",
+                                "operators": [
+                                    {
+                                        "fieldName": "result",
+                                        "operator": {
+                                            "type": "SUM",
+                                            "operands": [1, 2, 3]
+                                        }
+                                    }
+                                ]
                             }
                         ]
                     }
-                ]
-            }
-        """;
+                """;
         OperationRequest request = RequestParser.parseRequest(jsonMessage);
         assertInstanceOf(AggregateRequest.class, request);
         AggregateRequest aggregateRequest = (AggregateRequest) request;
@@ -224,16 +223,16 @@ public class RequestParserTest {
     @Test
     public void test_process_requests_with_primary_key_field() {
         String jsonMessage = """
-            {
-                "type": "SAVE",
-                "databaseName": "testDB",
-                "collectionName": "testCollection",
-                "object": {
-                    "_id": "12345",
-                    "name": "test"
-                }
-            }
-        """;
+                    {
+                        "type": "SAVE",
+                        "databaseName": "testDB",
+                        "collectionName": "testCollection",
+                        "object": {
+                            "_id": "12345",
+                            "name": "test"
+                        }
+                    }
+                """;
         OperationRequest request = RequestParser.parseRequest(jsonMessage);
         assertInstanceOf(SaveRequest.class, request);
         SaveRequest saveRequest = (SaveRequest) request;
@@ -268,7 +267,8 @@ public class RequestParserTest {
         assertTrue(request.getAggregationSteps().isEmpty());
 
         String invalidMessage = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"INVALID\" }] }";
-        Exception exception = assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(invalidMessage));
+        Exception exception = assertThrows(InvalidCommandException.class,
+                () -> RequestParser.parseRequest(invalidMessage));
         assertNotNull(exception);
     }
 
@@ -276,10 +276,10 @@ public class RequestParserTest {
     @Test
     public void test_parse_list_collections_request() {
         String listCollectionsRequest = """
-            {
-                "type": "LIST_COLLECTIONS",
-                "databaseName": "testDb"
-            }""";
+                {
+                    "type": "LIST_COLLECTIONS",
+                    "databaseName": "testDb"
+                }""";
 
         OperationRequest result = RequestParser.parseRequest(listCollectionsRequest);
 
@@ -293,7 +293,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_bulk_save_request() {
         String msg = """
-            {"type":"BULK_SAVE","databaseName":"db","collectionName":"coll","objects":[{"name":"a"}]}""";
+                {"type":"BULK_SAVE","databaseName":"db","collectionName":"coll","objects":[{"name":"a"}]}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(BulkSaveRequest.class, result);
         assertEquals(OperationType.BULK_SAVE, result.getType());
@@ -303,7 +303,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_find_by_id_request() {
         String msg = """
-            {"type":"FIND_BY_ID","databaseName":"db","collectionName":"coll","_id":"123"}""";
+                {"type":"FIND_BY_ID","databaseName":"db","collectionName":"coll","_id":"123"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(FindByIdRequest.class, result);
         assertEquals(OperationType.FIND_BY_ID, result.getType());
@@ -313,7 +313,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_drop_database_request() {
         String msg = """
-            {"type":"DROP_DATABASE","databaseName":"myDb"}""";
+                {"type":"DROP_DATABASE","databaseName":"myDb"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(DropDatabaseRequest.class, result);
         assertEquals(OperationType.DROP_DATABASE, result.getType());
@@ -324,7 +324,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_drop_collection_request() {
         String msg = """
-            {"type":"DROP_COLLECTION","databaseName":"db","collectionName":"coll"}""";
+                {"type":"DROP_COLLECTION","databaseName":"db","collectionName":"coll"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(DropCollectionRequest.class, result);
         assertEquals(OperationType.DROP_COLLECTION, result.getType());
@@ -334,7 +334,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_create_index_request() {
         String msg = """
-            {"type":"CREATE_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
+                {"type":"CREATE_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(CreateIndexRequest.class, result);
         assertEquals(OperationType.CREATE_INDEX, result.getType());
@@ -344,7 +344,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_drop_index_request() {
         String msg = """
-            {"type":"DROP_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
+                {"type":"DROP_INDEX","databaseName":"db","collectionName":"coll","fieldName":"myField"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(DropIndexRequest.class, result);
         assertEquals(OperationType.DROP_INDEX, result.getType());
@@ -354,7 +354,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_close_connection_request() {
         String msg = """
-            {"type":"CLOSE_CONNECTION"}""";
+                {"type":"CLOSE_CONNECTION"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(CloseConnectionRequest.class, result);
         assertEquals(OperationType.CLOSE_CONNECTION, result.getType());
@@ -364,7 +364,7 @@ public class RequestParserTest {
     @Test
     public void test_parse_create_collection_request() {
         String msg = """
-            {"type":"CREATE_COLLECTION","databaseName":"db","collectionName":"coll"}""";
+                {"type":"CREATE_COLLECTION","databaseName":"db","collectionName":"coll"}""";
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(CreateCollectionRequest.class, result);
         assertEquals(OperationType.CREATE_COLLECTION, result.getType());
@@ -380,15 +380,15 @@ public class RequestParserTest {
     @Test
     public void test_parse_map_step_with_conjunction_condition() {
         String msg = """
-            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
-              {"type":"MAP","operators":[{
-                "fieldName":"result",
-                "condition":{"conjunctionType":"AND","operators":[
-                  {"fieldOperatorType":"EQUALS","field":"x","value":1}
-                ]},
-                "operator":{"type":"SUM","operands":["x",1]}
-              }]}
-            ]}""";
+                {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+                  {"type":"MAP","operators":[{
+                    "fieldName":"result",
+                    "condition":{"conjunctionType":"AND","operators":[
+                      {"fieldOperatorType":"EQUALS","field":"x","value":1}
+                    ]},
+                    "operator":{"type":"SUM","operands":["x",1]}
+                  }]}
+                ]}""";
         AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
         assertNotNull(result);
         assertEquals(1, result.getAggregationSteps().size());
@@ -398,15 +398,15 @@ public class RequestParserTest {
     @Test
     public void test_parse_aggregation_with_all_step_types() {
         String msg = """
-            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
-              {"type":"GROUP_BY","fieldName":"category"},
-              {"type":"COUNT"},
-              {"type":"DISTINCT","fieldName":"name"},
-              {"type":"JOIN","joinCollection":"other","localField":"id","remoteField":"refId","asField":"joined"},
-              {"type":"LIMIT","limit":10},
-              {"type":"SKIP","skip":5},
-              {"type":"SORT","fieldName":"score","ascending":true}
-            ]}""";
+                {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+                  {"type":"GROUP_BY","fieldName":"category"},
+                  {"type":"COUNT"},
+                  {"type":"DISTINCT","fieldName":"name"},
+                  {"type":"JOIN","joinCollection":"other","localField":"id","remoteField":"refId","asField":"joined"},
+                  {"type":"LIMIT","limit":10},
+                  {"type":"SKIP","skip":5},
+                  {"type":"SORT","fieldName":"score","ascending":true}
+                ]}""";
         AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
         assertNotNull(result);
         assertEquals(7, result.getAggregationSteps().size());
@@ -416,9 +416,9 @@ public class RequestParserTest {
     @Test
     public void test_parse_map_with_abs_operator() {
         String msg = """
-            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
-              {"type":"MAP","operators":[{"fieldName":"absVal","condition":null,"operator":{"type":"ABS","operand":"n"}}]}
-            ]}""";
+                {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+                  {"type":"MAP","operators":[{"fieldName":"absVal","condition":null,"operator":{"type":"ABS","operand":"n"}}]}
+                ]}""";
         AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
         assertNotNull(result);
         assertEquals(1, result.getAggregationSteps().size());
@@ -428,9 +428,9 @@ public class RequestParserTest {
     @Test
     public void test_parse_map_with_cast_operator() {
         String msg = """
-            {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
-              {"type":"MAP","operators":[{"fieldName":"casted","condition":null,"operator":{"type":"CAST","fieldName":"score","toType":"STRING"}}]}
-            ]}""";
+                {"type":"AGGREGATE","databaseName":"db","collectionName":"coll","aggregationSteps":[
+                  {"type":"MAP","operators":[{"fieldName":"casted","condition":null,"operator":{"type":"CAST","fieldName":"score","toType":"STRING"}}]}
+                ]}""";
         AggregateRequest result = (AggregateRequest) RequestParser.parseRequest(msg);
         assertNotNull(result);
         assertEquals(1, result.getAggregationSteps().size());

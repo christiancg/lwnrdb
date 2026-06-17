@@ -1,11 +1,11 @@
 package org.techhouse.unit.bckg_ops.events;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.AccessKind;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class CollectionUsageEventTest {
 

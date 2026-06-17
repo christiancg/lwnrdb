@@ -1,13 +1,12 @@
 package org.techhouse.data;
 
-import org.techhouse.config.Globals;
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
-import org.techhouse.ejson.elements.JsonCustom;
-
 import java.util.Arrays;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.techhouse.config.Globals;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.elements.JsonCustom;
 
 public class FieldIndexEntry<T> implements Comparable<T> {
     private String databaseName;
@@ -32,7 +31,8 @@ public class FieldIndexEntry<T> implements Comparable<T> {
         return strValue + Globals.ID_SEPARATOR + String.join(Globals.ID_SEPARATOR, ids);
     }
 
-    public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line, Class<T> tClass) {
+    public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line,
+            Class<T> tClass) {
         final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
         final var strValue = line.substring(0, separatorIdx);
         Object value;
@@ -46,7 +46,8 @@ public class FieldIndexEntry<T> implements Comparable<T> {
             value = CustomTypeFactory.getCustomTypeInstance(strValue);
         }
         final var idsStr = line.substring(separatorIdx + Globals.ID_SEPARATOR.length());
-        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value), Arrays.stream(idsStr.split(Globals.ID_SEPARATOR)).collect(Collectors.toSet()));
+        return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value),
+                Arrays.stream(idsStr.split(Globals.ID_SEPARATOR)).collect(Collectors.toSet()));
     }
 
     public String getDatabaseName() {
@@ -103,9 +104,12 @@ public class FieldIndexEntry<T> implements Comparable<T> {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof FieldIndexEntry<?> that)) return false;
-        return Objects.equals(databaseName, that.databaseName) && Objects.equals(collectionName, that.collectionName) && Objects.equals(value, that.value) && Objects.equals(ids, that.ids);
+        if (this == o)
+            return true;
+        if (!(o instanceof FieldIndexEntry<?> that))
+            return false;
+        return Objects.equals(databaseName, that.databaseName) && Objects.equals(collectionName, that.collectionName)
+                && Objects.equals(value, that.value) && Objects.equals(ids, that.ids);
     }
 
     @Override
@@ -115,6 +119,7 @@ public class FieldIndexEntry<T> implements Comparable<T> {
 
     @Override
     public String toString() {
-        return "FieldIndexEntry(databaseName=" + databaseName + ", collectionName=" + collectionName + ", value=" + value + ", ids=" + ids + ")";
+        return "FieldIndexEntry(databaseName=" + databaseName + ", collectionName=" + collectionName + ", value="
+                + value + ", ids=" + ids + ")";
     }
 }

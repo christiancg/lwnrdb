@@ -1,11 +1,10 @@
 package org.techhouse.unit.ejson.internal;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.internal.LinkedTreeMap;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.*;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.internal.LinkedTreeMap;
 
 public class LinkedTreeMapTest {
     // Insert key-value pairs and verify correct storage and retrieval
@@ -17,7 +16,7 @@ public class LinkedTreeMapTest {
         map.put("three", 3);
         assertEquals(3, map.size());
         assertEquals(1, map.get("one"));
-        assertEquals(2, map.get("two")); 
+        assertEquals(2, map.get("two"));
         assertEquals(3, map.get("three"));
     }
 
@@ -122,10 +121,7 @@ public class LinkedTreeMapTest {
     @Test
     public void test_put_null_key_throws_exception() {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
-        NullPointerException exception = assertThrows(
-                NullPointerException.class,
-                () -> map.put(null, 123)
-        );
+        NullPointerException exception = assertThrows(NullPointerException.class, () -> map.put(null, 123));
         assertEquals("key == null", exception.getMessage());
         assertEquals(0, map.size());
     }
@@ -197,11 +193,8 @@ public class LinkedTreeMapTest {
         Set<String> keySet1 = map.keySet();
         Set<String> keySet2 = map.keySet();
         Set<String> keySet3 = map.keySet();
-        assertAll(
-                () -> assertSame(keySet1, keySet2),
-                () -> assertSame(keySet2, keySet3),
-                () -> assertSame(keySet1, keySet3)
-        );
+        assertAll(() -> assertSame(keySet1, keySet2), () -> assertSame(keySet2, keySet3),
+                () -> assertSame(keySet1, keySet3));
     }
 
     // put with null value throws when allowNullValues=false (L50)
@@ -265,7 +258,8 @@ public class LinkedTreeMapTest {
     public void test_remove_node_with_two_children() {
         LinkedTreeMap<Integer, String> map = new LinkedTreeMap<>(true);
         // Insert enough nodes to guarantee a two-child removal
-        for (int i = 1; i <= 7; i++) map.put(i, "v" + i);
+        for (int i = 1; i <= 7; i++)
+            map.put(i, "v" + i);
         // Remove root-area node (4) which has both children in a balanced tree
         map.remove(4);
         assertNull(map.get(4));
@@ -276,11 +270,14 @@ public class LinkedTreeMapTest {
     @Test
     public void test_remove_triggers_rebalance() {
         LinkedTreeMap<Integer, String> map = new LinkedTreeMap<>(true);
-        for (int i = 1; i <= 10; i++) map.put(i, "v" + i);
+        for (int i = 1; i <= 10; i++)
+            map.put(i, "v" + i);
         // Remove several nodes to trigger various rebalancing paths
-        for (int i = 1; i <= 5; i++) map.remove(i);
+        for (int i = 1; i <= 5; i++)
+            map.remove(i);
         assertEquals(5, map.size());
-        for (int i = 6; i <= 10; i++) assertNotNull(map.get(i));
+        for (int i = 6; i <= 10; i++)
+            assertNotNull(map.get(i));
     }
 
     // Node.setValue() throws when null not allowed (L384-386)
@@ -418,7 +415,8 @@ public class LinkedTreeMapTest {
         map.put("a", 1);
         map.put("b", 2);
         Set<String> keys = new HashSet<>();
-        for (String key : map.keySet()) keys.add(key);
+        for (String key : map.keySet())
+            keys.add(key);
         assertEquals(Set.of("a", "b"), keys);
     }
 

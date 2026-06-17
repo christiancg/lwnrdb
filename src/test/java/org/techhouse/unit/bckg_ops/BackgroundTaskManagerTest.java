@@ -1,5 +1,11 @@
 package org.techhouse.unit.bckg_ops;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.*;
+
+import java.lang.reflect.Field;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.CollectionEvent;
@@ -8,13 +14,6 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Configuration;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
-
-import java.lang.reflect.Field;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.*;
 
 public class BackgroundTaskManagerTest {
 
@@ -32,7 +31,8 @@ public class BackgroundTaskManagerTest {
         // when
         manager.submitBackgroundTask(event);
 
-        final var type = new ReflectionUtils.TypeToken<LinkedBlockingQueue<Event>>() {};
+        final var type = new ReflectionUtils.TypeToken<LinkedBlockingQueue<Event>>() {
+        };
         LinkedBlockingQueue<Event> queue = TestUtils.getPrivateField(manager, "queue", type);
 
         // then

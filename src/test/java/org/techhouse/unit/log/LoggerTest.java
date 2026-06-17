@@ -1,5 +1,14 @@
 package org.techhouse.unit.log;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.mockStatic;
+
+import java.io.File;
+import java.io.IOException;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.util.Arrays;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,16 +20,6 @@ import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.io.File;
-import java.io.IOException;
-import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
-import java.util.Arrays;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.Mockito.mockStatic;
 
 public class LoggerTest {
     @BeforeEach
@@ -61,7 +60,8 @@ public class LoggerTest {
     public void test_constructor_initializes_with_valid_class() throws IllegalAccessException {
         Logger logger = new Logger(String.class);
         assertNotNull(logger);
-        final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields()).filter(f -> f.getName().equals("tClass")).findFirst();
+        final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields())
+                .filter(f -> f.getName().equals("tClass")).findFirst();
         if (fieldOptional.isPresent()) {
             final var field = fieldOptional.get();
             field.setAccessible(true);
@@ -76,7 +76,8 @@ public class LoggerTest {
     public void test_constructor_handles_null_class() throws IllegalAccessException {
         Logger logger = new Logger(null);
         assertNotNull(logger);
-        final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields()).filter(f -> f.getName().equals("tClass")).findFirst();
+        final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields())
+                .filter(f -> f.getName().equals("tClass")).findFirst();
         if (fieldOptional.isPresent()) {
             final var field = fieldOptional.get();
             field.setAccessible(true);
@@ -91,7 +92,8 @@ public class LoggerTest {
     public void test_logfor_returns_logger_with_valid_class() throws IllegalAccessException {
         Logger logger = Logger.logFor(String.class);
         assertNotNull(logger);
-        final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields()).filter(f -> f.getName().equals("tClass")).findFirst();
+        final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields())
+                .filter(f -> f.getName().equals("tClass")).findFirst();
         if (fieldOptional.isPresent()) {
             final var field = fieldOptional.get();
             field.setAccessible(true);
@@ -101,7 +103,8 @@ public class LoggerTest {
         }
     }
 
-    public static class FatalTest { }
+    public static class FatalTest {
+    }
 
     // Logs fatal message with correct severity level FATAL
     @Test
@@ -111,12 +114,8 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.fatal("Test fatal message");
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("-FATAL-") &&
-                                    logEntry.contains("Test fatal message")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("-FATAL-") && logEntry.contains("Test fatal message"))));
         }
     }
 
@@ -128,12 +127,8 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.fatal("*");
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("-FATAL-") &&
-                                    logEntry.endsWith("*")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter
+                    .writeLogEntry(argThat(logEntry -> logEntry.contains("-FATAL-") && logEntry.endsWith("*"))));
         }
     }
 
@@ -147,16 +142,13 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.fatal(testMessage, testException);
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("-FATAL-") &&
-                                    logEntry.contains("Test exception")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("-FATAL-") && logEntry.contains("Test exception"))));
         }
     }
 
-    public static class ErrorTest { }
+    public static class ErrorTest {
+    }
 
     // Verify error message is logged with ERROR severity level
     @Test
@@ -170,12 +162,8 @@ public class LoggerTest {
             logger.error(testMessage);
 
             // Assert
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains(LogSeverity.ERROR.name()) &&
-                                    logEntry.contains(testMessage)
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(argThat(
+                    logEntry -> logEntry.contains(LogSeverity.ERROR.name()) && logEntry.contains(testMessage))));
         }
     }
 
@@ -191,12 +179,9 @@ public class LoggerTest {
             logger.error(emptyMessage);
 
             // Assert
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains(LogSeverity.ERROR.name()) &&
-                                    logEntry.contains(ErrorTest.class.getName())
-                    ))
-            );
+            logWriterMock.verify(
+                    () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.ERROR.name())
+                            && logEntry.contains(ErrorTest.class.getName()))));
         }
     }
 
@@ -210,12 +195,8 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.fatal(expectedMessage, testException);
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("-FATAL-") &&
-                                    logEntry.contains("Test exception")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("-FATAL-") && logEntry.contains("Test exception"))));
         }
     }
 
@@ -229,14 +210,9 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.error(expectedMessage, testException);
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("ERROR") &&
-                                    logEntry.contains(ErrorTest.class.getName()) &&
-                                    logEntry.contains(expectedMessage) &&
-                                    logEntry.contains("Test exception")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("ERROR") && logEntry.contains(ErrorTest.class.getName())
+                            && logEntry.contains(expectedMessage) && logEntry.contains("Test exception"))));
         }
     }
 
@@ -249,18 +225,14 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.error(expectedMessage, null);
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("ERROR") &&
-                                    logEntry.contains(ErrorTest.class.getName()) &&
-                                    logEntry.contains(expectedMessage) &&
-                                    !logEntry.contains("->")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("ERROR") && logEntry.contains(ErrorTest.class.getName())
+                            && logEntry.contains(expectedMessage) && !logEntry.contains("->"))));
         }
     }
 
-    public static class WarningTest { }
+    public static class WarningTest {
+    }
 
     // Verify warning message is logged with WARNING severity level
     @Test
@@ -274,13 +246,9 @@ public class LoggerTest {
             logger.warning(testMessage);
 
             // Assert
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains(LogSeverity.WARNING.name()) &&
-                                    logEntry.contains(testMessage) &&
-                                    logEntry.contains(WarningTest.class.getName())
-                    ))
-            );
+            logWriterMock.verify(
+                    () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.WARNING.name())
+                            && logEntry.contains(testMessage) && logEntry.contains(WarningTest.class.getName()))));
         }
     }
 
@@ -296,12 +264,9 @@ public class LoggerTest {
             logger.warning(emptyMessage);
 
             // Assert
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains(LogSeverity.WARNING.name()) &&
-                                    logEntry.contains(WarningTest.class.getName())
-                    ))
-            );
+            logWriterMock.verify(
+                    () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.WARNING.name())
+                            && logEntry.contains(WarningTest.class.getName()))));
         }
     }
 
@@ -317,16 +282,14 @@ public class LoggerTest {
             logger.warning(testMessage, testException);
 
             // Assert
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains(LogSeverity.WARNING.name()) &&
-                                    logEntry.contains(WarningTest.class.getName())
-                    ))
-            );
+            logWriterMock.verify(
+                    () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.WARNING.name())
+                            && logEntry.contains(WarningTest.class.getName()))));
         }
     }
 
-    public static class InfoTest { }
+    public static class InfoTest {
+    }
 
     // Verify info message is logged with INFO severity level
     @Test
@@ -336,12 +299,8 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.info("Test message");
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("-INFO-") &&
-                                    logEntry.contains("Test message")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(
+                    argThat(logEntry -> logEntry.contains("-INFO-") && logEntry.contains("Test message"))));
         }
     }
 
@@ -353,12 +312,8 @@ public class LoggerTest {
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
             logger.info("");
 
-            logWriterMock.verify(() ->
-                    LogWriter.writeLogEntry(argThat(logEntry ->
-                            logEntry.contains("-INFO-") &&
-                                    logEntry.endsWith(InfoTest.class.getName() + " - ")
-                    ))
-            );
+            logWriterMock.verify(() -> LogWriter.writeLogEntry(argThat(
+                    logEntry -> logEntry.contains("-INFO-") && logEntry.endsWith(InfoTest.class.getName() + " - "))));
         }
     }
 }

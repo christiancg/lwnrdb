@@ -1,5 +1,12 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.BiPredicate;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,14 +27,6 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.function.BiPredicate;
-import java.util.stream.Stream;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 public class FilterOperatorHelperTest {
     @BeforeEach
     public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
@@ -46,22 +45,24 @@ public class FilterOperatorHelperTest {
         // Setup
         FieldOperator equalsOp = new FieldOperator(FieldOperatorType.EQUALS, "age", new JsonNumber(25));
         FieldOperator notEqualsOp = new FieldOperator(FieldOperatorType.NOT_EQUALS, "active", new JsonBoolean(true));
-    
+
         JsonObject testObj1 = new JsonObject();
         testObj1.addProperty("age", 25);
         testObj1.addProperty("active", false);
-    
+
         JsonObject testObj2 = new JsonObject();
-        testObj2.addProperty("age", 30); 
+        testObj2.addProperty("age", 30);
         testObj2.addProperty("active", true);
-    
+
         // Test equals operator
-        BiPredicate<JsonObject, String> equalsTester = FilterOperatorHelper.getTester(equalsOp, FieldOperatorType.EQUALS);
+        BiPredicate<JsonObject, String> equalsTester = FilterOperatorHelper.getTester(equalsOp,
+                FieldOperatorType.EQUALS);
         assertTrue(equalsTester.test(testObj1, "age"));
         assertFalse(equalsTester.test(testObj2, "age"));
-    
+
         // Test not equals operator
-        BiPredicate<JsonObject, String> notEqualsTester = FilterOperatorHelper.getTester(notEqualsOp, FieldOperatorType.NOT_EQUALS);
+        BiPredicate<JsonObject, String> notEqualsTester = FilterOperatorHelper.getTester(notEqualsOp,
+                FieldOperatorType.NOT_EQUALS);
         assertTrue(notEqualsTester.test(testObj1, "active"));
         assertFalse(notEqualsTester.test(testObj2, "active"));
     }
@@ -74,7 +75,7 @@ public class FilterOperatorHelperTest {
 
         JsonObject testData = new JsonObject();
         testData.addProperty("field1", "value1");
-    
+
         DbEntry testEntry = new DbEntry();
         testEntry.setDatabaseName(TestGlobals.DB);
         testEntry.setCollectionName(TestGlobals.COLL);
@@ -86,10 +87,11 @@ public class FilterOperatorHelperTest {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
-    
+
         // Test
-        Stream<JsonObject> result = FilterOperatorHelper.processOperator(fieldOp, null, TestGlobals.DB, TestGlobals.COLL);
-    
+        Stream<JsonObject> result = FilterOperatorHelper.processOperator(fieldOp, null, TestGlobals.DB,
+                TestGlobals.COLL);
+
         // Verify
         assertNotNull(result);
         List<JsonObject> resultList = result.toList();
@@ -112,7 +114,8 @@ public class FilterOperatorHelperTest {
         Stream<JsonObject> resultStream = Stream.of(testObj);
 
         // Act
-        Stream<JsonObject> result = FilterOperatorHelper.processOperator(conjunctionOp, resultStream, TestGlobals.DB, TestGlobals.COLL);
+        Stream<JsonObject> result = FilterOperatorHelper.processOperator(conjunctionOp, resultStream, TestGlobals.DB,
+                TestGlobals.COLL);
 
         // Assert
         List<JsonObject> resultList = result.toList();
@@ -125,7 +128,8 @@ public class FilterOperatorHelperTest {
     public void test_process_field_operator_with_valid_input() throws IOException {
         FieldOperator fieldOperator = new FieldOperator(FieldOperatorType.EQUALS, "field", new JsonString("value"));
         Stream<JsonObject> resultStream = Stream.of(new JsonObject());
-        Stream<JsonObject> processedStream = FilterOperatorHelper.processOperator(fieldOperator, resultStream, TestGlobals.DB, TestGlobals.COLL);
+        Stream<JsonObject> processedStream = FilterOperatorHelper.processOperator(fieldOperator, resultStream,
+                TestGlobals.DB, TestGlobals.COLL);
         assertNotNull(processedStream);
         assertFalse(processedStream.findAny().isPresent());
     }
@@ -136,8 +140,10 @@ public class FilterOperatorHelperTest {
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of());
         FieldOperator fieldOperator = new FieldOperator(FieldOperatorType.EQUALS, "field", new JsonString("value"));
 
-        Stream<JsonObject> processedConjunctionStream = FilterOperatorHelper.processOperator(conjunctionOperator, null, TestGlobals.DB, TestGlobals.COLL);
-        Stream<JsonObject> processedFieldStream = FilterOperatorHelper.processOperator(fieldOperator, null, TestGlobals.DB, TestGlobals.COLL);
+        Stream<JsonObject> processedConjunctionStream = FilterOperatorHelper.processOperator(conjunctionOperator, null,
+                TestGlobals.DB, TestGlobals.COLL);
+        Stream<JsonObject> processedFieldStream = FilterOperatorHelper.processOperator(fieldOperator, null,
+                TestGlobals.DB, TestGlobals.COLL);
 
         assertNotNull(processedConjunctionStream);
         assertNotNull(processedFieldStream);
@@ -148,7 +154,8 @@ public class FilterOperatorHelperTest {
     public void test_return_processed_stream_for_valid_inputs() throws IOException {
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.OR, List.of());
         Stream<JsonObject> resultStream = Stream.of(new JsonObject());
-        Stream<JsonObject> processedStream = FilterOperatorHelper.processOperator(conjunctionOperator, resultStream, TestGlobals.DB, TestGlobals.COLL);
+        Stream<JsonObject> processedStream = FilterOperatorHelper.processOperator(conjunctionOperator, resultStream,
+                TestGlobals.DB, TestGlobals.COLL);
         assertNotNull(processedStream);
         assertFalse(processedStream.findAny().isPresent());
     }
@@ -159,7 +166,8 @@ public class FilterOperatorHelperTest {
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of());
         Stream<JsonObject> resultStream = Stream.of(new JsonObject());
 
-        Stream<JsonObject> processedStream = FilterOperatorHelper.processOperator(conjunctionOperator, resultStream, TestGlobals.DB, TestGlobals.COLL);
+        Stream<JsonObject> processedStream = FilterOperatorHelper.processOperator(conjunctionOperator, resultStream,
+                TestGlobals.DB, TestGlobals.COLL);
 
         assertNotNull(processedStream);
     }
@@ -169,7 +177,8 @@ public class FilterOperatorHelperTest {
     public void test_handle_null_operator_parameter() {
         Stream<JsonObject> resultStream = Stream.of(new JsonObject());
 
-        assertThrows(NullPointerException.class, () -> FilterOperatorHelper.processOperator(null, resultStream, TestGlobals.DB, TestGlobals.COLL));
+        assertThrows(NullPointerException.class,
+                () -> FilterOperatorHelper.processOperator(null, resultStream, TestGlobals.DB, TestGlobals.COLL));
     }
 
     // Compare boolean values with EQUALS and NOT_EQUALS operators
@@ -240,7 +249,8 @@ public class FilterOperatorHelperTest {
     public void test_compare_string_values() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("stringField", "testString");
-        FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, "stringField", new JsonString("testString"));
+        FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, "stringField",
+                new JsonString("testString"));
         BiPredicate<JsonObject, String> tester = FilterOperatorHelper.getTester(operator, FieldOperatorType.EQUALS);
         assertTrue(tester.test(jsonObject, "stringField"));
 
@@ -276,14 +286,15 @@ public class FilterOperatorHelperTest {
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
         }
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        cache.putAdminCollectionEntry(adminCollEntry, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a", 0, 100, 0));
+        cache.putAdminCollectionEntry(adminCollEntry,
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a", 0, 100, 0));
 
-        ConjunctionOperator norOp = new ConjunctionOperator(ConjunctionOperatorType.NOR, List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("Alice")),
-                new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("Bob"))
-        ));
+        ConjunctionOperator norOp = new ConjunctionOperator(ConjunctionOperatorType.NOR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("Alice")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("Bob"))));
 
-        List<JsonObject> result = FilterOperatorHelper.processOperator(norOp, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(norOp, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
         assertEquals("Charlie", result.getFirst().get("name").asJsonString().getValue());
@@ -311,15 +322,16 @@ public class FilterOperatorHelperTest {
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
         }
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        cache.putAdminCollectionEntry(adminCollEntry, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
+        cache.putAdminCollectionEntry(adminCollEntry,
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
 
         // NAND of (x==10 AND y==20) means: NOT(x==10 AND y==20) → obj2 matches, obj1 does not
-        ConjunctionOperator nandOp = new ConjunctionOperator(ConjunctionOperatorType.NAND, List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(10)),
-                new FieldOperator(FieldOperatorType.EQUALS, "y", new JsonNumber(20))
-        ));
+        ConjunctionOperator nandOp = new ConjunctionOperator(ConjunctionOperatorType.NAND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(10)),
+                        new FieldOperator(FieldOperatorType.EQUALS, "y", new JsonNumber(20))));
 
-        List<JsonObject> result = FilterOperatorHelper.processOperator(nandOp, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(nandOp, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
         assertEquals("2", result.getFirst().get(Globals.PK_FIELD).asJsonString().getValue());
@@ -347,15 +359,16 @@ public class FilterOperatorHelperTest {
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
         }
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        cache.putAdminCollectionEntry(adminCollEntry, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
+        cache.putAdminCollectionEntry(adminCollEntry,
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
 
         // XOR of (a==true, b==true): obj1 matches only a==true (1 match) → included; obj2 matches both → excluded
-        ConjunctionOperator xorOp = new ConjunctionOperator(ConjunctionOperatorType.XOR, List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonBoolean(true)),
-                new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonBoolean(true))
-        ));
+        ConjunctionOperator xorOp = new ConjunctionOperator(ConjunctionOperatorType.XOR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonBoolean(true)),
+                        new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonBoolean(true))));
 
-        List<JsonObject> result = FilterOperatorHelper.processOperator(xorOp, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(xorOp, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
         assertEquals("1", result.getFirst().get(Globals.PK_FIELD).asJsonString().getValue());
@@ -485,7 +498,8 @@ public class FilterOperatorHelperTest {
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "ct1", 0, 100, 0));
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "t", new JsonTime("#time(10:00:00)"));
-        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertFalse(result.isEmpty());
     }
@@ -510,7 +524,8 @@ public class FilterOperatorHelperTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        cache.putAdminCollectionEntry(adminCollEntry, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "idx1", 0, 100, 0));
+        cache.putAdminCollectionEntry(adminCollEntry,
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "idx1", 0, 100, 0));
 
         // Create an index on "score"
         org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
@@ -520,7 +535,8 @@ public class FilterOperatorHelperTest {
 
         // Query with EQUALS on the indexed field — matchingValues will be non-null
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(100));
-        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
         assertEquals(100, result.getFirst().get("score").asJsonNumber().asInteger());
@@ -545,7 +561,8 @@ public class FilterOperatorHelperTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
         final var adminCollEntry2 = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        cache.putAdminCollectionEntry(adminCollEntry2, new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "is1", 0, 100, 0));
+        cache.putAdminCollectionEntry(adminCollEntry2,
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "is1", 0, 100, 0));
 
         org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "level");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(java.util.Set.of("level"));
@@ -553,7 +570,8 @@ public class FilterOperatorHelperTest {
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(5));
         // Pass a non-null stream — triggers the resultStream != null branch of matchingValues path
         java.util.stream.Stream<JsonObject> existing = java.util.stream.Stream.of(obj1, obj2);
-        List<JsonObject> result = FilterOperatorHelper.processOperator(op, existing, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, existing, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
         assertEquals(5, result.getFirst().get("level").asJsonNumber().asInteger());
@@ -583,7 +601,8 @@ public class FilterOperatorHelperTest {
         FieldOperator op = new FieldOperator(FieldOperatorType.IN, "color", arr);
 
         // With no index on "color", getIdsFromIndex returns null → falls through to full scan
-        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertFalse(result.isEmpty());
     }
@@ -671,7 +690,8 @@ public class FilterOperatorHelperTest {
     public void test_custom_greater_than_equals_at_boundary() {
         JsonObject obj = new JsonObject();
         obj.add("t", new JsonTime("#time(10:00:00)"));
-        FieldOperator op = new FieldOperator(FieldOperatorType.GREATER_THAN_EQUALS, "t", new JsonTime("#time(10:00:00)"));
+        FieldOperator op = new FieldOperator(FieldOperatorType.GREATER_THAN_EQUALS, "t",
+                new JsonTime("#time(10:00:00)"));
         assertTrue(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN_EQUALS).test(obj, "t"));
     }
 
@@ -680,7 +700,8 @@ public class FilterOperatorHelperTest {
     public void test_custom_smaller_than_equals_at_boundary() {
         JsonObject obj = new JsonObject();
         obj.add("t", new JsonTime("#time(10:00:00)"));
-        FieldOperator op = new FieldOperator(FieldOperatorType.SMALLER_THAN_EQUALS, "t", new JsonTime("#time(10:00:00)"));
+        FieldOperator op = new FieldOperator(FieldOperatorType.SMALLER_THAN_EQUALS, "t",
+                new JsonTime("#time(10:00:00)"));
         assertTrue(FilterOperatorHelper.getTester(op, FieldOperatorType.SMALLER_THAN_EQUALS).test(obj, "t"));
     }
 
@@ -706,7 +727,8 @@ public class FilterOperatorHelperTest {
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "role", new JsonString("admin"));
         java.util.stream.Stream<JsonObject> existing = java.util.stream.Stream.of(match, noMatch);
 
-        List<JsonObject> result = FilterOperatorHelper.processOperator(op, existing, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(op, existing, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
         assertEquals("admin", result.getFirst().get("role").asJsonString().getValue());
@@ -737,7 +759,8 @@ public class FilterOperatorHelperTest {
         ConjunctionOperator outer = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(inner));
 
         // Pass null stream so each sub-operator loads from cache independently
-        List<JsonObject> result = FilterOperatorHelper.processOperator(outer, null, TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> result = FilterOperatorHelper.processOperator(outer, null, TestGlobals.DB, TestGlobals.COLL)
+                .toList();
 
         assertEquals(1, result.size());
     }

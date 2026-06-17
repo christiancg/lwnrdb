@@ -113,7 +113,8 @@ public class ConfigurationValidator {
             // SizeParser already accepts 0 (unlimited) and -1 (disabled) as valid values.
             SizeParser.parse(value);
         } catch (IllegalArgumentException e) {
-            errors.add("maxMemory must be a valid size (e.g. 512Mb), 0 (unlimited) or -1 (disabled), but was: " + value);
+            errors.add(
+                    "maxMemory must be a valid size (e.g. 512Mb), 0 (unlimited) or -1 (disabled), but was: " + value);
         }
     }
 }

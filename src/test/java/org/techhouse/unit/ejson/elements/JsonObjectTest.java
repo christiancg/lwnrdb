@@ -1,12 +1,11 @@
 package org.techhouse.unit.ejson.elements;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Map;
 import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.*;
 
 public class JsonObjectTest {
     // Add string property and verify it is stored correctly
@@ -108,7 +107,7 @@ public class JsonObjectTest {
 
         JsonBaseElement element = jsonObject.get(propertyName);
         assertInstanceOf(JsonString.class, element);
-        assertEquals(propertyValue, ((JsonString)element).getValue());
+        assertEquals(propertyValue, ((JsonString) element).getValue());
     }
 
     // Add Integer property with valid key and value
@@ -258,9 +257,12 @@ public class JsonObjectTest {
         Set<Map.Entry<String, JsonBaseElement>> entries = jsonObject.entrySet();
 
         assertEquals(3, entries.size());
-        assertTrue(entries.stream().anyMatch(e -> e.getKey().equals("key1") && e.getValue().asJsonString().getValue().equals("value1")));
-        assertTrue(entries.stream().anyMatch(e -> e.getKey().equals("key2") && e.getValue().asJsonNumber().getValue().equals(123)));
-        assertTrue(entries.stream().anyMatch(e -> e.getKey().equals("key3") && e.getValue().asJsonBoolean().getValue().equals(true)));
+        assertTrue(entries.stream()
+                .anyMatch(e -> e.getKey().equals("key1") && e.getValue().asJsonString().getValue().equals("value1")));
+        assertTrue(entries.stream()
+                .anyMatch(e -> e.getKey().equals("key2") && e.getValue().asJsonNumber().getValue().equals(123)));
+        assertTrue(entries.stream()
+                .anyMatch(e -> e.getKey().equals("key3") && e.getValue().asJsonBoolean().getValue().equals(true)));
     }
 
     // Verify returned set is unmodifiable/immutable
@@ -270,7 +272,8 @@ public class JsonObjectTest {
         jsonObject.add("key1", new JsonString("value1"));
         Set<Map.Entry<String, JsonBaseElement>> entries = jsonObject.entrySet();
 
-        assertThrows(UnsupportedOperationException.class, () -> entries.add(Map.entry("key2", new JsonString("value2"))));
+        assertThrows(UnsupportedOperationException.class,
+                () -> entries.add(Map.entry("key2", new JsonString("value2"))));
     }
 
     // Return correct size for JsonObject with multiple members
@@ -288,7 +291,7 @@ public class JsonObjectTest {
     @Test
     public void test_size_with_large_members() {
         JsonObject jsonObject = new JsonObject();
-        for(int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 1000; i++) {
             jsonObject.addProperty("key" + i, i);
         }
 

@@ -1,12 +1,11 @@
 package org.techhouse.data;
 
+import java.util.Objects;
+import java.util.UUID;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-
-import java.util.Objects;
-import java.util.UUID;
 
 public class IndexedDbEntry {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -88,9 +87,14 @@ public class IndexedDbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof IndexedDbEntry that)) return false;
-        return previousByteSize == that.previousByteSize && Objects.equals(_id, that._id) && Objects.equals(databaseName, that.databaseName) && Objects.equals(collectionName, that.collectionName) && Objects.equals(data, that.data) && Objects.equals(index, that.index);
+        if (this == o)
+            return true;
+        if (!(o instanceof IndexedDbEntry that))
+            return false;
+        return previousByteSize == that.previousByteSize && Objects.equals(_id, that._id)
+                && Objects.equals(databaseName, that.databaseName)
+                && Objects.equals(collectionName, that.collectionName) && Objects.equals(data, that.data)
+                && Objects.equals(index, that.index);
     }
 
     @Override
@@ -100,6 +104,7 @@ public class IndexedDbEntry {
 
     @Override
     public String toString() {
-        return "IndexedDbEntry(id=" + _id + ", databaseName=" + databaseName + ", collectionName=" + collectionName + ", data=" + data + ", index=" + index + ", previousByteSize=" + previousByteSize + ")";
+        return "IndexedDbEntry(id=" + _id + ", databaseName=" + databaseName + ", collectionName=" + collectionName
+                + ", data=" + data + ", index=" + index + ", previousByteSize=" + previousByteSize + ")";
     }
 }

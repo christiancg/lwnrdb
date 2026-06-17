@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req.agg.step;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class SkipAggregationStepTest {
     // Constructor initializes with valid positive skip value

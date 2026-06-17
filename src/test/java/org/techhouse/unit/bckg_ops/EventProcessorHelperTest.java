@@ -1,5 +1,10 @@
 package org.techhouse.unit.bckg_ops;
 
+import static org.mockito.Mockito.*;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -7,23 +12,17 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.events.*;
 import org.techhouse.cache.AccessKind;
+import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.cache.Cache;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.mockito.Mockito.*;
 
 public class EventProcessorHelperTest {
 
@@ -64,7 +63,8 @@ public class EventProcessorHelperTest {
         when(collectionEvent.getCollName()).thenReturn(TestGlobals.COLL);
         when(collectionEvent.getType()).thenReturn(EventType.DELETED);
         EventProcessorHelper.processEvent(collectionEvent);
-        Assertions.assertDoesNotThrow(() -> AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
+        Assertions
+                .assertDoesNotThrow(() -> AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
@@ -83,12 +83,19 @@ public class EventProcessorHelperTest {
         TestUtils.createTestDatabaseAndCollection();
         final var testObj = new JsonObject();
         testObj.add("myField", "myValue");
-        List<DbEntry> insertedEntries = new ArrayList<>(){{ add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, testObj)); }};
-        final var bulkEntityEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, insertedEntries, new ArrayList<>());
+        List<DbEntry> insertedEntries = new ArrayList<>() {
+            {
+                add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, testObj));
+            }
+        };
+        final var bulkEntityEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, insertedEntries,
+                new ArrayList<>());
         EventProcessorHelper.processEvent(bulkEntityEvent);
         final var cache = IocContainer.get(Cache.class);
         final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
-        final var totalCount = pageEntries == null ? 0 : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+        final var totalCount = pageEntries == null
+                ? 0
+                : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
         Assertions.assertEquals(insertedEntries.size(), totalCount, "Entry count doesn't match");
     }
 
@@ -102,7 +109,9 @@ public class EventProcessorHelperTest {
         Assertions.assertNotNull(collEntry);
         final var cache = IocContainer.get(Cache.class);
         final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
-        final var totalCount = pageEntries == null ? 0 : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+        final var totalCount = pageEntries == null
+                ? 0
+                : pageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
         Assertions.assertEquals(1, totalCount, "Entry count should be 1");
     }
 
@@ -124,8 +133,8 @@ public class EventProcessorHelperTest {
                 "databases", null, System.currentTimeMillis());
         EventProcessorHelper.processEvent(event);
         final var cache = IocContainer.get(Cache.class);
-        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(
-                org.techhouse.config.Globals.ADMIN_DB_NAME, "databases", "");
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry
+                .buildId(org.techhouse.config.Globals.ADMIN_DB_NAME, "databases", "");
         Assertions.assertNull(cache.getPkIndexCollectionUsage(id));
     }
 

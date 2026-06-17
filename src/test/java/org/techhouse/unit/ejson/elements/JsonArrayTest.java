@@ -1,12 +1,11 @@
 package org.techhouse.unit.ejson.elements;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Iterator;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.*;
 
 public class JsonArrayTest {
     // Add JsonBaseElement to array and verify size increases
@@ -80,7 +79,7 @@ public class JsonArrayTest {
 
         assertEquals(1, array.size());
         assertInstanceOf(JsonString.class, array.get(0));
-        assertEquals(testString, ((JsonString)array.get(0)).getValue());
+        assertEquals(testString, ((JsonString) array.get(0)).getValue());
     }
 
     // Adding null string should create JsonString with null value
@@ -93,7 +92,7 @@ public class JsonArrayTest {
 
         assertEquals(1, array.size());
         assertInstanceOf(JsonString.class, array.get(0));
-        assertNull(((JsonString)array.get(0)).getValue());
+        assertNull(((JsonString) array.get(0)).getValue());
     }
 
     // Set valid JsonBaseElement at existing index and return previous element
@@ -389,27 +388,23 @@ public class JsonArrayTest {
 
         JsonBaseElement copiedArray = originalArray.deepCopy();
 
-        assertAll(
-                () -> assertInstanceOf(JsonArray.class, copiedArray),
-                () -> assertTrue(copiedArray instanceof JsonArray && ((JsonArray)copiedArray).isEmpty()),
-                () -> assertNotSame(originalArray, copiedArray)
-        );
+        assertAll(() -> assertInstanceOf(JsonArray.class, copiedArray),
+                () -> assertTrue(copiedArray instanceof JsonArray && ((JsonArray) copiedArray).isEmpty()),
+                () -> assertNotSame(originalArray, copiedArray));
     }
 
     // Deep copy of array containing null elements
     @Test
     public void test_array_with_null_deep_copy() {
         JsonArray originalArray = new JsonArray();
-        originalArray.add((JsonBaseElement)null);
-        originalArray.add((JsonBaseElement)null);
+        originalArray.add((JsonBaseElement) null);
+        originalArray.add((JsonBaseElement) null);
 
         JsonBaseElement copiedArray = originalArray.deepCopy();
 
-        assertAll(
-                () -> assertEquals(2, ((JsonArray)copiedArray).size()),
-                () -> assertTrue(((JsonArray)copiedArray).get(0).isJsonNull()),
-                () -> assertTrue(((JsonArray)copiedArray).get(1).isJsonNull()),
-                () -> assertNotSame(originalArray, copiedArray)
-        );
+        assertAll(() -> assertEquals(2, ((JsonArray) copiedArray).size()),
+                () -> assertTrue(((JsonArray) copiedArray).get(0).isJsonNull()),
+                () -> assertTrue(((JsonArray) copiedArray).get(1).isJsonNull()),
+                () -> assertNotSame(originalArray, copiedArray));
     }
 }

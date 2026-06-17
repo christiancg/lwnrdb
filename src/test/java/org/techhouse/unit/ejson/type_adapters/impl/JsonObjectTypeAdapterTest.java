@@ -1,5 +1,7 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
@@ -7,8 +9,6 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.JsonObjectTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonObjectTypeAdapterTest {
     @BeforeEach

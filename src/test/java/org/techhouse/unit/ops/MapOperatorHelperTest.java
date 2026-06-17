@@ -1,5 +1,10 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.*;
@@ -14,12 +19,6 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.test.TestUtils;
-
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class MapOperatorHelperTest {
     @AfterEach
@@ -36,7 +35,7 @@ public class MapOperatorHelperTest {
 
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("field1"));
-        operands.add(new JsonString("field2")); 
+        operands.add(new JsonString("field2"));
 
         ArrayParamMidOperator sumOperator = new ArrayParamMidOperator(MidOperationType.SUM, operands);
         AddFieldMapOperator addSumField = new AddFieldMapOperator("sum_result", null, sumOperator);
@@ -101,7 +100,6 @@ public class MapOperatorHelperTest {
         assertFalse(result.has("fieldToRemove"));
         assertTrue(result.has("anotherField"));
     }
-
 
     // Cast field values between different types (number, string, boolean)
     @Test
@@ -190,7 +188,8 @@ public class MapOperatorHelperTest {
 
         JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
 
-        assertTrue(Double.isInfinite(result.get("result").asJsonNumber().getValue().doubleValue()), "Result should be infinite due to division by zero");
+        assertTrue(Double.isInfinite(result.get("result").asJsonNumber().getValue().doubleValue()),
+                "Result should be infinite due to division by zero");
     }
 
     // Cast invalid values between incompatible types
@@ -236,7 +235,8 @@ public class MapOperatorHelperTest {
 
         JsonObject result = MapOperatorHelper.processOperator(addFieldOperator, jsonObject);
 
-        assertEquals(5, result.get("stringSize").asJsonNumber().asInteger(), "The size of the string 'hello' should be 5.");
+        assertEquals(5, result.get("stringSize").asJsonNumber().asInteger(),
+                "The size of the string 'hello' should be 5.");
 
         sizeOperator = new OneParamMidOperator(MidOperationType.SIZE, "arrayField");
         addFieldOperator = new AddFieldMapOperator("arraySize", null, sizeOperator);
@@ -263,7 +263,8 @@ public class MapOperatorHelperTest {
 
         JsonObject result = MapOperatorHelper.processOperator(addFieldOperator, jsonObject);
 
-        assertEquals("literal1value1literal2", result.get("concatenated").asJsonString().getValue(), "Concatenation should handle string literals correctly.");
+        assertEquals("literal1value1literal2", result.get("concatenated").asJsonString().getValue(),
+                "Concatenation should handle string literals correctly.");
     }
 
     // Support recursive conjunction operator processing
@@ -294,7 +295,8 @@ public class MapOperatorHelperTest {
         FieldOperator fieldOperator = new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonNumber(10));
         AddFieldMapOperator addFieldMapOperator = new AddFieldMapOperator("newField", fieldOperator, null);
 
-        assertThrows(NullPointerException.class, () -> MapOperatorHelper.processOperator(addFieldMapOperator, jsonObject));
+        assertThrows(NullPointerException.class,
+                () -> MapOperatorHelper.processOperator(addFieldMapOperator, jsonObject));
     }
 
     // Track number of valid steps in average calculation
@@ -468,7 +470,8 @@ public class MapOperatorHelperTest {
         CastMidOperator castZero = new CastMidOperator("zero", CastToType.BOOLEAN);
         CastMidOperator castNonZero = new CastMidOperator("nonzero", CastToType.BOOLEAN);
         JsonObject r1 = MapOperatorHelper.processOperator(new AddFieldMapOperator("boolZero", null, castZero), input);
-        JsonObject r2 = MapOperatorHelper.processOperator(new AddFieldMapOperator("boolNonZero", null, castNonZero), input);
+        JsonObject r2 = MapOperatorHelper.processOperator(new AddFieldMapOperator("boolNonZero", null, castNonZero),
+                input);
         assertFalse(r1.get("boolZero").asJsonBoolean().getValue());
         assertTrue(r2.get("boolNonZero").asJsonBoolean().getValue());
     }
@@ -507,10 +510,8 @@ public class MapOperatorHelperTest {
         JsonObject input = new JsonObject();
         input.addProperty("x", 1);
 
-        List<BaseOperator> ops = List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(99)),
-                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(98))
-        );
+        List<BaseOperator> ops = List.of(new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(99)),
+                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(98)));
         ConjunctionOperator orCond = new ConjunctionOperator(ConjunctionOperatorType.OR, ops);
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("x"));
@@ -528,10 +529,8 @@ public class MapOperatorHelperTest {
         input.addProperty("x", 5);
         input.addProperty("y", 10);
 
-        List<BaseOperator> ops = List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(5)),
-                new FieldOperator(FieldOperatorType.EQUALS, "y", new JsonNumber(99))
-        );
+        List<BaseOperator> ops = List.of(new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(5)),
+                new FieldOperator(FieldOperatorType.EQUALS, "y", new JsonNumber(99)));
         ConjunctionOperator xorCond = new ConjunctionOperator(ConjunctionOperatorType.XOR, ops);
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("x"));
@@ -548,9 +547,7 @@ public class MapOperatorHelperTest {
         JsonObject input = new JsonObject();
         input.addProperty("x", 5);
 
-        List<BaseOperator> ops = List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(99))
-        );
+        List<BaseOperator> ops = List.of(new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(99)));
         ConjunctionOperator norCond = new ConjunctionOperator(ConjunctionOperatorType.NOR, ops);
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("x"));
@@ -568,10 +565,9 @@ public class MapOperatorHelperTest {
         input.addProperty("a", 1);
         input.addProperty("b", 2);
 
-        ConjunctionOperator inner = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(
-                new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonNumber(1)),
-                new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonNumber(2))
-        ));
+        ConjunctionOperator inner = new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonNumber(1)),
+                        new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonNumber(2))));
         ConjunctionOperator outer = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(inner));
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("a"));

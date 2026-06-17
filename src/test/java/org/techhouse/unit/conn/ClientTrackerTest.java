@@ -1,5 +1,11 @@
 package org.techhouse.unit.conn;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
@@ -7,13 +13,6 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Client;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
-
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.Map;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class ClientTrackerTest {
     // Adding a client when under max connections returns a valid UUID
@@ -28,7 +27,7 @@ public class ClientTrackerTest {
         Mockito.when(mockInetAddress.getHostAddress()).thenReturn("127.0.0.1");
 
         UUID clientId = clientTracker.addClient(mockSocket);
-    
+
         assertNotNull(clientId);
     }
 
@@ -43,20 +42,21 @@ public class ClientTrackerTest {
         Mockito.when(mockSocket1.getInetAddress()).thenReturn(mockInetAddress1);
         Mockito.when(mockInetAddress1.getHostAddress()).thenReturn("127.0.0.1");
         clientTracker.addClient(mockSocket1);
-    
+
         Socket mockSocket2 = Mockito.mock(Socket.class);
         InetAddress mockInetAddress2 = Mockito.mock(InetAddress.class);
         Mockito.when(mockSocket2.getInetAddress()).thenReturn(mockInetAddress2);
         Mockito.when(mockInetAddress2.getHostAddress()).thenReturn("192.168.0.1");
-    
+
         UUID clientId = clientTracker.addClient(mockSocket2);
-    
+
         assertNull(clientId);
     }
 
     // maxConnections of 0 means unlimited: clients are added beyond a small count
     @Test
-    public void test_add_client_unlimited_when_max_connections_zero() throws NoSuchFieldException, IllegalAccessException {
+    public void test_add_client_unlimited_when_max_connections_zero()
+            throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "maxConnections", 0);
         ClientTracker clientTracker = new ClientTracker();
@@ -80,7 +80,8 @@ public class ClientTrackerTest {
         Mockito.when(mockInetAddress.getHostAddress()).thenReturn("127.0.0.1");
         clientTracker.addClient(mockSocket);
         clientTracker.removeById(clientId);
-        final var clientsType = new ReflectionUtils.TypeToken<Map<UUID, Client>>() {};
+        final var clientsType = new ReflectionUtils.TypeToken<Map<UUID, Client>>() {
+        };
         final var clients = TestUtils.getPrivateField(clientTracker, "clients", clientsType);
         assertNull(clients.get(clientId));
     }
@@ -89,7 +90,8 @@ public class ClientTrackerTest {
     @Test
     public void test_remove_client_from_empty_map() throws NoSuchFieldException, IllegalAccessException {
         ClientTracker clientTracker = new ClientTracker();
-        final var clientsType = new ReflectionUtils.TypeToken<Map<UUID, Client>>() {};
+        final var clientsType = new ReflectionUtils.TypeToken<Map<UUID, Client>>() {
+        };
         final var clients = TestUtils.getPrivateField(clientTracker, "clients", clientsType);
         UUID clientId = UUID.randomUUID();
         clientTracker.removeById(clientId);
@@ -98,11 +100,13 @@ public class ClientTrackerTest {
 
     // Successfully updates last command time for existing client
     @Test
-    public void test_update_last_command_time_for_existing_client() throws NoSuchFieldException, IllegalAccessException {
+    public void test_update_last_command_time_for_existing_client()
+            throws NoSuchFieldException, IllegalAccessException {
         ClientTracker clientTracker = new ClientTracker();
         UUID clientId = UUID.randomUUID();
         Client client = new Client("127.0.0.1");
-        final var clientsType = new ReflectionUtils.TypeToken<Map<UUID, Client>>() {};
+        final var clientsType = new ReflectionUtils.TypeToken<Map<UUID, Client>>() {
+        };
         final var clients = TestUtils.getPrivateField(clientTracker, "clients", clientsType);
         clients.put(clientId, client);
 
@@ -136,7 +140,8 @@ public class ClientTrackerTest {
     }
 
     @Test
-    public void test_get_authenticated_username_returns_null_when_not_set() throws NoSuchFieldException, IllegalAccessException {
+    public void test_get_authenticated_username_returns_null_when_not_set()
+            throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "maxConnections", 10);
         ClientTracker clientTracker = new ClientTracker();

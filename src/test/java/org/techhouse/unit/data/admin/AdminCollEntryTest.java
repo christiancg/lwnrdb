@@ -1,5 +1,10 @@
 package org.techhouse.unit.data.admin;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -7,12 +12,6 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AdminCollEntryTest {
     private static final String INDEXES_FIELD_NAME = "indexes";

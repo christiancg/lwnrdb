@@ -1,9 +1,9 @@
 package org.techhouse.unit.ejson.exceptions;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class NonRegisteredCustomTypeExceptionTest {
     // Exception is thrown with correct custom type name in message

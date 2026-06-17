@@ -1,12 +1,11 @@
 package org.techhouse.ops.req;
 
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ops.OperationType;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.OperationType;
 
 public class SetDatabaseOwnersRequest extends OperationRequest {
     private JsonArray owners;
@@ -22,9 +21,8 @@ public class SetDatabaseOwnersRequest extends OperationRequest {
     }
 
     public List<String> getOwners() {
-        if (owners == null) return new ArrayList<>();
-        return owners.asList().stream()
-                .map(el -> el.asJsonString().getValue())
-                .collect(Collectors.toList());
+        if (owners == null)
+            return new ArrayList<>();
+        return owners.asList().stream().map(el -> el.asJsonString().getValue()).collect(Collectors.toList());
     }
 }

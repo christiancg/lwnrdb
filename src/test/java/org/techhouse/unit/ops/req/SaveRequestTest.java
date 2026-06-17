@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.SaveRequest;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class SaveRequestTest {
     // Create SaveRequest with valid database and collection names

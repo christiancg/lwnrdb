@@ -1,9 +1,10 @@
 package org.techhouse.unit.data;
-import org.junit.jupiter.api.Test;
-import org.techhouse.data.Client;
-import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
+
+import java.time.LocalDateTime;
+import org.junit.jupiter.api.Test;
+import org.techhouse.data.Client;
 
 public class ClientTest {
     // Instantiation of Client sets connectionTime to current time
@@ -11,7 +12,8 @@ public class ClientTest {
     public void test_connection_time_on_instantiation() {
         Client client = new Client("127.0.0.1");
         LocalDateTime now = LocalDateTime.now();
-        assertTrue(client.getConnectionTime().isBefore(now.plusSeconds(1)) && client.getConnectionTime().isAfter(now.minusSeconds(1)));
+        assertTrue(client.getConnectionTime().isBefore(now.plusSeconds(1))
+                && client.getConnectionTime().isAfter(now.minusSeconds(1)));
     }
 
     // Instantiation of Client sets connectionTime to current time

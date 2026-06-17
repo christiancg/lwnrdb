@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.req.agg.mid_operators;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class CastMidOperatorTest {
     // Constructor correctly sets MidOperationType.CAST as type using super()

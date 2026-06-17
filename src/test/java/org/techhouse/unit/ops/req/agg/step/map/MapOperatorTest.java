@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.req.agg.step.map;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class MapOperatorTest {
     // Create MapOperator with ADD_FIELD type and valid fieldName

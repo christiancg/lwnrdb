@@ -1,12 +1,6 @@
 package org.techhouse.unit.config;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.techhouse.config.ConfigReader;
-import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
-import org.techhouse.test.TestUtils;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.io.IOException;
@@ -16,8 +10,13 @@ import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.techhouse.config.ConfigReader;
+import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
+import org.techhouse.test.TestUtils;
 
 public class ConfigReaderTest {
 
@@ -72,7 +71,8 @@ public class ConfigReaderTest {
     @Test
     public void test_handle_empty_configuration_file() {
         // Arrange
-        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        File configFile = new File(
+                Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
         try {
             try {
                 Files.write(configFile.toPath(), Collections.emptyList(), StandardCharsets.UTF_8);
@@ -103,7 +103,8 @@ public class ConfigReaderTest {
     @Test
     public void test_config_file_with_invalid_property_line() throws IOException {
         String configContent = "port=8989\nnot_a_valid_property\nmaxConnections=100\n";
-        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        File configFile = new File(
+                Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
         try {
             Files.writeString(configFile.toPath(), configContent);
             var config = ConfigReader.loadConfiguration();
@@ -118,7 +119,8 @@ public class ConfigReaderTest {
     @Test
     public void test_config_file_ignores_comments_and_blank_lines() throws IOException {
         String configContent = "# this is a comment\n\nport=8989\n   # indented comment\nmaxConnections=100\n";
-        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        File configFile = new File(
+                Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
         try {
             Files.writeString(configFile.toPath(), configContent);
             var config = ConfigReader.loadConfiguration();
@@ -135,7 +137,8 @@ public class ConfigReaderTest {
     @Test
     public void test_config_file_value_with_equals_sign() throws IOException {
         String configContent = "defaultAdminPassword=ab=cd=ef\n";
-        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        File configFile = new File(
+                Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
         try {
             Files.writeString(configFile.toPath(), configContent);
             var config = ConfigReader.loadConfiguration();

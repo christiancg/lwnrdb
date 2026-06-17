@@ -1,13 +1,6 @@
 package org.techhouse.unit.log;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
-import org.techhouse.log.LogWriter;
-import org.techhouse.test.TestGlobals;
-import org.techhouse.test.TestUtils;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -17,8 +10,14 @@ import java.nio.file.Files;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
+import org.techhouse.log.LogWriter;
+import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
 
 public class LogWriterTest {
     @BeforeEach
@@ -58,8 +57,8 @@ public class LogWriterTest {
         // Arrange
 
         File logDir = new File(TestGlobals.LOG_PATH);
-        File expectedLogFile = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR +
-            LocalDate.now().format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION);
+        File expectedLogFile = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR
+                + LocalDate.now().format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION);
 
         // Act
         LogWriter.createLogPathAndRemoveOldFiles();
@@ -71,7 +70,8 @@ public class LogWriterTest {
 
     // Handle case when log directory creation fails
     @Test
-    public void test_handles_failed_log_directory_creation() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_handles_failed_log_directory_creation()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         String testLogPath = "/invalid/path/that/cant/be/created";
         Configuration config = Configuration.getInstance();
@@ -137,13 +137,13 @@ public class LogWriterTest {
         File recentFile1 = new File(tempDir, now.minusDays(1).format(DateTimeFormatter.ISO_DATE) + ".log");
         File recentFile2 = new File(tempDir, now.minusDays(2).format(DateTimeFormatter.ISO_DATE) + ".log");
 
-        if(!currentFile.createNewFile()) {
+        if (!currentFile.createNewFile()) {
             fail("Failed creating current log file");
         }
-        if(!recentFile1.createNewFile()) {
+        if (!recentFile1.createNewFile()) {
             fail("Failed creating recent log file");
         }
-        if(!recentFile2.createNewFile()) {
+        if (!recentFile2.createNewFile()) {
             fail("Failed creating recent log file");
         }
 

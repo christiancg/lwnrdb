@@ -1,14 +1,14 @@
 package org.techhouse.unit.ops.req.agg.operators;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class FieldOperatorTest {
     // Constructor initializes with valid FieldOperatorType, field name and JsonBaseElement value

@@ -1,5 +1,8 @@
 package org.techhouse.conn;
 
+import java.io.*;
+import java.net.Socket;
+import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.InvalidCommandException;
@@ -12,10 +15,6 @@ import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
-
-import java.io.*;
-import java.net.Socket;
-import java.util.UUID;
 
 public class MessageProcessor implements Runnable {
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -50,12 +49,13 @@ public class MessageProcessor implements Runnable {
                             final var parsedMessage = RequestParser.parseRequest(message);
                             final var validationResult = RequestValidator.validate(parsedMessage);
                             if (!validationResult.isValid()) {
-                                response = eJson.toJson(new OperationResponse(
-                                        parsedMessage.getType(), OperationStatus.ERROR,
-                                        validationResult.getErrorMessage()));
+                                response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
+                                        OperationStatus.ERROR, validationResult.getErrorMessage()));
                             } else {
                                 final var type = parsedMessage.getType();
-                                final var isPublicOperation = type == OperationType.AUTHENTICATE || type == OperationType.LIST_DATABASES || type == OperationType.CLOSE_CONNECTION;
+                                final var isPublicOperation = type == OperationType.AUTHENTICATE
+                                        || type == OperationType.LIST_DATABASES
+                                        || type == OperationType.CLOSE_CONNECTION;
 
                                 if (isPublicOperation) {
                                     final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
@@ -67,23 +67,21 @@ public class MessageProcessor implements Runnable {
                                 } else {
                                     final var username = clientTracker.getAuthenticatedUsername(clientId);
                                     if (username == null) {
-                                        response = eJson.toJson(new OperationResponse(
-                                                type, OperationStatus.UNAUTHENTICATED,
-                                                "Must authenticate first"));
+                                        response = eJson.toJson(new OperationResponse(type,
+                                                OperationStatus.UNAUTHENTICATED, "Must authenticate first"));
                                     } else {
                                         final var user = cache.getAdminUserEntry(username);
                                         if (user == null) {
-                                            response = eJson.toJson(new OperationResponse(
-                                                    type, OperationStatus.UNAUTHENTICATED,
-                                                    "User no longer exists"));
+                                            response = eJson.toJson(new OperationResponse(type,
+                                                    OperationStatus.UNAUTHENTICATED, "User no longer exists"));
                                         } else {
                                             final var authzResult = AuthorizationChecker.check(parsedMessage, user);
                                             if (!authzResult.isAllowed()) {
-                                                response = eJson.toJson(new OperationResponse(
-                                                        type, OperationStatus.FORBIDDEN,
-                                                        authzResult.getReason()));
+                                                response = eJson.toJson(new OperationResponse(type,
+                                                        OperationStatus.FORBIDDEN, authzResult.getReason()));
                                             } else {
-                                                final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
+                                                final var responseObj = operationProcessor.processMessage(parsedMessage,
+                                                        clientId);
                                                 if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                                     close = true;
                                                     clientTracker.removeById(clientId);
