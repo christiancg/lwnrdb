@@ -113,30 +113,60 @@ def time_query(s, f, value):
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 
 
+SERVER_LOG = "/tmp/lwnrdb-bench.log"
+
+
+def _port_open():
+    try:
+        with socket.create_connection((HOST, PORT), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
 def kill_server():
+    pids = []
     try:
         out = subprocess.check_output(
             ["pgrep", "-f", "lwnrdb-1.0-SNAPSHOT.jar"], text=True).strip()
-        for pid in out.splitlines():
-            os.kill(int(pid), signal.SIGTERM)
+        pids = [int(p) for p in out.splitlines() if p.strip()]
     except subprocess.CalledProcessError:
-        pass
-    time.sleep(1.5)
+        return
+    for pid in pids:
+        os.kill(pid, signal.SIGTERM)
+    # Wait for the port to actually close (the JVM holds the listening socket
+    # until shutdown completes; on CI runners this can take several seconds).
+    deadline = time.time() + 30.0
+    while time.time() < deadline and _port_open():
+        time.sleep(0.2)
+    # Escalate to SIGKILL if anything is still alive.
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    while time.time() < deadline and _port_open():
+        time.sleep(0.2)
 
 
 def start_server():
-    log = open("/tmp/lwnrdb-bench.log", "ab")
+    log = open(SERVER_LOG, "ab")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     subprocess.Popen(["java", "-Xmx1g", "-jar", JAR],
-                     stdout=log, stderr=log,
-                     cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    # Wait until the port accepts connections.
-    deadline = time.time() + 30.0
+                     stdout=log, stderr=log, cwd=repo_root)
+    deadline = time.time() + 60.0
     while time.time() < deadline:
-        try:
-            with socket.create_connection((HOST, PORT), timeout=0.5):
-                return
-        except OSError:
-            time.sleep(0.2)
+        if _port_open():
+            return
+        time.sleep(0.2)
+    # Surface server log on failure so CI is debuggable.
+    try:
+        with open(SERVER_LOG, "rb") as fp:
+            tail = fp.read()[-4000:].decode(errors="replace")
+        print(f"--- server log tail ---\n{tail}\n--- end ---", file=sys.stderr)
+    except OSError:
+        pass
     raise RuntimeError("server did not come up in time")
 
 
