@@ -1,6 +1,5 @@
 package org.techhouse.unit.data.admin;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -85,7 +84,6 @@ public class AdminDbEntryTest {
 
     // Handles JsonObject with no collections field
     @Test
-    @Disabled("This should probably not fail, but it's a scenario that won't happen")
     public void test_no_collections_field() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.add(Globals.PK_FIELD, new JsonString("testDb"));

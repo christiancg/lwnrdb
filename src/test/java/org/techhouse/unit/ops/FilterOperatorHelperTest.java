@@ -2,7 +2,6 @@ package org.techhouse.unit.ops;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -171,24 +170,6 @@ public class FilterOperatorHelperTest {
         Stream<JsonObject> resultStream = Stream.of(new JsonObject());
 
         assertThrows(NullPointerException.class, () -> FilterOperatorHelper.processOperator(null, resultStream, TestGlobals.DB, TestGlobals.COLL));
-    }
-
-    // Handle null dbName or collName parameters
-    // This test was working but stopped after adding paging. It is not a valid scenario, so disabling the test for now
-    @Test
-    @Disabled
-    public void test_handle_null_db_or_coll_parameters() {
-        FieldOperator fieldOperator = new FieldOperator(FieldOperatorType.EQUALS, "field", new JsonString("value"));
-        Stream<JsonObject> resultStream = Stream.of(new JsonObject());
-
-        assertDoesNotThrow(() -> {
-            FilterOperatorHelper.processOperator(fieldOperator, resultStream, null, "testCollection");
-        });
-
-        Stream<JsonObject> resultStream1 = Stream.of(new JsonObject());
-        assertDoesNotThrow(() -> {
-            FilterOperatorHelper.processOperator(fieldOperator, resultStream1, "testDb", null);
-        });
     }
 
     // Compare boolean values with EQUALS and NOT_EQUALS operators
