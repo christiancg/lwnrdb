@@ -37,6 +37,7 @@ public class MemoryManagementTest {
         final var config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemoryBytes);
         final var mm = IocContainer.get(MemoryManagement.class);
+        mm.stopSweepThread();
         TestUtils.setPrivateField(mm, "counters", new ConcurrentHashMap<>());
         TestUtils.standardTearDown();
     }
