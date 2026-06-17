@@ -20,11 +20,19 @@ jobs:
         run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=adminstrator/' lwnrdb.cfg
       - name: Start server
         run: |
-          java -jar target/lwnrdb-1.0-SNAPSHOT.jar &
+          java -Xmx1g -jar target/lwnrdb-1.0-SNAPSHOT.jar &
           echo $! > server.pid
           until nc -z 127.0.0.1 8989; do sleep 0.2; done
       - name: Run auth integration tests
         run: python3 test_utils/test_auth.py
+      - name: Run memory limits tests
+        run: python3 test_utils/test_memory_limits.py
+      - name: Run extensive memory tests
+        run: python3 test_utils/test_memory_extensive.py
+      - name: Run cache warmup benchmark
+        # The benchmark restarts the server itself to measure cold-cache latency,
+        # so any tracked server.pid is stale after this step.
+        run: python3 test_utils/bench_cache_warmup.py
       - name: Stop server
         if: always()
-        run: kill $(cat server.pid) || true
+        run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
