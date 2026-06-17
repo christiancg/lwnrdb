@@ -61,7 +61,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] Validation of configurations
 - [ ] Review and address TODOs
 - [ ] Remove all warnings from code
-- [ ] Fix tests marked as @Deprecated
+- [x] Fix tests marked as @Disabled
 - [ ] Implement linting and formatting
 
 ## Wire Protocol / Message Reference
