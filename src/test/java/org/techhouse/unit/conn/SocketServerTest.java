@@ -40,7 +40,6 @@ public class SocketServerTest {
                 Thread.sleep(100); // Wait for the server to attempt to start
                 // Check logs or other indicators for failure due to port in use
                 // This is a placeholder for actual log checking or exception handling
-                assertTrue(true); // Replace with actual check
             } catch (IOException | InterruptedException e) {
                 fail("Unexpected exception occurred");
             }

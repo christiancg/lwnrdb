@@ -68,14 +68,17 @@ public class TypeAdapterFactoryTest {
     public void test_returns_cached_adapter_when_type_exists() throws ClassNotFoundException {
         // Create a parameterized type for List<String>
         Type listType = new ParameterizedType() {
+            @Override
             public Type[] getActualTypeArguments() {
                 return new Type[]{String.class};
             }
 
+            @Override
             public Type getRawType() {
                 return List.class;
             }
 
+            @Override
             public Type getOwnerType() {
                 return null;
             }

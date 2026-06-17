@@ -324,7 +324,7 @@ public class JsonArrayTest {
         JsonArray array = new JsonArray();
         array.add("test");
 
-        boolean result = array.equals(null);
+        boolean result = array.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }

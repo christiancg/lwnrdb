@@ -86,7 +86,7 @@ public class JsonPrimitiveTest {
     public void test_equals_with_null_returns_false() {
         JsonPrimitive<String> primitive = new JsonString("test");
 
-        boolean result = primitive.equals(null);
+        boolean result = primitive.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }

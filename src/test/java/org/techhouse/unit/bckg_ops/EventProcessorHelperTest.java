@@ -90,11 +90,8 @@ public class EventProcessorHelperTest {
         TestUtils.createTestDatabaseAndCollection();
         final var testObj = new JsonObject();
         testObj.add("myField", "myValue");
-        List<DbEntry> insertedEntries = new ArrayList<>() {
-            {
-                add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, testObj));
-            }
-        };
+        List<DbEntry> insertedEntries = new ArrayList<>();
+        insertedEntries.add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, testObj));
         final var bulkEntityEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, insertedEntries,
                 new ArrayList<>());
         EventProcessorHelper.processEvent(bulkEntityEvent);

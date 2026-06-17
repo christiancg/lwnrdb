@@ -478,7 +478,7 @@ public class FileSystem {
                     .collect(Collectors.joining(Globals.NEWLINE));
             writer.seek(totalLengthBefore);
             writer.write(reIndexedToWrite.getBytes(StandardCharsets.UTF_8), 0, reIndexedToWrite.length());
-            var newFileSize = 0;
+            int newFileSize;
             if (!reIndexedEntries.isEmpty()) {
                 writer.writeBytes(Globals.NEWLINE);
                 newFileSize = totalLengthBefore + reIndexedToWrite.length() + Globals.NEWLINE_CHAR_LENGTH;
@@ -547,7 +547,7 @@ public class FileSystem {
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
         final var value = entry.getValue();
-        var strValue = "";
+        String strValue;
         if (value instanceof JsonCustom<?> jsonCustom) {
             strValue = jsonCustom.getValue();
         } else if (value instanceof Number number) {

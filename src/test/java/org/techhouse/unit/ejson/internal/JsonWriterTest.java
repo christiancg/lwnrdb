@@ -16,8 +16,8 @@ public class JsonWriterTest {
     @Test
     public void test_convert_pojo_to_json_string() {
         class TestPojo {
-            private String name;
-            private int value;
+            private String name; // NOPMD - reflection/serialization test fixture
+            private int value; // NOPMD - reflection/serialization test fixture
 
             public void setName(String name) {
                 this.name = name;

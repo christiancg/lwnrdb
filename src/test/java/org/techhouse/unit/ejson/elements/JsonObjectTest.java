@@ -371,7 +371,7 @@ public class JsonObjectTest {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("key", "value");
 
-        boolean result = jsonObject.equals(null);
+        boolean result = jsonObject.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }

@@ -42,6 +42,7 @@ public class AdminPageEntry extends DbEntry {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + page;
     }
 
+    @Override
     public void setPage(long page) {
         this.page = page;
         syncData();
@@ -67,6 +68,7 @@ public class AdminPageEntry extends DbEntry {
         data.addProperty(PAGE_SIZE_FIELD_NAME, pageSize);
     }
 
+    @Override
     public long getPage() {
         return page;
     }

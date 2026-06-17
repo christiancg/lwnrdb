@@ -48,7 +48,7 @@ public class MessageProcessor implements Runnable {
                         break;
                     }
                     if (!message.isBlank()) {
-                        var response = "";
+                        String response;
                         try {
                             final var parsedMessage = RequestParser.parseRequest(message);
                             final var validationResult = RequestValidator.validate(parsedMessage);

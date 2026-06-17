@@ -266,7 +266,7 @@ public class MapOperatorHelper {
                 final var primitive = concatStep.asJsonPrimitive();
                 if (primitive.isJsonString()) {
                     final var primitiveString = primitive.asJsonString().getValue();
-                    var toAdd = "";
+                    String toAdd;
                     if (primitiveString.startsWith(Globals.STRING_LITERAL_PREFIX)) {
                         toAdd = primitiveString.replaceFirst("-", "");
                     } else {
