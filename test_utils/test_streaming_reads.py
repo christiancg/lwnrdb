@@ -1,3 +1,4 @@
+import os
 import socket
 import json
 import sys
@@ -13,13 +14,14 @@ ADMIN_PASSWORD = "adminstrator"
 
 # Knobs — tune these (and maxMemory in lwnrdb.cfg) to exercise paging. With the
 # default 2MB page size, a few thousand ~512B docs span many .dat pages so both
-# the targeted-fetch and page-streaming paths cross page boundaries.
+# the targeted-fetch and page-streaming paths cross page boundaries. CI runners are
+# slower, so the workload is overridable via env vars to keep the run quick.
 DB = "streamdb"
 COLL = "stream_coll"
 JOIN_COLL = "stream_join"
-NUM_DOCS = 8_000
-PAYLOAD_BYTES = 512
-BULK_BATCH_SIZE = 500
+NUM_DOCS = int(os.environ.get("STREAM_TEST_DOCS", "8000"))
+PAYLOAD_BYTES = int(os.environ.get("STREAM_TEST_PAYLOAD_BYTES", "512"))
+BULK_BATCH_SIZE = int(os.environ.get("STREAM_TEST_BATCH_SIZE", "500"))
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
@@ -223,7 +225,7 @@ def test_indexed_email_exact(s, f):
 
 def test_indexed_in_filter(s, f):
     section("Indexed FILTER — email IN [three known]")
-    vs = [10, 2000, NUM_DOCS - 1]
+    vs = sorted({NUM_DOCS // 10, NUM_DOCS // 2, NUM_DOCS - 1})
     r = agg(s, f, COLL, [field_filter("email", "IN", [email_for(v) for v in vs])])
     check("AGGREGATE FILTER email IN [...] (OK)", r, "OK")
     ids = {d.get("_id") for d in (r.get("results") or [])}
@@ -271,7 +273,7 @@ def test_targeted_fetch_does_not_bloat_cache(s, f):
         return
     before_cache = mem.get("userCacheBytes", 0)
     # A single indexed point lookup should pull at most a tiny subset into cache.
-    agg(s, f, COLL, [field_filter("email", "EQUALS", email_for(1234))])
+    agg(s, f, COLL, [field_filter("email", "EQUALS", email_for(NUM_DOCS // 3))])
     after = print_memory_snapshot("after point query", s, f)
     after_cache = after.get("memory", {}).get("userCacheBytes", 0)
     growth = after_cache - before_cache

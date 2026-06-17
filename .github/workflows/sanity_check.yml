@@ -36,6 +36,14 @@ jobs:
           MEM_TEST_DOCS: "2000"
           MEM_TEST_PAYLOAD_BYTES: "512"
         run: python3 test_utils/test_memory_extensive.py
+      - name: Run streaming read path tests
+        env:
+          # CI runners are slower; dial the workload down so the run stays quick
+          # while still spanning multiple pages to exercise the streaming and
+          # targeted-fetch read paths.
+          STREAM_TEST_DOCS: "2000"
+          STREAM_TEST_PAYLOAD_BYTES: "512"
+        run: python3 test_utils/test_streaming_reads.py
       - name: Run cache warmup benchmark
         # The benchmark restarts the server itself to measure cold-cache latency,
         # so any tracked server.pid is stale after this step.
