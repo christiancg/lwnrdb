@@ -889,4 +889,73 @@ public class FileSystemTest {
 
         assertNull(fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "nope"));
     }
+
+    @Test
+    public void test_readWholeCollectionPage_drops_and_rewrites_malformed_lines() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+
+        // Insert one valid entry so the page file exists with a known good line.
+        final var entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("good");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+        fs.insertIntoCollection(entry);
+
+        // Append a torn/garbage line, simulating a crash mid-write.
+        final var pageFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +
+                Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR +
+                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
+        Files.writeString(pageFile.toPath(), "\nthis-is-not-json{partial",
+                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+
+        // First read drops the bad line in-memory and on-disk.
+        final var firstRead = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0L);
+        assertEquals(1, firstRead.size());
+        assertTrue(firstRead.containsKey("good"));
+
+        // The file on disk should no longer contain the malformed line.
+        final var diskLines = Files.readAllLines(pageFile.toPath());
+        assertTrue(diskLines.stream().noneMatch(l -> l.contains("partial")),
+                "the malformed line should have been removed from disk");
+
+        // Subsequent read returns the same result without warnings.
+        final var secondRead = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0L);
+        assertEquals(1, secondRead.size());
+    }
+
+    @Test
+    public void test_readWholePkIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+
+        final var entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("good");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+        fs.insertIntoCollection(entry);
+
+        // Compose the PK index file path manually and append a garbage line.
+        final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +
+                Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR +
+                TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD +
+                Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
+        Files.writeString(indexFile.toPath(), "\nthis is not a valid pk index line",
+                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+
+        final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, firstRead.size());
+        assertEquals("good", firstRead.getFirst().getValue());
+
+        final var diskLines = Files.readAllLines(indexFile.toPath());
+        assertTrue(diskLines.stream().noneMatch(l -> l.contains("not a valid")),
+                "the malformed PK index line should have been removed");
+
+        final var secondRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, secondRead.size());
+    }
 }
