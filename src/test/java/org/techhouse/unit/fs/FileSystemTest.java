@@ -427,6 +427,41 @@ public class FileSystemTest {
         assertTrue(file.length() > originalFileLength);
     }
 
+    // Concurrent inserts and reads on the same page never corrupt the file: every insert lands and
+    // every concurrent read returns only complete, parseable entries (exercises the per-file locks).
+    @Test
+    public void test_concurrent_inserts_and_reads_keep_page_coherent() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final int writers = 8;
+        final int perWriter = 25;
+        final var errors = new java.util.concurrent.CopyOnWriteArrayList<Throwable>();
+        final var threads = new ArrayList<Thread>();
+        for (int w = 0; w < writers; w++) {
+            final int base = w * perWriter;
+            threads.add(new Thread(() -> {
+                for (int i = 0; i < perWriter; i++) {
+                    try {
+                        final var obj = new JsonObject();
+                        obj.addProperty("_id", "c-" + (base + i));
+                        obj.addProperty("v", base + i);
+                        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+                        entry.setPage(0);
+                        fileSystem.insertIntoCollection(entry);
+                        fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0);
+                    } catch (Throwable t) {
+                        errors.add(t);
+                    }
+                }
+            }));
+        }
+        for (var t : threads) t.start();
+        for (var t : threads) t.join(15000);
+        assertTrue(errors.isEmpty(), "no errors expected under concurrent insert/read: " + errors);
+        final var page = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0);
+        assertEquals(writers * perWriter, page.size());
+    }
+
     // Successfully writes index entries to file for each type in the map
     @Test
     public void test_writes_index_entries_to_file() throws IOException, NoSuchFieldException, IllegalAccessException {
