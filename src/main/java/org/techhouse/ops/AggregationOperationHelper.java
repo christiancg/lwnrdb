@@ -104,6 +104,9 @@ public class AggregationOperationHelper {
         final var joinCollectionLocalField = joinStep.getLocalField();
         final var joinCollectionRemoteField = joinStep.getRemoteField();
         final var as = joinStep.getAsField();
+        // Blocking step (documented exception): JOIN needs the full remote collection
+        // grouped in memory, so it loads the whole collection rather than streaming.
+        // TODO: find a better way to do this, because it might cause an OOM exception
         final var joinCollectionMap = cache.getWholeCollection(dbName, joinCollectionName);
         // TODO: use indexes
         final var joinedCollection = joinCollectionMap.values().stream()

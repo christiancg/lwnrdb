@@ -130,4 +130,51 @@ public class AdminOperationHelperTest {
         assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "tempColl"));
     }
 
+    @Test
+    public void test_upsert_collection_usage_creates_then_updates() throws Exception {
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
+                org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
+                System.currentTimeMillis());
+        AdminOperationHelper.upsertCollectionUsage(event);
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
+        Cache cache = IocContainer.get(Cache.class);
+        assertNotNull(cache.getPkIndexCollectionUsage(id));
+        // Second time goes through the UPDATE path
+        mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
+    }
+
+    @Test
+    public void test_upsert_collection_usage_ignores_admin_db() throws Exception {
+        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
+                org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null,
+                System.currentTimeMillis());
+        AdminOperationHelper.upsertCollectionUsage(event);
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(Globals.ADMIN_DB_NAME, "databases", "");
+        Cache cache = IocContainer.get(Cache.class);
+        assertNull(cache.getPkIndexCollectionUsage(id));
+    }
+
+    @Test
+    public void test_cleanup_collection_usage_removes_stale_only() throws Exception {
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
+                org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
+                System.currentTimeMillis());
+        AdminOperationHelper.upsertCollectionUsage(event);
+        // Cleanup with maxAge=Long.MAX_VALUE — nothing should be removed (everything is recent).
+        AdminOperationHelper.cleanupCollectionUsage(Long.MAX_VALUE);
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
+        Cache cache = IocContainer.get(Cache.class);
+        assertNotNull(cache.getPkIndexCollectionUsage(id));
+        // Make sure the threshold strictly exceeds the recorded lastAccessMillis (avoid same-millisecond race).
+        Thread.sleep(5);
+        // Cleanup with maxAge=0 — everything older than `now` removed (i.e. all entries).
+        AdminOperationHelper.cleanupCollectionUsage(0L);
+        assertNull(cache.getPkIndexCollectionUsage(id));
+    }
+
 }

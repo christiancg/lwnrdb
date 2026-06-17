@@ -10,18 +10,23 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.log.Logger;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.utils.ReflectionUtils;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class FileSystem {
+    private static final Logger logger = Logger.logFor(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private String dbPath;
 
@@ -41,12 +46,15 @@ public class FileSystem {
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
         final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         final var pagesUsers = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
+        final var pagesCollectionUsage = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesUsers);
+        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollectionUsage);
     }
 
     public boolean createDatabaseFolder(String dbName) {
@@ -129,20 +137,46 @@ public class FileSystem {
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
         final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getPage());
         try (final var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
-            reader.seek(pkIndexEntry.getPosition());
-            final var entryLength = (int) pkIndexEntry.getLength();
-            byte[] buffer = new byte[entryLength];
-            reader.readFully(buffer, 0, entryLength);
-            final var strEntry = new String(buffer);
-            final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
-            final var entry = new DbEntry();
-            entry.setDatabaseName(pkIndexEntry.getDatabaseName());
-            entry.setCollectionName(pkIndexEntry.getCollectionName());
-            entry.set_id(pkIndexEntry.getValue());
-            jsonObject.remove(Globals.PK_FIELD);
-            entry.setData(jsonObject);
-            return entry;
+            return readEntryFromOpenFile(reader, pkIndexEntry);
         }
+    }
+
+    private DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {
+        reader.seek(pkIndexEntry.getPosition());
+        final var entryLength = (int) pkIndexEntry.getLength();
+        byte[] buffer = new byte[entryLength];
+        reader.readFully(buffer, 0, entryLength);
+        final var strEntry = new String(buffer);
+        final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+        final var entry = new DbEntry();
+        entry.setDatabaseName(pkIndexEntry.getDatabaseName());
+        entry.setCollectionName(pkIndexEntry.getCollectionName());
+        entry.set_id(pkIndexEntry.getValue());
+        jsonObject.remove(Globals.PK_FIELD);
+        entry.setData(jsonObject);
+        return entry;
+    }
+
+    public List<DbEntry> getByIndexEntries(List<PkIndexEntry> entries) throws IOException {
+        final var result = new ArrayList<DbEntry>();
+        if (entries == null || entries.isEmpty()) {
+            return result;
+        }
+        final var byPage = entries.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage));
+        for (var pageGroup : byPage.entrySet()) {
+            final var first = pageGroup.getValue().getFirst();
+            final var file = getCollectionFile(first.getDatabaseName(), first.getCollectionName(), pageGroup.getKey());
+            // Read the page's requested entries in ascending position order for sequential seeks.
+            final var pageEntries = pageGroup.getValue().stream()
+                    .sorted(Comparator.comparingLong(PkIndexEntry::getPosition))
+                    .toList();
+            try (final var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
+                for (var pkEntry : pageEntries) {
+                    result.add(readEntryFromOpenFile(reader, pkEntry));
+                }
+            }
+        }
+        return result;
     }
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<T> entries) throws IOException {
@@ -579,30 +613,64 @@ public class FileSystem {
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
-        if (indexFile.exists()) {
-            return Files.readAllLines(indexFile.toPath()).stream().map(s -> PkIndexEntry.fromIndexFileEntry(dbName, collectionName, s))
-                    .sorted(Comparator.comparing(PkIndexEntry::getValue)).collect(Collectors.toList());
-        } else {
+        if (!indexFile.exists()) {
             return new ArrayList<>();
         }
+        final var entries = new ArrayList<PkIndexEntry>();
+        final var keepLines = new ArrayList<String>();
+        boolean dropped = false;
+        for (var line : Files.readAllLines(indexFile.toPath())) {
+            if (line.isEmpty()) continue;
+            try {
+                entries.add(PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line));
+                keepLines.add(line);
+            } catch (Exception e) {
+                dropped = true;
+                logger.warning("Removing malformed PK index entry in " +
+                        indexFile.getName() + ": " + e.getMessage());
+            }
+        }
+        if (dropped) {
+            rewriteFileAtomically(indexFile.toPath(), keepLines);
+        }
+        entries.sort(Comparator.comparing(PkIndexEntry::getValue));
+        return entries;
     }
 
     public Map<String, DbEntry> readWholeCollectionPage(String dbName, String collectionName, long page) throws IOException {
         final var collectionFile = getCollectionFile(dbName, collectionName, page);
-        if (collectionFile.exists()) {
-            return Files.readAllLines(collectionFile.toPath())
-                    .stream()
-                    .filter(s -> !s.isEmpty())
-                    .map(s -> {
-                        try {
-                            return DbEntry.fromString(dbName, collectionName, s);
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
-                    })
-                    .collect(Collectors.toMap(DbEntry::get_id, dbEntry -> dbEntry, (_, replacement) -> replacement));
-        } else {
+        if (!collectionFile.exists()) {
             return new HashMap<>();
+        }
+        final var result = new HashMap<String, DbEntry>();
+        for (var line : Files.readAllLines(collectionFile.toPath())) {
+            if (line.isEmpty()) continue;
+            try {
+                final var entry = DbEntry.fromString(dbName, collectionName, line);
+                result.put(entry.get_id(), entry);
+            } catch (Exception e) {
+                // Skip-and-log only. We deliberately do NOT rewrite the .dat
+                // file here: the .idx file stores byte offsets into the .dat,
+                // so removing lines would invalidate every entry's recorded
+                // position. Compacting both atomically is a separate concern
+                // (a real compaction operation, not a read-side side effect).
+                logger.warning("Skipping malformed entry in " +
+                        collectionFile.getName() + ": " + e.getMessage());
+            }
+        }
+        return result;
+    }
+
+    private void rewriteFileAtomically(Path path, List<String> lines) throws IOException {
+        final var tmp = path.resolveSibling(path.getFileName() + ".repair");
+        Files.write(tmp, lines, StandardCharsets.UTF_8,
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        try {
+            Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            // ATOMIC_MOVE can fail across filesystems or on platforms that don't
+            // support it; fall back to a non-atomic move.
+            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -626,6 +694,10 @@ public class FileSystem {
                     }
                 })
                 .onClose(pathStream::close);
+    }
+
+    public Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
+        return streamPages(dbName, collName).flatMap(map -> map.values().stream());
     }
 
     public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {

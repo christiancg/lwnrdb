@@ -453,4 +453,95 @@ public class OperationProcessorTest {
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
     }
+
+    @Test
+    public void test_save_records_collection_usage() {
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        final var before = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        final var beforeCount = before == null ? 0L : before.getAccessCount();
+        SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("usage-id-1"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+        final var after = mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
+        assertNotNull(after);
+        assertTrue(after.getAccessCount() > beforeCount);
+    }
+
+    @Test
+    public void test_find_by_id_records_pk_index_access() {
+        SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("usage-id-2"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        final var before = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL, null);
+        final var beforeCount = before == null ? 0L : before.getAccessCount();
+        FindByIdRequest request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("usage-id-2");
+        processor.processMessage(request);
+        final var after = mm.getCounter(org.techhouse.cache.AccessKind.PK_INDEX, TestGlobals.DB, TestGlobals.COLL, null);
+        assertNotNull(after);
+        assertTrue(after.getAccessCount() > beforeCount);
+    }
+
+    @Test
+    public void test_save_admin_collection_does_not_record_usage() {
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        // admin saves go through helpers, but explicitly verify recordAccess noops:
+        mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null);
+        assertNull(mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null));
+    }
+
+    @Test
+    public void test_get_database_stats_returns_populated_payload() {
+        // Make sure there's at least one user document so totals are non-trivial.
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "stats_seed");
+        obj.addProperty("v", 1);
+        save.setObject(obj);
+        save.set_id("stats_seed");
+        processor.processMessage(save);
+
+        final var response = (GetDatabaseStatsResponse) processor.processMessage(new GetDatabaseStatsRequest());
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(OperationType.GET_DATABASE_STATS, response.getType());
+        final var stats = response.getStats();
+        assertNotNull(stats);
+        assertTrue(stats.has("memory"));
+        assertTrue(stats.has("totals"));
+        assertTrue(stats.has("databases"));
+
+        final var memory = stats.get("memory").asJsonObject();
+        assertTrue(memory.has("heapUsedBytes"));
+        assertTrue(memory.has("heapMaxBytes"));
+        assertTrue(memory.has("userCacheBytes"));
+        assertTrue(memory.has("maxMemoryBytes"));
+
+        final var totals = stats.get("totals").asJsonObject();
+        assertTrue(totals.get("userCount").asJsonNumber().getValue().longValue() >= 0L);
+        assertTrue(totals.get("databaseCount").asJsonNumber().getValue().longValue() >= 1L);
+        assertTrue(totals.get("collectionCount").asJsonNumber().getValue().longValue() >= 1L);
+        assertTrue(totals.get("entryCount").asJsonNumber().getValue().longValue() >= 0L);
+
+        final var dbs = stats.get("databases").asJsonArray().asList();
+        assertFalse(dbs.isEmpty(), "expected at least one user database in the stats payload");
+        final var firstDb = dbs.getFirst().asJsonObject();
+        assertTrue(firstDb.has("name"));
+        assertTrue(firstDb.has("collectionCount"));
+        assertTrue(firstDb.has("collections"));
+        final var firstColls = firstDb.get("collections").asJsonArray().asList();
+        if (!firstColls.isEmpty()) {
+            final var firstColl = firstColls.getFirst().asJsonObject();
+            assertTrue(firstColl.has("name"));
+            assertTrue(firstColl.has("indexCount"));
+            assertTrue(firstColl.has("indexes"));
+            assertTrue(firstColl.has("pageCount"));
+            assertTrue(firstColl.has("entryCount"));
+            assertTrue(firstColl.has("sizeBytes"));
+        }
+    }
 }

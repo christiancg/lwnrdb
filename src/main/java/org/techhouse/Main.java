@@ -2,6 +2,7 @@ package org.techhouse;
 
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -23,6 +24,7 @@ public class Main {
     private static final Configuration config = Configuration.getInstance();
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
     private static int getPort(String[] args) {
         if (args.length > 0) {
@@ -46,8 +48,26 @@ public class Main {
         final var port = getPort(args);
         final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
         backgroundTaskManager.startBackgroundWorkers();
+        memoryManagement.loadProfileFromAdmin();
+        memoryManagement.startSweepThread();
+        warnIfXmxExceedsMaxMemory();
         final var server = new SocketServer(port);
         server.serve();
+    }
+
+    static void warnIfXmxExceedsMaxMemory() {
+        if (config.isCachingDisabled() || config.isCacheUnlimited()) {
+            return;
+        }
+        final var xmx = Runtime.getRuntime().maxMemory();
+        final var cap = config.getMaxMemoryBytes();
+        if (xmx > cap * 2L) {
+            Logger.logFor(Main.class).warning(
+                    "JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxMemory (" + cap +
+                    " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps " +
+                    "committed; set -Xmx close to maxMemory so the OS-visible process size " +
+                    "matches the configured budget.");
+        }
     }
 
     private static void bootstrapDefaultAdmin() throws IOException {
