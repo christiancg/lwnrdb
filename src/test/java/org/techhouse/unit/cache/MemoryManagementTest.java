@@ -366,6 +366,54 @@ public class MemoryManagementTest {
         assertEquals(24L * 60L * 60L * 1000L, mm.usageRetentionMillis());
     }
 
+    @Test
+    public void test_ensureHeadroomForBytes_noop_under_budget() throws Exception {
+        setMaxMemory(10L * 1024L * 1024L);
+        final var cache = IocContainer.get(Cache.class);
+        seedCollectionCache(cache, "userColl", 10);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.ensureHeadroomForBytes(100L);
+        assertEquals(1, cache.listCacheableResources().size());
+    }
+
+    @Test
+    public void test_ensureHeadroomForBytes_noop_when_disabled() throws Exception {
+        setMaxMemory(-1L);
+        final var cache = IocContainer.get(Cache.class);
+        seedCollectionCache(cache, "userColl", 10);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.ensureHeadroomForBytes(1_000_000L);
+        assertEquals(1, cache.listCacheableResources().size());
+    }
+
+    @Test
+    public void test_ensureHeadroomForBytes_noop_when_unlimited() throws Exception {
+        setMaxMemory(0L);
+        final var cache = IocContainer.get(Cache.class);
+        seedCollectionCache(cache, "userColl", 10);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.ensureHeadroomForBytes(1_000_000L);
+        assertEquals(1, cache.listCacheableResources().size());
+    }
+
+    @Test
+    public void test_ensureHeadroomForBytes_evicts_lfu_to_make_room() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        seedCollectionCache(cache, "hot", 10);
+        seedCollectionCache(cache, "cold", 10);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        for (int i = 0; i < 5; i++) {
+            mm.recordAccess(AccessKind.COLLECTION, "userDb", "hot", null);
+        }
+        mm.recordAccess(AccessKind.COLLECTION, "userDb", "cold", null);
+        // Cap leaves no room: any incoming page must trigger eviction of the LFU resource.
+        setMaxMemory(1L);
+        mm.ensureHeadroomForBytes(1L);
+        final var remaining = cache.listCacheableResources();
+        assertTrue(remaining.stream().noneMatch(r -> r.collName().equals("cold")),
+                "cold should be evicted first to make headroom");
+    }
+
     private void seedFieldIndex(Cache cache, String collName) throws NoSuchFieldException, IllegalAccessException {
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);

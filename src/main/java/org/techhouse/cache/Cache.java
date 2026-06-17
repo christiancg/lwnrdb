@@ -29,6 +29,7 @@ public class Cache {
     private static final Logger logger = Logger.logFor(Cache.class);
     private static final long ESTIMATED_PK_ENTRY_BYTES = 96L;
     private static final long ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES = 64L;
+    private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
@@ -192,7 +193,7 @@ public class Cache {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
             return false;
         }
-        return Configuration.getInstance().isCachingDisabled();
+        return configuration.isCachingDisabled();
     }
 
     private boolean shouldCache(String dbName, long estimatedBytes) {
@@ -434,13 +435,110 @@ public class Cache {
         }
     }
 
+    public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
+        final var result = new ArrayList<DbEntry>();
+        if (ids == null || ids.isEmpty()) {
+            return result;
+        }
+        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        final var cachingDisabled = isCachingDisabled(dbName);
+        final var cached = cachingDisabled ? null : collectionMap.get(collectionIdentifier);
+        // Serve cache hits directly by id; only ids that are not cached need to be
+        // resolved through the PK index and targeted-read from disk.
+        final var missingIds = new ArrayList<String>();
+        for (var id : ids) {
+            final var hit = cached != null ? cached.get(id) : null;
+            if (hit != null) {
+                result.add(hit);
+            } else {
+                missingIds.add(id);
+            }
+        }
+        if (missingIds.isEmpty()) {
+            return result;
+        }
+        final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
+        // Snapshot the resolved PkIndexEntry references. They are immutable value carriers,
+        // so reading against this snapshot is unaffected by a concurrent write that shifts
+        // offsets mid-read; read/write isolation for aggregates is a separate, pre-existing
+        // concern (the aggregate path already reads lock-free).
+        final var toRead = new ArrayList<PkIndexEntry>();
+        for (var id : missingIds) {
+            final var pos = Collections.binarySearch(pkIndex, id);
+            if (pos >= 0) {
+                toRead.add(pkIndex.get(pos));
+            }
+        }
+        if (toRead.isEmpty()) {
+            return result;
+        }
+        final var read = fs.getByIndexEntries(toRead);
+        result.addAll(read);
+        if (!cachingDisabled) {
+            long bytes = 0L;
+            for (var e : read) {
+                bytes += e.byteSize();
+            }
+            if (shouldCache(dbName, bytes)) {
+                final var coll = collectionMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>());
+                for (var e : read) {
+                    coll.put(e.get_id(), e);
+                }
+            }
+        }
+        return result;
+    }
+
+    public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
+        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
+        if (!isCachingDisabled(dbName)) {
+            final var cached = collectionMap.get(collectionIdentifier);
+            if (cached != null && !cached.isEmpty()) {
+                final var collPages = pages.get(collectionIdentifier);
+                if (collPages == null) {
+                    return cached.values().stream();
+                }
+                final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
+                if (cached.size() >= entryCount) {
+                    return cached.values().stream();
+                }
+            }
+        }
+        return streamCollectionFromDisk(dbName, collName);
+    }
+
+    private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
+        final var collPages = pages.get(getCollectionIdentifier(dbName, collName));
+        if (collPages == null || collPages.isEmpty()) {
+            // No page metadata to drive memory-aware reading; fall back to the lazy
+            // file-based page stream (still only one page resident at a time).
+            return fs.streamEntries(dbName, collName);
+        }
+        final var maxPageBytes = configuration.getMaxPageSizeBytes();
+        final var sortedPages = collPages.stream()
+                .sorted(Comparator.comparingLong(AdminPageEntry::getPage))
+                .toList();
+        // flatMap pulls one page at a time: the headroom check + page read happen lazily
+        // as the previous page's entries are exhausted downstream, so each page map is
+        // released for GC before the next is read.
+        return sortedPages.stream().flatMap(pageEntry -> {
+            final var estimate = pageEntry.getPageSize() > 0 ? pageEntry.getPageSize() : maxPageBytes;
+            memoryManagement().ensureHeadroomForBytes(estimate);
+            try {
+                return fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values().stream();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
     public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
         return selectPageForInsert(dbName, collName, entryByteSize, Map.of());
     }
 
     public long selectPageForInsert(String dbName, String collName, int entryByteSize,
                                     Map<Long, Long> pendingPageBytes) {
-        final var maxPageBytes = Configuration.getInstance().getMaxPageSizeBytes();
+        final var maxPageBytes = configuration.getMaxPageSizeBytes();
         final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
         final var fit = pageEntries.stream()
                 .sorted(Comparator.comparingLong(AdminPageEntry::getPage))
@@ -671,19 +769,7 @@ public class Cache {
         if (resultStream != null) {
             return resultStream;
         }
-        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
-        if (isCachingDisabled(dbName)) {
-            return readWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
-        }
-        var coll = collectionMap.get(collectionIdentifier);
-        if (coll == null) {
-            final var loaded = readWholeCollection(dbName, collName);
-            coll = new ConcurrentHashMap<>(loaded);
-            if (shouldCache(dbName, estimateCollectionSize(coll))) {
-                collectionMap.put(collectionIdentifier, coll);
-            }
-        }
-        return coll.values().stream().map(DbEntry::getData);
+        return streamCollection(dbName, collName).map(DbEntry::getData);
     }
 
     public boolean hasIndex(String dbName, String collName, String fieldName) {

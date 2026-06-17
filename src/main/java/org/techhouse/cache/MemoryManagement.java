@@ -167,36 +167,53 @@ public class MemoryManagement {
             return;
         }
         try {
-            final var maxBytes = config.getMaxMemoryBytes();
-            var resources = cache.listCacheableResources();
-            if (sumBytes(resources) <= maxBytes) {
-                return;
-            }
-            final var ranked = new ArrayList<>(resources);
-            ranked.sort(Comparator
-                    .comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
-                    .thenComparingLong(this::counterAccessCount)
-                    .thenComparingLong(this::counterLastAccess));
-            for (var resource : ranked) {
-                if (userCacheBytes() <= maxBytes) {
-                    break;
-                }
-                if (!locks.tryLock(resource.dbName(), resource.collName())) {
-                    continue;
-                }
-                try {
-                    switch (resource.kind()) {
-                        case PK_INDEX -> cache.evictPkIndex(resource.dbName(), resource.collName());
-                        case FIELD_INDEX -> cache.evictFieldIndex(resource.dbName(), resource.collName(),
-                                resource.indexKey());
-                        case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
-                    }
-                } finally {
-                    locks.release(resource.dbName(), resource.collName());
-                }
-            }
+            evictDownTo(config.getMaxMemoryBytes());
         } finally {
             sweepRunning.set(false);
+        }
+    }
+
+    // Synchronous, between-pages guard for the streaming read path. Reuses the same
+    // LFU eviction logic as the scheduled sweep so a long scan can reclaim other
+    // cached resources to make room for the next page instead of waiting for the timer.
+    public void ensureHeadroomForBytes(long nextPageEstimateBytes) {
+        if (isCachingDisabled() || isCacheUnlimited()) {
+            return;
+        }
+        final var maxBytes = config.getMaxMemoryBytes();
+        if (userCacheBytes() + nextPageEstimateBytes <= maxBytes) {
+            return;
+        }
+        evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes));
+    }
+
+    private void evictDownTo(long targetBytes) {
+        var resources = cache.listCacheableResources();
+        if (sumBytes(resources) <= targetBytes) {
+            return;
+        }
+        final var ranked = new ArrayList<>(resources);
+        ranked.sort(Comparator
+                .comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
+                .thenComparingLong(this::counterAccessCount)
+                .thenComparingLong(this::counterLastAccess));
+        for (var resource : ranked) {
+            if (userCacheBytes() <= targetBytes) {
+                break;
+            }
+            if (!locks.tryLock(resource.dbName(), resource.collName())) {
+                continue;
+            }
+            try {
+                switch (resource.kind()) {
+                    case PK_INDEX -> cache.evictPkIndex(resource.dbName(), resource.collName());
+                    case FIELD_INDEX -> cache.evictFieldIndex(resource.dbName(), resource.collName(),
+                            resource.indexKey());
+                    case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
+                }
+            } finally {
+                locks.release(resource.dbName(), resource.collName());
+            }
         }
     }
 

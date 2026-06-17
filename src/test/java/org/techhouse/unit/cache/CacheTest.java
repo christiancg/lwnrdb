@@ -959,7 +959,7 @@ public class CacheTest {
         fsField.setAccessible(true);
         fsField.set(cache, fsMock);
 
-        when(fsMock.streamPages(anyString(), anyString())).thenThrow(IOException.class);
+        when(fsMock.streamEntries(anyString(), anyString())).thenThrow(IOException.class);
         assertThrows(IOException.class, () -> cache.initializeStreamIfNecessary(null, "dbName", "collName"));
     }
 
@@ -1705,6 +1705,283 @@ public class CacheTest {
             cache.addEntryToCache("userDb", "new", DbEntry.fromJsonObject("userDb", "new", obj));
             assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "old")));
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "new")));
+        } finally {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
+        }
+    }
+
+    // ── getEntriesByIds / streamCollection (page-streaming read path) ─────────
+
+    private static void injectPkIndex(Cache cache, String collId, List<PkIndexEntry> entries)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
+        pkIndexMap.put(collId, new ArrayList<>(entries));
+    }
+
+    private static void injectCachedEntry(Cache cache, String collId, DbEntry entry)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var inner = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
+        inner.put(entry.get_id(), entry);
+    }
+
+    private static void injectPages(Cache cache, String collId,
+                                    List<org.techhouse.data.admin.AdminPageEntry> pageList)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var pages = TestUtils.getPrivateField(cache, "pages", type);
+        pages.put(collId, pageList);
+    }
+
+    @Test
+    public void test_getEntriesByIds_empty_or_null_returns_empty() throws Exception {
+        Cache cache = new Cache();
+        assertTrue(cache.getEntriesByIds("userDb", "c1", Set.of()).isEmpty());
+        assertTrue(cache.getEntriesByIds("userDb", "c1", null).isEmpty());
+    }
+
+    @Test
+    public void test_getEntriesByIds_serves_from_cache_without_fs_read() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "id1");
+        injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", obj));
+
+        final var result = cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+
+        assertEquals(1, result.size());
+        assertEquals("id1", result.getFirst().get_id());
+        verify(fsMock, never()).getByIndexEntries(anyList());
+    }
+
+    @Test
+    public void test_getEntriesByIds_targeted_read_for_missing_and_populates_cache() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var pk1 = new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0);
+        final var pk2 = new PkIndexEntry("userDb", "c1", "id2", 50, 50, 0);
+        injectPkIndex(cache, collId, List.of(pk1, pk2));
+        // id1 already cached; id2 must be read from disk.
+        final var cachedObj = new JsonObject();
+        cachedObj.addProperty(Globals.PK_FIELD, "id1");
+        injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", cachedObj));
+
+        final var readObj = new JsonObject();
+        readObj.addProperty(Globals.PK_FIELD, "id2");
+        final var readEntry = DbEntry.fromJsonObject("userDb", "c1", readObj);
+        when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(readEntry));
+
+        final var result = cache.getEntriesByIds("userDb", "c1", new HashSet<>(Set.of("id1", "id2")));
+
+        assertEquals(2, result.size());
+        // Only the missing entry should have been targeted-read.
+        final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(fsMock).getByIndexEntries(captor.capture());
+        final List<PkIndexEntry> requested = captor.getValue();
+        assertEquals(1, requested.size());
+        assertEquals("id2", requested.getFirst().getValue());
+
+        // The freshly read entry should now be cached.
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        assertTrue(collectionMap.get(collId).containsKey("id2"));
+    }
+
+    @Test
+    public void test_getEntriesByIds_admission_rejected_does_not_populate_cache() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.REJECT);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
+        final var readObj = new JsonObject();
+        readObj.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
+
+        final var result = cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+
+        assertEquals(1, result.size());
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        assertFalse(collectionMap.containsKey(collId), "rejected admission must not populate the cache");
+    }
+
+    @Test
+    public void test_getEntriesByIds_caching_disabled_reads_directly() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
+        try {
+            Cache cache = new Cache();
+            FileSystem fsMock = mock(FileSystem.class);
+            TestUtils.setPrivateField(cache, "fs", fsMock);
+
+            final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+            injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
+            final var readObj = new JsonObject();
+            readObj.addProperty(Globals.PK_FIELD, "id1");
+            when(fsMock.getByIndexEntries(anyList()))
+                    .thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
+
+            final var result = cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+
+            assertEquals(1, result.size());
+            verify(fsMock).getByIndexEntries(anyList());
+            final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+            assertFalse(collectionMap.containsKey(collId), "caching disabled must not populate the cache");
+        } finally {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
+        }
+    }
+
+    @Test
+    public void test_getEntriesByIds_skips_ids_not_in_pk_index() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
+
+        final var result = cache.getEntriesByIds("userDb", "c1", Set.of("missing"));
+
+        // An id absent from the PK index resolves to nothing, so no targeted read happens.
+        assertTrue(result.isEmpty());
+        verify(fsMock, never()).getByIndexEntries(anyList());
+    }
+
+    @Test
+    public void test_streamCollection_fully_cached_streams_from_cache() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "id1");
+        injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", obj));
+        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry("userDb", "c1", 0);
+        pageEntry.setEntryCount(1);
+        injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
+
+        final List<DbEntry> result;
+        try (final var stream = cache.streamCollection("userDb", "c1")) {
+            result = stream.toList();
+        }
+
+        assertEquals(1, result.size());
+        assertEquals("id1", result.getFirst().get_id());
+        verify(fsMock, never()).readWholeCollectionPage(anyString(), anyString(), anyLong());
+        verify(fsMock, never()).streamEntries(anyString(), anyString());
+    }
+
+    @Test
+    public void test_streamCollection_not_cached_streams_pages_with_headroom_check() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry("userDb", "c1", 0);
+        pageEntry.setEntryCount(2);
+        pageEntry.setPageSize(1234L);
+        injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
+
+        final var page = new HashMap<String, DbEntry>();
+        final var o1 = new JsonObject(); o1.addProperty(Globals.PK_FIELD, "id1");
+        final var o2 = new JsonObject(); o2.addProperty(Globals.PK_FIELD, "id2");
+        page.put("id1", DbEntry.fromJsonObject("userDb", "c1", o1));
+        page.put("id2", DbEntry.fromJsonObject("userDb", "c1", o2));
+        when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
+
+        final List<DbEntry> result;
+        try (final var stream = cache.streamCollection("userDb", "c1")) {
+            result = stream.toList();
+        }
+
+        assertEquals(2, result.size());
+        verify(mmMock).ensureHeadroomForBytes(1234L);
+        verify(fsMock).readWholeCollectionPage("userDb", "c1", 0L);
+    }
+
+    @Test
+    public void test_streamCollection_no_page_metadata_falls_back_to_stream_entries() throws Exception {
+        Cache cache = new Cache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+
+        final var o1 = new JsonObject(); o1.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.streamEntries("userDb", "c1"))
+                .thenReturn(Stream.of(DbEntry.fromJsonObject("userDb", "c1", o1)));
+
+        final List<DbEntry> result;
+        try (final var stream = cache.streamCollection("userDb", "c1")) {
+            result = stream.toList();
+        }
+
+        assertEquals(1, result.size());
+        verify(fsMock).streamEntries("userDb", "c1");
+    }
+
+    @Test
+    public void test_streamCollection_caching_disabled_uses_disk_path() throws Exception {
+        final var config = Configuration.getInstance();
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
+        try {
+            Cache cache = new Cache();
+            FileSystem fsMock = mock(FileSystem.class);
+            TestUtils.setPrivateField(cache, "fs", fsMock);
+            org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+            TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+            final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+            // Even though an entry is cached, caching-disabled must bypass the cache branch.
+            final var cachedObj = new JsonObject();
+            cachedObj.addProperty(Globals.PK_FIELD, "stale");
+            injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", cachedObj));
+            final var pageEntry = new org.techhouse.data.admin.AdminPageEntry("userDb", "c1", 0);
+            pageEntry.setEntryCount(1);
+            injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
+            final var page = new HashMap<String, DbEntry>();
+            final var o1 = new JsonObject(); o1.addProperty(Globals.PK_FIELD, "fromDisk");
+            page.put("fromDisk", DbEntry.fromJsonObject("userDb", "c1", o1));
+            when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
+
+            final List<DbEntry> result;
+            try (final var stream = cache.streamCollection("userDb", "c1")) {
+                result = stream.toList();
+            }
+
+            assertEquals(1, result.size());
+            assertEquals("fromDisk", result.getFirst().get_id());
+            verify(fsMock).readWholeCollectionPage("userDb", "c1", 0L);
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
