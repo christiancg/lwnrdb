@@ -190,26 +190,7 @@ public class Cache {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
             return true;
         }
-        final var config = Configuration.getInstance();
-        if (config.isCachingDisabled()) {
-            return false;
-        }
-        if (memoryManagement().admissionCheck() == AdmissionDecision.REJECT) {
-            return false;
-        }
-        if (config.isCacheUnlimited()) {
-            return true;
-        }
-        final var maxBytes = config.getMaxCollectionCacheBytes();
-        return currentUserCacheBytes() + estimatedBytes <= maxBytes;
-    }
-
-    private long currentUserCacheBytes() {
-        long total = 0L;
-        for (var r : listCacheableResources()) {
-            total += r.estimatedSizeBytes();
-        }
-        return total;
+        return memoryManagement().admissionCheck(estimatedBytes) == AdmissionDecision.ADMIT;
     }
 
     public Map<String, List<FieldIndexEntry<?>>> getAllFieldIndexesAndLoadIfNecessary(String dbName, String collName,
@@ -430,7 +411,15 @@ public class Cache {
             }
         }
         try {
-            return readWholeCollection(dbName, collName);
+            final var loaded = readWholeCollection(dbName, collName);
+            if (!isCachingDisabled(dbName)) {
+                final var asMap = new ConcurrentHashMap<>(loaded);
+                if (shouldCache(dbName, estimateCollectionSize(asMap))) {
+                    collectionMap.put(collectionIdentifier, asMap);
+                    return asMap;
+                }
+            }
+            return loaded;
         } catch (IOException e) {
             throw new RuntimeException(e);
         }

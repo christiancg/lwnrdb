@@ -1,9 +1,10 @@
 package org.techhouse.bckg_ops;
 
 import org.techhouse.bckg_ops.events.*;
-import org.techhouse.config.Configuration;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
@@ -20,7 +21,7 @@ public class EventProcessorHelper {
             case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent);
             case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
             case UsageProfileCleanupEvent ignored -> AdminOperationHelper.cleanupCollectionUsage(
-                    Configuration.getInstance().getUsageProfileRetentionMillis());
+                    IocContainer.get(MemoryManagement.class).usageRetentionMillis());
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }

@@ -12,7 +12,7 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "adminstrator"
 
 # Knobs — tweak via env or here. Defaults try to push enough data through that
-# eviction is forced when maxCollectionCache is configured tight (e.g. 8mb).
+# eviction is forced when maxMemory is configured tight (e.g. 8mb).
 HOT_COLL = "hot_coll"
 COLD_COLL = "cold_coll"
 DOCS_PER_COLLECTION = 5_000
@@ -107,10 +107,10 @@ def print_memory_snapshot(label: str, s, f) -> dict:
     heap_used_mb = mem.get("heapUsedBytes", 0) / (1024 * 1024)
     heap_max_mb = mem.get("heapMaxBytes", 0) / (1024 * 1024)
     cache_mb = mem.get("userCacheBytes", 0) / (1024 * 1024)
-    max_cache_mb = mem.get("maxCollectionCacheBytes", 0) / (1024 * 1024)
-    os_free_ratio = mem.get("osFreeRatio", 0)
+    max_cache_mb = mem.get("maxMemoryBytes", 0) / (1024 * 1024)
+    os_free_ratio = 0
     print(f"  [stats] {label}: heap={heap_used_mb:.1f}/{heap_max_mb:.0f}MB  "
-          f"heapRatio={mem.get('heapUsedRatio', 0)*100:.1f}%  "
+          f"heapRatio={(mem.get('heapUsedBytes', 0) / max(mem.get('heapMaxBytes', 1), 1))*100:.1f}%  "
           f"cache={cache_mb:.2f}MB (cap {max_cache_mb:.0f}MB)  "
           f"osFree={os_free_ratio*100:.1f}%  "
           f"entries={totals.get('entryCount', 0)} pages={totals.get('pageCount', 0)}")
@@ -125,11 +125,11 @@ def assert_cache_respects_cap(label: str, snapshot: dict):
     if mem.get("cacheUnlimited"):
         print(f"  [skip] {label}: cache unlimited — cap not applicable")
         return
-    cap = mem.get("maxCollectionCacheBytes", 0)
+    cap = mem.get("maxMemoryBytes", 0)
     used = mem.get("userCacheBytes", 0)
     budget = int(cap * CACHE_CAP_TOLERANCE)
     check_true(
-        f"{label}: userCacheBytes={used} <= maxCollectionCacheBytes*{CACHE_CAP_TOLERANCE}={budget}",
+        f"{label}: userCacheBytes={used} <= maxMemoryBytes*{CACHE_CAP_TOLERANCE}={budget}",
         used <= budget,
         detail=("eviction is keeping the cache within the configured cap"
                 if used <= budget
@@ -145,13 +145,13 @@ def assert_eviction_actually_happened(label: str, snapshot: dict):
     if mem.get("cachingDisabled") or mem.get("cacheUnlimited"):
         print(f"  [skip] {label}: caching disabled or unlimited")
         return
-    cap = mem.get("maxCollectionCacheBytes", 0)
+    cap = mem.get("maxMemoryBytes", 0)
     on_disk = totals.get("sizeBytes", 0)
     used = mem.get("userCacheBytes", 0)
     if on_disk <= cap:
         print(f"  [skip] {label}: on-disk size ({on_disk}B) does not exceed cap "
               f"({cap}B) — eviction is not expected to fire. "
-              f"Lower maxCollectionCache in lwnrdb.cfg to actually exercise this.")
+              f"Lower maxMemory in lwnrdb.cfg to actually exercise this.")
         return
     check_true(
         f"{label}: with on-disk={on_disk}B > cap={cap}B, cache holds only {used}B (subset)",
@@ -164,7 +164,7 @@ def assert_heap_stays_under_high_watermark(label: str, snapshot: dict, high_wate
     """The eviction sweep should keep heap usage below the configured high
     watermark. A bit fuzzy because heap pressure depends on GC timing."""
     mem = snapshot.get("memory", {})
-    heap_ratio = mem.get("heapUsedRatio", 0)
+    heap_ratio = (mem.get("heapUsedBytes", 0) / max(mem.get("heapMaxBytes", 1), 1))
     check_true(
         f"{label}: heapUsedRatio={heap_ratio*100:.1f}% < high watermark ({high_watermark*100:.0f}%)",
         heap_ratio < high_watermark,
@@ -329,7 +329,7 @@ def main():
     print("═" * 60)
     print(f"  Connecting to {HOST}:{PORT}")
     print(f"  Plan: insert ~{(DOCS_PER_COLLECTION * PAYLOAD_BYTES * 2) // (1024*1024)}MB total")
-    print(f"        Tune maxCollectionCache in lwnrdb.cfg low (e.g. 4mb) to force eviction.")
+    print(f"        Tune maxMemory in lwnrdb.cfg low (e.g. 4mb) to force eviction.")
 
     with new_conn() as (s, f):
         r = authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)

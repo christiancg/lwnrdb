@@ -1464,8 +1464,8 @@ public class CacheTest {
     @Test
     public void test_addEntryToCache_skips_when_caching_disabled() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var obj = new JsonObject();
@@ -1475,15 +1475,15 @@ public class CacheTest {
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_addEntryToCache_caches_admin_even_when_disabled() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var obj = new JsonObject();
@@ -1493,15 +1493,15 @@ public class CacheTest {
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_addEntriesToCache_skips_when_caching_disabled() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var obj = new JsonObject();
@@ -1512,7 +1512,7 @@ public class CacheTest {
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
@@ -1531,9 +1531,9 @@ public class CacheTest {
     @Test
     public void test_addEntryToCache_refuses_when_over_cap() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
+        final long original = config.getMaxMemoryBytes();
         // Tight cap that an entry's byteSize will exceed.
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1L);
+        TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
@@ -1546,15 +1546,15 @@ public class CacheTest {
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")),
                     "entry should not be admitted when it exceeds the cap");
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_addEntryToCache_admits_when_within_cap() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1024L * 1024L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", 1024L * 1024L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
@@ -1566,15 +1566,15 @@ public class CacheTest {
             assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")),
                     "small entry should be admitted under a generous cap");
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_addEntriesToCache_refuses_when_total_over_cap() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
@@ -1591,15 +1591,15 @@ public class CacheTest {
                             DbEntry.fromJsonObject("userDb", "c1", obj2)));
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_getById_skips_cache_when_disabled() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             FileSystem fsMock = mock(FileSystem.class);
@@ -1621,15 +1621,15 @@ public class CacheTest {
                 fsField.set(cache, originalFs);
             }
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_getById_admission_check_when_over_cap() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             FileSystem fsMock = mock(FileSystem.class);
@@ -1656,15 +1656,15 @@ public class CacheTest {
                 fsField.set(cache, originalFs);
             }
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_initializeStreamIfNecessary_skips_cache_when_disabled() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", -1L);
+        final long original = config.getMaxMemoryBytes();
+        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             // Create the collection on disk so readWholeCollection works.
@@ -1676,16 +1676,16 @@ public class CacheTest {
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 
     @Test
     public void test_shouldCache_refuses_new_entry_when_over_cap() throws Exception {
         final var config = Configuration.getInstance();
-        final long original = config.getMaxCollectionCacheBytes();
+        final long original = config.getMaxMemoryBytes();
         // Cap smaller than the seeded "old" collection — adding "new" should be refused.
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", 100L);
+        TestUtils.setPrivateField(config, "maxMemoryBytes", 100L);
         try {
             Cache cache = IocContainer.get(Cache.class);
             final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
@@ -1706,7 +1706,7 @@ public class CacheTest {
             assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "old")));
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "new")));
         } finally {
-            TestUtils.setPrivateField(config, "maxCollectionCacheBytes", original);
+            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
 }

@@ -2,7 +2,6 @@ package org.techhouse.ops;
 
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
-import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -14,7 +13,6 @@ import java.util.Set;
 
 public class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
     private DatabaseStatsHelper() {
     }
@@ -41,22 +39,18 @@ public class DatabaseStatsHelper {
     }
 
     private static JsonObject buildMemoryStats() {
-        final var snapshot = memoryManagement.pressureSnapshot();
         final var config = Configuration.getInstance();
         final var memory = new JsonObject();
         final var heapUsage = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
         memory.addProperty("heapUsedBytes", heapUsage.getUsed());
         memory.addProperty("heapMaxBytes", heapUsage.getMax());
         memory.addProperty("heapCommittedBytes", heapUsage.getCommitted());
-        memory.addProperty("heapUsedRatio", snapshot.heapUsedRatio());
-        memory.addProperty("osMetricsAvailable", snapshot.osMetricsAvailable());
-        memory.addProperty("osFreeRatio", snapshot.osFreeRatio());
         long userCacheBytes = 0L;
         for (CacheableResource r : cache.listCacheableResources()) {
             userCacheBytes += r.estimatedSizeBytes();
         }
         memory.addProperty("userCacheBytes", userCacheBytes);
-        memory.addProperty("maxCollectionCacheBytes", config.getMaxCollectionCacheBytes());
+        memory.addProperty("maxMemoryBytes", config.getMaxMemoryBytes());
         memory.addProperty("cachingDisabled", config.isCachingDisabled());
         memory.addProperty("cacheUnlimited", config.isCacheUnlimited());
         return memory;

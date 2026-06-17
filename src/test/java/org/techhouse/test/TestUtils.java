@@ -1,8 +1,6 @@
 package org.techhouse.test;
 
 import org.techhouse.cache.Cache;
-import org.techhouse.cache.MemoryManagement;
-import org.techhouse.cache.MemoryPressureMonitor;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminCollEntry;
@@ -27,19 +25,11 @@ public class TestUtils {
         final var field = Configuration.class.getDeclaredField("filePath");
         field.setAccessible(true);
         field.set(config, TestGlobals.PATH);
-        installPermissivePressureMonitor();
         final var fs = IocContainer.get(FileSystem.class);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         final var cache = IocContainer.get(Cache.class);
         cache.loadAdminData();
-    }
-
-    public static void installPermissivePressureMonitor() throws NoSuchFieldException, IllegalAccessException {
-        final var mm = IocContainer.get(MemoryManagement.class);
-        final MemoryPressureMonitor permissive = () ->
-                new MemoryPressureMonitor.Snapshot(0.0, 0L, 1.0, true);
-        setPrivateField(mm, "pressure", permissive);
     }
 
     public static void standardTearDown() throws NoSuchFieldException, IllegalAccessException {

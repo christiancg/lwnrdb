@@ -517,10 +517,9 @@ public class OperationProcessorTest {
 
         final var memory = stats.get("memory").asJsonObject();
         assertTrue(memory.has("heapUsedBytes"));
-        assertTrue(memory.has("heapUsedRatio"));
-        assertTrue(memory.has("osMetricsAvailable"));
+        assertTrue(memory.has("heapMaxBytes"));
         assertTrue(memory.has("userCacheBytes"));
-        assertTrue(memory.has("maxCollectionCacheBytes"));
+        assertTrue(memory.has("maxMemoryBytes"));
 
         final var totals = stats.get("totals").asJsonObject();
         assertTrue(totals.get("userCount").asJsonNumber().getValue().longValue() >= 0L);

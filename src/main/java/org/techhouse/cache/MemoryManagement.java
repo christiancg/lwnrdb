@@ -20,13 +20,16 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MemoryManagement {
+    static final long SWEEP_INTERVAL_SECONDS = 5L;
+    static final long USAGE_RETENTION_MILLIS = 24L * 60L * 60L * 1000L;
+    static final long USAGE_CLEANUP_INTERVAL_SECONDS = 60L * 60L;
+
     private final Logger logger = Logger.logFor(MemoryManagement.class);
     private final Configuration config = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
-    private final MemoryPressureMonitor pressure = IocContainer.get(DefaultMemoryPressureMonitor.class);
     private final ConcurrentHashMap<String, UsageCounter> counters = new ConcurrentHashMap<>();
     private final AtomicBoolean sweepRunning = new AtomicBoolean(false);
     private ScheduledExecutorService scheduler;
@@ -74,6 +77,10 @@ public class MemoryManagement {
         counters.put(buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()), counter);
     }
 
+    public long usageRetentionMillis() {
+        return USAGE_RETENTION_MILLIS;
+    }
+
     public void loadProfileFromAdmin() {
         if (isCachingDisabled()) {
             return;
@@ -106,19 +113,15 @@ public class MemoryManagement {
         if (isCachingDisabled()) {
             return;
         }
-        final var interval = config.getMemoryManagementSweepIntervalSeconds();
-        final var retentionMillis = config.getUsageProfileRetentionMillis();
-        final var pollInterval = Math.max(1L, config.getPressurePollIntervalSeconds());
-        scheduler = Executors.newScheduledThreadPool(2, r -> {
+        scheduler = Executors.newScheduledThreadPool(1, r -> {
             final var t = new Thread(r, "memory-management-sweep");
             t.setDaemon(true);
             return t;
         });
-        scheduler.scheduleAtFixedRate(this::runEvictionSweepSafely, interval, interval, TimeUnit.SECONDS);
-        scheduler.scheduleAtFixedRate(this::pollPressureAndMaybeSweep, pollInterval, pollInterval, TimeUnit.SECONDS);
-        final var cleanupIntervalSeconds = Math.max(60L, retentionMillis / 4_000L);
-        scheduler.scheduleAtFixedRate(this::submitCleanupTask, cleanupIntervalSeconds, cleanupIntervalSeconds,
-                TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::runEvictionSweepSafely,
+                SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::submitCleanupTask,
+                USAGE_CLEANUP_INTERVAL_SECONDS, USAGE_CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     public void stopSweepThread() {
@@ -136,17 +139,6 @@ public class MemoryManagement {
         }
     }
 
-    public void pollPressureAndMaybeSweep() {
-        try {
-            final var snapshot = safeSnapshot();
-            if (isPressureHigh(snapshot)) {
-                runEvictionSweep();
-            }
-        } catch (Exception e) {
-            logger.error("Pressure poll failed", e);
-        }
-    }
-
     private void submitCleanupTask() {
         try {
             taskManager.submitBackgroundTask(new UsageProfileCleanupEvent());
@@ -155,46 +147,38 @@ public class MemoryManagement {
         }
     }
 
-    public AdmissionDecision admissionCheck() {
+    public AdmissionDecision admissionCheck(long estimatedBytes) {
         if (isCachingDisabled()) {
             return AdmissionDecision.REJECT;
         }
-        final var snapshot = safeSnapshot();
-        if (snapshot.osMetricsAvailable() &&
-                snapshot.osFreeRatio() < config.getOsFreeCriticalRatio()) {
-            return AdmissionDecision.REJECT;
+        if (config.isCacheUnlimited()) {
+            return AdmissionDecision.ADMIT;
         }
-        if (isPressureHigh(snapshot)) {
-            return AdmissionDecision.REJECT;
-        }
-        if (heapBudgetExceeded(snapshot)) {
-            return AdmissionDecision.REJECT;
-        }
-        return AdmissionDecision.ADMIT;
+        return userCacheBytes() + estimatedBytes > config.getMaxMemoryBytes()
+                ? AdmissionDecision.REJECT
+                : AdmissionDecision.ADMIT;
     }
 
     public void runEvictionSweep() {
-        if (isCachingDisabled()) {
+        if (isCachingDisabled() || config.isCacheUnlimited()) {
             return;
         }
         if (!sweepRunning.compareAndSet(false, true)) {
             return;
         }
         try {
-            final var snapshot = safeSnapshot();
-            if (!isPressureHigh(snapshot) && !heapBudgetExceeded(snapshot)) {
+            final var maxBytes = config.getMaxMemoryBytes();
+            var resources = cache.listCacheableResources();
+            if (sumBytes(resources) <= maxBytes) {
                 return;
             }
-            final var overage = heapOverage(snapshot);
-            final var resources = cache.listCacheableResources();
             final var ranked = new ArrayList<>(resources);
             ranked.sort(Comparator
                     .comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
                     .thenComparingLong(this::counterAccessCount)
                     .thenComparingLong(this::counterLastAccess));
-            long evicted = 0L;
             for (var resource : ranked) {
-                if (shouldStop(evicted, overage)) {
+                if (userCacheBytes() <= maxBytes) {
                     break;
                 }
                 if (!locks.tryLock(resource.dbName(), resource.collName())) {
@@ -207,7 +191,6 @@ public class MemoryManagement {
                                 resource.indexKey());
                         case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
                     }
-                    evicted += resource.estimatedSizeBytes();
                 } finally {
                     locks.release(resource.dbName(), resource.collName());
                 }
@@ -217,50 +200,16 @@ public class MemoryManagement {
         }
     }
 
-    private boolean heapBudgetExceeded(MemoryPressureMonitor.Snapshot snapshot) {
-        if (config.isCacheUnlimited()) {
-            return false;
-        }
-        return snapshot.heapUsedBytes() > config.getMaxCollectionCacheBytes();
+    public long userCacheBytes() {
+        return sumBytes(cache.listCacheableResources());
     }
 
-    private long heapOverage(MemoryPressureMonitor.Snapshot snapshot) {
-        if (config.isCacheUnlimited()) {
-            return 0L;
+    private long sumBytes(java.util.List<CacheableResource> resources) {
+        long total = 0L;
+        for (var r : resources) {
+            total += r.estimatedSizeBytes();
         }
-        return Math.max(0L, snapshot.heapUsedBytes() - config.getMaxCollectionCacheBytes());
-    }
-
-    private boolean isPressureHigh(MemoryPressureMonitor.Snapshot snapshot) {
-        final var heapHigh = snapshot.heapUsedRatio() > config.getHeapHighWatermarkRatio();
-        final var osLow = snapshot.osMetricsAvailable() &&
-                snapshot.osFreeRatio() < config.getOsFreeLowWatermarkRatio();
-        return heapHigh || osLow;
-    }
-
-    private boolean shouldStop(long evicted, long heapOverage) {
-        final var snapshot = safeSnapshot();
-        if (snapshot.heapUsedRatio() > config.getHeapLowWatermarkRatio()) {
-            return false;
-        }
-        if (snapshot.osMetricsAvailable() &&
-                snapshot.osFreeRatio() < config.getOsFreeHighWatermarkRatio()) {
-            return false;
-        }
-        return heapOverage <= 0L || evicted >= heapOverage;
-    }
-
-    public MemoryPressureMonitor.Snapshot pressureSnapshot() {
-        return safeSnapshot();
-    }
-
-    private MemoryPressureMonitor.Snapshot safeSnapshot() {
-        try {
-            return pressure.snapshot();
-        } catch (Exception e) {
-            logger.warning("Pressure snapshot failed: " + e.getMessage());
-            return new MemoryPressureMonitor.Snapshot(0.0, 0L, 1.0, false);
-        }
+        return total;
     }
 
     private int tierOrdinal(AccessKind kind) {

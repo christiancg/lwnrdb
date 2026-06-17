@@ -51,7 +51,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] 95% test coverage
 - [x] Request validation
 - [ ] Iterative read depending on available memory and document count
-- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxCollectionCache` configuration)
+- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxMemory` configuration)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
 - [ ] Secure connections with TLS or something similar
@@ -241,7 +241,7 @@ Replaces the full owners list for a database. All usernames must already exist. 
 ```
 
 #### `GET_DATABASE_STATS` (admin only)
-Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxCollectionCache`.
+Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxMemory`.
 
 ```json
 {"type":"GET_DATABASE_STATS"}
@@ -258,11 +258,8 @@ Response shape:
       "heapUsedBytes": 123456789,
       "heapMaxBytes": 6442450944,
       "heapCommittedBytes": 268435456,
-      "heapUsedRatio": 0.019,
-      "osMetricsAvailable": true,
-      "osFreeRatio": 0.42,
       "userCacheBytes": 2097152,
-      "maxCollectionCacheBytes": 536870912,
+      "maxMemoryBytes": 536870912,
       "cachingDisabled": false,
       "cacheUnlimited": false
     },
@@ -370,32 +367,18 @@ On first startup, if no admin user exists and `defaultAdminUsername` / `defaultA
 ```
 defaultAdminUsername=admin
 defaultAdminPassword=adminstrator
-maxCollectionCache=512Mb
-usageProfileRetentionSeconds=86400
-memoryManagementSweepIntervalSeconds=10
-heapHighWatermarkPercent=80
-heapLowWatermarkPercent=65
-osFreeLowWatermarkPercent=10
-osFreeHighWatermarkPercent=20
-osFreeCriticalPercent=5
-pressurePollIntervalSeconds=2
+maxMemory=512Mb
 ```
 
 ### Memory management
 
-`maxCollectionCache` is the **JVM heap-used budget**: when the heap actually consumed by the process exceeds this value, the eviction sweep drops least-frequently-used user collections/indexes until heap drops back to the budget. Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
-- `0` — unlimited (cap-based eviction off; pressure-based eviction still runs).
+`maxMemory` is the **JVM heap-used budget**: a background sweep (every 5s) drops least-frequently-used user collections/indexes whenever the JVM heap exceeds this value, until heap is back below the budget. Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+- `0` — unlimited; caching is on but eviction never triggers (suitable when `-Xmx` is already the only ceiling you want).
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
-Beyond the absolute cap, two relative pressure signals also drive eviction:
-- **JVM heap watermarks** — `heapHighWatermarkPercent` / `heapLowWatermarkPercent` (percent of `-Xmx`). Hysteresis: evict when heap exceeds high, stop when it drops below low.
-- **Host OS free memory** — `osFreeLowWatermarkPercent` / `osFreeHighWatermarkPercent` trigger and stop eviction. `osFreeCriticalPercent` is the hard floor below which new cache admissions are rejected so the database never forces the host into swap.
+Eviction order is LFU. Access counts are recorded asynchronously and persisted in the `admin/collection_usage` collection; records older than 24h are pruned hourly. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
 
-A fast pressure poll runs every `pressurePollIntervalSeconds` (default 2s) and invokes the sweep on demand; a steady sweep runs every `memoryManagementSweepIntervalSeconds` (default 10s).
-
-Eviction order is LFU. Access counts are recorded asynchronously via the background task system and persisted in the `admin/collection_usage` collection. Stale usage records older than `usageProfileRetentionSeconds` are removed by a periodic cleanup task. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
-
-**Aligning RSS with the cap.** `maxCollectionCache` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxCollectionCache`. Startup logs a warning when `-Xmx > maxCollectionCache × 2`.
+**Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
 
 ## Q&A
 
