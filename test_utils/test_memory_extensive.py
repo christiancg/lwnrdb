@@ -33,10 +33,10 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "adminstrator"
 
 DB = "memstress"
-NUM_COLLECTIONS = 8
-DOCS_PER_COLLECTION = 10_000
-PAYLOAD_BYTES = 768
-BULK_BATCH_SIZE = 250
+NUM_COLLECTIONS = int(os.environ.get("MEM_TEST_COLLECTIONS", "8"))
+DOCS_PER_COLLECTION = int(os.environ.get("MEM_TEST_DOCS", "10000"))
+PAYLOAD_BYTES = int(os.environ.get("MEM_TEST_PAYLOAD_BYTES", "768"))
+BULK_BATCH_SIZE = int(os.environ.get("MEM_TEST_BATCH_SIZE", "250"))
 INDEXED_FIELDS = ["category", "score"]
 
 # How much over the cap we tolerate transiently between sweeps.
