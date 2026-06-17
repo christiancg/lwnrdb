@@ -59,6 +59,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] Remove lombok
 - [ ] Check that in join aggregations, the user should have permissions to the collection that is being joined
 - [ ] Validation of configurations
+- [ ] Review and address TODOs
+- [ ] Remove all warnings from code
 
 ## Wire Protocol / Message Reference
 
