@@ -79,22 +79,11 @@ public class Main {
             return;
         }
 
+        // defaultAdminUsername/defaultAdminPassword are validated at startup
+        // (non-blank username, password at least Globals.PASSWORD_MIN_LENGTH chars),
+        // so they are guaranteed to be usable here.
         final var defaultUsername = config.getDefaultAdminUsername();
         final var defaultPassword = config.getDefaultAdminPassword();
-
-        if (defaultUsername == null || defaultUsername.isBlank() ||
-            defaultPassword == null || defaultPassword.isBlank()) {
-            Logger.logFor(Main.class).warning(
-                    "No admin user found and no default admin configured. " +
-                    "Set defaultAdminUsername and defaultAdminPassword in lwnrdb.cfg to bootstrap.");
-            return;
-        }
-
-        if (defaultPassword.length() < 8) {
-            Logger.logFor(Main.class).warning(
-                    "Default admin password must be at least 8 characters. Not bootstrapping.");
-            return;
-        }
 
         final var passwordHash = PasswordHasher.hash(defaultPassword);
         final var globalPerms = new HashSet<GlobalPermissionType>();

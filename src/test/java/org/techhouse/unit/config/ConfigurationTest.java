@@ -7,6 +7,7 @@ import org.mockito.MockedStatic;
 import org.techhouse.config.ConfigReader;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.test.TestUtils;
 
 import java.io.BufferedWriter;
@@ -14,6 +15,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -115,10 +117,27 @@ public class ConfigurationTest {
         }
     }
 
+    private static Map<String, String> fullValidConfig() {
+        final var map = new HashMap<String, String>();
+        map.put("port", "8989");
+        map.put("maxConnections", "100");
+        map.put("filePath", "db");
+        map.put("backgroundProcessingThreads", "10");
+        map.put("logPath", "logs");
+        map.put("maxLogFiles", "7");
+        map.put("maxPageSize", "2Mb");
+        map.put("maxEntrySize", "1Mb");
+        map.put("defaultAdminUsername", "admin");
+        map.put("defaultAdminPassword", "adminstrator");
+        map.put("maxMemory", "512mb");
+        return map;
+    }
+
     @Test
-    public void test_configuration_file_missing_or_unreadable() {
+    public void test_configuration_loads_a_full_valid_map() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "port", 0);
         try(MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
-            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(new HashMap<>());
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(fullValidConfig());
             Configuration config = Configuration.getInstance();
             assertEquals(8989, config.getPort());
             assertEquals(100, config.getMaxConnections());
@@ -126,6 +145,20 @@ public class ConfigurationTest {
             assertEquals(10, config.getBackgroundProcessingThreads());
             assertEquals("logs", config.getLogPath());
             assertEquals(7, config.getMaxLogFiles());
+            assertEquals(2L * 1024L * 1024L, config.getMaxPageSize());
+            assertEquals(1024L * 1024L, config.getMaxEntrySize());
+        }
+    }
+
+    @Test
+    public void test_configuration_throws_when_validation_fails() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "port", 0);
+        final var invalid = fullValidConfig();
+        invalid.put("port", "not-a-number");
+        invalid.put("maxConnections", "-5");
+        try(MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(invalid);
+            assertThrows(InvalidConfigurationException.class, Configuration::getInstance);
         }
     }
 
@@ -156,14 +189,14 @@ public class ConfigurationTest {
     }
 
     @Test
-    public void test_maxMemory_defaults_to_unlimited_when_missing() throws NoSuchFieldException, IllegalAccessException {
+    public void test_maxMemory_unlimited_when_zero() throws NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         TestUtils.setPrivateField(configInstance, "maxMemoryBytes", 0L);
-        final var minimalConfig = new HashMap<String, String>();
-        minimalConfig.put("port", "8989");
+        final var configMap = fullValidConfig();
+        configMap.put("maxMemory", "0");
         try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
-            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(minimalConfig);
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(configMap);
             final var config = Configuration.getInstance();
             assertEquals(0L, config.getMaxMemoryBytes());
             assertTrue(config.isCacheUnlimited());
@@ -193,7 +226,7 @@ public class ConfigurationTest {
     }
 
     @Test
-    public void test_maxMemory_invalid_falls_back_to_unlimited() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_maxMemory_invalid_throws() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
@@ -202,8 +235,7 @@ public class ConfigurationTest {
             writer.newLine();
         }
         try {
-            final var config = Configuration.getInstance();
-            assertEquals(0L, config.getMaxMemoryBytes());
+            assertThrows(InvalidConfigurationException.class, Configuration::getInstance);
         } finally {
             if (!newConfigFile.delete()) {
                 fail("Failed deleting temp test file");

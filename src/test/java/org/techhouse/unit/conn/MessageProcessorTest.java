@@ -105,11 +105,12 @@ public class MessageProcessorTest {
     // When max connections is reached, clientId is null and an error response is sent (L63-67)
     @Test
     public void test_max_connections_sends_error_response() throws Exception {
-        // Set maxConnections to 0 so any new connection gets null clientId
+        // Set maxConnections to a value the client count can never be under so any
+        // new connection gets a null clientId (0 now means unlimited, so use -1).
         Configuration config = Configuration.getInstance();
         int originalMax = config.getMaxConnections();
         try {
-            TestUtils.setPrivateField(config, "maxConnections", 0);
+            TestUtils.setPrivateField(config, "maxConnections", -1);
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             Socket socket = mockSocket(new ByteArrayInputStream("".getBytes()), out);

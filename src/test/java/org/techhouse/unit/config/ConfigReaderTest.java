@@ -55,8 +55,8 @@ public class ConfigReaderTest {
         expectedConfig.put("backgroundProcessingThreads", "10");
         expectedConfig.put("logPath", "logs");
         expectedConfig.put("maxLogFiles", "7");
-        expectedConfig.put("maxPageSizeBytes", "2097152");
-        expectedConfig.put("maxEntrySizeBytes", "1048576");
+        expectedConfig.put("maxPageSize", "2Mb");
+        expectedConfig.put("maxEntrySize", "1Mb");
         expectedConfig.put("defaultAdminUsername", "admin");
         expectedConfig.put("defaultAdminPassword", "adminstrator");
         expectedConfig.put("maxMemory", "512mb");
@@ -109,6 +109,38 @@ public class ConfigReaderTest {
             var config = ConfigReader.loadConfiguration();
             assertNotNull(config);
             assertEquals("8989", config.get("port"));
+        } finally {
+            configFile.delete();
+        }
+    }
+
+    // Comment lines (starting with '#') and blank lines are ignored
+    @Test
+    public void test_config_file_ignores_comments_and_blank_lines() throws IOException {
+        String configContent = "# this is a comment\n\nport=8989\n   # indented comment\nmaxConnections=100\n";
+        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        try {
+            Files.writeString(configFile.toPath(), configContent);
+            var config = ConfigReader.loadConfiguration();
+            assertNotNull(config);
+            assertEquals("8989", config.get("port"));
+            assertEquals("100", config.get("maxConnections"));
+            assertFalse(config.containsKey("# this is a comment"));
+        } finally {
+            configFile.delete();
+        }
+    }
+
+    // Values containing '=' are preserved (split with limit 2)
+    @Test
+    public void test_config_file_value_with_equals_sign() throws IOException {
+        String configContent = "defaultAdminPassword=ab=cd=ef\n";
+        File configFile = new File(Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        try {
+            Files.writeString(configFile.toPath(), configContent);
+            var config = ConfigReader.loadConfiguration();
+            assertNotNull(config);
+            assertEquals("ab=cd=ef", config.get("defaultAdminPassword"));
         } finally {
             configFile.delete();
         }
