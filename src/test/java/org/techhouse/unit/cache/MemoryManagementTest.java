@@ -3,12 +3,7 @@ package org.techhouse.unit.cache;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cache.AccessKind;
-import org.techhouse.cache.AdmissionDecision;
-import org.techhouse.cache.Cache;
-import org.techhouse.cache.MemoryManagement;
-import org.techhouse.cache.MemoryPressureMonitor;
-import org.techhouse.cache.UsageCounter;
+import org.techhouse.cache.*;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -29,57 +24,25 @@ import static org.junit.jupiter.api.Assertions.*;
 
 public class MemoryManagementTest {
 
-    private long savedMaxCollectionCacheBytes;
-    private MemoryPressureMonitor savedPressure;
-
-    private static final class FakeMemoryPressureMonitor implements MemoryPressureMonitor {
-        volatile double heapRatio = 0.1;
-        volatile long heapUsedBytes = 0L;
-        volatile double osFreeRatio = 0.9;
-        volatile boolean osAvailable = true;
-        volatile boolean throwOnSnapshot = false;
-
-        @Override
-        public Snapshot snapshot() {
-            if (throwOnSnapshot) {
-                throw new RuntimeException("forced");
-            }
-            return new Snapshot(heapRatio, heapUsedBytes, osFreeRatio, osAvailable);
-        }
-    }
-
-    private FakeMemoryPressureMonitor installFakePressure() throws NoSuchFieldException, IllegalAccessException {
-        final var fake = new FakeMemoryPressureMonitor();
-        final var mm = IocContainer.get(MemoryManagement.class);
-        TestUtils.setPrivateField(mm, "pressure", fake);
-        return fake;
-    }
-
-    private FakeMemoryPressureMonitor fakePressure;
+    private long savedMaxMemoryBytes;
 
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
         TestUtils.standardInitialSetup();
-        final var config = Configuration.getInstance();
-        savedMaxCollectionCacheBytes = config.getMaxCollectionCacheBytes();
-        final var mm = IocContainer.get(MemoryManagement.class);
-        savedPressure = TestUtils.getPrivateField(mm, "pressure", MemoryPressureMonitor.class);
-        fakePressure = installFakePressure();
+        savedMaxMemoryBytes = Configuration.getInstance().getMaxMemoryBytes();
     }
 
     @AfterEach
     public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
         final var config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", savedMaxCollectionCacheBytes);
+        TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemoryBytes);
         final var mm = IocContainer.get(MemoryManagement.class);
-        TestUtils.setPrivateField(mm, "counters", new java.util.concurrent.ConcurrentHashMap<>());
-        TestUtils.setPrivateField(mm, "pressure", savedPressure);
+        TestUtils.setPrivateField(mm, "counters", new ConcurrentHashMap<>());
         TestUtils.standardTearDown();
     }
 
-    private void setCacheCap(long bytes) throws NoSuchFieldException, IllegalAccessException {
-        final var config = Configuration.getInstance();
-        TestUtils.setPrivateField(config, "maxCollectionCacheBytes", bytes);
+    private void setMaxMemory(long bytes) throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxMemoryBytes", bytes);
     }
 
     @Test
@@ -102,7 +65,7 @@ public class MemoryManagementTest {
 
     @Test
     public void test_recordAccess_skipped_when_caching_disabled() throws NoSuchFieldException, IllegalAccessException {
-        setCacheCap(-1L);
+        setMaxMemory(-1L);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "myDb", "myColl", null);
         assertNull(mm.getCounter(AccessKind.COLLECTION, "myDb", "myColl", null));
@@ -110,7 +73,7 @@ public class MemoryManagementTest {
 
     @Test
     public void test_isCachingDisabled_when_config_minus_one() throws NoSuchFieldException, IllegalAccessException {
-        setCacheCap(-1L);
+        setMaxMemory(-1L);
         final var mm = IocContainer.get(MemoryManagement.class);
         assertTrue(mm.isCachingDisabled());
         assertFalse(mm.isCacheUnlimited());
@@ -118,7 +81,7 @@ public class MemoryManagementTest {
 
     @Test
     public void test_isCacheUnlimited_when_config_zero() throws NoSuchFieldException, IllegalAccessException {
-        setCacheCap(0L);
+        setMaxMemory(0L);
         final var mm = IocContainer.get(MemoryManagement.class);
         assertTrue(mm.isCacheUnlimited());
         assertFalse(mm.isCachingDisabled());
@@ -126,7 +89,7 @@ public class MemoryManagementTest {
 
     @Test
     public void test_runEvictionSweep_noop_when_unlimited() throws Exception {
-        setCacheCap(0L);
+        setMaxMemory(0L);
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
@@ -136,19 +99,27 @@ public class MemoryManagementTest {
 
     @Test
     public void test_runEvictionSweep_noop_when_disabled() throws Exception {
-        setCacheCap(-1L);
+        setMaxMemory(-1L);
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.runEvictionSweep();
-        // documents were seeded directly, but sweep is a no-op
+        assertEquals(1, cache.listCacheableResources().size());
+    }
+
+    @Test
+    public void test_runEvictionSweep_noop_when_cache_under_cap() throws Exception {
+        setMaxMemory(10L * 1024L * 1024L);
+        final var cache = IocContainer.get(Cache.class);
+        seedCollectionCache(cache, "userColl", 10);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.runEvictionSweep();
         assertEquals(1, cache.listCacheableResources().size());
     }
 
     @Test
     public void test_runEvictionSweep_evicts_lowest_LFU_first() throws Exception {
-        setCacheCap(1L);
-        fakePressure.heapUsedBytes = 1_000_000L; // way over cap → budget exceeded
+        setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "hot", 10);
         seedCollectionCache(cache, "cold", 10);
@@ -165,18 +136,20 @@ public class MemoryManagementTest {
 
     @Test
     public void test_runEvictionSweep_respects_priority_tier() throws Exception {
-        // Cap is 200B; fake heap reports 201B so overage is 1B. The first evicted
-        // resource (COLLECTION, by tier ordering) covers it and the sweep stops,
-        // leaving the PK_INDEX in place.
-        setCacheCap(200L);
-        fakePressure.heapUsedBytes = 201L;
+        // PK index sizes by ESTIMATED_PK_ENTRY_BYTES (small); collection by entry bytes.
+        // Set cap so PK index alone fits, but collection + PK index together do not.
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
         seedPkIndex(cache, "coll");
+        seedCollectionCache(cache, "coll", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
-        // Same access count: tier wins (COLLECTION should be evicted before PK_INDEX)
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "coll", null);
         mm.recordAccess(AccessKind.PK_INDEX, "userDb", "coll", null);
+        // size the cap to exactly the PK index size so the collection must go.
+        final var pkBytes = cache.listCacheableResources().stream()
+                .filter(r -> r.kind() == AccessKind.PK_INDEX)
+                .mapToLong(CacheableResource::estimatedSizeBytes)
+                .sum();
+        setMaxMemory(pkBytes);
         mm.runEvictionSweep();
         final var remaining = cache.listCacheableResources();
         assertTrue(remaining.stream().anyMatch(r -> r.kind() == AccessKind.PK_INDEX),
@@ -187,13 +160,11 @@ public class MemoryManagementTest {
 
     @Test
     public void test_runEvictionSweep_never_touches_admin() throws Exception {
-        setCacheCap(1L);
+        setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
-        // Seed an admin collection entry directly via reflection.
         seedRawCollection(cache);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.runEvictionSweep();
-        // The admin entry should remain — listCacheableResources excludes admin so direct field probe:
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
         assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
@@ -227,11 +198,18 @@ public class MemoryManagementTest {
     }
 
     @Test
+    public void test_buildKey_handles_null_indexKey() {
+        final var key = MemoryManagement.buildKey(AccessKind.COLLECTION, "db", "coll", null);
+        assertTrue(key.contains("COLLECTION"));
+        assertTrue(key.contains("db"));
+        assertTrue(key.contains("coll"));
+    }
+
+    @Test
     public void test_startSweepThread_noop_when_disabled() throws NoSuchFieldException, IllegalAccessException {
-        setCacheCap(-1L);
+        setMaxMemory(-1L);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.startSweepThread();
-        // Should not have started a scheduler
         final var scheduler = TestUtils.getPrivateField(mm, "scheduler", java.util.concurrent.ScheduledExecutorService.class);
         assertNull(scheduler);
     }
@@ -243,6 +221,19 @@ public class MemoryManagementTest {
     }
 
     @Test
+    public void test_startSweepThread_starts_scheduler_when_enabled() throws Exception {
+        setMaxMemory(1024L);
+        final var mm = IocContainer.get(MemoryManagement.class);
+        mm.startSweepThread();
+        try {
+            final var scheduler = TestUtils.getPrivateField(mm, "scheduler", java.util.concurrent.ScheduledExecutorService.class);
+            assertNotNull(scheduler);
+        } finally {
+            mm.stopSweepThread();
+        }
+    }
+
+    @Test
     public void test_loadProfileFromAdmin_no_throw_when_empty() {
         final var mm = IocContainer.get(MemoryManagement.class);
         assertDoesNotThrow(mm::loadProfileFromAdmin);
@@ -250,9 +241,8 @@ public class MemoryManagementTest {
 
     @Test
     public void test_loadProfileFromAdmin_skipped_when_caching_disabled() throws Exception {
-        setCacheCap(-1L);
+        setMaxMemory(-1L);
         final var mm = IocContainer.get(MemoryManagement.class);
-        // Should return immediately without touching the filesystem.
         assertDoesNotThrow(mm::loadProfileFromAdmin);
     }
 
@@ -263,16 +253,14 @@ public class MemoryManagementTest {
         org.techhouse.ops.AdminOperationHelper.upsertCollectionUsage(
                 new org.techhouse.bckg_ops.events.CollectionUsageEvent(AccessKind.COLLECTION, "userDb", "userColl", null,
                         System.currentTimeMillis()));
-        // Clear in-memory counters and reload from admin storage.
-        TestUtils.setPrivateField(mm, "counters", new java.util.concurrent.ConcurrentHashMap<>());
+        TestUtils.setPrivateField(mm, "counters", new ConcurrentHashMap<>());
         mm.loadProfileFromAdmin();
         assertNotNull(mm.getCounter(AccessKind.COLLECTION, "userDb", "userColl", null));
     }
 
     @Test
     public void test_runEvictionSweep_handles_field_index_tier() throws Exception {
-        setCacheCap(1L);
-        fakePressure.heapUsedBytes = 1_000_000L;
+        setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
         seedFieldIndex(cache, "coll");
         final var mm = IocContainer.get(MemoryManagement.class);
@@ -285,32 +273,17 @@ public class MemoryManagementTest {
 
     @Test
     public void test_runEvictionSweep_skips_concurrent_call() throws Exception {
-        setCacheCap(1L);
+        setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "coll", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
-        // Pretend a sweep is already in progress.
         final var sweepRunning = TestUtils.getPrivateField(mm, "sweepRunning", java.util.concurrent.atomic.AtomicBoolean.class);
         sweepRunning.set(true);
         try {
             mm.runEvictionSweep();
-            // Sweep should have done nothing (the existing entry remains).
             assertEquals(1, cache.listCacheableResources().size());
         } finally {
             sweepRunning.set(false);
-        }
-    }
-
-    @Test
-    public void test_startSweepThread_starts_scheduler_when_enabled() throws Exception {
-        setCacheCap(1024L);
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.startSweepThread();
-        try {
-            final var scheduler = TestUtils.getPrivateField(mm, "scheduler", java.util.concurrent.ScheduledExecutorService.class);
-            assertNotNull(scheduler);
-        } finally {
-            mm.stopSweepThread();
         }
     }
 
@@ -319,7 +292,6 @@ public class MemoryManagementTest {
         final var mm = IocContainer.get(MemoryManagement.class);
         final var method = MemoryManagement.class.getDeclaredMethod("runEvictionSweepSafely");
         method.setAccessible(true);
-        // Just verify it doesn't propagate even if something goes wrong inside.
         method.invoke(mm);
     }
 
@@ -328,15 +300,12 @@ public class MemoryManagementTest {
         final var mm = IocContainer.get(MemoryManagement.class);
         final var method = MemoryManagement.class.getDeclaredMethod("submitCleanupTask");
         method.setAccessible(true);
-        // Should not throw — just submits the event.
         method.invoke(mm);
     }
 
     @Test
     public void test_tier_ordinal_covers_all_kinds() throws Exception {
-        // Exercise all branches of tierOrdinal via runEvictionSweep with one resource per kind.
-        setCacheCap(1L);
-        fakePressure.heapUsedBytes = 1_000_000L;
+        setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "coll1", 5);
         seedPkIndex(cache, "coll2");
@@ -349,167 +318,51 @@ public class MemoryManagementTest {
     }
 
     @Test
-    public void test_sweep_triggers_on_heap_high_even_when_own_budget_ok() throws Exception {
-        setCacheCap(1024L * 1024L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.heapRatio = 0.95;
+    public void test_admission_check_admits_when_cache_has_room() throws Exception {
+        setMaxMemory(1024L * 1024L);
         final var mm = IocContainer.get(MemoryManagement.class);
-        mm.runEvictionSweep();
-        assertTrue(cache.listCacheableResources().stream().noneMatch(r -> r.collName().equals("coll")),
-                "high heap should trigger eviction even with cap not exceeded");
+        assertEquals(AdmissionDecision.ADMIT, mm.admissionCheck(100L));
     }
 
     @Test
-    public void test_sweep_triggers_on_os_low_free_even_when_own_budget_ok() throws Exception {
-        setCacheCap(1024L * 1024L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.osAvailable = true;
-        fakePressure.osFreeRatio = 0.05;
+    public void test_admission_check_admits_when_unlimited() throws Exception {
+        setMaxMemory(0L);
         final var mm = IocContainer.get(MemoryManagement.class);
-        mm.runEvictionSweep();
-        assertTrue(cache.listCacheableResources().stream().noneMatch(r -> r.collName().equals("coll")),
-                "low OS free should trigger eviction");
-    }
-
-    @Test
-    public void test_sweep_runs_when_cache_unlimited_but_heap_pressure_high() throws Exception {
-        setCacheCap(0L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.heapRatio = 0.95;
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.runEvictionSweep();
-        assertTrue(cache.listCacheableResources().isEmpty(),
-                "unlimited cap must not protect from real memory pressure");
-    }
-
-    @Test
-    public void test_sweep_runs_when_cache_unlimited_but_os_critical() throws Exception {
-        setCacheCap(0L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.osAvailable = true;
-        fakePressure.osFreeRatio = 0.02;
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.runEvictionSweep();
-        assertTrue(cache.listCacheableResources().isEmpty(),
-                "unlimited cap must yield to OS critical floor");
-    }
-
-    @Test
-    public void test_sweep_ignores_os_signal_when_not_available() throws Exception {
-        setCacheCap(0L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.osAvailable = false;
-        fakePressure.osFreeRatio = 0.0;
-        fakePressure.heapRatio = 0.1;
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.runEvictionSweep();
-        assertEquals(1, cache.listCacheableResources().size(),
-                "OS signal must not trigger eviction when unavailable");
-    }
-
-    @Test
-    public void test_admission_check_admits_when_nominal() {
-        final var mm = IocContainer.get(MemoryManagement.class);
-        fakePressure.heapRatio = 0.1;
-        fakePressure.osFreeRatio = 0.9;
-        assertEquals(AdmissionDecision.ADMIT, mm.admissionCheck());
+        assertEquals(AdmissionDecision.ADMIT, mm.admissionCheck(1_000_000_000L));
     }
 
     @Test
     public void test_admission_check_rejects_when_caching_disabled() throws Exception {
-        setCacheCap(-1L);
+        setMaxMemory(-1L);
         final var mm = IocContainer.get(MemoryManagement.class);
-        assertEquals(AdmissionDecision.REJECT, mm.admissionCheck());
+        assertEquals(AdmissionDecision.REJECT, mm.admissionCheck(1L));
     }
 
     @Test
-    public void test_admission_check_rejects_under_heap_pressure_without_evicting() throws Exception {
-        setCacheCap(1024L * 1024L);
+    public void test_admission_check_rejects_when_admission_would_exceed_cap() throws Exception {
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "coll", 10);
-        fakePressure.heapRatio = 0.95;
+        final var existing = cache.listCacheableResources().stream()
+                .mapToLong(CacheableResource::estimatedSizeBytes).sum();
+        setMaxMemory(existing + 100L);
         final var mm = IocContainer.get(MemoryManagement.class);
-        assertEquals(AdmissionDecision.REJECT, mm.admissionCheck());
-        assertEquals(1, cache.listCacheableResources().size(),
-                "admission must not evict — that is the background sweep's job");
+        assertEquals(AdmissionDecision.ADMIT, mm.admissionCheck(50L));
+        assertEquals(AdmissionDecision.REJECT, mm.admissionCheck(200L));
     }
 
     @Test
-    public void test_admission_check_rejects_when_os_critical() throws Exception {
-        setCacheCap(1024L * 1024L);
+    public void test_userCacheBytes_reflects_resources() throws Exception {
+        final var mm = IocContainer.get(MemoryManagement.class);
+        assertEquals(0L, mm.userCacheBytes());
         final var cache = IocContainer.get(Cache.class);
         seedCollectionCache(cache, "coll", 10);
-        fakePressure.osAvailable = true;
-        fakePressure.osFreeRatio = 0.01; // below 5% critical
-        final var mm = IocContainer.get(MemoryManagement.class);
-        assertEquals(AdmissionDecision.REJECT, mm.admissionCheck());
+        assertTrue(mm.userCacheBytes() > 0L);
     }
 
     @Test
-    public void test_admission_check_rejects_when_os_low_but_not_critical() throws Exception {
-        setCacheCap(1024L * 1024L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.osAvailable = true;
-        fakePressure.osFreeRatio = 0.07; // below low (10%) but above critical (5%)
+    public void test_usageRetentionMillis_is_24h() {
         final var mm = IocContainer.get(MemoryManagement.class);
-        assertEquals(AdmissionDecision.REJECT, mm.admissionCheck());
-    }
-
-    @Test
-    public void test_pressure_poll_triggers_sweep_when_heap_high() throws Exception {
-        setCacheCap(1024L * 1024L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        fakePressure.heapRatio = 0.95;
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.pollPressureAndMaybeSweep();
-        assertTrue(cache.listCacheableResources().isEmpty());
-    }
-
-    @Test
-    public void test_pressure_poll_noop_when_signals_nominal() throws Exception {
-        setCacheCap(1024L * 1024L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.pollPressureAndMaybeSweep();
-        assertEquals(1, cache.listCacheableResources().size());
-    }
-
-    @Test
-    public void test_pressure_poll_swallows_snapshot_exceptions() {
-        fakePressure.throwOnSnapshot = true;
-        final var mm = IocContainer.get(MemoryManagement.class);
-        // Should not propagate.
-        mm.pollPressureAndMaybeSweep();
-    }
-
-    @Test
-    public void test_safe_snapshot_returns_default_on_exception() throws Exception {
-        fakePressure.throwOnSnapshot = true;
-        final var mm = IocContainer.get(MemoryManagement.class);
-        // safeSnapshot is private; exercise via runEvictionSweep — should not throw.
-        setCacheCap(1024L);
-        mm.runEvictionSweep();
-    }
-
-    @Test
-    public void test_startSweepThread_starts_pressure_poll_task() throws Exception {
-        setCacheCap(1024L);
-        final var mm = IocContainer.get(MemoryManagement.class);
-        mm.startSweepThread();
-        try {
-            final var scheduler = TestUtils.getPrivateField(mm, "scheduler", java.util.concurrent.ScheduledExecutorService.class);
-            assertNotNull(scheduler);
-        } finally {
-            mm.stopSweepThread();
-        }
+        assertEquals(24L * 60L * 60L * 1000L, mm.usageRetentionMillis());
     }
 
     private void seedFieldIndex(Cache cache, String collName) throws NoSuchFieldException, IllegalAccessException {
