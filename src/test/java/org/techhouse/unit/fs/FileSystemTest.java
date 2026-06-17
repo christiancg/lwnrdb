@@ -891,7 +891,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_readWholeCollectionPage_drops_and_rewrites_malformed_lines() throws Exception {
+    public void test_readWholeCollectionPage_skips_malformed_lines() throws Exception {
         final var fs = new FileSystem();
         TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
 
@@ -911,19 +911,16 @@ public class FileSystemTest {
         Files.writeString(pageFile.toPath(), "\nthis-is-not-json{partial",
                 StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
 
-        // First read drops the bad line in-memory and on-disk.
+        // The malformed line is skipped in-memory; the file is left untouched
+        // so the .idx file's byte offsets remain valid (rewriting the .dat
+        // here would require coordinated .idx rewriting — a real compaction).
         final var firstRead = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0L);
         assertEquals(1, firstRead.size());
         assertTrue(firstRead.containsKey("good"));
 
-        // The file on disk should no longer contain the malformed line.
         final var diskLines = Files.readAllLines(pageFile.toPath());
-        assertTrue(diskLines.stream().noneMatch(l -> l.contains("partial")),
-                "the malformed line should have been removed from disk");
-
-        // Subsequent read returns the same result without warnings.
-        final var secondRead = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0L);
-        assertEquals(1, secondRead.size());
+        assertTrue(diskLines.stream().anyMatch(l -> l.contains("partial")),
+                ".dat is intentionally left as-is to preserve .idx offsets");
     }
 
     @Test

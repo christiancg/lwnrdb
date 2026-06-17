@@ -181,8 +181,9 @@ def main():
 
     # Let async background workers finish writing admin metadata to disk before
     # the abrupt SIGTERM below — otherwise we corrupt admin pages and the next
-    # boot has to salvage them.
-    time.sleep(3)
+    # boot has to salvage them. CI runners are slower than dev hardware so
+    # err on the side of waiting longer.
+    time.sleep(8)
 
     # Restart server to clear the in-memory cache so the "cold" call really is cold.
     print("Restarting server to clear cache ...")

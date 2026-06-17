@@ -617,22 +617,20 @@ public class FileSystem {
             return new HashMap<>();
         }
         final var result = new HashMap<String, DbEntry>();
-        final var keepLines = new ArrayList<String>();
-        boolean dropped = false;
         for (var line : Files.readAllLines(collectionFile.toPath())) {
             if (line.isEmpty()) continue;
             try {
                 final var entry = DbEntry.fromString(dbName, collectionName, line);
                 result.put(entry.get_id(), entry);
-                keepLines.add(line);
             } catch (Exception e) {
-                dropped = true;
-                logger.warning("Removing malformed entry in " +
+                // Skip-and-log only. We deliberately do NOT rewrite the .dat
+                // file here: the .idx file stores byte offsets into the .dat,
+                // so removing lines would invalidate every entry's recorded
+                // position. Compacting both atomically is a separate concern
+                // (a real compaction operation, not a read-side side effect).
+                logger.warning("Skipping malformed entry in " +
                         collectionFile.getName() + ": " + e.getMessage());
             }
-        }
-        if (dropped) {
-            rewriteFileAtomically(collectionFile.toPath(), keepLines);
         }
         return result;
     }
