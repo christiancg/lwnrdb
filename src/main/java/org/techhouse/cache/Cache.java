@@ -15,6 +15,7 @@ import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.*;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.SearchUtils;
 
@@ -25,6 +26,7 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class Cache {
+    private static final Logger logger = Logger.logFor(Cache.class);
     private static final long ESTIMATED_PK_ENTRY_BYTES = 96L;
     private static final long ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES = 64L;
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -91,29 +93,36 @@ public class Cache {
         usersPkIndex.putAll(pkIndexAdminUserEntriesMap);
         if (!pkIndexAdminDbEntriesMap.isEmpty()) {
             final var adminDatabasesColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-            final var adminDatabasesCollMap = adminDatabasesColl.entrySet().stream()
-                    .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
-                            e -> AdminDbEntry.fromJsonObject(e.getValue().getData())));
-            databases.putAll(adminDatabasesCollMap);
+            loadAdminEntries(adminDatabasesColl, Globals.ADMIN_DATABASES_COLLECTION_NAME,
+                    AdminDbEntry::fromJsonObject, databases);
         }
         if (!pkIndexAdminCollEntries.isEmpty()) {
             final var adminCollectionsColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-            final var adminCollectionsCollMap = adminCollectionsColl.entrySet().stream()
-                    .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
-                            e -> AdminCollEntry.fromJsonObject(e.getValue().getData())));
-            collections.putAll(adminCollectionsCollMap);
+            loadAdminEntries(adminCollectionsColl, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
+                    AdminCollEntry::fromJsonObject, collections);
         }
         if (!pkIndexAdminUserEntriesMap.isEmpty()) {
             final var adminUsersColl = readWholeCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-            final var adminUsersCollMap = adminUsersColl.entrySet().stream()
-                    .collect(Collectors.toConcurrentMap(Map.Entry::getKey,
-                            e -> AdminUserEntry.fromJsonObject(e.getValue().getData())));
-            users.putAll(adminUsersCollMap);
+            loadAdminEntries(adminUsersColl, Globals.ADMIN_USERS_COLLECTION_NAME,
+                    AdminUserEntry::fromJsonObject, users);
         }
         for (var collEntry : collections.values()) {
             final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             if (parts.length < 2) continue;
             loadAdminPagesForCollection(parts[0], parts[1]);
+        }
+    }
+
+    private <V> void loadAdminEntries(Map<String, DbEntry> source, String adminCollName,
+                                      java.util.function.Function<JsonObject, V> mapper,
+                                      Map<String, V> target) {
+        for (var entry : source.entrySet()) {
+            try {
+                target.put(entry.getKey(), mapper.apply(entry.getValue().getData()));
+            } catch (Exception e) {
+                logger.warning("Skipping malformed admin entry '" + entry.getKey() +
+                        "' in " + adminCollName + ": " + e.getMessage());
+            }
         }
     }
 
