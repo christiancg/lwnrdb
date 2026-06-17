@@ -431,7 +431,7 @@ public class OperationProcessorTest {
         SaveRequest request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString("bigId"));
-        // Create a value larger than 1MB (maxEntrySizeBytes default)
+        // Create a value larger than 1MB (maxEntrySize default)
         obj.add("bigField", new JsonString("x".repeat(1_048_600)));
         request.setObject(obj);
 

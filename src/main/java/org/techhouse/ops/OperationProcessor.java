@@ -33,6 +33,7 @@ public class OperationProcessor {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final Configuration configuration = Configuration.getInstance();
 
     private void recordCollectionAccess(String dbName, String collName) {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
@@ -91,7 +92,7 @@ public class OperationProcessor {
         for (var entry : bulkSaveRequest.getObjects()) {
             entries.add(DbEntry.fromJsonObject(dbName, collName, entry));
         }
-        final var maxEntrySize = Configuration.getInstance().getMaxEntrySizeBytes();
+        final var maxEntrySize = configuration.getMaxEntrySize();
         for (var entry : entries) {
             if (entry.byteSize() > maxEntrySize) {
                 return new BulkSaveResponse(OperationStatus.ERROR,
@@ -167,7 +168,7 @@ public class OperationProcessor {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
-        final var maxEntrySize = Configuration.getInstance().getMaxEntrySizeBytes();
+        final var maxEntrySize = configuration.getMaxEntrySize();
         if (entry.byteSize() > maxEntrySize) {
             return new SaveResponse(OperationStatus.ERROR,
                     "Entry size of " + entry.byteSize() + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null);

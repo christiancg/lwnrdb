@@ -54,6 +54,21 @@ public class ClientTrackerTest {
         assertNull(clientId);
     }
 
+    // maxConnections of 0 means unlimited: clients are added beyond a small count
+    @Test
+    public void test_add_client_unlimited_when_max_connections_zero() throws NoSuchFieldException, IllegalAccessException {
+        Configuration config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        for (int i = 0; i < 50; i++) {
+            Socket mockSocket = Mockito.mock(Socket.class);
+            InetAddress mockInetAddress = Mockito.mock(InetAddress.class);
+            Mockito.when(mockSocket.getInetAddress()).thenReturn(mockInetAddress);
+            Mockito.when(mockInetAddress.getHostAddress()).thenReturn("127.0.0." + i);
+            assertNotNull(clientTracker.addClient(mockSocket));
+        }
+    }
+
     // Successfully removes a client when a valid UUID is provided
     @Test
     public void test_remove_client_with_valid_uuid() throws NoSuchFieldException, IllegalAccessException {

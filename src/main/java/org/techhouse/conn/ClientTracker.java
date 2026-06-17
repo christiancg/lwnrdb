@@ -11,9 +11,11 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
+    private final Configuration configuration = Configuration.getInstance();
 
     public UUID addClient(Socket socket) {
-        if (Configuration.getInstance().getMaxConnections() > clients.size()) {
+        final var maxConnections = configuration.getMaxConnections();
+        if (maxConnections == 0 || maxConnections > clients.size()) {
             final var clientId = UUID.randomUUID();
             clients.put(clientId, new Client(socket.getInetAddress().getHostAddress()));
             return clientId;

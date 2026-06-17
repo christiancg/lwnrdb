@@ -12,7 +12,8 @@ import java.nio.file.Paths;
 import java.util.*;
 
 public class ConfigReader {
-    private static final Set<String> configKeys = Set.of("port", "maxConnections", "filePath", "backgroundProcessingThreads", "logPath", "maxLogFiles", "maxPageSizeBytes", "maxEntrySizeBytes", "defaultAdminUsername", "defaultAdminPassword", "maxMemory");
+    private static final Set<String> configKeys = Set.of("port", "maxConnections", "filePath", "backgroundProcessingThreads", "logPath", "maxLogFiles", "maxPageSize", "maxEntrySize", "defaultAdminUsername", "defaultAdminPassword", "maxMemory");
+    private static final String COMMENT_PREFIX = "#";
     private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
     private static final Logger logger = Logger.logFor(ConfigReader.class);
 
@@ -65,7 +66,11 @@ public class ConfigReader {
     private static Map<String, String> processFromLines(List<String> lines) {
         final Map<String, String> config = new HashMap<>();
         for (var line : lines) {
-            final var parts = line.split("=");
+            final var trimmed = line.trim();
+            if (trimmed.isEmpty() || trimmed.startsWith(COMMENT_PREFIX)) {
+                continue;
+            }
+            final var parts = trimmed.split("=", 2);
             if (parts.length == 2) {
                 final var key = parts[0].trim();
                 final var value = parts[1].trim();
