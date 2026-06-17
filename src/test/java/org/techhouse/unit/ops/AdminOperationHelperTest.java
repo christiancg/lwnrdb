@@ -16,7 +16,7 @@ import org.techhouse.utils.ReflectionUtils;
 
 import java.io.IOException;
 import java.util.Map;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -69,7 +69,7 @@ public class AdminOperationHelperTest {
         AdminOperationHelper.saveDatabaseEntry(dbEntry);
 
         // Assert
-        final var typeToken = new ReflectionUtils.TypeToken<Map<String, Semaphore>>() {};
+        final var typeToken = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {};
         final var actualLocks = TestUtils.getPrivateField(locks, "locks", typeToken);
         assertNotNull(actualLocks.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME)));
         final var inserted = cache.getAdminDbEntry(Globals.ADMIN_DB_NAME);

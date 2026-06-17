@@ -12,10 +12,9 @@ import org.techhouse.utils.ReflectionUtils;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -98,12 +97,6 @@ public class TestUtils {
         field.set(object, fieldValue);
     }
 
-    public static <U> Method getPrivateMethod(U object, String methodName, Class<?>... parameterTypes) throws NoSuchMethodException {
-        final var method = object.getClass().getDeclaredMethod(methodName, parameterTypes);
-        method.setAccessible(true);
-        return method;
-    }
-
     public static void deleteFolder(File folder) {
         File[] files = folder.listFiles();
         if(files!=null) { //some JVMs return null for empty dirs
@@ -120,10 +113,16 @@ public class TestUtils {
 
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {
         final var locker = IocContainer.get(ResourceLocking.class);
-        final var locksType = new ReflectionUtils.TypeToken<Map<String, Semaphore>>() {};
+        final var locksType = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {};
         final var locks = TestUtils.getPrivateField(locker, "locks", locksType);
-        for (var lock : locks.entrySet()) {
-            lock.getValue().release();
+        for (var lock : locks.values()) {
+            while (lock.isWriteLockedByCurrentThread()) {
+                lock.writeLock().unlock();
+            }
+            while (lock.getReadHoldCount() > 0) {
+                lock.readLock().unlock();
+            }
         }
+        locks.clear();
     }
 }

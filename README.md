@@ -47,7 +47,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] sort
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
-- [ ] Better file locks
+- [x] Better file locks
 - [x] 95% test coverage
 - [x] Request validation
 - [x] Iterative read depending on available memory and document count
@@ -61,6 +61,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] Validation of configurations
 - [ ] Review and address TODOs
 - [ ] Remove all warnings from code
+- [ ] Fix tests marked as @Deprecated
+- [ ] Implement linting and formatting
 
 ## Wire Protocol / Message Reference
 
@@ -122,6 +124,10 @@ At least one object required.
 ```json
 {"type":"FIND_BY_ID","databaseName":"my_db","collectionName":"my_coll","_id":"user-1"}
 ```
+Read operations accept an optional `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
+```json
+{"type":"FIND_BY_ID","databaseName":"my_db","collectionName":"my_coll","_id":"user-1","dirtyRead":true}
+```
 
 #### `DELETE`
 ```json
@@ -129,7 +135,7 @@ At least one object required.
 ```
 
 #### `AGGREGATE`
-Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents).
+Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
 
 ```json
 {
@@ -412,6 +418,15 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 **Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
 
 **Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC. The inherently blocking steps — `SORT`, `GROUP_BY`, `JOIN`, `DISTINCT` — still materialize their working set in memory.
+
+### Concurrency & locking
+
+Locking is two-tier and applies to **both reads and writes** (earlier versions locked only writes):
+
+- **Collection-level read/write locks.** Each collection (and each field index) has a read/write lock. Reads acquire a *shared* read lock; writes (`SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`) acquire an *exclusive* write lock. While a writer holds a collection, nobody else may read or write it; multiple readers run concurrently. An `AGGREGATE` with `JOIN` steps read-locks the primary collection and every joined collection, acquiring them in a deterministic order so overlapping queries cannot deadlock. Cache eviction only evicts a resource it can exclusively (write) lock, so it never races an in-flight read or write.
+- **File-level read/write locks.** Below the collection tier, each physical `.dat`/`.idx` file has its own read/write lock, so a file's bytes are never read while they are being rewritten.
+
+**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection — but it still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting. Logical read-your-writes consistency against asynchronous background index updates is out of scope (it belongs to the pending *Transactions* work).
 
 ## Q&A
 
