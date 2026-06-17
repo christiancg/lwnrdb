@@ -31,7 +31,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
-- Each collection is split across pages (one file per page) sized up to `maxPageSizeBytes`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages_<collection>`, and the pagination of that admin collection is itself persisted under `admin/pages_pages_<collection>` (further levels are tracked in memory only and rebuilt at startup). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
+- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages_<collection>`, and the pagination of that admin collection is itself persisted under `admin/pages_pages_<collection>` (further levels are tracked in memory only and rebuilt at startup). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
 
 ## Pending tasks
 
@@ -58,7 +58,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
 - [x] Check that in join aggregations, the user should have permissions to the collection that is being joined
-- [ ] Validation of configurations
+- [x] Validation of configurations
 - [ ] Review and address TODOs
 - [ ] Remove all warnings from code
 
@@ -363,10 +363,39 @@ Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COL
 
 ### Bootstrap
 
-On first startup, if no admin user exists and `defaultAdminUsername` / `defaultAdminPassword` are set in `lwnrdb.cfg`, the server creates that user as superadmin. The password must be at least 8 characters. If neither an existing admin nor valid credentials are configured, the server starts but no privileged operations can be performed until an admin user is created directly.
+On first startup, if no admin user exists, the server creates a superadmin from `defaultAdminUsername` / `defaultAdminPassword`. Both are required and validated at startup (see Configuration), so the server always has a way to bootstrap an admin. If an admin user already exists, these values are ignored.
+
+### Configuration
+
+Configuration is read from `lwnrdb.cfg` in the working directory, falling back to bundled defaults for any missing key. Lines starting with `#` and blank lines are ignored, so you can document special cases inline.
+
+Every value is **validated at startup**. If any value is invalid, the server logs a `FATAL` error listing all problems and refuses to start.
 
 **`lwnrdb.cfg` keys:**
+
+| Key | Rule |
+|---|---|
+| `port` | Valid number, 1–65535 |
+| `maxConnections` | Valid number ≥ 0. `0` means unlimited connections |
+| `filePath` | Path that exists or can be created, and is writable by the process |
+| `logPath` | Path that exists or can be created, and is writable by the process |
+| `backgroundProcessingThreads` | Valid number ≥ 1 |
+| `maxLogFiles` | Valid number ≥ 1 |
+| `maxPageSize` | Human-readable size (e.g. `2Mb`) > 0, and strictly greater than `maxEntrySize` |
+| `maxEntrySize` | Human-readable size (e.g. `1Mb`) > 0, and strictly smaller than `maxPageSize` |
+| `defaultAdminUsername` | Non-blank string |
+| `defaultAdminPassword` | Non-blank string, at least 8 characters |
+| `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
+
 ```
+# the port the server listens on
+port=8989
+# 0 = unlimited connections
+maxConnections=100
+filePath=db
+logPath=logs
+maxPageSize=2Mb
+maxEntrySize=1Mb
 defaultAdminUsername=admin
 defaultAdminPassword=adminstrator
 maxMemory=512Mb

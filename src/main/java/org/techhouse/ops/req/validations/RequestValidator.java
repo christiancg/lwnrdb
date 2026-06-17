@@ -12,7 +12,7 @@ public class RequestValidator {
     static final String NAME_PATTERN = "^[a-zA-Z0-9_-]{3,64}$";
     private static final String ID_PATTERN = "^[a-zA-Z0-9_-]{1,64}$";
     private static final String USERNAME_PATTERN = NAME_PATTERN;
-    private static final int PASSWORD_MIN_LENGTH = 8;
+    private static final int PASSWORD_MIN_LENGTH = Globals.PASSWORD_MIN_LENGTH;
 
     public static ValidationResult validate(OperationRequest request) {
         return switch (request.getType()) {

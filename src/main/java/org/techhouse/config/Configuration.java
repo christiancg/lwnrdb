@@ -1,5 +1,6 @@
 package org.techhouse.config;
 
+import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.log.Logger;
 
 public class Configuration {
@@ -12,8 +13,8 @@ public class Configuration {
     private int backgroundProcessingThreads;
     private String logPath;
     private int maxLogFiles;
-    private int maxPageSizeBytes;
-    private int maxEntrySizeBytes;
+    private long maxPageSize;
+    private long maxEntrySize;
     private String defaultAdminUsername;
     private String defaultAdminPassword;
     private long maxMemoryBytes;
@@ -23,6 +24,12 @@ public class Configuration {
 
     private void load() {
         final var configs = ConfigReader.loadConfiguration();
+        final var errors = ConfigurationValidator.validate(configs);
+        if (!errors.isEmpty()) {
+            logger.fatal("Configuration validation failed, the application will not start:" +
+                    Globals.NEWLINE + String.join(Globals.NEWLINE, errors));
+            throw new InvalidConfigurationException(errors);
+        }
         for (var config: configs.entrySet()) {
             switch (config.getKey()) {
                 case "port" -> port = Integer.parseInt(config.getValue());
@@ -31,19 +38,11 @@ public class Configuration {
                 case "backgroundProcessingThreads" -> backgroundProcessingThreads = Integer.parseInt(config.getValue());
                 case "logPath" -> logPath = config.getValue();
                 case "maxLogFiles" -> maxLogFiles = Integer.parseInt(config.getValue());
-                case "maxPageSizeBytes" -> maxPageSizeBytes = Integer.parseInt(config.getValue());
-                case "maxEntrySizeBytes" -> maxEntrySizeBytes = Integer.parseInt(config.getValue());
+                case "maxPageSize" -> maxPageSize = SizeParser.parse(config.getValue());
+                case "maxEntrySize" -> maxEntrySize = SizeParser.parse(config.getValue());
                 case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
                 case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
-                case "maxMemory" -> {
-                    try {
-                        maxMemoryBytes = SizeParser.parse(config.getValue());
-                    } catch (IllegalArgumentException e) {
-                        logger.warning("Invalid maxMemory value '" + config.getValue() +
-                                "', falling back to unlimited (0)");
-                        maxMemoryBytes = 0L;
-                    }
-                }
+                case "maxMemory" -> maxMemoryBytes = SizeParser.parse(config.getValue());
             }
         }
     }
@@ -79,12 +78,12 @@ public class Configuration {
         return maxLogFiles;
     }
 
-    public int getMaxPageSizeBytes() {
-        return maxPageSizeBytes;
+    public long getMaxPageSize() {
+        return maxPageSize;
     }
 
-    public int getMaxEntrySizeBytes() {
-        return maxEntrySizeBytes;
+    public long getMaxEntrySize() {
+        return maxEntrySize;
     }
 
     public String getDefaultAdminUsername() {
