@@ -514,7 +514,7 @@ public class Cache {
             // file-based page stream (still only one page resident at a time).
             return fs.streamEntries(dbName, collName);
         }
-        final var maxPageBytes = configuration.getMaxPageSizeBytes();
+        final var maxPageBytes = configuration.getMaxPageSize();
         final var sortedPages = collPages.stream()
                 .sorted(Comparator.comparingLong(AdminPageEntry::getPage))
                 .toList();
@@ -538,7 +538,7 @@ public class Cache {
 
     public long selectPageForInsert(String dbName, String collName, int entryByteSize,
                                     Map<Long, Long> pendingPageBytes) {
-        final var maxPageBytes = configuration.getMaxPageSizeBytes();
+        final var maxPageBytes = configuration.getMaxPageSize();
         final var pageEntries = pages.computeIfAbsent(getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
         final var fit = pageEntries.stream()
                 .sorted(Comparator.comparingLong(AdminPageEntry::getPage))

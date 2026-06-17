@@ -4,6 +4,7 @@ import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
@@ -25,6 +26,7 @@ public class Main {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
         if (args.length > 0) {
@@ -51,8 +53,18 @@ public class Main {
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
         warnIfXmxExceedsMaxMemory();
+        warnIfDefaultAdminPassword();
         final var server = new SocketServer(port);
         server.serve();
+    }
+
+    static void warnIfDefaultAdminPassword() {
+        if (Globals.DEFAULT_ADMIN_PASSWORD.equals(config.getDefaultAdminPassword())) {
+            logger.warning(
+                    "SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. " +
+                    "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid " +
+                    "unauthorized access.");
+        }
     }
 
     static void warnIfXmxExceedsMaxMemory() {
@@ -62,7 +74,7 @@ public class Main {
         final var xmx = Runtime.getRuntime().maxMemory();
         final var cap = config.getMaxMemoryBytes();
         if (xmx > cap * 2L) {
-            Logger.logFor(Main.class).warning(
+            logger.warning(
                     "JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxMemory (" + cap +
                     " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps " +
                     "committed; set -Xmx close to maxMemory so the OS-visible process size " +
@@ -79,22 +91,11 @@ public class Main {
             return;
         }
 
+        // defaultAdminUsername/defaultAdminPassword are validated at startup
+        // (non-blank username, password at least Globals.PASSWORD_MIN_LENGTH chars),
+        // so they are guaranteed to be usable here.
         final var defaultUsername = config.getDefaultAdminUsername();
         final var defaultPassword = config.getDefaultAdminPassword();
-
-        if (defaultUsername == null || defaultUsername.isBlank() ||
-            defaultPassword == null || defaultPassword.isBlank()) {
-            Logger.logFor(Main.class).warning(
-                    "No admin user found and no default admin configured. " +
-                    "Set defaultAdminUsername and defaultAdminPassword in lwnrdb.cfg to bootstrap.");
-            return;
-        }
-
-        if (defaultPassword.length() < 8) {
-            Logger.logFor(Main.class).warning(
-                    "Default admin password must be at least 8 characters. Not bootstrapping.");
-            return;
-        }
 
         final var passwordHash = PasswordHasher.hash(defaultPassword);
         final var globalPerms = new HashSet<GlobalPermissionType>();
@@ -112,7 +113,7 @@ public class Main {
 
         try {
             AdminOperationHelper.saveUserEntry(adminUser);
-            Logger.logFor(Main.class).info("Bootstrapped default admin user: " + defaultUsername);
+            logger.info("Bootstrapped default admin user: " + defaultUsername);
         } catch (InterruptedException e) {
             throw new RuntimeException("Failed to bootstrap admin user", e);
         }
