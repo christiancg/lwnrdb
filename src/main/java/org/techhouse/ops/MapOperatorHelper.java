@@ -5,7 +5,12 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import org.techhouse.config.Globals;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
@@ -307,6 +312,7 @@ public class MapOperatorHelper {
                         try {
                             yield new JsonNumber(Double.parseDouble(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
+                            // not a valid number; fall through to JsonNull below
                         }
                     }
                     yield JsonNull.INSTANCE;
@@ -331,6 +337,7 @@ public class MapOperatorHelper {
                         try {
                             yield new JsonBoolean(Boolean.parseBoolean(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
+                            // not a valid boolean; fall through to JsonNull below
                         }
                     } else if (primitive.isJsonNumber()) {
                         final var number = primitive.asJsonNumber().getValue().doubleValue();

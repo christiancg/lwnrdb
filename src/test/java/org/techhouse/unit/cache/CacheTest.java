@@ -5,10 +5,19 @@ import static org.mockito.Mockito.*;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -18,7 +27,12 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ejson.custom_types.JsonTime;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -1951,7 +1965,7 @@ public class CacheTest {
         injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
 
         final List<DbEntry> result;
-        try (final var stream = cache.streamCollection("userDb", "c1")) {
+        try (var stream = cache.streamCollection("userDb", "c1")) {
             result = stream.toList();
         }
 
@@ -1985,7 +1999,7 @@ public class CacheTest {
         when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
 
         final List<DbEntry> result;
-        try (final var stream = cache.streamCollection("userDb", "c1")) {
+        try (var stream = cache.streamCollection("userDb", "c1")) {
             result = stream.toList();
         }
 
@@ -2005,7 +2019,7 @@ public class CacheTest {
         when(fsMock.streamEntries("userDb", "c1")).thenReturn(Stream.of(DbEntry.fromJsonObject("userDb", "c1", o1)));
 
         final List<DbEntry> result;
-        try (final var stream = cache.streamCollection("userDb", "c1")) {
+        try (var stream = cache.streamCollection("userDb", "c1")) {
             result = stream.toList();
         }
 
@@ -2040,7 +2054,7 @@ public class CacheTest {
             when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
 
             final List<DbEntry> result;
-            try (final var stream = cache.streamCollection("userDb", "c1")) {
+            try (var stream = cache.streamCollection("userDb", "c1")) {
                 result = stream.toList();
             }
 

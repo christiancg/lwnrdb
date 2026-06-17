@@ -9,7 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.IntPredicate;
 
-public class ConfigurationValidator {
+public final class ConfigurationValidator {
 
     private ConfigurationValidator() {
     }

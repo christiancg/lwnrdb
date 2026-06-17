@@ -20,7 +20,7 @@ public class UnsafeAllocatorTest {
         class TestClassWithConstructor {
             private String testField;
 
-            public TestClassWithConstructor(String testField) {
+            TestClassWithConstructor(String testField) {
                 this.testField = testField;
             }
         }

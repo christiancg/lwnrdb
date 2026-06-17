@@ -10,7 +10,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 
-public class DatabaseStatsHelper {
+public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
 
     private DatabaseStatsHelper() {

@@ -17,7 +17,11 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.auth.AuthorizationChecker;
-import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.DropCollectionRequest;
+import org.techhouse.ops.req.DropDatabaseRequest;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.test.TestUtils;
 
 public class AuthorizationCheckerOwnershipTest {

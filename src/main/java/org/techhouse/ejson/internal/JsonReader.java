@@ -1,7 +1,11 @@
 package org.techhouse.ejson.internal;
 
 import java.util.List;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class JsonReader {

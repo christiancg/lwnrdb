@@ -67,7 +67,7 @@ public class CustomTypeFactoryTest {
     }
 
     private static class InvalidCustomType extends JsonCustom<Locale> {
-        public InvalidCustomType(Locale value) {
+        InvalidCustomType(Locale value) {
             super(value);
         }
 

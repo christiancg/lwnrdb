@@ -7,7 +7,10 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
-import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.ChangePermissionsRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 
 public class UserRequestValidationTest {

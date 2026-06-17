@@ -5,11 +5,24 @@ import java.math.BigInteger;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonPrimitive;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
-import org.techhouse.ejson.type_adapters.impl.*;
+import org.techhouse.ejson.type_adapters.impl.BooleanTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.JsonArrayTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.JsonBaseElementTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.JsonObjectTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.JsonPrimitiveTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
+import org.techhouse.ejson.type_adapters.impl.StringTypeAdapter;
 
 public class EJson {
     private final JsonReader reader = new JsonReader();

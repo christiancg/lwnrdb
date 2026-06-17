@@ -2,7 +2,7 @@ package org.techhouse.ejson.elements;
 
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
-public class JsonSyntaxToken extends JsonBaseElement {
+public final class JsonSyntaxToken extends JsonBaseElement {
     private enum SyntaxToken {
         LEFT_BRACE, RIGHT_BRACE, LEFT_BRACKET, RIGHT_BRACKET, COMMA, COLON
     }

@@ -1,6 +1,6 @@
 package org.techhouse.ops.req.validations;
 
-public class ValidationResult {
+public final class ValidationResult {
     private final boolean valid;
     private final String errorMessage;
 

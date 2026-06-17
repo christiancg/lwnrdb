@@ -5,9 +5,9 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.ex.DependencyInjectionFailed;
 
-public class IocContainer {
+public final class IocContainer {
 
-    private final static IocContainer instance = new IocContainer();
+    private static final IocContainer instance = new IocContainer();
 
     private final Map<String, Object> dependencies = new ConcurrentHashMap<>();
 

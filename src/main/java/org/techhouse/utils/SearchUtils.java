@@ -163,7 +163,8 @@ public class SearchUtils {
 
     private static <T extends JsonCustom<K>, K> int internalGreaterSmallerEquals(List<FieldIndexEntry<T>> entries,
             JsonCustom<K> value, GreaterSmallerEqualsType type) {
-        int start = 0, end = entries.size() - 1;
+        int start = 0;
+        int end = entries.size() - 1;
         // Minimum size of the array should be 1
         if (end == 0) {
             return -1;
@@ -194,6 +195,8 @@ public class SearchUtils {
                 if (value.compare(entry.getValue().getCustomValue()) <= 0) {
                     return start;
                 }
+            }
+            default -> {
             }
         }
         int ans = -1;
@@ -228,7 +231,8 @@ public class SearchUtils {
 
     private static int internalGreaterSmallerEquals(List<FieldIndexEntry<Double>> entries, Double value,
             GreaterSmallerEqualsType type) {
-        int start = 0, end = entries.size() - 1;
+        int start = 0;
+        int end = entries.size() - 1;
         // Minimum size of the array should be 1
         if (end == 0) {
             return -1;
@@ -259,6 +263,8 @@ public class SearchUtils {
                 if (value <= entry.getValue()) {
                     return start;
                 }
+            }
+            default -> {
             }
         }
         int ans = -1;
