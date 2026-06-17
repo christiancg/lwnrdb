@@ -26,6 +26,7 @@ public class Globals {
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;
     public static final int PASSWORD_MIN_LENGTH = 8;
+    public static final String DEFAULT_ADMIN_PASSWORD = "adminstrator";
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";
