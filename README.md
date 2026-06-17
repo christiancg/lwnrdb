@@ -57,7 +57,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
-- [ ] Check that in join aggregations, the user should have permissions to the collection that is being joined
+- [x] Check that in join aggregations, the user should have permissions to the collection that is being joined
 - [ ] Validation of configurations
 - [ ] Review and address TODOs
 - [ ] Remove all warnings from code
@@ -151,7 +151,7 @@ Queries run through a pipeline of steps. `aggregationSteps` may be empty (return
 | `FILTER` | `operator` | Field or conjunction operator |
 | `MAP` | `operators` (non-empty) | Each operator needs `fieldName` |
 | `GROUP_BY` | `fieldName` | |
-| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules |
+| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules; the user must also have `READ` on `joinCollection` |
 | `COUNT` | — | Returns `{"count": N}` |
 | `DISTINCT` | — | `fieldName` is optional; omitting it deduplicates whole documents |
 | `LIMIT` | `limit` (> 0) | |
@@ -350,7 +350,7 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`. An `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.
 
 ### Authentication errors
