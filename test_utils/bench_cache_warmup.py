@@ -179,6 +179,11 @@ def main():
     print(f"  cache after insert: {cb_before/1024/1024:.2f}MB")
     s.close()
 
+    # Let async background workers finish writing admin metadata to disk before
+    # the abrupt SIGTERM below — otherwise we corrupt admin pages and the next
+    # boot has to salvage them.
+    time.sleep(3)
+
     # Restart server to clear the in-memory cache so the "cold" call really is cold.
     print("Restarting server to clear cache ...")
     kill_server()
