@@ -50,13 +50,17 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Better file locks
 - [x] 95% test coverage
 - [x] Request validation
-- [ ] Iterative read depending on available memory and document count
-- [ ] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm)
+- [x] Iterative read depending on available memory and document count
+- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxMemory` configuration)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
 - [ ] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
+- [ ] Check that in join aggregations, the user should have permissions to the collection that is being joined
+- [ ] Validation of configurations
+- [ ] Review and address TODOs
+- [ ] Remove all warnings from code
 
 ## Wire Protocol / Message Reference
 
@@ -238,6 +242,62 @@ Replaces the full owners list for a database. All usernames must already exist. 
 {"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
 ```
 
+#### `GET_DATABASE_STATS` (admin only)
+Returns memory usage, totals, and per-database/per-collection breakdown. Useful for monitoring eviction and tuning `maxMemory`.
+
+```json
+{"type":"GET_DATABASE_STATS"}
+```
+
+Response shape:
+
+```json
+{
+  "type": "GET_DATABASE_STATS",
+  "status": "OK",
+  "stats": {
+    "memory": {
+      "heapUsedBytes": 123456789,
+      "heapMaxBytes": 6442450944,
+      "heapCommittedBytes": 268435456,
+      "userCacheBytes": 2097152,
+      "maxMemoryBytes": 536870912,
+      "cachingDisabled": false,
+      "cacheUnlimited": false
+    },
+    "totals": {
+      "userCount": 3,
+      "databaseCount": 1,
+      "collectionCount": 2,
+      "indexCount": 1,
+      "pageCount": 4,
+      "entryCount": 5000,
+      "sizeBytes": 2560000
+    },
+    "databases": [
+      {
+        "name": "my_db",
+        "collectionCount": 2,
+        "indexCount": 1,
+        "pageCount": 4,
+        "entryCount": 5000,
+        "sizeBytes": 2560000,
+        "collections": [
+          {
+            "name": "my_coll",
+            "indexCount": 1,
+            "indexes": ["email"],
+            "pageCount": 2,
+            "entryCount": 3000,
+            "sizeBytes": 1536000
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 #### `LIST_USERS` (admin only)
 Returns all users with their permissions. `passwordHash` is never included in the response. `aggregationSteps` is optional; when omitted all users are returned.
 
@@ -305,11 +365,24 @@ Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COL
 
 On first startup, if no admin user exists and `defaultAdminUsername` / `defaultAdminPassword` are set in `lwnrdb.cfg`, the server creates that user as superadmin. The password must be at least 8 characters. If neither an existing admin nor valid credentials are configured, the server starts but no privileged operations can be performed until an admin user is created directly.
 
-**New `lwnrdb.cfg` keys:**
+**`lwnrdb.cfg` keys:**
 ```
 defaultAdminUsername=admin
-defaultAdminPassword=
+defaultAdminPassword=adminstrator
+maxMemory=512Mb
 ```
+
+### Memory management
+
+`maxMemory` is the **JVM heap-used budget**: a background sweep (every 5s) drops least-frequently-used user collections/indexes whenever the JVM heap exceeds this value, until heap is back below the budget. Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+- `0` — unlimited; caching is on but eviction never triggers (suitable when `-Xmx` is already the only ceiling you want).
+- `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
+
+Eviction order is LFU. Access counts are recorded asynchronously and persisted in the `admin/collection_usage` collection; records older than 24h are pruned hourly. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
+
+**Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
+
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC. The inherently blocking steps — `SORT`, `GROUP_BY`, `JOIN`, `DISTINCT` — still materialize their working set in memory.
 
 ## Q&A
 

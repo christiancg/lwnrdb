@@ -8,10 +8,24 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
 
+import java.util.Set;
+
 public final class AuthorizationChecker {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(
+            OperationType.CREATE_USER,
+            OperationType.DELETE_USER,
+            OperationType.CHANGE_PERMISSIONS,
+            OperationType.SET_DATABASE_OWNERS,
+            OperationType.LIST_USERS,
+            OperationType.GET_DATABASE_STATS
+    );
 
     private AuthorizationChecker() {
+    }
+
+    private static boolean isAdminOnly(OperationType type) {
+        return ADMIN_ONLY_OPERATIONS.contains(type);
     }
 
     public static AuthorizationResult check(OperationRequest req, AdminUserEntry user) {
@@ -25,10 +39,7 @@ public final class AuthorizationChecker {
 
         final var type = req.getType();
 
-        // Admin-only operations
-        if (type == OperationType.CREATE_USER || type == OperationType.DELETE_USER
-                || type == OperationType.CHANGE_PERMISSIONS || type == OperationType.SET_DATABASE_OWNERS
-                || type == OperationType.LIST_USERS) {
+        if (isAdminOnly(type)) {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 

@@ -1,14 +1,18 @@
 package org.techhouse.bckg_ops;
 
 import org.techhouse.bckg_ops.events.*;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
 import java.io.IOException;
 
 public class EventProcessorHelper {
+    private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+
     public static void processEvent(Event event)
             throws IOException, InterruptedException {
         switch (event) {
@@ -17,6 +21,9 @@ public class EventProcessorHelper {
             case EntityEvent entityEvent -> processEntityEvent(entityEvent);
             case IndexEvent indexEvent -> processIndexEvent(indexEvent);
             case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent);
+            case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
+            case UsageProfileCleanupEvent ignored -> AdminOperationHelper.cleanupCollectionUsage(
+                    memoryManagement.usageRetentionMillis());
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }

@@ -22,6 +22,9 @@ public class Globals {
     public static final String ADMIN_COLLECTIONS_COLLECTION_NAME = "collections";
     public static final String ADMIN_USERS_COLLECTION_NAME = "users";
     public static final String ADMIN_PAGES_PER_COLLECTION_NAME = "pages_%s_%s";
+    public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
+    public static final long CACHE_DISABLED = -1L;
+    public static final long CACHE_UNLIMITED = 0L;
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";

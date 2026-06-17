@@ -889,4 +889,191 @@ public class FileSystemTest {
 
         assertNull(fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "nope"));
     }
+
+    @Test
+    public void test_readWholeCollectionPage_skips_malformed_lines() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+
+        // Insert one valid entry so the page file exists with a known good line.
+        final var entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("good");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+        fs.insertIntoCollection(entry);
+
+        // Append a torn/garbage line, simulating a crash mid-write.
+        final var pageFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +
+                Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR +
+                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
+        Files.writeString(pageFile.toPath(), "\nthis-is-not-json{partial",
+                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+
+        // The malformed line is skipped in-memory; the file is left untouched
+        // so the .idx file's byte offsets remain valid (rewriting the .dat
+        // here would require coordinated .idx rewriting — a real compaction).
+        final var firstRead = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0L);
+        assertEquals(1, firstRead.size());
+        assertTrue(firstRead.containsKey("good"));
+
+        final var diskLines = Files.readAllLines(pageFile.toPath());
+        assertTrue(diskLines.stream().anyMatch(l -> l.contains("partial")),
+                ".dat is intentionally left as-is to preserve .idx offsets");
+    }
+
+    @Test
+    public void test_readWholePkIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+
+        final var entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("good");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+        fs.insertIntoCollection(entry);
+
+        // Compose the PK index file path manually and append a garbage line.
+        final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB +
+                Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR +
+                TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD +
+                Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
+        Files.writeString(indexFile.toPath(), "\nthis is not a valid pk index line",
+                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+
+        final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, firstRead.size());
+        assertEquals("good", firstRead.getFirst().getValue());
+
+        final var diskLines = Files.readAllLines(indexFile.toPath());
+        assertTrue(diskLines.stream().noneMatch(l -> l.contains("not a valid")),
+                "the malformed PK index line should have been removed");
+
+        final var secondRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, secondRead.size());
+    }
+
+    // getByIndexEntries returns an empty list for null or empty input
+    @Test
+    public void test_get_by_index_entries_empty_input() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+
+        assertTrue(fs.getByIndexEntries(null).isEmpty());
+        assertTrue(fs.getByIndexEntries(new ArrayList<>()).isEmpty());
+    }
+
+    // getByIndexEntries reads only the requested entries across multiple pages
+    @Test
+    public void test_get_by_index_entries_reads_requested_across_pages() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entries = new ArrayList<DbEntry>();
+        for (int i = 0; i < 3; i++) {
+            JsonObject d = new JsonObject();
+            d.addProperty("v", i);
+            DbEntry e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d);
+            e.set_id("p0-" + i);
+            e.setPage(0);
+            entries.add(e);
+        }
+        JsonObject d3 = new JsonObject();
+        d3.addProperty("v", 99);
+        DbEntry e3 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d3);
+        e3.set_id("p1-0");
+        e3.setPage(1);
+        entries.add(e3);
+
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        final var byId = new HashMap<String, PkIndexEntry>();
+        for (var ix : indexed) {
+            byId.put(ix.get_id(), ix.getIndex());
+        }
+
+        // Request one from page 0 and one from page 1 — must get exactly those two.
+        final var requested = List.of(byId.get("p0-1"), byId.get("p1-0"));
+        final var result = fs.getByIndexEntries(requested);
+
+        assertEquals(2, result.size());
+        final var ids = result.stream().map(DbEntry::get_id).collect(java.util.stream.Collectors.toSet());
+        assertTrue(ids.contains("p0-1"));
+        assertTrue(ids.contains("p1-0"));
+        final var p01 = result.stream().filter(e -> e.get_id().equals("p0-1")).findFirst().orElseThrow();
+        assertEquals(1, p01.getData().get("v").asJsonNumber().getValue().intValue());
+    }
+
+    // getByIndexEntries reads multiple entries from a single page in position order
+    @Test
+    public void test_get_by_index_entries_single_page_multiple() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entries = new ArrayList<DbEntry>();
+        for (int i = 0; i < 3; i++) {
+            JsonObject d = new JsonObject();
+            d.addProperty("name", "n" + i);
+            DbEntry e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d);
+            e.set_id("id-" + i);
+            entries.add(e);
+        }
+        final var indexed = fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        final var pkEntries = indexed.stream().map(IndexedDbEntry::getIndex).collect(java.util.stream.Collectors.toList());
+
+        final var result = fs.getByIndexEntries(pkEntries);
+        assertEquals(3, result.size());
+        final var ids = result.stream().map(DbEntry::get_id).collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("id-0", "id-1", "id-2"), ids);
+    }
+
+    // streamEntries on a missing/empty collection yields an empty stream
+    @Test
+    public void test_stream_entries_empty_collection() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+
+        try (final var stream = fs.streamEntries(TestGlobals.DB, "nonExistentColl")) {
+            assertEquals(0, stream.count());
+        }
+    }
+
+    // streamEntries yields all entries across pages
+    @Test
+    public void test_stream_entries_yields_all_across_pages() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entries = new ArrayList<DbEntry>();
+        JsonObject d1 = new JsonObject(); d1.addProperty("f", "a");
+        DbEntry e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d1);
+        e1.set_id("a"); e1.setPage(0);
+        JsonObject d2 = new JsonObject(); d2.addProperty("f", "b");
+        DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d2);
+        e2.set_id("b"); e2.setPage(1);
+        entries.add(e1);
+        entries.add(e2);
+        fs.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+
+        final Set<String> ids;
+        try (final var stream = fs.streamEntries(TestGlobals.DB, TestGlobals.COLL)) {
+            ids = stream.map(DbEntry::get_id).collect(java.util.stream.Collectors.toSet());
+        }
+        assertEquals(Set.of("a", "b"), ids);
+    }
 }

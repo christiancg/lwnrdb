@@ -43,7 +43,6 @@ public class ConfigurationTest {
         Configuration.getInstance();
     }
 
-    // Configuration loads correctly with all valid default settings
     @Test
     public void test_loads_with_valid_default_settings() {
         Configuration config = Configuration.getInstance();
@@ -55,7 +54,6 @@ public class ConfigurationTest {
         assertEquals(7, config.getMaxLogFiles());
     }
 
-    // Configuration loads all properties correctly from default and file sources
     @Test
     public void test_loads_all_properties_correctly() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
@@ -117,15 +115,11 @@ public class ConfigurationTest {
         }
     }
 
-    // Configuration file is missing or unreadable
     @Test
     public void test_configuration_file_missing_or_unreadable() {
-        // Simulate missing or unreadable file by mocking ConfigReader
         try(MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
             mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(new HashMap<>());
             Configuration config = Configuration.getInstance();
-
-            // Everything should be default
             assertEquals(8989, config.getPort());
             assertEquals(100, config.getMaxConnections());
             assertEquals("db",config.getFilePath());
@@ -135,9 +129,85 @@ public class ConfigurationTest {
         }
     }
 
-    // Globals instantiation covers implicit default constructor (L5)
     @Test
     public void test_globals_instantiation() {
         assertNotNull(new Globals());
+    }
+
+    @Test
+    public void test_loads_maxMemory_humanReadable() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("maxMemory=512Mb");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(512L * 1024L * 1024L, config.getMaxMemoryBytes());
+            assertFalse(config.isCachingDisabled());
+            assertFalse(config.isCacheUnlimited());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_maxMemory_defaults_to_unlimited_when_missing() throws NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        TestUtils.setPrivateField(configInstance, "maxMemoryBytes", 0L);
+        final var minimalConfig = new HashMap<String, String>();
+        minimalConfig.put("port", "8989");
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(minimalConfig);
+            final var config = Configuration.getInstance();
+            assertEquals(0L, config.getMaxMemoryBytes());
+            assertTrue(config.isCacheUnlimited());
+            assertFalse(config.isCachingDisabled());
+        }
+    }
+
+    @Test
+    public void test_maxMemory_disabled_when_minus_one() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("maxMemory=-1");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(-1L, config.getMaxMemoryBytes());
+            assertTrue(config.isCachingDisabled());
+            assertFalse(config.isCacheUnlimited());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
+    }
+
+    @Test
+    public void test_maxMemory_invalid_falls_back_to_unlimited() throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var configInstance = Configuration.getInstance();
+        TestUtils.setPrivateField(configInstance, "port", 0);
+        final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
+        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+            writer.write("maxMemory=nonsense");
+            writer.newLine();
+        }
+        try {
+            final var config = Configuration.getInstance();
+            assertEquals(0L, config.getMaxMemoryBytes());
+        } finally {
+            if (!newConfigFile.delete()) {
+                fail("Failed deleting temp test file");
+            }
+        }
     }
 }

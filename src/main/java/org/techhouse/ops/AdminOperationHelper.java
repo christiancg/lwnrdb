@@ -1,13 +1,16 @@
 package org.techhouse.ops;
 
+import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -25,6 +28,7 @@ public class AdminOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
     private static void lockAdminCollectionsCollection() throws InterruptedException {
         locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
@@ -403,6 +407,84 @@ public class AdminOperationHelper {
             cache.putAdminUserEntry(userEntry, adminUserEntry);
         } finally {
             releaseAdminUsersCollection();
+        }
+    }
+
+    private static void lockAdminCollectionUsageCollection() throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+    }
+
+    private static void releaseAdminCollectionUsageCollection() {
+        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+    }
+
+    public static void upsertCollectionUsage(CollectionUsageEvent event)
+            throws IOException, InterruptedException {
+        if (Globals.ADMIN_DB_NAME.equals(event.getDbName())) {
+            return;
+        }
+        memoryManagement.recordAccess(event.getKind(), event.getDbName(), event.getCollName(), event.getIndexKey());
+        final var counter = memoryManagement.getCounter(event.getKind(), event.getDbName(), event.getCollName(),
+                event.getIndexKey());
+        if (counter == null) {
+            return;
+        }
+        lockAdminCollectionUsageCollection();
+        try {
+            final var entryId = AdminCollectionUsageEntry.buildId(counter.dbName(), counter.collName(),
+                    counter.indexKey());
+            final var usageEntry = new AdminCollectionUsageEntry(counter.kind(), counter.dbName(),
+                    counter.collName(), counter.indexKey(), counter.getAccessCount(), counter.getLastAccessMillis());
+            final var existingPk = cache.getPkIndexCollectionUsage(entryId);
+            PkIndexEntry savedPk;
+            if (existingPk != null) {
+                usageEntry.setPage(existingPk.getPage());
+                usageEntry.setPreviousByteSize(existingPk.getLength());
+                savedPk = fs.updateFromCollection(usageEntry, existingPk);
+                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
+                        EventType.UPDATED, List.of(usageEntry));
+            } else {
+                usageEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME,
+                        Globals.ADMIN_COLLECTION_USAGE_NAME, usageEntry.byteSize()));
+                savedPk = fs.insertIntoCollection(usageEntry);
+                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
+                        EventType.CREATED, List.of(usageEntry));
+            }
+            cache.putPkIndexCollectionUsage(savedPk);
+        } finally {
+            releaseAdminCollectionUsageCollection();
+        }
+    }
+
+    public static void cleanupCollectionUsage(long maxAgeMillis)
+            throws IOException, InterruptedException {
+        final var threshold = System.currentTimeMillis() - maxAgeMillis;
+        lockAdminCollectionUsageCollection();
+        try {
+            final var pkIndexes = new ArrayList<>(cache.getCollectionUsagePkIndexes().values());
+            for (var pk : pkIndexes) {
+                final DbEntry entry;
+                try {
+                    entry = fs.getById(pk);
+                } catch (Exception ex) {
+                    throw new IOException("Failed to read collection usage entry " + pk.getValue(), ex);
+                }
+                if (entry == null) continue;
+                final var data = entry.getData();
+                data.addProperty(Globals.PK_FIELD, entry.get_id());
+                final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
+                if (usage.getLastAccessMillis() < threshold) {
+                    usage.setPreviousByteSize(pk.getLength());
+                    fs.deleteFromCollection(pk);
+                    cache.removePkIndexCollectionUsage(pk.getValue());
+                    memoryManagement.clearCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
+                            usage.getIndexKey());
+                    baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
+                            EventType.DELETED, List.of(usage));
+                }
+            }
+        } finally {
+            releaseAdminCollectionUsageCollection();
         }
     }
 

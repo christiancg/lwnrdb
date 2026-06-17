@@ -1,7 +1,10 @@
 package org.techhouse.config;
 
+import org.techhouse.log.Logger;
+
 public class Configuration {
     private static final Configuration config = new Configuration();
+    private static final Logger logger = Logger.logFor(Configuration.class);
 
     private int port;
     private int maxConnections;
@@ -13,6 +16,7 @@ public class Configuration {
     private int maxEntrySizeBytes;
     private String defaultAdminUsername;
     private String defaultAdminPassword;
+    private long maxMemoryBytes;
 
     private Configuration() {
     }
@@ -31,6 +35,15 @@ public class Configuration {
                 case "maxEntrySizeBytes" -> maxEntrySizeBytes = Integer.parseInt(config.getValue());
                 case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
                 case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
+                case "maxMemory" -> {
+                    try {
+                        maxMemoryBytes = SizeParser.parse(config.getValue());
+                    } catch (IllegalArgumentException e) {
+                        logger.warning("Invalid maxMemory value '" + config.getValue() +
+                                "', falling back to unlimited (0)");
+                        maxMemoryBytes = 0L;
+                    }
+                }
             }
         }
     }
@@ -80,5 +93,17 @@ public class Configuration {
 
     public String getDefaultAdminPassword() {
         return defaultAdminPassword;
+    }
+
+    public long getMaxMemoryBytes() {
+        return maxMemoryBytes;
+    }
+
+    public boolean isCachingDisabled() {
+        return maxMemoryBytes == Globals.CACHE_DISABLED;
+    }
+
+    public boolean isCacheUnlimited() {
+        return maxMemoryBytes == Globals.CACHE_UNLIMITED;
     }
 }

@@ -78,6 +78,9 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined, Stream<JsonObject> resultStream,
                                                                   String dbName, String collName) {
         if (resultStream == null) {
+            // Blocking step (documented exception): NOR/NAND must diff against the full
+            // collection, so it loads the whole collection rather than streaming.
+            // TODO: see if we can improve this in the future, as it might cause an OOM exception when collections are too large
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
         return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD)))
@@ -183,30 +186,28 @@ public class FilterOperatorHelper {
             case JsonString jsonString -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
             default -> null;
         };
-        final var coll = cache.getWholeCollection(dbName, collName);
         if (matchingValues != null) {
-            final var partialList = new ArrayList<JsonObject>();
-            for (var match : matchingValues) {
-                partialList.add(coll.get(match).getData());
-            }
             if (resultStream == null) {
-                resultStream = partialList.stream();
+                // Index hit with no upstream stream: fetch only the matched entries via
+                // positioned reads instead of loading the whole collection into memory.
+                resultStream = cache.getEntriesByIds(dbName, collName, matchingValues).stream()
+                        .map(DbEntry::getData);
             } else {
-                final var idSet = partialList.stream()
-                        .filter(jsonObject -> jsonObject.has(Globals.PK_FIELD))
-                        .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
-                        .collect(Collectors.toSet());
+                // matchingValues already is the set of matching ids; filter the incoming
+                // stream against it directly, without loading the whole collection.
                 resultStream = resultStream.filter(jsonObject -> {
                     if (jsonObject.has(Globals.PK_FIELD)) {
                         final var id = jsonObject.get(Globals.PK_FIELD).asJsonString().getValue();
-                        return idSet.contains(id);
+                        return matchingValues.contains(id);
                     }
                     return false;
                 });
             }
         } else {
             if (resultStream == null) {
-                resultStream = coll.values().stream().map(DbEntry::getData)
+                // No index: scan the collection page-by-page (memory-aware) rather than
+                // materializing it all up front.
+                resultStream = cache.streamCollection(dbName, collName).map(DbEntry::getData)
                         .filter(data -> test.test(data, fieldName));
             } else {
                 resultStream = resultStream.filter(data -> test.test(data, fieldName));
