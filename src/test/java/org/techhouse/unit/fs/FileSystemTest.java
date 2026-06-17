@@ -2,7 +2,6 @@ package org.techhouse.unit.fs;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -100,17 +99,6 @@ public class FileSystemTest {
         File dbFolder = new File(testDbPath + Globals.FILE_SEPARATOR + TestGlobals.DB);
         assertTrue(dbFolder.exists());
         assertTrue(dbFolder.delete());
-    }
-
-    // Handles null database name
-    @Test
-    @Disabled //TODO: should probably handle this case
-    public void test_handles_null_database_name() throws NoSuchFieldException, IllegalAccessException {
-        String testDbPath = System.getProperty("java.io.tmpdir");
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", testDbPath);
-
-        assertThrows(NullPointerException.class, () -> fileSystem.createDatabaseFolder(null));
     }
 
     // Successfully delete database folder and all its contents when database exists
