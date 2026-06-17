@@ -137,20 +137,46 @@ public class FileSystem {
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
         final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getPage());
         try (final var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
-            reader.seek(pkIndexEntry.getPosition());
-            final var entryLength = (int) pkIndexEntry.getLength();
-            byte[] buffer = new byte[entryLength];
-            reader.readFully(buffer, 0, entryLength);
-            final var strEntry = new String(buffer);
-            final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
-            final var entry = new DbEntry();
-            entry.setDatabaseName(pkIndexEntry.getDatabaseName());
-            entry.setCollectionName(pkIndexEntry.getCollectionName());
-            entry.set_id(pkIndexEntry.getValue());
-            jsonObject.remove(Globals.PK_FIELD);
-            entry.setData(jsonObject);
-            return entry;
+            return readEntryFromOpenFile(reader, pkIndexEntry);
         }
+    }
+
+    private DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {
+        reader.seek(pkIndexEntry.getPosition());
+        final var entryLength = (int) pkIndexEntry.getLength();
+        byte[] buffer = new byte[entryLength];
+        reader.readFully(buffer, 0, entryLength);
+        final var strEntry = new String(buffer);
+        final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+        final var entry = new DbEntry();
+        entry.setDatabaseName(pkIndexEntry.getDatabaseName());
+        entry.setCollectionName(pkIndexEntry.getCollectionName());
+        entry.set_id(pkIndexEntry.getValue());
+        jsonObject.remove(Globals.PK_FIELD);
+        entry.setData(jsonObject);
+        return entry;
+    }
+
+    public List<DbEntry> getByIndexEntries(List<PkIndexEntry> entries) throws IOException {
+        final var result = new ArrayList<DbEntry>();
+        if (entries == null || entries.isEmpty()) {
+            return result;
+        }
+        final var byPage = entries.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage));
+        for (var pageGroup : byPage.entrySet()) {
+            final var first = pageGroup.getValue().getFirst();
+            final var file = getCollectionFile(first.getDatabaseName(), first.getCollectionName(), pageGroup.getKey());
+            // Read the page's requested entries in ascending position order for sequential seeks.
+            final var pageEntries = pageGroup.getValue().stream()
+                    .sorted(Comparator.comparingLong(PkIndexEntry::getPosition))
+                    .toList();
+            try (final var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
+                for (var pkEntry : pageEntries) {
+                    result.add(readEntryFromOpenFile(reader, pkEntry));
+                }
+            }
+        }
+        return result;
     }
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName, final List<T> entries) throws IOException {
@@ -668,6 +694,10 @@ public class FileSystem {
                     }
                 })
                 .onClose(pathStream::close);
+    }
+
+    public Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
+        return streamPages(dbName, collName).flatMap(map -> map.values().stream());
     }
 
     public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {

@@ -50,7 +50,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Better file locks
 - [x] 95% test coverage
 - [x] Request validation
-- [ ] Iterative read depending on available memory and document count
+- [x] Iterative read depending on available memory and document count
 - [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxMemory` configuration)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
@@ -379,6 +379,8 @@ maxMemory=512Mb
 Eviction order is LFU. Access counts are recorded asynchronously and persisted in the `admin/collection_usage` collection; records older than 24h are pruned hourly. Within the cache, PK indexes are preferred over field indexes, which are preferred over full document maps.
 
 **Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
+
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC. The inherently blocking steps — `SORT`, `GROUP_BY`, `JOIN`, `DISTINCT` — still materialize their working set in memory.
 
 ## Q&A
 
