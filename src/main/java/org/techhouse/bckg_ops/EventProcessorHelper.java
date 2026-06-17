@@ -11,6 +11,8 @@ import org.techhouse.ops.IndexHelper;
 import java.io.IOException;
 
 public class EventProcessorHelper {
+    private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+
     public static void processEvent(Event event)
             throws IOException, InterruptedException {
         switch (event) {
@@ -21,7 +23,7 @@ public class EventProcessorHelper {
             case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent);
             case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
             case UsageProfileCleanupEvent ignored -> AdminOperationHelper.cleanupCollectionUsage(
-                    IocContainer.get(MemoryManagement.class).usageRetentionMillis());
+                    memoryManagement.usageRetentionMillis());
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }
