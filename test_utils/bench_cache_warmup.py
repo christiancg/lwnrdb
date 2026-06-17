@@ -25,9 +25,9 @@ ADMIN_PASSWORD = "adminstrator"
 
 DB = "benchdb"
 COLL = "items"
-DOCS = 20_000
-PAYLOAD_BYTES = 512
-WARM_RUNS = 30
+DOCS = int(os.environ.get("BENCH_DOCS", "20000"))
+PAYLOAD_BYTES = int(os.environ.get("BENCH_PAYLOAD_BYTES", "512"))
+WARM_RUNS = int(os.environ.get("BENCH_WARM_RUNS", "30"))
 
 
 def send(s, f, payload):
