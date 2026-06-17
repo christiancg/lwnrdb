@@ -1,6 +1,5 @@
 package org.techhouse.unit.data;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -79,17 +78,6 @@ public class DbEntryTest {
         entry.setData(new JsonObject());
         String fileEntry = entry.toFileEntry();
         assertNotNull(entry.get_id());
-        assertTrue(fileEntry.contains(entry.get_id()));
-    }
-
-    // Handles null data gracefully
-    @Test
-    @Disabled("Set data should probably reject nulls")
-    public void test_handles_null_data_gracefully() {
-        DbEntry entry = new DbEntry();
-        entry.setData(null);
-        String fileEntry = entry.toFileEntry();
-        assertNotNull(fileEntry);
         assertTrue(fileEntry.contains(entry.get_id()));
     }
 

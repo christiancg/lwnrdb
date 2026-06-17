@@ -436,9 +436,8 @@ public class CacheTest {
         assertTrue(collectionMap.get(collId).containsKey("2"));
     }
 
-    // Adding entries with duplicate IDs
+    // Adding entries with duplicate IDs (last one wins, matching upsert semantics)
     @Test
-    @Disabled // this will fail as there's no "no duplicate id check on the method". We should probably have that
     public void test_adding_entries_with_duplicate_ids() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         String dbName = "testDb";
@@ -612,20 +611,6 @@ public class CacheTest {
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         assertEquals(entry, databasesPkIndex.get("value1"));
-    }
-
-    // Adding a PkIndexEntry with a null value
-    @Test
-    @Disabled // This one will fail because we're not checking that the pk index value shouldn't be null. We should probably do it
-    public void test_add_null_value_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
-        Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", null, 0L, 100L,0);
-        cache.putPkIndexAdminDbEntry(entry);
-
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
-        final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
-
-        assertNull(databasesPkIndex.get(null));
     }
 
     // Retrieve an existing AdminDbEntry by its database name

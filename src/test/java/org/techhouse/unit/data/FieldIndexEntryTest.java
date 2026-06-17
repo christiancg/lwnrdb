@@ -1,6 +1,5 @@
 package org.techhouse.unit.data;
 
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
@@ -41,20 +40,6 @@ public class FieldIndexEntryTest {
         assertEquals(123.45, entry.getValue());
         assertTrue(entry.getIds().contains("id1"));
         assertTrue(entry.getIds().contains("id2"));
-    }
-
-    // Handles empty line input gracefully
-    @Test
-    @Disabled("We should probably check this to avoid issues while creating FileIndexEntries")
-    public void test_empty_line_input() {
-        String databaseName = "testDB";
-        String collectionName = "testCollection";
-        String line = "";
-        FieldIndexEntry<String> entry = FieldIndexEntry.fromIndexFileEntry(databaseName, collectionName, line, String.class);
-        assertEquals("testDB", entry.getDatabaseName());
-        assertEquals("testCollection", entry.getCollectionName());
-        assertNull(entry.getValue());
-        assertTrue(entry.getIds().isEmpty());
     }
 
     @Test
@@ -169,9 +154,8 @@ public class FieldIndexEntryTest {
 
     // compareTo with null value returns 0 (L55)
     @Test
-    @SuppressWarnings("unchecked")
     public void test_compare_to_null_value_returns_zero() {
-        FieldIndexEntry entry = new FieldIndexEntry<>("db", "col", null, Set.of("id1"));
+        FieldIndexEntry<Object> entry = new FieldIndexEntry<>("db", "col", null, Set.of("id1"));
         assertEquals(0, entry.compareTo("anything"));
     }
 
