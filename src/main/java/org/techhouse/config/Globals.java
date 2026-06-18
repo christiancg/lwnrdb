@@ -2,7 +2,9 @@ package org.techhouse.config;
 
 import java.nio.file.FileSystems;
 
-public class Globals {
+public final class Globals {
+    private Globals() {
+    }
     public static final String PK_FIELD = "_id";
     public static final String PK_FIELD_TYPE = "String";
     public static final int BUFFER_SIZE = 32768;

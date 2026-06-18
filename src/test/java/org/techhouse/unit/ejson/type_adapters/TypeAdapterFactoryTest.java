@@ -111,12 +111,6 @@ public class TypeAdapterFactoryTest {
         assertSame(stringAdapter, result);
     }
 
-    // TypeAdapterFactory instantiation covers implicit default constructor (L14)
-    @Test
-    public void test_type_adapter_factory_instantiation() {
-        assertNotNull(new TypeAdapterFactory());
-    }
-
     // getAdapter(Class) for a JsonCustom subclass returns a JsonCustomTypeAdapter (L51-53)
     @Test
     public void test_get_adapter_for_custom_type() {

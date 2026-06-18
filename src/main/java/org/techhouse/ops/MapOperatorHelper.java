@@ -24,7 +24,10 @@ import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.utils.JsonUtils;
 
-public class MapOperatorHelper {
+public final class MapOperatorHelper {
+    private MapOperatorHelper() {
+    }
+
     public static JsonObject processOperator(MapOperator operator, JsonObject toMap) {
         final var condition = operator.getCondition();
         boolean continueProcessing = true;

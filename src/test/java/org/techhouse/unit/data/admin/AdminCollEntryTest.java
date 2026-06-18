@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
@@ -110,13 +111,13 @@ public class AdminCollEntryTest {
     @Test
     public void test_equals_different_class_returns_false() {
         AdminCollEntry entry = new AdminCollEntry("db", "coll");
-        assertFalse(entry.equals("notAnEntry"));
+        assertNotEquals("notAnEntry", entry);
     }
 
     @Test
     public void test_equals_different_indexes_returns_false() {
-        AdminCollEntry entry1 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx1")));
-        AdminCollEntry entry2 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx2")));
+        AdminCollEntry entry1 = new AdminCollEntry("db", "coll", new HashSet<>(List.of("idx1")));
+        AdminCollEntry entry2 = new AdminCollEntry("db", "coll", new HashSet<>(List.of("idx2")));
         assertNotEquals(entry1, entry2);
     }
 
@@ -129,8 +130,8 @@ public class AdminCollEntryTest {
 
     @Test
     public void test_hashCode_different_indexes_differs() {
-        AdminCollEntry entry1 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx1")));
-        AdminCollEntry entry2 = new AdminCollEntry("db", "coll", new HashSet<>(Arrays.asList("idx2")));
+        AdminCollEntry entry1 = new AdminCollEntry("db", "coll", new HashSet<>(List.of("idx1")));
+        AdminCollEntry entry2 = new AdminCollEntry("db", "coll", new HashSet<>(List.of("idx2")));
         assertNotEquals(entry1.hashCode(), entry2.hashCode());
     }
 

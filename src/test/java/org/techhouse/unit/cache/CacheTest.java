@@ -49,7 +49,7 @@ public class CacheTest {
     }
 
     @AfterEach
-    public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 

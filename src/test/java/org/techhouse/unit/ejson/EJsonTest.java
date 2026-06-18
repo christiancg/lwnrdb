@@ -189,11 +189,10 @@ public class EJsonTest {
     // Handle null JsonBaseElement input
     @Test
     public void test_handle_null_json_element() {
-        JsonBaseElement jsonElement = null;
         Class<String> targetClass = String.class;
 
         EJson eJson = new EJson();
 
-        assertThrows(NullPointerException.class, () -> eJson.fromJson(jsonElement, targetClass));
+        assertThrows(NullPointerException.class, () -> eJson.fromJson((JsonBaseElement) null, targetClass));
     }
 }

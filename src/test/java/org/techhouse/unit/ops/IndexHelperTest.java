@@ -34,7 +34,7 @@ public class IndexHelperTest {
     }
 
     @AfterEach
-    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -210,7 +210,7 @@ public class IndexHelperTest {
 
     // updateIndexes indexes a String-valued field for a CREATED event
     @Test
-    public void test_update_indexes_string_field() throws Exception {
+    public void test_update_indexes_string_field() {
         Cache cache = IocContainer.get(Cache.class);
         DbEntry entry = entryWith("s1", "tag", new JsonString("alpha"));
         setupCollection(cache, entry);
@@ -227,7 +227,7 @@ public class IndexHelperTest {
 
     // updateIndexes indexes a Boolean-valued field for a CREATED event
     @Test
-    public void test_update_indexes_boolean_field() throws Exception {
+    public void test_update_indexes_boolean_field() {
         Cache cache = IocContainer.get(Cache.class);
         DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
         setupCollection(cache, entry);

@@ -6,7 +6,7 @@ import org.techhouse.ejson.type_adapters.TypeAdapter;
 public class BooleanTypeAdapter implements TypeAdapter<Boolean> {
     @Override
     public String toJson(Boolean value) {
-        return value ? "true" : "false";
+        return value.toString();
     }
 
     @Override

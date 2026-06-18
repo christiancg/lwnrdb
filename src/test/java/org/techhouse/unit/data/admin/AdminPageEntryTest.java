@@ -81,7 +81,7 @@ public class AdminPageEntryTest {
     @Test
     public void test_equals_different_class_returns_false() {
         AdminPageEntry entry = new AdminPageEntry("db", "coll", 0L);
-        assertFalse(entry.equals("notAnEntry"));
+        assertNotEquals("notAnEntry", entry);
     }
 
     @Test

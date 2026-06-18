@@ -163,11 +163,6 @@ public class ConfigurationTest {
     }
 
     @Test
-    public void test_globals_instantiation() {
-        assertNotNull(new Globals());
-    }
-
-    @Test
     public void test_loads_maxMemory_humanReadable() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);

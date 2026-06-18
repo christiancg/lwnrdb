@@ -90,7 +90,7 @@ public class AdminCollectionUsageEntryTest {
     public void test_equals_null_and_different_class() {
         final var e = new AdminCollectionUsageEntry(AccessKind.COLLECTION, "db", "coll", "", 1L, 2L);
         assertNotEquals(null, e);
-        assertFalse(e.equals("string"));
+        assertNotEquals("string", e);
     }
 
     @Test

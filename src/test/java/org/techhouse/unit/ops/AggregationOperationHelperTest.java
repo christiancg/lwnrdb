@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,7 +46,7 @@ public class AggregationOperationHelperTest {
     }
 
     @AfterEach
-    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -452,12 +453,6 @@ public class AggregationOperationHelperTest {
         assertTrue(result.stream().allMatch(r -> !r.has("joined") || r.get("joined").asJsonArray().isEmpty()));
     }
 
-    // AggregationOperationHelper instantiation covers implicit constructor (L21)
-    @Test
-    public void test_aggregation_operation_helper_instantiation() {
-        assertNotNull(new AggregationOperationHelper());
-    }
-
     // MAP step with actual data exercises the lambda body (L61-62)
     @Test
     public void test_map_step_processes_actual_data() throws IOException {
@@ -468,6 +463,16 @@ public class AggregationOperationHelperTest {
         JsonArray operands = new JsonArray();
         operands.add(new JsonString("score"));
         operands.add(new JsonNumber(5));
+        AggregateRequest request = getAggregateRequest(operands);
+
+        List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
+
+        assertNotNull(result);
+        assertFalse(result.isEmpty());
+        assertTrue(result.stream().allMatch(r -> r.has("total")));
+    }
+
+    private static @NonNull AggregateRequest getAggregateRequest(JsonArray operands) {
         org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator sumOp = new org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator(
                 org.techhouse.ops.req.agg.mid_operators.MidOperationType.SUM, operands);
         org.techhouse.ops.req.agg.step.map.AddFieldMapOperator mapOp = new org.techhouse.ops.req.agg.step.map.AddFieldMapOperator(
@@ -475,12 +480,7 @@ public class AggregationOperationHelperTest {
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(new MapAggregationStep(List.of(mapOp))));
-
-        List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
-
-        assertNotNull(result);
-        assertFalse(result.isEmpty());
-        assertTrue(result.stream().allMatch(r -> r.has("total")));
+        return request;
     }
 
     // Handle missing fields in json objects during operations

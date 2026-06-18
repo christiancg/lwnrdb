@@ -182,7 +182,7 @@ public class IndexedDbEntryTest {
     public void test_equals_different_class_returns_false() {
         IndexedDbEntry entry = new IndexedDbEntry();
         entry.set_id("id1");
-        assertFalse(entry.equals("notAnEntry"));
+        assertNotEquals("notAnEntry", entry);
     }
 
     @Test
