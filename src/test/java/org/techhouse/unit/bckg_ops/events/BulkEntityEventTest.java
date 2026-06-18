@@ -81,7 +81,7 @@ public class BulkEntityEventTest {
     @Test
     public void test_equals_different_class_returns_false() {
         BulkEntityEvent event = new BulkEntityEvent("db", "coll", List.of(), List.of());
-        assertFalse(event.equals("notAnEvent"));
+        assertNotEquals("notAnEvent", event);
     }
 
     @Test

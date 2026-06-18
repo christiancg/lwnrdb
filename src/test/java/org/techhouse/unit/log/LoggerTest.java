@@ -5,7 +5,6 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mockStatic;
 
 import java.io.File;
-import java.io.IOException;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -23,7 +22,7 @@ import org.techhouse.test.TestUtils;
 
 public class LoggerTest {
     @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
+    public void setUp() throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
         final var logDir = new File(config.getLogPath());

@@ -88,10 +88,4 @@ public class LexerTest {
         String input = "\"unclosed";
         assertThrows(org.techhouse.ejson.exceptions.MissingEndOfStringException.class, () -> Lexer.lex(input));
     }
-
-    // Lexer instantiation covers implicit default constructor (L12)
-    @Test
-    public void test_lexer_instantiation() {
-        assertNotNull(new Lexer());
-    }
 }

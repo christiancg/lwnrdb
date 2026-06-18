@@ -10,7 +10,10 @@ import org.techhouse.ejson.type_adapters.impl.IterableTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.JsonCustomTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
 
-public class TypeAdapterFactory {
+public final class TypeAdapterFactory {
+    private TypeAdapterFactory() {
+    }
+
     private static final Map<Class<?>, TypeAdapter<?>> _adapters = new HashMap<>();
     private static final Map<Type, TypeAdapter<?>> _genericTypeAdapters = new HashMap<>();
 

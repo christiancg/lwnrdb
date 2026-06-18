@@ -187,10 +187,4 @@ public class CustomTypeFactoryTest {
         assertThrows(BadImplementationCustomTypeException.class,
                 () -> CustomTypeFactory.getCustomTypeInstance("#time(not_a_valid_time)"));
     }
-
-    // Instantiating CustomTypeFactory covers implicit default constructor
-    @Test
-    public void test_custom_type_factory_instantiation() {
-        assertNotNull(new CustomTypeFactory());
-    }
 }

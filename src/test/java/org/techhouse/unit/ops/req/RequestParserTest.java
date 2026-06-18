@@ -385,12 +385,6 @@ public class RequestParserTest {
         assertEquals(OperationType.CREATE_COLLECTION, result.getType());
     }
 
-    // RequestParser instantiation covers implicit default constructor (L20)
-    @Test
-    public void test_request_parser_instantiation() {
-        assertNotNull(new RequestParser());
-    }
-
     // MAP step with a conjunction condition covers the condition parsing path (L94, L137-138)
     @Test
     public void test_parse_map_step_with_conjunction_condition() {

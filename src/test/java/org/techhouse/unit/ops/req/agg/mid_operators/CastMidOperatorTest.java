@@ -23,10 +23,9 @@ public class CastMidOperatorTest {
     // Constructor handles null fieldName parameter
     @Test
     public void test_constructor_accepts_null_field_name() {
-        String fieldName = null;
         CastToType toType = CastToType.NUMBER;
 
-        CastMidOperator operator = new CastMidOperator(fieldName, toType);
+        CastMidOperator operator = new CastMidOperator(null, toType);
 
         assertNull(operator.getFieldName());
         assertEquals(toType, operator.getToType());

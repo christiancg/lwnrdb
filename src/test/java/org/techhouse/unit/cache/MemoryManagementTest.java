@@ -37,7 +37,7 @@ public class MemoryManagementTest {
     }
 
     @AfterEach
-    public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         final var config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemoryBytes);
         final var mm = IocContainer.get(MemoryManagement.class);

@@ -139,7 +139,7 @@ public class JsonPrimitiveTest {
     public void test_equals_different_primitive_types_returns_false() {
         JsonString s = new JsonString("true");
         JsonBoolean b = new JsonBoolean(true);
-        assertFalse(s.equals(b));
+        assertNotEquals(s, b);
     }
 
     @Test

@@ -27,8 +27,7 @@ public class AggregationStepValidator {
             case MAP -> validateMap((MapAggregationStep) step);
             case GROUP_BY -> validateGroupBy((GroupByAggregationStep) step);
             case JOIN -> validateJoin((JoinAggregationStep) step);
-            case COUNT -> ValidationResult.ok();
-            case DISTINCT -> ValidationResult.ok();
+            case COUNT, DISTINCT -> ValidationResult.ok();
             case LIMIT -> validateLimit((LimitAggregationStep) step);
             case SKIP -> validateSkip((SkipAggregationStep) step);
             case SORT -> validateSort((SortAggregationStep) step);

@@ -19,7 +19,7 @@ public class ReflectionUtilsTest {
     @Test
     public void test_get_set_field_values() throws IllegalAccessException {
         class TestClass {
-            private String testField = "initial"; // NOPMD - reflection/serialization test fixture
+            private final String testField = "initial"; // NOPMD - reflection/serialization test fixture
         }
 
         TestClass instance = new TestClass();
@@ -37,10 +37,12 @@ public class ReflectionUtilsTest {
     @Test
     public void test_access_private_members() {
         final class PrivateClass {
-            private final String privateField; // NOPMD - reflection/serialization test fixture
-
-            private PrivateClass(String value) {
-                this.privateField = value;
+            private String privateField = "initial"; // NOPMD - reflection/serialization test fixture
+            public String getPrivateField() {
+                return privateField;
+            }
+            public void setPrivateField(String privateField) {
+                this.privateField = privateField;
             }
         }
         Constructor<?>[] constructors = ReflectionUtils.getConstructors(PrivateClass.class);
@@ -50,7 +52,7 @@ public class ReflectionUtilsTest {
         assertTrue(constructors[0].canAccess(null));
 
         assertEquals(1, fields.length);
-        assertTrue(fields[0].canAccess(new PrivateClass("initial")));
+        assertTrue(fields[0].canAccess(new PrivateClass()));
         assertEquals("privateField", fields[0].getName());
     }
 

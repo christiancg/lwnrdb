@@ -2,9 +2,9 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
@@ -31,7 +31,7 @@ import org.techhouse.test.TestUtils;
 
 public class MapOperatorHelperTest {
     @AfterEach
-    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.releaseAllLocks();
     }
 
@@ -365,6 +365,12 @@ public class MapOperatorHelperTest {
         operands.add(new JsonString("field1"));
         operands.add(new JsonString("field2"));
         operands.add(new JsonNumber(5));
+        AddFieldMapOperator operator = getAddFieldMapOperator(operands);
+        JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
+        assertEquals(35, result.get("result").asJsonNumber().asInteger());
+    }
+
+    private static @NonNull AddFieldMapOperator getAddFieldMapOperator(JsonArray operands) {
         ArrayParamMidOperator midOperator = new ArrayParamMidOperator(MidOperationType.SUM, operands);
 
         JsonObject conditionObject = new JsonObject();
@@ -375,9 +381,7 @@ public class MapOperatorHelperTest {
         List<BaseOperator> operators = List.of(fieldOp1, fieldOp2);
         ConjunctionOperator conjunctionOp = new ConjunctionOperator(ConjunctionOperatorType.AND, operators);
 
-        AddFieldMapOperator operator = new AddFieldMapOperator("result", conjunctionOp, midOperator);
-        JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
-        assertEquals(35, result.get("result").asJsonNumber().asInteger());
+        return new AddFieldMapOperator("result", conjunctionOp, midOperator);
     }
 
     // Calculate average of mixed field references and direct numbers
@@ -634,12 +638,6 @@ public class MapOperatorHelperTest {
         ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
         assertTrue(result.has("out"));
-    }
-
-    // MapOperatorHelper instantiation covers implicit default constructor (L23)
-    @Test
-    public void test_map_operator_helper_instantiation() {
-        assertNotNull(new MapOperatorHelper());
     }
 
     // CAST NUMBER when field is already a number of returns the number (L302)

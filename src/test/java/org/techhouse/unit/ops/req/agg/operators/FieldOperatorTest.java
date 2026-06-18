@@ -30,10 +30,9 @@ public class FieldOperatorTest {
     @Test
     public void test_constructor_accepts_null_field_name() {
         FieldOperatorType operatorType = FieldOperatorType.EQUALS;
-        String fieldName = null;
         JsonBaseElement value = new JsonString("testValue");
 
-        FieldOperator operator = new FieldOperator(operatorType, fieldName, value);
+        FieldOperator operator = new FieldOperator(operatorType, null, value);
 
         assertEquals(OperatorType.FIELD, operator.getType());
         assertEquals(operatorType, operator.getFieldOperatorType());

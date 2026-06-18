@@ -366,12 +366,6 @@ public class SearchUtilsTest {
         assertEquals(allIdSet, resultTime);
     }
 
-    // SearchUtils instantiation covers implicit default constructor (L14)
-    @Test
-    public void test_search_utils_instantiation() {
-        assertNotNull(new SearchUtils());
-    }
-
     // NOT_EQUALS where value is NOT in entries → else branch returns all (L43)
     @Test
     public void test_not_equals_value_not_in_entries_returns_all() {

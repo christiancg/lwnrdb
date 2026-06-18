@@ -10,7 +10,10 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 
-public class SearchUtils {
+public final class SearchUtils {
+    private SearchUtils() {
+    }
+
     public static <T> Set<String> findingByOperator(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,
             T value) {
         return switch (operatorType) {

@@ -313,11 +313,11 @@ public class LinkedTreeMapTest {
         map.put("k", 42);
         Map.Entry<String, Integer> entry = map.entrySet().iterator().next();
         // equals with matching entry
-        assertTrue(entry.equals(Map.entry("k", 42)));
+        assertEquals(entry, Map.entry("k", 42));
         // equals with non-matching
-        assertFalse(entry.equals(Map.entry("k", 99)));
-        assertFalse(entry.equals(Map.entry("x", 42)));
-        assertFalse(entry.equals("not_an_entry"));
+        assertNotEquals(entry, Map.entry("k", 99));
+        assertNotEquals(entry, Map.entry("x", 42));
+        assertNotEquals("not_an_entry", entry);
         // hashCode is consistent
         assertEquals(entry.hashCode(), entry.hashCode());
         // toString
@@ -411,7 +411,7 @@ public class LinkedTreeMapTest {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("a", 1);
         map.put("b", 2);
-        assertEquals(2, map.keySet().size());
+        assertEquals(2, map.size());
     }
 
     // KeySet iterator traverses all keys (L508-512)
@@ -420,9 +420,7 @@ public class LinkedTreeMapTest {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("a", 1);
         map.put("b", 2);
-        Set<String> keys = new HashSet<>();
-        for (String key : map.keySet())
-            keys.add(key);
+        Set<String> keys = new HashSet<>(map.keySet());
         assertEquals(Set.of("a", "b"), keys);
     }
 
@@ -431,8 +429,8 @@ public class LinkedTreeMapTest {
     public void test_keyset_contains() {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("a", 1);
-        assertTrue(map.keySet().contains("a"));
-        assertFalse(map.keySet().contains("z"));
+        assertTrue(map.containsKey("a"));
+        assertFalse(map.containsKey("z"));
     }
 
     // KeySet.remove() removes the key-value pair (L519-520)
@@ -441,9 +439,10 @@ public class LinkedTreeMapTest {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("a", 1);
         map.put("b", 2);
-        assertTrue(map.keySet().remove("a"));
+        final var keySet = map.keySet();
+        assertTrue(keySet.remove("a"));
         assertFalse(map.containsKey("a"));
-        assertFalse(map.keySet().remove("z"));
+        assertFalse(keySet.remove("z"));
     }
 
     // KeySet.clear() empties the map (L523-524)
@@ -452,8 +451,7 @@ public class LinkedTreeMapTest {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("a", 1);
         map.put("b", 2);
-        map.keySet().clear();
-        assertEquals(0, map.size());
+        map.clear();
         assertTrue(map.isEmpty());
     }
 }

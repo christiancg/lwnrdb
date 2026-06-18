@@ -41,7 +41,7 @@ public class ClientTest {
     @Test
     public void test_equals_different_class_returns_false() {
         Client client = new Client("127.0.0.1");
-        assertFalse(client.equals("127.0.0.1"));
+        assertNotEquals("127.0.0.1", client);
     }
 
     @Test

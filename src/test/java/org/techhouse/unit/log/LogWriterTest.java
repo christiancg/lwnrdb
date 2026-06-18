@@ -21,7 +21,7 @@ import org.techhouse.test.TestUtils;
 
 public class LogWriterTest {
     @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
+    public void setUp() throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
         final var logDir = new File(config.getLogPath());
