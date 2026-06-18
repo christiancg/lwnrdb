@@ -19,7 +19,8 @@
         <checkstyle.version>10.21.4</checkstyle.version>
         <pmd.plugin.version>3.28.0</pmd.plugin.version>
         <pmd.version>7.25.0</pmd.version>
-        <spotbugs.plugin.version>4.9.3.0</spotbugs.plugin.version>
+        <spotbugs.plugin.version>4.10.2.0</spotbugs.plugin.version>
+        <spotbugs.version>4.10.2</spotbugs.version>
     </properties>
 
     <dependencies>
@@ -139,10 +140,38 @@
                     <includeTests>true</includeTests>
                     <printFailingErrors>true</printFailingErrors>
                     <failOnViolation>true</failOnViolation>
+                    <linkXRef>false</linkXRef>
                 </configuration>
                 <executions>
                     <execution>
                         <id>pmd-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>com.github.spotbugs</groupId>
+                <artifactId>spotbugs-maven-plugin</artifactId>
+                <version>${spotbugs.plugin.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>com.github.spotbugs</groupId>
+                        <artifactId>spotbugs</artifactId>
+                        <version>${spotbugs.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <effort>Max</effort>
+                    <threshold>Medium</threshold>
+                    <failOnError>true</failOnError>
+                    <excludeFilterFile>${project.basedir}/config/spotbugs-exclude.xml</excludeFilterFile>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>spotbugs-check</id>
                         <phase>verify</phase>
                         <goals>
                             <goal>check</goal>

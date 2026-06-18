@@ -56,9 +56,10 @@ public class ConfigReader {
     private static Map<String, String> loadDefaultConfig() {
         try (var inputStream = ConfigReader.class.getResourceAsStream(DEFAULT_CONFIG_PATH)) {
             if (inputStream != null) {
-                final var allLines = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))
-                        .lines().toList();
-                return processFromLines(allLines);
+                try (var reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+                    final var allLines = reader.lines().toList();
+                    return processFromLines(allLines);
+                }
             }
         } catch (IOException exception) {
             logger.error("Error while loading " + DEFAULT_CONFIG_PATH, exception);

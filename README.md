@@ -62,7 +62,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Review and address TODOs
 - [ ] Remove all warnings from code
 - [x] Fix tests marked as @Disabled
-- [ ] Implement linting and formatting
+- [x] Implement linting and formatting
 
 ## Wire Protocol / Message Reference
 
@@ -436,6 +436,36 @@ Locking is two-tier and applies to **both reads and writes** (earlier versions l
   - I wouldn't recommend doing that at least for now, as it is very experimental
 - I discovered a bug. What should I do?
   - Please submit an issue with the steps to reproduce it and the expected result.
+
+## Code quality
+
+Formatting and static analysis run as part of `mvn verify`, so a violation
+fails the build (and therefore blocks a merge). All four tools are wired into
+the `verify` phase:
+
+| Tool | Goal | Config |
+|---|---|---|
+| **Spotless** (Eclipse JDT formatter, 4-space) | `spotless:check` | [`config/eclipse-format.xml`](config/eclipse-format.xml) |
+| **Checkstyle** | `checkstyle:check` | [`config/checkstyle.xml`](config/checkstyle.xml) |
+| **PMD** | `pmd:check` | [`config/pmd-ruleset.xml`](config/pmd-ruleset.xml) |
+| **SpotBugs** | `spotbugs:check` | [`config/spotbugs-exclude.xml`](config/spotbugs-exclude.xml) |
+
+To auto-format your changes before committing:
+
+```bash
+mvn spotless:apply
+```
+
+> **Build JDK:** use **JDK 25** (matching the project's compiler target and CI).
+> JDK 26 also works. The Eclipse JDT formatter is used instead of
+> Google/Palantir formatters specifically because the latter rely on `javac`
+> internals that are incompatible with JDK 25/26.
+
+The linter rulesets are deliberately curated rather than using defaults: they
+target real defects and conventions the formatter does not cover, while
+accommodating the project's intentional choices (e.g. the `_id` wire field,
+`snake_case` test method names, `null`-as-absent sentinels for index/config
+lookups). Exclusions are documented inline in each config file.
 
 ## Contributing
 
