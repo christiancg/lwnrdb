@@ -91,8 +91,8 @@ public final class SelfSignedCertificateGenerator {
     }
 
     private static byte[] encodeCommonName() {
-        return DerWriter.sequence(
-                DerWriter.set(DerWriter.sequence(DerWriter.oid(OID_COMMON_NAME), DerWriter.utf8String(Globals.TLS_CERT_DNAME))));
+        return DerWriter.sequence(DerWriter
+                .set(DerWriter.sequence(DerWriter.oid(OID_COMMON_NAME), DerWriter.utf8String(Globals.TLS_CERT_DNAME))));
     }
 
     private static byte[] basicConstraintsExtension() {
