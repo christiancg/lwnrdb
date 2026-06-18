@@ -191,7 +191,7 @@ public class FieldIndexEntryTest {
     @Test
     public void test_equals_different_class_returns_false() {
         FieldIndexEntry<String> entry = new FieldIndexEntry<>("db", "coll", "val", Set.of("id1"));
-        assertNotEquals("notAnEntry", entry);
+        assertFalse(entry.equals("notAnEntry"));
     }
 
     @Test

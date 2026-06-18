@@ -62,7 +62,7 @@ public class DatabaseEventTest {
     @Test
     public void test_equals_different_class_returns_false() {
         DatabaseEvent event = new DatabaseEvent(EventType.CREATED, "testDB");
-        assertNotEquals("notAnEvent", event);
+        assertFalse(event.equals("notAnEvent"));
     }
 
     @Test
