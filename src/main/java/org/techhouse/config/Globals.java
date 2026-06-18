@@ -37,4 +37,12 @@ public final class Globals {
     public static final int NEWLINE_CHAR_LENGTH = System.lineSeparator().equals("\n") ? 1 : 2;
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
+    public static final String TLS_KEY_ALIAS = "lwnrdb";
+    public static final String TLS_KEY_ALGORITHM = "RSA";
+    public static final int TLS_KEY_SIZE = 2048;
+    public static final String TLS_SIGNATURE_ALGORITHM = "SHA256withRSA";
+    public static final int TLS_CERT_VALIDITY_DAYS = 365;
+    public static final String TLS_CERT_DNAME = "lwnrdb";
+    public static final String TLS_KEYSTORE_TYPE = "PKCS12";
+    public static final String TLS_PROTOCOL = "TLS";
 }
