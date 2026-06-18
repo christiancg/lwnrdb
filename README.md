@@ -315,7 +315,7 @@ Each user object in the response contains:
 | `admin` | boolean | Whether the user is a superadmin |
 | `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
 | `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
-| `collectionPermissions` | object | e.g. `{"mydb\|coll": "READ"}` |
+| `collectionPermissions` | object | e.g. `{"mydb&#124;coll": "READ"}` |
 | `ownedDatabases` | array | Databases where this user is an owner |
 
 ```json
@@ -344,13 +344,13 @@ Example filters:
 
 ### Permission model
 
-| Concept | Description |
-|---|---|
-| `admin` flag | Superadmin — bypasses all permission checks |
-| Database ownership | Full access to the database and all its collections, including the ability to drop it |
-| `globalPermissions` | `CREATE_DATABASE` — required to create new databases |
-| `databasePermissions` | Grants `READ` or `READ_WRITE` to all collections in a database |
-| `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection` |
+| Concept                 | Description                                                                           |
+|-------------------------|---------------------------------------------------------------------------------------|
+| `admin` flag            | Superadmin — bypasses all permission checks                                           |
+| Database ownership      | Full access to the database and all its collections, including the ability to drop it |
+| `globalPermissions`     | `CREATE_DATABASE` — required to create new databases                                  |
+| `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
+| `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
 Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
 
