@@ -2,13 +2,18 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.custom_types.JsonDateTime;
+import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -698,6 +703,92 @@ public class MapOperatorHelperTest {
         CastMidOperator cast = new CastMidOperator("n", CastToType.NUMBER);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertTrue(result.get("out").isJsonNull());
+    }
+
+    // CONCAT with a DateTime field reference uses stringDataValue
+    @Test
+    public void test_concat_datetime_field_uses_string_data_value() {
+        JsonObject input = new JsonObject();
+        input.add("ts", new JsonDateTime(LocalDateTime.of(2024, 1, 15, 10, 30, 0)));
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("ts"));
+        ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
+        assertEquals("2024-01-15T10:30", result.get("out").asJsonString().getValue());
+    }
+
+    // CONCAT with a Time field reference uses stringDataValue
+    @Test
+    public void test_concat_time_field_uses_string_data_value() {
+        JsonObject input = new JsonObject();
+        input.add("t", new JsonTime(LocalTime.of(10, 30, 0)));
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("t"));
+        ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
+        assertEquals("10:30", result.get("out").asJsonString().getValue());
+    }
+
+    // CAST string to a custom type (datetime) via JSON_CUSTOM
+    @Test
+    public void test_cast_string_to_datetime_via_json_custom() {
+        JsonObject input = new JsonObject();
+        input.add("ts", new JsonString("2024-01-15T10:30:00"));
+        CastMidOperator cast = new CastMidOperator("ts", "datetime");
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertInstanceOf(JsonDateTime.class, result.get("out"));
+        assertEquals("2024-01-15T10:30:00", ((JsonCustom<?>) result.get("out")).stringDataValue());
+    }
+
+    // CAST invalid string to a custom type returns null
+    @Test
+    public void test_cast_invalid_string_to_custom_type_returns_null() {
+        JsonObject input = new JsonObject();
+        input.add("ts", new JsonString("not-a-date"));
+        CastMidOperator cast = new CastMidOperator("ts", "datetime");
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertTrue(result.get("out").isJsonNull());
+    }
+
+    // CAST custom type to same custom type returns the same value
+    @Test
+    public void test_cast_custom_type_to_same_custom_type_returns_same() {
+        JsonObject input = new JsonObject();
+        input.add("ts", new JsonDateTime(LocalDateTime.of(2024, 1, 15, 10, 30, 0)));
+        CastMidOperator cast = new CastMidOperator("ts", "datetime");
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertInstanceOf(JsonDateTime.class, result.get("out"));
+    }
+
+    // CAST string to time custom type via JSON_CUSTOM
+    @Test
+    public void test_cast_string_to_time_via_json_custom() {
+        JsonObject input = new JsonObject();
+        input.add("t", new JsonString("10:30:00"));
+        CastMidOperator cast = new CastMidOperator("t", "time");
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertInstanceOf(JsonTime.class, result.get("out"));
+        assertEquals("10:30:00", ((JsonCustom<?>) result.get("out")).stringDataValue());
+    }
+
+    // CAST custom type to STRING yields the data portion only
+    @Test
+    public void test_cast_datetime_to_string_yields_data_value() {
+        JsonObject input = new JsonObject();
+        input.add("ts", new JsonDateTime(LocalDateTime.of(2024, 1, 15, 10, 30, 0)));
+        CastMidOperator cast = new CastMidOperator("ts", CastToType.STRING);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals("2024-01-15T10:30", result.get("out").asJsonString().getValue());
+    }
+
+    // CAST time custom type to STRING yields the data portion only
+    @Test
+    public void test_cast_time_to_string_yields_data_value() {
+        JsonObject input = new JsonObject();
+        input.add("t", new JsonTime(LocalTime.of(10, 30, 0)));
+        CastMidOperator cast = new CastMidOperator("t", CastToType.STRING);
+        JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
+        assertEquals("10:30", result.get("out").asJsonString().getValue());
     }
 
     // Attempt to remove non-existent field

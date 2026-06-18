@@ -476,6 +476,22 @@ public class OperationProcessorTest {
         assertEquals(OperationStatus.ERROR, response.getStatus());
     }
 
+    // Bulk save with duplicate _id values in the same request returns an error
+    @Test
+    public void test_bulk_save_duplicate_id_returns_error() {
+        BulkSaveRequest request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        JsonObject obj1 = new JsonObject();
+        obj1.add(Globals.PK_FIELD, new JsonString("dupId"));
+        JsonObject obj2 = new JsonObject();
+        obj2.add(Globals.PK_FIELD, new JsonString("dupId"));
+        request.setObjects(List.of(obj1, obj2));
+
+        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(request);
+
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertTrue(response.getMessage().contains("dupId"));
+    }
+
     // Bulk save with an oversized entry returns an error response
     @Test
     public void test_bulk_save_oversized_entry_returns_error() {

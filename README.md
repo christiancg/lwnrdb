@@ -45,6 +45,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] group by
   - [ ] join
   - [ ] sort
+  - [ ] distinct
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [x] Better file locks
@@ -59,8 +60,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] Remove lombok
 - [x] Check that in join aggregations, the user should have permissions to the collection that is being joined
 - [x] Validation of configurations
-- [ ] Review and address TODOs
-- [ ] Remove all warnings from code
+- [x] Review and address TODOs
+- [x] Remove all warnings from code
 - [x] Fix tests marked as @Disabled
 - [x] Implement linting and formatting
 
