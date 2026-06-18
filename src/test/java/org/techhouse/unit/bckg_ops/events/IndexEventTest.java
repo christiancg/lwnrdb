@@ -77,7 +77,7 @@ public class IndexEventTest {
     @Test
     public void test_equals_different_class_returns_false() {
         IndexEvent event = new IndexEvent(EventType.CREATED, "db", "coll", "field");
-        assertNotEquals("notAnEvent", event);
+        assertFalse(event.equals("notAnEvent"));
     }
 
     @Test

@@ -39,7 +39,7 @@ public class CollectionEventTest {
     @Test
     public void test_equals_different_class_returns_false() {
         CollectionEvent event = new CollectionEvent(EventType.CREATED, "db", "coll");
-        assertNotEquals("notAnEvent", event);
+        assertFalse(event.equals("notAnEvent"));
     }
 
     @Test

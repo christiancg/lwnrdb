@@ -72,7 +72,7 @@ public class EntityEventTest {
     public void test_equals_different_class_returns_false() {
         DbEntry dbEntry = DbEntry.fromJsonObject("db", "coll", new JsonObject());
         EntityEvent event = new EntityEvent(EventType.CREATED, "db", "coll", dbEntry);
-        assertNotEquals("notAnEvent", event);
+        assertFalse(event.equals("notAnEvent"));
     }
 
     @Test

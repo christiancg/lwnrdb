@@ -110,7 +110,7 @@ public class AdminCollEntryTest {
     @Test
     public void test_equals_different_class_returns_false() {
         AdminCollEntry entry = new AdminCollEntry("db", "coll");
-        assertNotEquals("notAnEntry", entry);
+        assertFalse(entry.equals("notAnEntry"));
     }
 
     @Test

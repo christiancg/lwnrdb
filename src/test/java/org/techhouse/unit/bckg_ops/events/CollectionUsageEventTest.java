@@ -49,7 +49,7 @@ public class CollectionUsageEventTest {
     @Test
     public void test_equals_different_class_returns_false() {
         final var e = new CollectionUsageEvent(AccessKind.COLLECTION, "db", "coll", null, 1L);
-        assertNotEquals("string", e);
+        assertFalse(e.equals("string"));
     }
 
     @Test

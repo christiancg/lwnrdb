@@ -107,7 +107,7 @@ public class PkIndexEntryTest {
     @Test
     public void test_equals_different_class_returns_false() {
         PkIndexEntry entry = new PkIndexEntry("db", "coll", "val", 1L, 1L, 0L);
-        assertNotEquals("notAnEntry", entry);
+        assertFalse(entry.equals("notAnEntry"));
     }
 
     @Test

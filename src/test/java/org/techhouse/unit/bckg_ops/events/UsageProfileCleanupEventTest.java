@@ -37,7 +37,7 @@ public class UsageProfileCleanupEventTest {
     @Test
     public void test_equals_different_class_returns_false() {
         final var e = new UsageProfileCleanupEvent();
-        assertNotEquals("string", e);
+        assertFalse(e.equals("string"));
     }
 
     @Test
