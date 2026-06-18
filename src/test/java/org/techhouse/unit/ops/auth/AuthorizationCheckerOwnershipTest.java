@@ -57,31 +57,31 @@ public class AuthorizationCheckerOwnershipTest {
     @Test
     public void test_drop_database_requires_ownership_not_just_global_perm() {
         final var user = nonAdminWithDropPerm();
-        final var req = new DropDatabaseRequest("somedb");
+        final var req = new DropDatabaseRequest("some_db");
         // user has DROP_DATABASE global perm but is not owner → FORBIDDEN
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
 
     @Test
     public void test_drop_database_allowed_for_owner() {
-        setOwnerInCache("owneddb");
+        setOwnerInCache("owned_db");
         final var user = nonAdminNoPerms();
-        final var req = new DropDatabaseRequest("owneddb");
+        final var req = new DropDatabaseRequest("owned_db");
         assertTrue(AuthorizationChecker.check(req, user).isAllowed());
     }
 
     @Test
     public void test_owner_can_do_all_ops_on_owned_db() {
-        setOwnerInCache("ownerdb");
+        setOwnerInCache("owner_db");
         final var user = nonAdminNoPerms();
 
-        final var saveReq = new SaveRequest("ownerdb", "somecoll");
+        final var saveReq = new SaveRequest("owner_db", "some_coll");
         assertTrue(AuthorizationChecker.check(saveReq, user).isAllowed());
 
-        final var findReq = new FindByIdRequest("ownerdb", "somecoll");
+        final var findReq = new FindByIdRequest("owner_db", "some_coll");
         assertTrue(AuthorizationChecker.check(findReq, user).isAllowed());
 
-        final var dropCollReq = new DropCollectionRequest("ownerdb", "somecoll");
+        final var dropCollReq = new DropCollectionRequest("owner_db", "some_coll");
         assertTrue(AuthorizationChecker.check(dropCollReq, user).isAllowed());
     }
 
@@ -96,23 +96,23 @@ public class AuthorizationCheckerOwnershipTest {
     @Test
     public void test_set_database_owners_forbidden_for_non_admin() {
         final var user = nonAdminNoPerms();
-        final var req = new SetDatabaseOwnersRequest("somedb");
+        final var req = new SetDatabaseOwnersRequest("some_db");
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
 
     @Test
     public void test_drop_database_no_entry_in_cache_forbidden() {
         final var user = nonAdminWithDropPerm();
-        final var req = new DropDatabaseRequest("nonexistentdb");
+        final var req = new DropDatabaseRequest("nonexistent_db");
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
 
     @Test
     public void test_drop_database_db_exists_but_user_not_owner_forbidden() {
-        setOwnerInCache("otherownersdb");
+        setOwnerInCache("other_owners_db");
         // "user2" is NOT in the owners list (only "user" is)
         final var user2 = new AdminUserEntry("user2", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>());
-        final var req = new DropDatabaseRequest("otherownersdb");
+        final var req = new DropDatabaseRequest("other_owners_db");
         assertFalse(AuthorizationChecker.check(req, user2).isAllowed());
     }
 

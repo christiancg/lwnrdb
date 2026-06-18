@@ -101,15 +101,15 @@ public class ConfigurationTest {
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
         try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
-            writer.write("defaultAdminUsername=adminuser");
+            writer.write("defaultAdminUsername=admin_user");
             writer.newLine();
-            writer.write("defaultAdminPassword=secretpass");
+            writer.write("defaultAdminPassword=secret_pass");
             writer.newLine();
         }
         try {
             final var config = Configuration.getInstance();
-            assertEquals("adminuser", config.getDefaultAdminUsername());
-            assertEquals("secretpass", config.getDefaultAdminPassword());
+            assertEquals("admin_user", config.getDefaultAdminUsername());
+            assertEquals("secret_pass", config.getDefaultAdminPassword());
         } finally {
             if (!newConfigFile.delete()) {
                 fail("Failed deleting temp test file");
@@ -128,7 +128,7 @@ public class ConfigurationTest {
         map.put("maxPageSize", "2Mb");
         map.put("maxEntrySize", "1Mb");
         map.put("defaultAdminUsername", "admin");
-        map.put("defaultAdminPassword", "adminstrator");
+        map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512mb");
         return map;
     }

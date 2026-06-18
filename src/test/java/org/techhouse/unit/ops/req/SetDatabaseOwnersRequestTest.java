@@ -24,16 +24,16 @@ public class SetDatabaseOwnersRequestTest {
     @Test
     public void test_set_and_get_owners() {
         final var req = new SetDatabaseOwnersRequest("mydb");
-        req.setOwners(List.of("alice", "bob"));
-        assertEquals(List.of("alice", "bob"), req.getOwners());
+        req.setOwners(List.of("Alice", "bob"));
+        assertEquals(List.of("Alice", "bob"), req.getOwners());
     }
 
     @Test
     public void test_parser_parses_set_database_owners() {
-        final var msg = "{\"type\":\"SET_DATABASE_OWNERS\",\"databaseName\":\"mydb\",\"owners\":[\"alice\",\"bob\"]}";
+        final var msg = "{\"type\":\"SET_DATABASE_OWNERS\",\"databaseName\":\"mydb\",\"owners\":[\"Alice\",\"bob\"]}";
         final var req = (SetDatabaseOwnersRequest) org.techhouse.ops.req.RequestParser.parseRequest(msg);
         assertEquals(OperationType.SET_DATABASE_OWNERS, req.getType());
         assertEquals("mydb", req.getDatabaseName());
-        assertEquals(List.of("alice", "bob"), req.getOwners());
+        assertEquals(List.of("Alice", "bob"), req.getOwners());
     }
 }

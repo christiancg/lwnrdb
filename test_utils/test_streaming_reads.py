@@ -10,13 +10,13 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "adminstrator"
+ADMIN_PASSWORD = "administrator"
 
 # Knobs — tune these (and maxMemory in lwnrdb.cfg) to exercise paging. With the
 # default 2MB page size, a few thousand ~512B docs span many .dat pages so both
 # the targeted-fetch and page-streaming paths cross page boundaries. CI runners are
 # slower, so the workload is overridable via env vars to keep the run quick.
-DB = "streamdb"
+DB = "stream_db"
 COLL = "stream_coll"
 JOIN_COLL = "stream_join"
 NUM_DOCS = int(os.environ.get("STREAM_TEST_DOCS", "8000"))

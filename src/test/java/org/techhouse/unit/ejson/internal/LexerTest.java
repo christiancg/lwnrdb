@@ -37,7 +37,7 @@ public class LexerTest {
         assertTrue(result.isEmpty());
     }
 
-    // Successfully lexes a valid number and returns JsonNumber token
+    // Successfully lexing a valid number and returns JsonNumber token
     @Test
     public void test_lex_number() {
         String input = "12345";
@@ -47,7 +47,7 @@ public class LexerTest {
         assertEquals(12345, ((JsonNumber) tokens.getFirst()).getValue());
     }
 
-    // Successfully lexes true/false boolean values and returns JsonBoolean token
+    // Successfully lexing true/false boolean values and returns JsonBoolean token
     @Test
     public void test_lex_boolean() {
         String inputTrue = "true";
@@ -63,7 +63,7 @@ public class LexerTest {
         assertFalse(((JsonBoolean) tokensFalse.getFirst()).getValue());
     }
 
-    // Successfully lexes null value and returns JsonNull token
+    // Successfully lexing null value and returns JsonNull token
     @Test
     public void test_lex_null() {
         String input = "null";
@@ -72,7 +72,7 @@ public class LexerTest {
         assertInstanceOf(JsonNull.class, tokens.getFirst());
     }
 
-    // Lexes a custom type string and returns a JsonCustom token (L27 branch)
+    // Lexing a custom type string and returns a JsonCustom token (L27 branch)
     @Test
     public void test_lex_custom_type_string() {
         new org.techhouse.ejson.EJson(); // registers custom types

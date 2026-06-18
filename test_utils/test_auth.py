@@ -6,7 +6,7 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "adminstrator"
+ADMIN_PASSWORD = "administrator"
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
@@ -174,7 +174,7 @@ def test_bad_credentials(s, f):
     section("Authentication with wrong credentials — must return ERROR")
 
     check("Wrong password",
-          authenticate(s, f, ADMIN_USERNAME, "wrongpassword"),
+          authenticate(s, f, ADMIN_USERNAME, "wrong_password"),
           "ERROR")
 
     check("Unknown user",
@@ -399,7 +399,7 @@ def test_set_password(s, f):
           "OK")
 
     check("User cannot change own password with wrong currentPassword",
-          set_password(s, f, "pwduser", "anothernew1", current_password="wrongpassword"),
+          set_password(s, f, "pwduser", "anothernew1", current_password="wrong_password"),
           "ERROR")
 
     check("User cannot change another user's password (FORBIDDEN)",
@@ -429,7 +429,7 @@ def test_set_password(s, f):
           "OK")
 
     check("SET_PASSWORD for non-existent user returns NOT_FOUND",
-          set_password(s, f, "nobody999", "newpassword1"),
+          set_password(s, f, "nobody999", "new_password_1"),
           "NOT_FOUND")
 
 
@@ -503,27 +503,27 @@ def test_ownership(s, f):
           authenticate(s, f, "dbmaker", "dbmaker1234"),
           "OK")
 
-    check("CREATE_DATABASE 'owneddb' — dbmaker becomes owner automatically",
-          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "owneddb"}),
+    check("CREATE_DATABASE 'owned_db' — dbmaker becomes owner automatically",
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "owned_db"}),
           "OK")
 
     check("Owner can CREATE_COLLECTION with no explicit db/coll permissions",
-          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "owneddb",
-                      "collectionName": "mycoll"}),
+          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "owned_db",
+                      "collectionName": "my_coll"}),
           "OK")
 
     check("Owner can SAVE with no explicit db/coll permissions",
-          send(s, f, {"type": "SAVE", "databaseName": "owneddb", "collectionName": "mycoll",
+          send(s, f, {"type": "SAVE", "databaseName": "owned_db", "collectionName": "my_coll",
                       "object": {"_id": "o1", "val": 1}}),
           "OK")
 
     check("Owner can FIND_BY_ID",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "owneddb",
-                      "collectionName": "mycoll", "_id": "o1"}),
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "owned_db",
+                      "collectionName": "my_coll", "_id": "o1"}),
           "OK")
 
     check("Owner can DROP_DATABASE their own database",
-          send(s, f, {"type": "DROP_DATABASE", "databaseName": "owneddb"}),
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "owned_db"}),
           "OK")
 
     # ── DROP_DATABASE requires ownership, not just global permission ───────
@@ -566,7 +566,7 @@ def test_ownership(s, f):
           "OK")
 
     check("SET_DATABASE_OWNERS with non-existent user returns ERROR",
-          set_database_owners(s, f, "transferdb", ["ghostuser999"]),
+          set_database_owners(s, f, "transferdb", ["ghost_user999"]),
           "ERROR")
 
     # ── New owner has full access, non-owner is denied ─────────────────────

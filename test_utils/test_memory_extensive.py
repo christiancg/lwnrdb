@@ -30,7 +30,7 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "adminstrator"
+ADMIN_PASSWORD = "administrator"
 
 DB = "memstress"
 NUM_COLLECTIONS = int(os.environ.get("MEM_TEST_COLLECTIONS", "8"))

@@ -89,7 +89,7 @@ public class LoggerTest {
 
     // Returns a new Logger instance when called with a valid Class parameter
     @Test
-    public void test_logfor_returns_logger_with_valid_class() throws IllegalAccessException {
+    public void test_log_for_returns_logger_with_valid_class() throws IllegalAccessException {
         Logger logger = Logger.logFor(String.class);
         assertNotNull(logger);
         final var fieldOptional = Arrays.stream(logger.getClass().getDeclaredFields())

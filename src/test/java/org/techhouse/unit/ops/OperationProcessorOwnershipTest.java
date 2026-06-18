@@ -35,7 +35,7 @@ public class OperationProcessorOwnershipTest {
     public void test_create_database_sets_authenticated_user_as_owner() throws Exception {
         // Create a user and authenticate them
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("dbcreator");
+        createReq.setUsername("db_creator");
         createReq.setPassword("password123");
         createReq.setAdmin(false);
         createReq.setGlobalPermissions(new java.util.HashSet<>());
@@ -51,15 +51,15 @@ public class OperationProcessorOwnershipTest {
         org.mockito.Mockito.when(fakeAddr.getHostAddress()).thenReturn("127.0.0.1");
         TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxConnections", 100);
         final var clientId = clientTracker.addClient(fakeSocket);
-        clientTracker.setAuthenticatedUser(clientId, "dbcreator");
+        clientTracker.setAuthenticatedUser(clientId, "db_creator");
 
-        final var req = new CreateDatabaseRequest("ownertest-db");
+        final var req = new CreateDatabaseRequest("owner_test-db");
         final var resp = processor.processMessage(req, clientId);
         assertEquals(OperationStatus.OK, resp.getStatus());
 
-        final var dbEntry = cache.getAdminDbEntry("ownertest-db");
+        final var dbEntry = cache.getAdminDbEntry("owner_test-db");
         assertNotNull(dbEntry);
-        assertTrue(dbEntry.isOwner("dbcreator"), "Creator should be set as owner");
+        assertTrue(dbEntry.isOwner("db_creator"), "Creator should be set as owner");
 
         // Clean up
         clientTracker.removeById(clientId);
@@ -70,16 +70,16 @@ public class OperationProcessorOwnershipTest {
         TestUtils.createTestDatabaseAndCollection();
 
         final var req = new SetDatabaseOwnersRequest(TestGlobals.DB);
-        req.setOwners(List.of("alice"));
+        req.setOwners(List.of("Alice"));
 
         final var resp = processor.processMessage(req, null);
         assertEquals(OperationStatus.OK, resp.getStatus());
-        assertTrue(cache.getAdminDbEntry(TestGlobals.DB).isOwner("alice"));
+        assertTrue(cache.getAdminDbEntry(TestGlobals.DB).isOwner("Alice"));
     }
 
     @Test
     public void test_set_database_owners_not_found() {
-        final var req = new SetDatabaseOwnersRequest("nonexistentdb");
+        final var req = new SetDatabaseOwnersRequest("nonexistent_db");
         final var resp = processor.processMessage(req, null);
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
     }

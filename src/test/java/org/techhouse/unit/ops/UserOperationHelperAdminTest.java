@@ -54,7 +54,7 @@ public class UserOperationHelperAdminTest {
     @Test
     public void test_promote_user_to_admin() {
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("topromotee");
+        createReq.setUsername("to_promotee");
         createReq.setPassword("password123");
         createReq.setAdmin(false);
         createReq.setGlobalPermissions(new HashSet<>());
@@ -63,7 +63,7 @@ public class UserOperationHelperAdminTest {
         UserOperationHelper.processCreateUser(createReq);
 
         final var changeReq = new ChangePermissionsRequest();
-        changeReq.setUsername("topromotee");
+        changeReq.setUsername("to_promotee");
         changeReq.setAdmin(true);
         changeReq.setGlobalPermissions(new HashSet<>());
         changeReq.setDatabasePermissions(new HashMap<>());
@@ -71,7 +71,7 @@ public class UserOperationHelperAdminTest {
 
         final var resp = UserOperationHelper.processChangePermissions(changeReq);
         assertEquals(OperationStatus.OK, resp.getStatus());
-        final var user = cache.getAdminUserEntry("topromotee");
+        final var user = cache.getAdminUserEntry("to_promotee");
         assertTrue(user.isAdmin());
     }
 
@@ -79,7 +79,7 @@ public class UserOperationHelperAdminTest {
     public void test_authenticate_success_sets_client_username() {
         final var password = "correctPassword456";
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("authtest");
+        createReq.setUsername("auth_test");
         createReq.setPassword(password);
         createReq.setGlobalPermissions(new HashSet<>());
         createReq.setDatabasePermissions(new HashMap<>());
@@ -87,7 +87,7 @@ public class UserOperationHelperAdminTest {
         UserOperationHelper.processCreateUser(createReq);
 
         final var authReq = new AuthenticateRequest();
-        authReq.setUsername("authtest");
+        authReq.setUsername("auth_test");
         authReq.setPassword(password);
         final var clientId = UUID.randomUUID();
 
@@ -98,7 +98,7 @@ public class UserOperationHelperAdminTest {
     @Test
     public void test_change_permissions_with_permissions() {
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("permuser");
+        createReq.setUsername("perm_user");
         createReq.setPassword("password123");
         createReq.setGlobalPermissions(new HashSet<>());
         createReq.setDatabasePermissions(new HashMap<>());
@@ -118,7 +118,7 @@ public class UserOperationHelperAdminTest {
         collPerms.put("db2|coll1", PermissionLevel.READ_WRITE);
 
         final var changeReq = new ChangePermissionsRequest();
-        changeReq.setUsername("permuser");
+        changeReq.setUsername("perm_user");
         changeReq.setAdmin(true);
         changeReq.setGlobalPermissions(globalPerms);
         changeReq.setDatabasePermissions(dbPerms);
@@ -127,7 +127,7 @@ public class UserOperationHelperAdminTest {
         final var resp = UserOperationHelper.processChangePermissions(changeReq);
         assertEquals(OperationStatus.OK, resp.getStatus());
 
-        final var user = cache.getAdminUserEntry("permuser");
+        final var user = cache.getAdminUserEntry("perm_user");
         assertTrue(user.isAdmin());
         assertEquals(globalPerms, user.getGlobalPermissions());
         assertEquals(dbPerms, user.getDatabasePermissions());
@@ -154,14 +154,14 @@ public class UserOperationHelperAdminTest {
     public void test_user_password_not_stored_in_plaintext() {
         final var plainPassword = "MySecurePassword789";
         final var req = new CreateUserRequest();
-        req.setUsername("secureuser");
+        req.setUsername("secure_user");
         req.setPassword(plainPassword);
         req.setGlobalPermissions(new HashSet<>());
         req.setDatabasePermissions(new HashMap<>());
         req.setCollectionPermissions(new HashMap<>());
         UserOperationHelper.processCreateUser(req);
 
-        final var user = cache.getAdminUserEntry("secureuser");
+        final var user = cache.getAdminUserEntry("secure_user");
         assertNotEquals(plainPassword, user.getPasswordHash());
         assertTrue(user.getPasswordHash().contains("pbkdf2"));
     }

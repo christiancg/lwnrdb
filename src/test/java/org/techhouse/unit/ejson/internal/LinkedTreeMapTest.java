@@ -176,7 +176,7 @@ public class LinkedTreeMapTest {
 
     // Returns existing EntrySet instance when entrySet field is not null
     @Test
-    public void test_returns_existing_entryset_instance() {
+    public void test_returns_existing_entry_set_instance() {
         LinkedTreeMap<String, String> map = new LinkedTreeMap<>(true);
         Set<Map.Entry<String, String>> firstCall = map.entrySet();
         Set<Map.Entry<String, String>> secondCall = map.entrySet();
@@ -308,7 +308,7 @@ public class LinkedTreeMapTest {
 
     // Node.equals(), hashCode(), toString() (L392-406)
     @Test
-    public void test_entry_equals_hashcode_tostring() {
+    public void test_entry_equals_hashcode_to_string() {
         LinkedTreeMap<String, Integer> map = new LinkedTreeMap<>(true);
         map.put("k", 42);
         Map.Entry<String, Integer> entry = map.entrySet().iterator().next();

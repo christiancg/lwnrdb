@@ -602,7 +602,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_field_index_roundtrip_with_pipe_in_id()
+    public void test_field_index_round_trip_with_pipe_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -622,7 +622,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_field_index_roundtrip_with_semicolon_in_id()
+    public void test_field_index_round_trip_with_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -642,7 +642,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_field_index_roundtrip_with_pipe_and_semicolon_in_id()
+    public void test_field_index_round_trip_with_pipe_and_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -687,7 +687,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_pk_index_roundtrip_with_pipe_in_id()
+    public void test_pk_index_round_trip_with_pipe_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -708,7 +708,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_pk_index_roundtrip_with_semicolon_in_id()
+    public void test_pk_index_round_trip_with_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -729,7 +729,7 @@ public class FileSystemTest {
     }
 
     @Test
-    public void test_pk_index_roundtrip_with_pipe_and_semicolon_in_id()
+    public void test_pk_index_round_trip_with_pipe_and_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
@@ -824,7 +824,7 @@ public class FileSystemTest {
 
         // Act
         ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
-                "unexistantCollection", fieldName);
+                "nonexistentCollection", fieldName);
 
         // Assert
         assertNull(result);

@@ -530,7 +530,7 @@ public class OperationProcessorTest {
     @Test
     public void test_save_admin_collection_does_not_record_usage() {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
-        // admin saves go through helpers, but explicitly verify recordAccess noops:
+        // admin saves go through helpers, but explicitly verify recordAccess no ops:
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null);
         assertNull(mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null));
     }
@@ -573,9 +573,9 @@ public class OperationProcessorTest {
         assertTrue(firstDb.has("name"));
         assertTrue(firstDb.has("collectionCount"));
         assertTrue(firstDb.has("collections"));
-        final var firstColls = firstDb.get("collections").asJsonArray().asList();
-        if (!firstColls.isEmpty()) {
-            final var firstColl = firstColls.getFirst().asJsonObject();
+        final var firstCollections = firstDb.get("collections").asJsonArray().asList();
+        if (!firstCollections.isEmpty()) {
+            final var firstColl = firstCollections.getFirst().asJsonObject();
             assertTrue(firstColl.has("name"));
             assertTrue(firstColl.has("indexCount"));
             assertTrue(firstColl.has("indexes"));
