@@ -1,0 +1,45 @@
+# Build output
+target/
+build/
+
+# Version control
+.git/
+.gitignore
+
+# IDE / tooling
+.idea/
+.vscode/
+.qodo/
+*.iws
+*.iml
+*.ipr
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+# OS files
+.DS_Store
+
+# Docs / project meta
+README.md
+CLAUDE.md
+.github/
+.claude/
+
+# Runtime data (mounted as volumes, never baked into the image)
+db/
+logs/
+test_log/
+test_utils/
+
+# TLS keystores / certs (auto-generated, contain private keys)
+certs/
+*.p12
+*.jks
+
+# This file
+.dockerignore
