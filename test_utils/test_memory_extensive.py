@@ -32,7 +32,7 @@ PORT = 8989
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 
-DB = "memstress"
+DB = "mem_stress"
 NUM_COLLECTIONS = int(os.environ.get("MEM_TEST_COLLECTIONS", "8"))
 DOCS_PER_COLLECTION = int(os.environ.get("MEM_TEST_DOCS", "10000"))
 PAYLOAD_BYTES = int(os.environ.get("MEM_TEST_PAYLOAD_BYTES", "768"))
@@ -164,7 +164,7 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
 
     Total raw data ~= NUM_COLLECTIONS * DOCS * PAYLOAD_BYTES (well over the cap).
     """
-    section(f"Mass insert: {NUM_COLLECTIONS} colls x {DOCS_PER_COLLECTION} docs "
+    section(f"Mass insert: {NUM_COLLECTIONS} collections x {DOCS_PER_COLLECTION} docs "
             f"x {PAYLOAD_BYTES}B "
             f"(~{(NUM_COLLECTIONS * DOCS_PER_COLLECTION * PAYLOAD_BYTES) // (1024*1024)}MB)")
 

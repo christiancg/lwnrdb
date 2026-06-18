@@ -79,10 +79,10 @@ public class MessageProcessor implements Runnable {
                                             response = eJson.toJson(new OperationResponse(type,
                                                     OperationStatus.UNAUTHENTICATED, "User no longer exists"));
                                         } else {
-                                            final var authzResult = AuthorizationChecker.check(parsedMessage, user);
-                                            if (!authzResult.isAllowed()) {
+                                            final var authResult = AuthorizationChecker.check(parsedMessage, user);
+                                            if (!authResult.isAllowed()) {
                                                 response = eJson.toJson(new OperationResponse(type,
-                                                        OperationStatus.FORBIDDEN, authzResult.getReason()));
+                                                        OperationStatus.FORBIDDEN, authResult.getReason()));
                                             } else {
                                                 final var responseObj = operationProcessor.processMessage(parsedMessage,
                                                         clientId);
