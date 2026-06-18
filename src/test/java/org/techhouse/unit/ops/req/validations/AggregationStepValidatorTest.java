@@ -410,7 +410,19 @@ public class AggregationStepValidatorTest {
 
     @Test
     public void validate_castMidOperator_nullToType_returnsFail() {
-        assertFalse(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", null)).isValid());
+        assertFalse(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", (CastToType) null))
+                .isValid());
+    }
+
+    @Test
+    public void validate_castMidOperator_jsonCustom_missingTypeName_returnsFail() {
+        final var op = new CastMidOperator("score", CastToType.JSON_CUSTOM);
+        assertFalse(AggregationStepValidator.validateMidOperator(op).isValid());
+    }
+
+    @Test
+    public void validate_castMidOperator_jsonCustom_withTypeName_returnsOk() {
+        assertTrue(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", "datetime")).isValid());
     }
 
     // Mid-operator: MAX, MIN, MULTIPLY, CONCAT

@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
@@ -165,7 +166,6 @@ public class OperationProcessor {
     }
 
     private BulkSaveResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest) {
-        // TODO: validate that there shouldn't be more than 1 object with the same id
         final var dbName = bulkSaveRequest.getDatabaseName();
         final var collName = bulkSaveRequest.getCollectionName();
         final var entries = new ArrayList<DbEntry>();
@@ -177,6 +177,13 @@ public class OperationProcessor {
             if (entry.byteSize() > maxEntrySize) {
                 return new BulkSaveResponse(OperationStatus.ERROR, "Entry size of " + entry.byteSize()
                         + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null, null);
+            }
+        }
+        final var seenIds = new HashSet<String>();
+        for (var entry : entries) {
+            if (!seenIds.add(entry.get_id())) {
+                return new BulkSaveResponse(OperationStatus.ERROR,
+                        "Duplicate _id in bulk save request: " + entry.get_id(), null, null);
             }
         }
         try {

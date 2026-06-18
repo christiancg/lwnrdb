@@ -5,8 +5,10 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -261,7 +263,6 @@ public final class MapOperatorHelper {
     }
 
     private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
-        // TODO: implement concat for custom type here
         final var operands = midOperator.getOperands();
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
@@ -275,7 +276,9 @@ public final class MapOperatorHelper {
                     } else {
                         final var fieldName = primitive.asJsonString().getValue();
                         final var element = JsonUtils.getFromPath(obj, fieldName);
-                        if (element.isJsonString()) {
+                        if (element instanceof JsonCustom<?> custom) {
+                            toAdd = custom.stringDataValue();
+                        } else if (element.isJsonString()) {
                             toAdd = element.asJsonString().getValue();
                         } else {
                             toAdd = TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(element);
@@ -300,7 +303,6 @@ public final class MapOperatorHelper {
     }
 
     private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
-        // TODO: implement cast to and from custom type here
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
         final var field = JsonUtils.getFromPath(obj, fieldName);
@@ -321,7 +323,9 @@ public final class MapOperatorHelper {
                     yield JsonNull.INSTANCE;
                 }
                 case STRING -> {
-                    if (primitive.isJsonString()) {
+                    if (primitive instanceof JsonCustom<?> custom) {
+                        yield new JsonString(custom.stringDataValue());
+                    } else if (primitive.isJsonString()) {
                         yield primitive;
                     } else if (primitive.isJsonNumber()) {
                         final var value = primitive.asJsonNumber().getValue();
@@ -345,6 +349,22 @@ public final class MapOperatorHelper {
                     } else if (primitive.isJsonNumber()) {
                         final var number = primitive.asJsonNumber().getValue().doubleValue();
                         yield new JsonBoolean(number != 0);
+                    }
+                    yield JsonNull.INSTANCE;
+                }
+                case JSON_CUSTOM -> {
+                    final var customTypeName = midOperator.getCustomTypeName();
+                    if (primitive instanceof JsonCustom<?> existing
+                            && existing.getCustomTypeName().equals(customTypeName)) {
+                        yield primitive;
+                    } else if (primitive.isJsonString() && !(primitive instanceof JsonCustom<?>)) {
+                        try {
+                            final var wireFormat = "#" + customTypeName + "(" + primitive.asJsonString().getValue()
+                                    + ")";
+                            yield CustomTypeFactory.getCustomTypeInstance(wireFormat);
+                        } catch (Exception ignored) {
+                            // not a valid value for this custom type; fall through to JsonNull below
+                        }
                     }
                     yield JsonNull.INSTANCE;
                 }

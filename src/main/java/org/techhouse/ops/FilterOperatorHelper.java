@@ -81,7 +81,6 @@ public class FilterOperatorHelper {
         if (resultStream == null) {
             // Blocking step (documented exception): NOR/NAND must diff against the full
             // collection, so it loads the whole collection rather than streaming.
-            // TODO: see if we can improve this in the future, as it might cause an OOM exception when collections are too large
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
         return Stream.concat(resultStream, combined)
