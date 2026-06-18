@@ -22,7 +22,7 @@ public class ReflectionUtils {
                         "TypeToken must be created with a type argument: new TypeToken<...>() {}; When using code"
                                 + " shrinkers (ProGuard, R8, ...) make sure that generic signatures are preserved.");
             }
-            // User created subclass of subclass of TypeToken
+            // User created sub subclass of TypeToken
             throw new IllegalStateException("Must only create direct subclasses of TypeToken");
         }
     }

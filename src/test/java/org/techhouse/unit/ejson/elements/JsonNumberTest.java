@@ -104,7 +104,7 @@ public class JsonNumberTest {
         assertEquals(Integer.MAX_VALUE, result);
     }
 
-    // String constructor with non-integer value stores as double (L25)
+    // String constructor with noninteger value stores as double (L25)
     @Test
     public void test_string_constructor_non_integer_value() {
         JsonNumber num = new JsonNumber("3.14");

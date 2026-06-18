@@ -12,7 +12,7 @@ import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 
 public class ConjunctionOperatorTest {
-    // Create ConjunctionOperator with valid conjunctionType AND and non-empty operators list
+    // Create ConjunctionOperator with valid conjunctionType "AND" and non-empty operators list
     @Test
     public void test_create_conjunction_operator_with_valid_type_and_operators() {
         List<BaseOperator> operators = Arrays.asList(new BaseOperator(OperatorType.FIELD),

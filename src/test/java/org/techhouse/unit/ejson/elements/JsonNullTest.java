@@ -7,7 +7,7 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 
 public class JsonNullTest {
-    // Singleton instance INSTANCE is accessible and returns same object on multiple accesses
+    // Singleton instance "INSTANCE" is accessible and returns same object on multiple accesses
     @Test
     public void test_singleton_instance_returns_same_object() {
         JsonNull instance1 = JsonNull.INSTANCE;

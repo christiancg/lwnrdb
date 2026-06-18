@@ -642,7 +642,7 @@ public class MapOperatorHelperTest {
         assertNotNull(new MapOperatorHelper());
     }
 
-    // CAST NUMBER when field is already a number returns the number (L302)
+    // CAST NUMBER when field is already a number of returns the number (L302)
     @Test
     public void test_cast_number_to_number_returns_same() {
         JsonObject input = new JsonObject();

@@ -414,61 +414,61 @@ Join
 
 Map
 
-Add field "average" -> type "AVG"
+Add field "average" → type "AVG"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "average", "condition": null, "operator": {"type":"AVG", "operands": ["aNumber", 20]}}]}]}
 ```
 
-Add field "sum" -> type "SUM"
+Add field "sum" → type "SUM"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "sum", "condition": null, "operator": {"type":"SUM", "operands": ["aNumber", 100]}}]}]}
 ```
 
-Add field "subs" -> type "SUBS"
+Add field "subs" → type "SUBS"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "subs", "condition": null, "operator": {"type":"SUBS", "operands": ["aNumber", 100]}}]}]}
 ```
 
-Add field "max" -> type "MAX"
+Add field "max" → type "MAX"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "max", "condition": null, "operator": {"type":"MAX", "operands": ["aNumber", 7]}}]}]}
 ```
 
-Add field "min" -> type "MIN"
+Add field "min" → type "MIN"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "min", "condition": null, "operator": {"type":"MIN", "operands": ["aNumber", 7]}}]}]}
 ```
 
-Add field "multiply" -> type "MULTIPLY"
+Add field "multiply" → type "MULTIPLY"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "multiply", "condition": null, "operator": {"type":"MULTIPLY", "operands": ["aNumber", 2]}}]}]}
 ```
 
-Add field "divided" -> type "DIVIDE"
+Add field "divided" → type "DIVIDE"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "divided", "condition": null, "operator": {"type":"DIVIDE", "operands": ["aNumber", 2]}}]}]}
 ```
 
-Add field "powered" -> type "POW"
+Add field "powered" → type "POW"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "powered", "condition": null, "operator": {"type":"POW", "operands": ["aNumber", 2]}}]}]}
 ```
 
-Add field "rooted" -> type "ROOT"
+Add field "rooted" → type "ROOT"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "rooted", "condition": null, "operator": {"type":"ROOT", "operands": ["aNumber", 2]}}]}]}
 ```
 
-Add field "absolute" -> type "ABS"
+Add field "absolute" → type "ABS"
 
 ```json
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "aNumber": -3 }}
@@ -478,7 +478,7 @@ Add field "absolute" -> type "ABS"
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "absolute", "condition": null, "operator": {"type":"ABS", "operand": "aNumber"}}]}]}
 ```
 
-Add field "size" -> type "SIZE"
+Add field "size" → type "SIZE"
 
 array
 
@@ -496,13 +496,13 @@ string
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "size", "condition": null, "operator": {"type":"SIZE", "operand": "aString"}}]}]}
 ```
 
-Add field "concatenated" -> type "CONCAT"
+Add field "concatenated" → type "CONCAT"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "concatenated", "condition": null, "operator": {"type":"CONCAT", "operands": ["aString", 73, "-birras", false, "aNumber"]}}]}]}
 ```
 
-Add field "casted" -> type "CAST"
+Add field "cast" → type "CAST"
 
 number to string
 
@@ -546,13 +546,13 @@ number to boolean
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "casted", "condition": null, "operator": {"type":"CAST", "fieldName": "aNumber", "toType": "BOOLEAN"}}]}]}
 ```
 
-Add field "addedAfterMap" with condition "AND" -> type "MULTIPLY"
+Add field "addedAfterMap" with condition "AND" → type "MULTIPLY"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "addedAfterMap", "condition": {"conjunctionType":"AND","operators": [{"fieldOperatorType": "SMALLER_THAN_EQUALS", "field": "aNumber", "value": 10},{"fieldOperatorType": "GREATER_THAN", "field": "aNumber", "value": 7}]}, "operator": {"type":"MULTIPLY", "operands": ["aNumber", 3]}}]}]}
 ```
 
-Add field "addedAfterMap" with condition "OR" -> type "MULTIPLY"
+Add field "addedAfterMap" with condition "OR" → type "MULTIPLY"
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "addedAfterMap", "condition": {"conjunctionType":"OR","operators": [{"fieldOperatorType": "SMALLER_THAN_EQUALS", "field": "aNumber", "value": 10},{"fieldOperatorType": "GREATER_THAN", "field": "aNumber", "value": 7}]}, "operator": {"type":"MULTIPLY", "operands": ["aNumber", 3]}}]}]}
@@ -852,9 +852,7 @@ Delete dbadmin
 {"type": "DELETE_USER", "username": "dbadmin"}
 ```
 
-Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM,
-
-totals across databases/collections, plus per-collection page/index/entry breakdown)
+Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown)
 
 ```json
 {"type": "GET_DATABASE_STATS"}
