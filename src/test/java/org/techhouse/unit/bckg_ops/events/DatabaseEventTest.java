@@ -21,8 +21,7 @@ public class DatabaseEventTest {
     @Test
     public void test_create_database_event_with_null_dbname() {
         EventType eventType = EventType.CREATED;
-        String dbName = null;
-        DatabaseEvent databaseEvent = new DatabaseEvent(eventType, dbName);
+        DatabaseEvent databaseEvent = new DatabaseEvent(eventType, null);
         assertEquals(eventType, databaseEvent.getType());
         assertNull(databaseEvent.getDbName());
     }

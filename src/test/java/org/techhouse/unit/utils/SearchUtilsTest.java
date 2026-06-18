@@ -143,7 +143,7 @@ public class SearchUtilsTest {
                 () -> SearchUtils.findingByOperator(entries, FieldOperatorType.IN, "value"));
     }
 
-    // Create a happy path test of the findingbyoperator method using the operator types IN and NOT_IN
+    // Create a happy path test of the finding by operator method using the operator types IN and NOT_IN
     @Test
     public void test_in_and_not_in_operators_throw_exception() {
         Set<String> ids1 = Set.of("id1", "id2");
@@ -364,12 +364,6 @@ public class SearchUtilsTest {
         final var allIdSet = new HashSet<>(ids1);
         allIdSet.addAll(ids2);
         assertEquals(allIdSet, resultTime);
-    }
-
-    // SearchUtils instantiation covers implicit default constructor (L14)
-    @Test
-    public void test_search_utils_instantiation() {
-        assertNotNull(new SearchUtils());
     }
 
     // NOT_EQUALS where value is NOT in entries → else branch returns all (L43)

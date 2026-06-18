@@ -7,7 +7,9 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
 
-public class CustomTypeFactory {
+public final class CustomTypeFactory {
+    private CustomTypeFactory() {
+    }
     private static final Map<String, Class<? extends JsonCustom<?>>> _customTypes = new HashMap<>();
 
     public static void registerCustomType(Class<? extends JsonCustom<?>> aClass) {

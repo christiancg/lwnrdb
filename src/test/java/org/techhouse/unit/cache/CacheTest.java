@@ -49,7 +49,7 @@ public class CacheTest {
     }
 
     @AfterEach
-    public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -146,7 +146,7 @@ public class CacheTest {
     }
 
     @Test
-    public void test_concatenates_dbname_and_collname_correctly() {
+    public void test_concatenates_dbname_and_coll_name_correctly() {
         String dbName = "testDb";
         String collName = "testColl";
         String expected = "testDb" + Globals.COLL_IDENTIFIER_SEPARATOR + "testColl";
@@ -155,7 +155,7 @@ public class CacheTest {
     }
 
     @Test
-    public void test_handles_empty_dbname_and_collname_gracefully() {
+    public void test_handles_empty_dbname_and_coll_name_gracefully() {
         String dbName = "a";
         String collName = "a";
         String expected = "a" + Globals.COLL_IDENTIFIER_SEPARATOR + "a";
@@ -338,7 +338,7 @@ public class CacheTest {
 
     // Handles null values in JsonArray gracefully
     @Test
-    public void test_handles_null_values_in_jsonarray() throws IOException {
+    public void test_handles_null_values_in_json_array() throws IOException {
         // Arrange
         var cache = new Cache();
         var dbName = "testDB";
@@ -610,7 +610,7 @@ public class CacheTest {
 
     // Retrieve PkIndexEntry for existing database name
     @Test
-    public void test_retrieve_pkindexentry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
+    public void test_retrieve_pk_index_entry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L, 0);
 
@@ -628,7 +628,7 @@ public class CacheTest {
 
     // Database name is an empty string
     @Test
-    public void test_retrieve_pkindexentry_empty_dbname() {
+    public void test_retrieve_pk_index_entry_empty_dbname() {
         Cache cache = new Cache();
 
         PkIndexEntry result = cache.getPkIndexAdminDbEntry("");
@@ -638,7 +638,7 @@ public class CacheTest {
 
     // Adding a valid PkIndexEntry to databasesPkIndex
     @Test
-    public void test_add_valid_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
+    public void test_add_valid_pk_index_entry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L, 0);
         cache.putPkIndexAdminDbEntry(entry);
@@ -652,7 +652,7 @@ public class CacheTest {
 
     // Retrieve an existing AdminDbEntry by its database name
     @Test
-    public void test_retrieve_existing_admindbentry() throws NoSuchFieldException, IllegalAccessException {
+    public void test_retrieve_existing_admin_db_entry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminDbEntry entry = new AdminDbEntry("testDb");
 
@@ -680,7 +680,7 @@ public class CacheTest {
 
     // Retrieve existing PkIndexEntry for a valid collection identifier
     @Test
-    public void test_retrieve_existing_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
+    public void test_retrieve_existing_pk_index_entry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L, 0);
 
@@ -698,7 +698,7 @@ public class CacheTest {
 
     // Adds a PkIndexEntry to collectionsPkIndex map
     @Test
-    public void test_adds_pkindexentry_to_map() throws NoSuchFieldException, IllegalAccessException {
+    public void test_adds_pk_index_entry_to_map() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L, 0);
         cache.putPkIndexAdminCollEntry(entry);
@@ -712,7 +712,7 @@ public class CacheTest {
 
     // Retrieves an AdminCollEntry when the collection exists in the cache
     @Test
-    public void test_retrieves_admincollentry_when_exists_in_cache()
+    public void test_retrieves_admin_coll_entry_when_exists_in_cache()
             throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         String dbName = "testDB";
@@ -1266,7 +1266,7 @@ public class CacheTest {
 
     // getIdsFromIndex with JsonArray containing JsonString elements
     @Test
-    public void test_get_ids_from_index_with_jsonarray_of_strings() throws IOException {
+    public void test_get_ids_from_index_with_json_array_of_strings() throws IOException {
         var cache = mock(Cache.class);
         var dbName = "db";
         var collName = "coll";
@@ -1289,7 +1289,7 @@ public class CacheTest {
 
     // getIdsFromIndex with JsonArray containing JsonNumber elements
     @Test
-    public void test_get_ids_from_index_with_jsonarray_of_numbers() throws IOException {
+    public void test_get_ids_from_index_with_json_array_of_numbers() throws IOException {
         var cache = mock(Cache.class);
         var dbName = "db";
         var collName = "coll";
@@ -1314,7 +1314,7 @@ public class CacheTest {
 
     // getIdsFromIndex with JsonArray containing JsonBoolean elements
     @Test
-    public void test_get_ids_from_index_with_jsonarray_of_booleans() throws IOException {
+    public void test_get_ids_from_index_with_json_array_of_booleans() throws IOException {
         var cache = mock(Cache.class);
         var dbName = "db";
         var collName = "coll";
@@ -1336,7 +1336,7 @@ public class CacheTest {
 
     // getIdsFromIndex with JsonArray containing a non-primitive first element returns null
     @Test
-    public void test_get_ids_from_index_with_jsonarray_non_primitive_returns_null() throws IOException {
+    public void test_get_ids_from_index_with_json_array_non_primitive_returns_null() throws IOException {
         var cache = new Cache();
         var arr = new JsonArray();
         JsonObject nested = new JsonObject();
@@ -1352,7 +1352,7 @@ public class CacheTest {
     @Test
     public void test_load_admin_data_with_existing_users_populates_users_map() throws Exception {
         // Persist a user to disk
-        final var userEntry = new org.techhouse.data.admin.AdminUserEntry("cachetestuser", "hash", false,
+        final var userEntry = new org.techhouse.data.admin.AdminUserEntry("cachetest_user", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
         org.techhouse.ops.AdminOperationHelper.saveUserEntry(userEntry);
 
@@ -1364,7 +1364,7 @@ public class CacheTest {
         // Reload — should find the persisted user
         cache.loadAdminData();
 
-        assertNotNull(cache.getAdminUserEntry("cachetestuser"));
+        assertNotNull(cache.getAdminUserEntry("cachetest_user"));
     }
 
     // loadAdminData with pre-existing databases and collections populates all maps (L49-67, L92-98)
@@ -1865,7 +1865,9 @@ public class CacheTest {
         assertEquals(2, result.size());
         // Only the missing entry should have been targeted-read.
         final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        //noinspection unchecked
         verify(fsMock).getByIndexEntries(captor.capture());
+        //noinspection unchecked
         final List<PkIndexEntry> requested = captor.getValue();
         assertEquals(1, requested.size());
         assertEquals("id2", requested.getFirst().getValue());

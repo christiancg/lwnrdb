@@ -24,7 +24,7 @@ public class ListUsersTest {
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         // Create some test users
-        createUser("alice", true);
+        createUser("Alice", true);
         createUser("bob", false);
         createUser("charlie", false);
     }
@@ -90,13 +90,13 @@ public class ListUsersTest {
     @Test
     public void test_list_users_filter_by_username() {
         final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":["
-                + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"alice\"}}"
+                + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"Alice\"}}"
                 + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
         assertEquals(1, resp.getUsers().size());
-        assertEquals("alice", resp.getUsers().getFirst().get("_id").asJsonString().getValue());
+        assertEquals("Alice", resp.getUsers().getFirst().get("_id").asJsonString().getValue());
     }
 
     @Test

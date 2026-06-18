@@ -84,7 +84,7 @@ public class IndexedDbEntryTest {
 
     // Converts IndexedDbEntry to DbEntry with matching _id
     @Test
-    public void test_convert_to_dbentry_with_matching_id() {
+    public void test_convert_to_db_entry_with_matching_id() {
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
         indexedDbEntry.set_id("12345");
         indexedDbEntry.setDatabaseName("testDatabase");
@@ -103,7 +103,7 @@ public class IndexedDbEntryTest {
 
     // Handles null _id in IndexedDbEntry
     @Test
-    public void test_handle_null_id_in_indexeddbentry() {
+    public void test_handle_null_id_in_indexed_db_entry() {
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
         indexedDbEntry.set_id(null);
         indexedDbEntry.setDatabaseName("testDatabase");
@@ -142,7 +142,7 @@ public class IndexedDbEntryTest {
 
     // Handles null _id in IndexedDbEntry
     @Test
-    public void test_ejson_is_not_null() throws NoSuchFieldException, IllegalAccessException {
+    public void test_e_json_is_not_null() throws NoSuchFieldException, IllegalAccessException {
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
         final var eJson = TestUtils.getPrivateField(indexedDbEntry, "eJson", EJson.class);
         assertNotNull(eJson);

@@ -34,7 +34,10 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 
-public class RequestParser {
+public final class RequestParser {
+    private RequestParser() {
+    }
+
     private static final EJson eJson = IocContainer.get(EJson.class);
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {

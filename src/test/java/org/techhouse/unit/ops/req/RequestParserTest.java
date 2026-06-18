@@ -147,7 +147,7 @@ public class RequestParserTest {
     // Parse map operations with add field and remove field operators
     @Test
     public void test_parse_map_operations_with_add_and_remove_field_operators() {
-        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"MAP\", \"operators\": [{ \"fieldName\": \"newField\", \"operator\": { \"type\": \"SUM\", \"operands\": [\"aField\", 30] }}] }] }";
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"MAP\", \"operators\": [{ \"fieldName\": \"newField\", \"operator\": { \"type\": \"SUM\", \"operands\": [\"a_field\", 30] }}] }] }";
         OperationRequest request = RequestParser.parseRequest(message);
         assertInstanceOf(AggregateRequest.class, request);
         AggregateRequest aggRequest = (AggregateRequest) request;
@@ -162,7 +162,7 @@ public class RequestParserTest {
         assertEquals("newField", addOp.getFieldName());
         assertInstanceOf(ArrayParamMidOperator.class, addOp.getOperator());
         ArrayParamMidOperator addParamOperator = (ArrayParamMidOperator) addOp.getOperator();
-        assertEquals("aField", addParamOperator.getOperands().asList().getFirst().asJsonString().getValue());
+        assertEquals("a_field", addParamOperator.getOperands().asList().getFirst().asJsonString().getValue());
     }
 
     // Parse conjunction operators with nested operators (AND, OR)
@@ -193,7 +193,7 @@ public class RequestParserTest {
         assertEquals(new JsonNumber(18), secondOp.getValue().asJsonObject().get("$numberInt").asJsonNumber());
     }
 
-    // Parse mid operators with array parameters (AVG, SUM, etc)
+    // Parse mid-operators with array parameters (AVG, SUM, etc.)
     @Test
     public void test_parse_mid_operators_with_array_parameters() {
         String jsonMessage = """
@@ -383,12 +383,6 @@ public class RequestParserTest {
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(CreateCollectionRequest.class, result);
         assertEquals(OperationType.CREATE_COLLECTION, result.getType());
-    }
-
-    // RequestParser instantiation covers implicit default constructor (L20)
-    @Test
-    public void test_request_parser_instantiation() {
-        assertNotNull(new RequestParser());
     }
 
     // MAP step with a conjunction condition covers the condition parsing path (L94, L137-138)

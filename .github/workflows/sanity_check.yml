@@ -17,7 +17,7 @@ jobs:
       - name: Run Maven Verify
         run: mvn verify
       - name: Set admin credentials for integration tests
-        run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=adminstrator/' lwnrdb.cfg
+        run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
       - name: Start server
         run: |
           java -Xmx1g -jar target/lwnrdb-1.0-SNAPSHOT.jar &

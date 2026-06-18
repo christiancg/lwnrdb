@@ -16,6 +16,7 @@ public class SocketServerTest {
     @Test
     public void test_server_starts_and_listens_on_specified_port() throws InterruptedException {
         int port = 8080;
+        //noinspection resource
         ExecutorService executor = Executors.newSingleThreadExecutor();
         SocketServer server = new SocketServer(port);
         executor.submit(server::serve);
@@ -25,7 +26,7 @@ public class SocketServerTest {
         } catch (IOException e) {
             fail("Server did not start or listen on the specified port");
         } finally {
-            executor.shutdown();
+            executor.shutdownNow();
         }
     }
 

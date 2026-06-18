@@ -4,7 +4,10 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 
-public class JsonUtils {
+public final class JsonUtils {
+    private JsonUtils() {
+    }
+
     public static boolean hasInPath(JsonObject obj, String path) {
         var currentPart = obj;
         final var parts = path.split("\\.");

@@ -2,9 +2,9 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
@@ -31,7 +31,7 @@ import org.techhouse.test.TestUtils;
 
 public class MapOperatorHelperTest {
     @AfterEach
-    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.releaseAllLocks();
     }
 
@@ -365,6 +365,12 @@ public class MapOperatorHelperTest {
         operands.add(new JsonString("field1"));
         operands.add(new JsonString("field2"));
         operands.add(new JsonNumber(5));
+        AddFieldMapOperator operator = getAddFieldMapOperator(operands);
+        JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
+        assertEquals(35, result.get("result").asJsonNumber().asInteger());
+    }
+
+    private static @NonNull AddFieldMapOperator getAddFieldMapOperator(JsonArray operands) {
         ArrayParamMidOperator midOperator = new ArrayParamMidOperator(MidOperationType.SUM, operands);
 
         JsonObject conditionObject = new JsonObject();
@@ -375,9 +381,7 @@ public class MapOperatorHelperTest {
         List<BaseOperator> operators = List.of(fieldOp1, fieldOp2);
         ConjunctionOperator conjunctionOp = new ConjunctionOperator(ConjunctionOperatorType.AND, operators);
 
-        AddFieldMapOperator operator = new AddFieldMapOperator("result", conjunctionOp, midOperator);
-        JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
-        assertEquals(35, result.get("result").asJsonNumber().asInteger());
+        return new AddFieldMapOperator("result", conjunctionOp, midOperator);
     }
 
     // Calculate average of mixed field references and direct numbers
@@ -589,7 +593,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a numeric field reference uses toJson for non-string element (L270)
     @Test
-    public void test_concat_non_string_field_uses_tojson() {
+    public void test_concat_non_string_field_uses_to_json() {
         JsonObject input = new JsonObject();
         input.addProperty("score", 42);
         JsonArray operands = new JsonArray();
@@ -602,7 +606,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a JsonNumber operand directly uses toJson (L275)
     @Test
-    public void test_concat_json_number_operand_uses_tojson() {
+    public void test_concat_json_number_operand_uses_to_json() {
         JsonObject input = new JsonObject();
         JsonArray operands = new JsonArray();
         operands.add(new JsonNumber(99));
@@ -613,7 +617,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a JsonArray operand appends its primitive elements (L278-282)
     @Test
-    public void test_concat_jsonarray_operand() {
+    public void test_concat_json_array_operand() {
         JsonObject input = new JsonObject();
         JsonArray arr = new JsonArray();
         arr.add(new JsonString("x"));
@@ -627,7 +631,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a JsonNull operand appends null string (L284)
     @Test
-    public void test_concat_jsonnull_operand() {
+    public void test_concat_json_null_operand() {
         JsonObject input = new JsonObject();
         JsonArray operands = new JsonArray();
         operands.add(JsonNull.INSTANCE);
@@ -636,13 +640,7 @@ public class MapOperatorHelperTest {
         assertTrue(result.has("out"));
     }
 
-    // MapOperatorHelper instantiation covers implicit default constructor (L23)
-    @Test
-    public void test_map_operator_helper_instantiation() {
-        assertNotNull(new MapOperatorHelper());
-    }
-
-    // CAST NUMBER when field is already a number returns the number (L302)
+    // CAST NUMBER when field is already a number of returns the number (L302)
     @Test
     public void test_cast_number_to_number_returns_same() {
         JsonObject input = new JsonObject();

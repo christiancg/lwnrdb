@@ -65,7 +65,7 @@ public class AdminDbEntryTest {
 
     // Converts a valid JsonObject to AdminDbEntry correctly
     @Test
-    public void test_valid_jsonobject_conversion() {
+    public void test_valid_json_object_conversion() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.add(Globals.PK_FIELD, new JsonString("testDb"));
         JsonArray collectionsArray = new JsonArray();

@@ -42,7 +42,7 @@ public class FilterOperatorHelperTest {
     }
 
     @AfterEach
-    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -586,7 +586,7 @@ public class FilterOperatorHelperTest {
 
     // processOperator with a JsonArray value exercises the JsonArray index path (IN)
     @Test
-    public void test_process_operator_with_jsonarray_value() throws IOException {
+    public void test_process_operator_with_json_array_value() throws IOException {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString("arr1"));
         obj.addProperty("color", "red");

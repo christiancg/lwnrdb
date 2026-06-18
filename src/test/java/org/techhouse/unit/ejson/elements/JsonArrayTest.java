@@ -91,9 +91,8 @@ public class JsonArrayTest {
     @Test
     public void test_add_null_string_creates_json_string_with_null() {
         JsonArray array = new JsonArray();
-        String nullString = null;
 
-        array.add(nullString);
+        array.add((String) null);
 
         assertEquals(1, array.size());
         assertInstanceOf(JsonString.class, array.get(0));

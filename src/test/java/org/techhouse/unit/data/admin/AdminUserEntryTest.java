@@ -13,11 +13,11 @@ import org.techhouse.data.auth.PermissionLevel;
 public class AdminUserEntryTest {
     @Test
     public void test_constructor_sets_admin_db_and_users_collection() {
-        final var entry = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>());
         assertEquals(Globals.ADMIN_DB_NAME, entry.getDatabaseName());
         assertEquals(Globals.ADMIN_USERS_COLLECTION_NAME, entry.getCollectionName());
-        assertEquals("testuser", entry.get_id());
+        assertEquals("test_user", entry.get_id());
     }
 
     @Test
@@ -29,7 +29,7 @@ public class AdminUserEntryTest {
         final var collPerms = new HashMap<String, PermissionLevel>();
         collPerms.put("mydb|coll", PermissionLevel.READ);
 
-        final var entry = new AdminUserEntry("testuser", "hash", true, globalPerms, dbPerms, collPerms);
+        final var entry = new AdminUserEntry("test_user", "hash", true, globalPerms, dbPerms, collPerms);
         final var data = entry.getData();
 
         assertNotNull(data.get("_id"));
@@ -49,7 +49,7 @@ public class AdminUserEntryTest {
         final var collPerms = new HashMap<String, PermissionLevel>();
         collPerms.put("mydb|coll", PermissionLevel.READ_WRITE);
 
-        final var original = new AdminUserEntry("testuser", "hash123", true, globalPerms, dbPerms, collPerms);
+        final var original = new AdminUserEntry("test_user", "hash123", true, globalPerms, dbPerms, collPerms);
         final var restored = AdminUserEntry.fromJsonObject(original.getData());
 
         assertEquals(original.get_id(), restored.get_id());
@@ -62,7 +62,7 @@ public class AdminUserEntryTest {
 
     @Test
     public void test_setters_rebuild_data() {
-        final var entry = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>());
         entry.setAdmin(true);
         assertTrue(entry.isAdmin());
@@ -76,14 +76,14 @@ public class AdminUserEntryTest {
 
     @Test
     public void test_equals_hashcode_toString() {
-        final var entry1 = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+        final var entry1 = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>());
-        final var entry2 = new AdminUserEntry("testuser", "hash", false, new HashSet<>(), new HashMap<>(),
+        final var entry2 = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>());
 
         assertEquals(entry1, entry2);
         assertEquals(entry1.hashCode(), entry2.hashCode());
         assertNotNull(entry1.toString());
-        assertTrue(entry1.toString().contains("testuser"));
+        assertTrue(entry1.toString().contains("test_user"));
     }
 }

@@ -10,6 +10,12 @@ public class UnsafeAllocatorTest {
     public void test_creates_simple_class() throws Exception {
         class TestClass {
             private String testField = "initial"; // NOPMD - reflection/serialization test fixture
+            public String getTestField() {
+                return testField;
+            }
+            public void setTestField(String testField) {
+                this.testField = testField;
+            }
         }
         final var instance = UnsafeAllocator.INSTANCE.newInstance(TestClass.class);
         assertNotNull(instance);
@@ -17,12 +23,7 @@ public class UnsafeAllocatorTest {
 
     @Test
     public void test_creates_class_with_constructor() throws Exception {
-        class TestClassWithConstructor {
-            private String testField; // NOPMD - reflection/serialization test fixture
-
-            TestClassWithConstructor(String testField) {
-                this.testField = testField;
-            }
+        record TestClassWithConstructor(String testField) {
         }
         final var instance = UnsafeAllocator.INSTANCE.newInstance(TestClassWithConstructor.class);
         assertNotNull(instance);

@@ -59,7 +59,7 @@ public class JsonObject extends JsonBaseElement {
 
     @Override
     public boolean equals(Object o) {
-        return (o == this) || (o instanceof JsonObject && ((JsonObject) o).members.equals(members));
+        return (o == this) || (o instanceof JsonObject obj && obj.members.equals(members));
     }
 
     @Override

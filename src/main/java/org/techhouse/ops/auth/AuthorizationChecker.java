@@ -106,8 +106,6 @@ public final class AuthorizationChecker {
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
             case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS -> PermissionLevel.READ;
-            case SAVE, BULK_SAVE, DELETE, CREATE_COLLECTION, DROP_COLLECTION, CREATE_INDEX, DROP_INDEX ->
-                PermissionLevel.READ_WRITE;
             default -> PermissionLevel.READ_WRITE;
         };
     }

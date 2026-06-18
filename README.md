@@ -189,7 +189,7 @@ Every connection must authenticate before sending any protected operation. `LIST
 
 #### `AUTHENTICATE`
 ```json
-{"type":"AUTHENTICATE","username":"alice","password":"secret"}
+{"type":"AUTHENTICATE","username":"Alice","password":"secret"}
 ```
 
 #### `CREATE_USER` (admin only)
@@ -234,18 +234,18 @@ A user can change their own password by providing `currentPassword` for verifica
 | `currentPassword` | for non-admins changing own password | Not required when an admin changes another user's password |
 
 ```json
-{"type":"SET_PASSWORD","username":"alice","currentPassword":"oldpass","newPassword":"newpass1234"}
+{"type":"SET_PASSWORD","username":"Alice","currentPassword":"old_pass","newPassword":"new_pass_1234"}
 ```
 
 Admin changing another user's password (no `currentPassword` needed):
 ```json
-{"type":"SET_PASSWORD","username":"alice","newPassword":"newpass1234"}
+{"type":"SET_PASSWORD","username":"Alice","newPassword":"new_pass_1234"}
 ```
 
 #### `SET_DATABASE_OWNERS` (admin only)
 Replaces the full owners list for a database. All usernames must already exist. The creator of a database is automatically set as its first owner.
 ```json
-{"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
+{"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["Alice","bob"]}
 ```
 
 #### `GET_DATABASE_STATS` (admin only)
@@ -315,7 +315,7 @@ Each user object in the response contains:
 | `admin` | boolean | Whether the user is a superadmin |
 | `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
 | `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
-| `collectionPermissions` | object | e.g. `{"mydb\|coll": "READ"}` |
+| `collectionPermissions` | object | e.g. `{"mydb&#124;coll": "READ"}` |
 | `ownedDatabases` | array | Databases where this user is an owner |
 
 ```json
@@ -337,20 +337,20 @@ Example filters:
 
 | Goal | Step |
 |---|---|
-| Find user by username | `FILTER` with `_id EQUALS "alice"` |
+| Find user by username | `FILTER` with `_id EQUALS "Alice"` |
 | Find all admins | `FILTER` with `admin EQUALS true` |
 | Find owners of a database | `FILTER` with `ownedDatabases CONTAINS "mydb"` |
 | Count users | `COUNT` |
 
 ### Permission model
 
-| Concept | Description |
-|---|---|
-| `admin` flag | Superadmin — bypasses all permission checks |
-| Database ownership | Full access to the database and all its collections, including the ability to drop it |
-| `globalPermissions` | `CREATE_DATABASE` — required to create new databases |
-| `databasePermissions` | Grants `READ` or `READ_WRITE` to all collections in a database |
-| `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection` |
+| Concept                 | Description                                                                           |
+|-------------------------|---------------------------------------------------------------------------------------|
+| `admin` flag            | Superadmin — bypasses all permission checks                                           |
+| Database ownership      | Full access to the database and all its collections, including the ability to drop it |
+| `globalPermissions`     | `CREATE_DATABASE` — required to create new databases                                  |
+| `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
+| `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
 Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
 
@@ -403,7 +403,7 @@ logPath=logs
 maxPageSize=2Mb
 maxEntrySize=1Mb
 defaultAdminUsername=admin
-defaultAdminPassword=adminstrator
+defaultAdminPassword=administrator
 maxMemory=512Mb
 ```
 
@@ -426,7 +426,7 @@ Locking is two-tier and applies to **both reads and writes** (earlier versions l
 - **Collection-level read/write locks.** Each collection (and each field index) has a read/write lock. Reads acquire a *shared* read lock; writes (`SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`) acquire an *exclusive* write lock. While a writer holds a collection, nobody else may read or write it; multiple readers run concurrently. An `AGGREGATE` with `JOIN` steps read-locks the primary collection and every joined collection, acquiring them in a deterministic order so overlapping queries cannot deadlock. Cache eviction only evicts a resource it can exclusively (write) lock, so it never races an in-flight read or write.
 - **File-level read/write locks.** Below the collection tier, each physical `.dat`/`.idx` file has its own read/write lock, so a file's bytes are never read while they are being rewritten.
 
-**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection — but it still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting. Logical read-your-writes consistency against asynchronous background index updates is out of scope (it belongs to the pending *Transactions* work).
+**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting. Logical read-your-writes consistency against asynchronous background index updates is out of scope (it belongs to the pending *Transactions* work).
 
 ## Q&A
 

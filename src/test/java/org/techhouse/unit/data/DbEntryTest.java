@@ -10,7 +10,7 @@ import org.techhouse.ejson.elements.JsonObject;
 public class DbEntryTest {
     // Successfully creates DbEntry from a valid JsonObject
     @Test
-    public void test_create_dbentry_from_valid_jsonobject() {
+    public void test_create_db_entry_from_valid_json_object() {
         String databaseName = "testDB";
         String collectionName = "testCollection";
         JsonObject jsonObject = new JsonObject();
@@ -27,7 +27,7 @@ public class DbEntryTest {
 
     // Handles JsonObject without _id field
     @Test
-    public void test_handle_jsonobject_without_id_field() {
+    public void test_handle_json_object_without_id_field() {
         String databaseName = "testDB";
         String collectionName = "testCollection";
         JsonObject jsonObject = new JsonObject();

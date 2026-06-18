@@ -1,5 +1,7 @@
 package org.techhouse.bckg_ops.events;
 
+import java.util.Objects;
+
 public class UsageProfileCleanupEvent extends Event {
     public UsageProfileCleanupEvent() {
         super(EventType.DELETED);
@@ -16,7 +18,7 @@ public class UsageProfileCleanupEvent extends Event {
 
     @Override
     public int hashCode() {
-        return super.hashCode();
+        return Objects.hash(getType(), getClass());
     }
 
     @Override

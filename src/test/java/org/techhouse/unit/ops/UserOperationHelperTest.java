@@ -34,7 +34,7 @@ public class UserOperationHelperTest {
     @Test
     public void test_authenticate_unknown_user_returns_error() {
         final var req = new AuthenticateRequest();
-        req.setUsername("unknownuser");
+        req.setUsername("unknown_user");
         req.setPassword("password");
         final var resp = UserOperationHelper.processAuthenticate(req, UUID.randomUUID());
         assertEquals(OperationStatus.ERROR, resp.getStatus());
@@ -45,7 +45,7 @@ public class UserOperationHelperTest {
     public void test_authenticate_wrong_password_returns_error() {
         final var password = "correctPassword123";
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("testuser");
+        createReq.setUsername("test_user");
         createReq.setPassword(password);
         createReq.setGlobalPermissions(new HashSet<>());
         createReq.setDatabasePermissions(new HashMap<>());
@@ -53,7 +53,7 @@ public class UserOperationHelperTest {
         UserOperationHelper.processCreateUser(createReq);
 
         final var authReq = new AuthenticateRequest();
-        authReq.setUsername("testuser");
+        authReq.setUsername("test_user");
         authReq.setPassword("wrongPassword");
         final var resp = UserOperationHelper.processAuthenticate(authReq, UUID.randomUUID());
         assertEquals(OperationStatus.ERROR, resp.getStatus());
@@ -62,7 +62,7 @@ public class UserOperationHelperTest {
     @Test
     public void test_create_user_persists_and_caches() {
         final var req = new CreateUserRequest();
-        req.setUsername("newuser");
+        req.setUsername("new_user");
         req.setPassword("password123");
         req.setGlobalPermissions(new HashSet<>());
         req.setDatabasePermissions(new HashMap<>());
@@ -70,7 +70,7 @@ public class UserOperationHelperTest {
 
         final var resp = UserOperationHelper.processCreateUser(req);
         assertEquals(OperationStatus.OK, resp.getStatus());
-        assertNotNull(cache.getAdminUserEntry("newuser"));
+        assertNotNull(cache.getAdminUserEntry("new_user"));
     }
 
     @Test

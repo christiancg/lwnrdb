@@ -33,10 +33,8 @@ public class IterableTypeAdapter<T> implements TypeAdapter<Iterable<T>> {
 
     @Override
     public Iterable<T> fromJson(JsonBaseElement value) {
-        if (value instanceof JsonArray) {
-            return StreamSupport
-                    .stream(Spliterators.spliteratorUnknownSize(value.asJsonArray().iterator(), Spliterator.ORDERED),
-                            false)
+        if (value instanceof JsonArray arr) {
+            return StreamSupport.stream(Spliterators.spliteratorUnknownSize(arr.iterator(), Spliterator.ORDERED), false)
                     .map(jsonBaseElement -> TypeAdapterFactory.getAdapter(tClass).fromJson(jsonBaseElement)).toList();
         } else {
             return null;

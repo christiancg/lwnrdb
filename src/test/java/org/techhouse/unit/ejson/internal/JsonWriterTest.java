@@ -22,9 +22,14 @@ public class JsonWriterTest {
             public void setName(String name) {
                 this.name = name;
             }
-
+            public String getName() {
+                return name;
+            }
             public void setValue(int value) {
                 this.value = value;
+            }
+            public int getValue() {
+                return value;
             }
         }
         JsonWriter writer = new JsonWriter();

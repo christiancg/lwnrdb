@@ -14,7 +14,10 @@ import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.exceptions.MissingEndOfStringException;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
-public class Lexer {
+public final class Lexer {
+    private Lexer() {
+    }
+
     private static final Set<Character> JSON_SYNTAX = Set.of(',', ':', '[', ']', '{', '}');
     private static final Set<Character> JSON_WHITESPACE = Set.of(' ', '\t', '\b', '\n', '\r');
     private static final int FALSE_LEN = "false".length();

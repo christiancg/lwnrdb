@@ -13,7 +13,9 @@ import java.util.Map;
 import java.util.Set;
 import org.techhouse.log.Logger;
 
-public class ConfigReader {
+public final class ConfigReader {
+    private ConfigReader() {
+    }
     private static final Set<String> configKeys = Set.of("port", "maxConnections", "filePath",
             "backgroundProcessingThreads", "logPath", "maxLogFiles", "maxPageSize", "maxEntrySize",
             "defaultAdminUsername", "defaultAdminPassword", "maxMemory");

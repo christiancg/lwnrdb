@@ -27,7 +27,7 @@ public class AdminOperationHelperTest {
     }
 
     @AfterEach
-    public void tearDown() throws InterruptedException, IOException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -75,12 +75,6 @@ public class AdminOperationHelperTest {
                 .get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME)));
         final var inserted = cache.getAdminDbEntry(Globals.ADMIN_DB_NAME);
         assertNotNull(inserted);
-    }
-
-    // AdminOperationHelper instantiation covers implicit default constructor (L23)
-    @Test
-    public void test_admin_operation_helper_instantiation() {
-        assertNotNull(new AdminOperationHelper());
     }
 
     // saveDatabaseEntry for an already-existing database takes the update path (L204-205)
