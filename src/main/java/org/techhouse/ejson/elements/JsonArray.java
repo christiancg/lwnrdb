@@ -56,7 +56,7 @@ public class JsonArray extends JsonBaseElement implements Iterable<JsonBaseEleme
 
     @Override
     public boolean equals(Object o) {
-        return (o == this) || (o instanceof JsonArray && ((JsonArray) o).elements.equals(elements));
+        return (o == this) || (o instanceof JsonArray arr && arr.elements.equals(elements));
     }
 
     @Override
