@@ -39,6 +39,7 @@ build/
 
 ### Claude ###
 CLAUDE.md
+.claude/
 
 ### DB files ###
 logs/
