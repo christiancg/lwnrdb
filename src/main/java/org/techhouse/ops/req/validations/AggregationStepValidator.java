@@ -6,6 +6,7 @@ import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -183,6 +184,10 @@ public class AggregationStepValidator {
                 }
                 if (op.getToType() == null) {
                     yield ValidationResult.fail("CAST operator requires a toType");
+                }
+                if (op.getToType() == CastToType.JSON_CUSTOM
+                        && (op.getCustomTypeName() == null || op.getCustomTypeName().isBlank())) {
+                    yield ValidationResult.fail("CAST to JSON_CUSTOM requires a non-blank customTypeName");
                 }
                 yield ValidationResult.ok();
             }
