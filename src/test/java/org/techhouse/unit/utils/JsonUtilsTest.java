@@ -1,11 +1,14 @@
 package org.techhouse.unit.utils;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonTime;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.utils.JsonUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonUtilsTest {
     // hasInPath returns true for existing nested path in JsonObject
@@ -15,7 +18,7 @@ public class JsonUtilsTest {
         innerObj.addProperty("key2", "value2");
 
         JsonObject obj = new JsonObject();
-        obj.addProperty("key1", "value1"); 
+        obj.addProperty("key1", "value1");
         obj.add("nested", innerObj);
 
         boolean result = JsonUtils.hasInPath(obj, "nested.key2");

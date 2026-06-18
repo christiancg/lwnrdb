@@ -1,9 +1,8 @@
 package org.techhouse.bckg_ops;
 
+import java.util.concurrent.LinkedBlockingQueue;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.log.Logger;
-
-import java.util.concurrent.LinkedBlockingQueue;
 
 public class BackgroundProcessorThread implements Runnable {
     private final Logger logger = Logger.logFor(BackgroundProcessorThread.class);

@@ -1,25 +1,22 @@
 package org.techhouse.unit.ops.req.agg.operators;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
+import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 
-import java.util.Arrays;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-
 public class ConjunctionOperatorTest {
     // Create ConjunctionOperator with valid conjunctionType AND and non-empty operators list
     @Test
     public void test_create_conjunction_operator_with_valid_type_and_operators() {
-        List<BaseOperator> operators = Arrays.asList(
-            new BaseOperator(OperatorType.FIELD),
-            new BaseOperator(OperatorType.FIELD)
-        );
+        List<BaseOperator> operators = Arrays.asList(new BaseOperator(OperatorType.FIELD),
+                new BaseOperator(OperatorType.FIELD));
 
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.AND, operators);
 
@@ -43,10 +40,8 @@ public class ConjunctionOperatorTest {
     // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
-        List<BaseOperator> operators = Arrays.asList(
-                new BaseOperator(OperatorType.FIELD),
-                new BaseOperator(OperatorType.FIELD)
-        );
+        List<BaseOperator> operators = Arrays.asList(new BaseOperator(OperatorType.FIELD),
+                new BaseOperator(OperatorType.FIELD));
 
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.OR, operators);
 
@@ -58,9 +53,7 @@ public class ConjunctionOperatorTest {
         conjunctionOperator.setConjunctionType(ConjunctionOperatorType.AND);
         assertEquals(ConjunctionOperatorType.AND, conjunctionOperator.getConjunctionType());
 
-        List<BaseOperator> newOperators = List.of(
-                new BaseOperator(OperatorType.CONJUNCTION)
-        );
+        List<BaseOperator> newOperators = List.of(new BaseOperator(OperatorType.CONJUNCTION));
         conjunctionOperator.setOperators(newOperators);
         assertEquals(newOperators, conjunctionOperator.getOperators());
     }

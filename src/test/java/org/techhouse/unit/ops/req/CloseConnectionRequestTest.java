@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CloseConnectionRequest;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class CloseConnectionRequestTest {
     // Verify constructor creates instance with CLOSE_CONNECTION operation type

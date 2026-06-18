@@ -1,17 +1,16 @@
 package org.techhouse.ops.req;
 
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.OperationType;
-
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 public class ChangePermissionsRequest extends OperationRequest {
     private String username;
@@ -45,14 +44,15 @@ public class ChangePermissionsRequest extends OperationRequest {
     }
 
     public Set<GlobalPermissionType> getGlobalPermissions() {
-        if (globalPermissions == null) return new HashSet<>();
-        return globalPermissions.asList().stream()
-                .map(e -> GlobalPermissionType.valueOf(e.asJsonString().getValue()))
+        if (globalPermissions == null)
+            return new HashSet<>();
+        return globalPermissions.asList().stream().map(e -> GlobalPermissionType.valueOf(e.asJsonString().getValue()))
                 .collect(Collectors.toSet());
     }
 
     public Map<String, PermissionLevel> getDatabasePermissions() {
-        if (databasePermissions == null) return new HashMap<>();
+        if (databasePermissions == null)
+            return new HashMap<>();
         final var result = new HashMap<String, PermissionLevel>();
         for (var entry : databasePermissions.entrySet()) {
             result.put(entry.getKey(), PermissionLevel.valueOf(entry.getValue().asJsonString().getValue()));
@@ -61,7 +61,8 @@ public class ChangePermissionsRequest extends OperationRequest {
     }
 
     public Map<String, PermissionLevel> getCollectionPermissions() {
-        if (collectionPermissions == null) return new HashMap<>();
+        if (collectionPermissions == null)
+            return new HashMap<>();
         final var result = new HashMap<String, PermissionLevel>();
         for (var entry : collectionPermissions.entrySet()) {
             result.put(entry.getKey(), PermissionLevel.valueOf(entry.getValue().asJsonString().getValue()));

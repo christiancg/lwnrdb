@@ -1,5 +1,14 @@
 package org.techhouse.unit.config;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,16 +18,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.test.TestUtils;
-
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 public class ConfigurationTest {
 
@@ -70,7 +69,7 @@ public class ConfigurationTest {
             assertEquals("test_log", config.getLogPath());
             assertEquals(1, config.getMaxLogFiles());
         } finally {
-            if(!newConfigFile.delete()) {
+            if (!newConfigFile.delete()) {
                 fail("Failed deleting temp test file");
             }
         }
@@ -78,7 +77,7 @@ public class ConfigurationTest {
 
     private File getFile() throws IOException {
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try(final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("port=1111");
             writer.newLine();
             writer.write("maxConnections=1");
@@ -96,11 +95,12 @@ public class ConfigurationTest {
     }
 
     @Test
-    public void test_loads_default_admin_credentials() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_loads_default_admin_credentials()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try(final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("defaultAdminUsername=adminuser");
             writer.newLine();
             writer.write("defaultAdminPassword=secretpass");
@@ -136,12 +136,12 @@ public class ConfigurationTest {
     @Test
     public void test_configuration_loads_a_full_valid_map() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.setPrivateField(Configuration.getInstance(), "port", 0);
-        try(MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
             mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(fullValidConfig());
             Configuration config = Configuration.getInstance();
             assertEquals(8989, config.getPort());
             assertEquals(100, config.getMaxConnections());
-            assertEquals("db",config.getFilePath());
+            assertEquals("db", config.getFilePath());
             assertEquals(10, config.getBackgroundProcessingThreads());
             assertEquals("logs", config.getLogPath());
             assertEquals(7, config.getMaxLogFiles());
@@ -156,7 +156,7 @@ public class ConfigurationTest {
         final var invalid = fullValidConfig();
         invalid.put("port", "not-a-number");
         invalid.put("maxConnections", "-5");
-        try(MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
             mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(invalid);
             assertThrows(InvalidConfigurationException.class, Configuration::getInstance);
         }
@@ -172,7 +172,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("maxMemory=512Mb");
             writer.newLine();
         }
@@ -205,11 +205,12 @@ public class ConfigurationTest {
     }
 
     @Test
-    public void test_maxMemory_disabled_when_minus_one() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_maxMemory_disabled_when_minus_one()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("maxMemory=-1");
             writer.newLine();
         }
@@ -230,7 +231,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (final var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
             writer.write("maxMemory=nonsense");
             writer.newLine();
         }

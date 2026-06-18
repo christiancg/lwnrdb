@@ -1,8 +1,7 @@
 package org.techhouse.bckg_ops.events;
 
-import org.techhouse.data.DbEntry;
-
 import java.util.Objects;
+import org.techhouse.data.DbEntry;
 
 public class EntityEvent extends Event {
     private final String dbName;
@@ -30,10 +29,14 @@ public class EntityEvent extends Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof EntityEvent that)) return false;
-        if (!super.equals(o)) return false;
-        return Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName) && Objects.equals(dbEntry, that.dbEntry);
+        if (this == o)
+            return true;
+        if (!(o instanceof EntityEvent that))
+            return false;
+        if (!super.equals(o))
+            return false;
+        return Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName)
+                && Objects.equals(dbEntry, that.dbEntry);
     }
 
     @Override
@@ -43,6 +46,7 @@ public class EntityEvent extends Event {
 
     @Override
     public String toString() {
-        return "EntityEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName + ", dbEntry=" + dbEntry + ")";
+        return "EntityEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName + ", dbEntry="
+                + dbEntry + ")";
     }
 }

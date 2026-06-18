@@ -1,9 +1,9 @@
 package org.techhouse.unit.data.auth;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.auth.PasswordHasher;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class PasswordHasherTest {
     @Test

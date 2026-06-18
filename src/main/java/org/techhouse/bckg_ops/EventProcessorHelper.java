@@ -1,6 +1,15 @@
 package org.techhouse.bckg_ops;
 
-import org.techhouse.bckg_ops.events.*;
+import java.io.IOException;
+import org.techhouse.bckg_ops.events.BulkEntityEvent;
+import org.techhouse.bckg_ops.events.CollectionEvent;
+import org.techhouse.bckg_ops.events.CollectionUsageEvent;
+import org.techhouse.bckg_ops.events.DatabaseEvent;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.Event;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.bckg_ops.events.IndexEvent;
+import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -8,13 +17,10 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
-import java.io.IOException;
-
 public class EventProcessorHelper {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
-    public static void processEvent(Event event)
-            throws IOException, InterruptedException {
+    public static void processEvent(Event event) throws IOException, InterruptedException {
         switch (event) {
             case DatabaseEvent databaseEvent -> processDatabaseEvent(databaseEvent);
             case CollectionEvent collectionEvent -> processCollectionEvent(collectionEvent);
@@ -22,14 +28,13 @@ public class EventProcessorHelper {
             case IndexEvent indexEvent -> processIndexEvent(indexEvent);
             case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent);
             case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
-            case UsageProfileCleanupEvent ignored -> AdminOperationHelper.cleanupCollectionUsage(
-                    memoryManagement.usageRetentionMillis());
+            case UsageProfileCleanupEvent ignored ->
+                AdminOperationHelper.cleanupCollectionUsage(memoryManagement.usageRetentionMillis());
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }
 
-    private static void processDatabaseEvent(DatabaseEvent event)
-            throws IOException, InterruptedException {
+    private static void processDatabaseEvent(DatabaseEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         if (event.getType() == EventType.CREATED) {
             final var existingDbEntry = AdminOperationHelper.getDatabaseEntry(dbName);
@@ -42,8 +47,7 @@ public class EventProcessorHelper {
         }
     }
 
-    private static void processCollectionEvent(CollectionEvent event)
-            throws IOException, InterruptedException {
+    private static void processCollectionEvent(CollectionEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         if (event.getType() == EventType.CREATED) {
@@ -59,8 +63,7 @@ public class EventProcessorHelper {
         }
     }
 
-    private static void processBulkEntityEvent(BulkEntityEvent event)
-            throws IOException, InterruptedException {
+    private static void processBulkEntityEvent(BulkEntityEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         IndexHelper.bulkUpdateIndexes(dbName, collName, event.getInsertedEntries(), event.getUpdatedEntries());
@@ -68,8 +71,7 @@ public class EventProcessorHelper {
         AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries());
     }
 
-    private static void processEntityEvent(EntityEvent event)
-            throws IOException, InterruptedException {
+    private static void processEntityEvent(EntityEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         final var dbEntry = event.getDbEntry();
@@ -78,8 +80,7 @@ public class EventProcessorHelper {
         AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry);
     }
 
-    private static void processIndexEvent(IndexEvent event)
-            throws IOException, InterruptedException {
+    private static void processIndexEvent(IndexEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         final var fieldName = event.getFieldName();

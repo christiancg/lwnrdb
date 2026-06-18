@@ -1,11 +1,11 @@
 package org.techhouse.unit.data.admin;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AdminPageEntryTest {
 
@@ -20,8 +20,8 @@ public class AdminPageEntryTest {
     @Test
     public void test_id_follows_deterministic_scheme() {
         AdminPageEntry entry = new AdminPageEntry("myDb", "myColl", 3L);
-        assertEquals("myDb" + Globals.COLL_IDENTIFIER_SEPARATOR + "myColl"
-                + Globals.COLL_IDENTIFIER_SEPARATOR + "3", entry.get_id());
+        assertEquals("myDb" + Globals.COLL_IDENTIFIER_SEPARATOR + "myColl" + Globals.COLL_IDENTIFIER_SEPARATOR + "3",
+                entry.get_id());
         assertEquals(3L, entry.getPage());
     }
 

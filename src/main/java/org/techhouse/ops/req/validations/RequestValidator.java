@@ -5,7 +5,21 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.ChangePermissionsRequest;
+import org.techhouse.ops.req.CreateIndexRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.DropIndexRequest;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ListUsersRequest;
+import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SetDatabaseOwnersRequest;
+import org.techhouse.ops.req.SetPasswordRequest;
 
 public class RequestValidator {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -16,26 +30,26 @@ public class RequestValidator {
 
     public static ValidationResult validate(OperationRequest request) {
         return switch (request.getType()) {
-            case SAVE             -> validateSave((SaveRequest) request);
-            case BULK_SAVE        -> validateBulkSave((BulkSaveRequest) request);
-            case FIND_BY_ID       -> validateFindById((FindByIdRequest) request);
-            case DELETE           -> validateDelete((DeleteRequest) request);
-            case AGGREGATE        -> validateAggregate((AggregateRequest) request);
-            case CREATE_DATABASE  -> validateDbOnly(request, true);
-            case DROP_DATABASE    -> validateDbOnly(request, true);
-            case LIST_DATABASES   -> ValidationResult.ok();
+            case SAVE -> validateSave((SaveRequest) request);
+            case BULK_SAVE -> validateBulkSave((BulkSaveRequest) request);
+            case FIND_BY_ID -> validateFindById((FindByIdRequest) request);
+            case DELETE -> validateDelete((DeleteRequest) request);
+            case AGGREGATE -> validateAggregate((AggregateRequest) request);
+            case CREATE_DATABASE -> validateDbOnly(request, true);
+            case DROP_DATABASE -> validateDbOnly(request, true);
+            case LIST_DATABASES -> ValidationResult.ok();
             case CREATE_COLLECTION, DROP_COLLECTION -> validateDbAndColl(request, true);
             case LIST_COLLECTIONS -> validateDbOnly(request, false);
-            case CREATE_INDEX     -> validateCreateIndex((CreateIndexRequest) request);
-            case DROP_INDEX       -> validateDropIndex((DropIndexRequest) request);
+            case CREATE_INDEX -> validateCreateIndex((CreateIndexRequest) request);
+            case DROP_INDEX -> validateDropIndex((DropIndexRequest) request);
             case CLOSE_CONNECTION -> ValidationResult.ok();
-            case AUTHENTICATE    -> validateAuthenticate((AuthenticateRequest) request);
-            case CREATE_USER     -> validateCreateUser((CreateUserRequest) request);
-            case DELETE_USER     -> validateDeleteUser((DeleteUserRequest) request);
+            case AUTHENTICATE -> validateAuthenticate((AuthenticateRequest) request);
+            case CREATE_USER -> validateCreateUser((CreateUserRequest) request);
+            case DELETE_USER -> validateDeleteUser((DeleteUserRequest) request);
             case CHANGE_PERMISSIONS -> validateChangePermissions((ChangePermissionsRequest) request);
             case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
-            case LIST_USERS         -> validateListUsers((ListUsersRequest) request);
-            case SET_PASSWORD       -> validateSetPassword((SetPasswordRequest) request);
+            case LIST_USERS -> validateListUsers((ListUsersRequest) request);
+            case SET_PASSWORD -> validateSetPassword((SetPasswordRequest) request);
             case GET_DATABASE_STATS -> ValidationResult.ok();
         };
     }
@@ -170,7 +184,8 @@ public class RequestValidator {
             return ValidationResult.fail("collectionName is required");
         }
         if (!collectionName.matches(NAME_PATTERN)) {
-            return ValidationResult.fail("collectionName must be 3-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult
+                    .fail("collectionName must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
         return ValidationResult.ok();
     }
@@ -198,7 +213,8 @@ public class RequestValidator {
         if (request.getPassword() == null || request.getPassword().length() < PASSWORD_MIN_LENGTH) {
             return ValidationResult.fail("password must be at least " + PASSWORD_MIN_LENGTH + " characters");
         }
-        final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
+        final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(),
+                request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
         }
@@ -222,7 +238,8 @@ public class RequestValidator {
         if (!request.getUsername().matches(USERNAME_PATTERN)) {
             return ValidationResult.fail("username must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
-        final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(), request.getRawCollectionPermissions());
+        final var dbPermsResult = validateRawPermissionMaps(request.getRawDatabasePermissions(),
+                request.getRawCollectionPermissions());
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
         }
@@ -259,7 +276,8 @@ public class RequestValidator {
         }
         for (var owner : request.getOwners()) {
             if (!owner.matches(NAME_PATTERN)) {
-                return ValidationResult.fail("owner username must be 3-64 alphanumeric characters, underscores, or hyphens");
+                return ValidationResult
+                        .fail("owner username must be 3-64 alphanumeric characters, underscores, or hyphens");
             }
             if (cache.getAdminUserEntry(owner) == null) {
                 return ValidationResult.fail("user '" + owner + "' does not exist");
@@ -269,7 +287,7 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateRawPermissionMaps(JsonObject databasePermissions,
-                                                              JsonObject collectionPermissions) {
+            JsonObject collectionPermissions) {
         if (databasePermissions != null) {
             for (var entry : databasePermissions.entrySet()) {
                 final var dbName = entry.getKey();
@@ -277,7 +295,8 @@ public class RequestValidator {
                     return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
-                    return ValidationResult.fail("database name in permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
+                    return ValidationResult.fail(
+                            "database name in permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
                 }
                 try {
                     PermissionLevel.valueOf(entry.getValue().asJsonString().getValue());
@@ -299,10 +318,12 @@ public class RequestValidator {
                     return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
-                    return ValidationResult.fail("database name in collection permission must be 3-64 alphanumeric characters, underscores, or hyphens");
+                    return ValidationResult.fail(
+                            "database name in collection permission must be 3-64 alphanumeric characters, underscores, or hyphens");
                 }
                 if (!collName.matches(NAME_PATTERN)) {
-                    return ValidationResult.fail("collection name in permission must be 3-64 alphanumeric characters, underscores, or hyphens");
+                    return ValidationResult.fail(
+                            "collection name in permission must be 3-64 alphanumeric characters, underscores, or hyphens");
                 }
                 try {
                     PermissionLevel.valueOf(entry.getValue().asJsonString().getValue());

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclude filter for LWNRDB. Entries suppress findings that are
+  false positives or deliberate design choices for an internal, embedded
+  database engine (no untrusted-caller security boundary between its own
+  data classes). Each block documents why.
+-->
+<FindBugsFilter>
+
+    <!-- LWNRDB's data classes (DbEntry, request/response DTOs, admin entries,
+         JSON elements) intentionally share references to their mutable
+         collections/JSON objects with trusted in-process callers. Defensive
+         copying on every constructor/accessor would add significant overhead
+         and churn for no benefit in this internal engine. These findings live
+         in the MALICIOUS_CODE category, which targets untrusted callers. -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2,MS_EXPOSE_REP"/>
+    </Match>
+
+    <!-- The ejson layer casts JsonBaseElement subtypes after checking the
+         element's own type tag (isJsonObject(), isJsonArray(), etc.), which
+         SpotBugs cannot correlate. The casts are guarded by design. -->
+    <Match>
+        <Bug pattern="BC_UNCONFIRMED_CAST"/>
+    </Match>
+
+    <!-- Public primitive fields are intentional on the JSON elements and DTOs. -->
+    <Match>
+        <Bug pattern="PA_PUBLIC_PRIMITIVE_ATTRIBUTE"/>
+    </Match>
+
+    <!-- Constructors validate arguments and throw on invalid input. The
+         finalizer-attack vector this rule guards against is not relevant: the
+         codebase defines no finalizers and these are internal classes. -->
+    <Match>
+        <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+    </Match>
+
+    <!-- Catching Exception at request/connection/IO boundaries is a deliberate
+         defensive pattern (log + degrade gracefully). Consistent with the
+         matching PMD exclusion (AvoidCatchingGenericException). -->
+    <Match>
+        <Bug pattern="REC_CATCH_EXCEPTION"/>
+    </Match>
+
+    <!-- LinkedTreeMap is a vendored Gson-style structure. It implements
+         Serializable via a writeReplace() proxy (a LinkedHashMap), so its
+         internal nodes/views are never Java-serialized; SpotBugs does not
+         track writeReplace. The known-null branch in find() is part of the
+         upstream balancing logic. -->
+    <Match>
+        <Class name="org.techhouse.ejson.internal.LinkedTreeMap"/>
+        <Bug pattern="SE_BAD_FIELD,NP_LOAD_OF_KNOWN_NULL_VALUE"/>
+    </Match>
+
+    <!-- Salt generation uses SecureRandom; creating one per hash call is
+         intentional. DMI_RANDOM_USED_ONLY_ONCE targets predictable
+         java.util.Random, not SecureRandom. -->
+    <Match>
+        <Class name="org.techhouse.data.auth.PasswordHasher"/>
+        <Bug pattern="DMI_RANDOM_USED_ONLY_ONCE"/>
+    </Match>
+
+    <!-- JsonNumber deliberately relies on JsonPrimitive's value-based equality;
+         its extra strLength field is derived from the value and must not affect
+         equality. -->
+    <Match>
+        <Class name="org.techhouse.ejson.elements.JsonNumber"/>
+        <Bug pattern="EQ_DOESNT_OVERRIDE_EQUALS"/>
+    </Match>
+
+    <!-- Type adapters intentionally pass null through (a JSON null deserializes
+         to a null Boolean rather than false). -->
+    <Match>
+        <Class name="org.techhouse.ejson.type_adapters.impl.BooleanTypeAdapter"/>
+        <Bug pattern="NP_BOOLEAN_RETURN_NULL"/>
+    </Match>
+
+</FindBugsFilter>

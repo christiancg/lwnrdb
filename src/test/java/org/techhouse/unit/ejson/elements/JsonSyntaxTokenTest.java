@@ -1,12 +1,12 @@
 package org.techhouse.unit.ejson.elements;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonSyntaxTokenTest {
     // Verify fromChar() correctly maps each valid character to its corresponding JsonSyntaxToken
@@ -24,10 +24,8 @@ public class JsonSyntaxTokenTest {
     @Test
     public void test_invalid_chars_throw_exception() {
         char invalidChar = 'x';
-        UnexpectedCharacterException exception = assertThrows(
-            UnexpectedCharacterException.class,
-            () -> JsonSyntaxToken.fromChar(invalidChar)
-        );
+        UnexpectedCharacterException exception = assertThrows(UnexpectedCharacterException.class,
+                () -> JsonSyntaxToken.fromChar(invalidChar));
         assertEquals("Unexpected character x at position: 0", exception.getMessage());
     }
 
@@ -70,7 +68,7 @@ public class JsonSyntaxTokenTest {
     public void test_equals_with_null_returns_false() {
         JsonSyntaxToken token = JsonSyntaxToken.COLON;
 
-        boolean result = token.equals(null);
+        boolean result = token.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }

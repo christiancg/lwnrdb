@@ -1,5 +1,7 @@
 package org.techhouse.ops;
 
+import java.io.IOException;
+import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -15,9 +17,6 @@ import org.techhouse.ops.resp.ChangePermissionsResponse;
 import org.techhouse.ops.resp.CreateUserResponse;
 import org.techhouse.ops.resp.DeleteUserResponse;
 import org.techhouse.ops.resp.SetPasswordResponse;
-
-import java.io.IOException;
-import java.util.UUID;
 
 public class UserOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -49,14 +48,9 @@ public class UserOperationHelper {
             }
 
             final var passwordHash = PasswordHasher.hash(request.getPassword());
-            final var userEntry = new AdminUserEntry(
-                    username,
-                    passwordHash,
-                    request.getAdmin(),
-                    request.getGlobalPermissions(),
-                    request.getDatabasePermissions(),
-                    request.getCollectionPermissions()
-            );
+            final var userEntry = new AdminUserEntry(username, passwordHash, request.getAdmin(),
+                    request.getGlobalPermissions(), request.getDatabasePermissions(),
+                    request.getCollectionPermissions());
 
             AdminOperationHelper.saveUserEntry(userEntry);
             return new CreateUserResponse(OperationStatus.OK, "User created successfully");
@@ -74,7 +68,8 @@ public class UserOperationHelper {
                 return new DeleteUserResponse(OperationStatus.NOT_FOUND, "User not found");
             }
 
-            if (user.isAdmin() && cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1) {
+            if (user.isAdmin()
+                    && cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1) {
                 return new DeleteUserResponse(OperationStatus.ERROR, "Cannot delete the last admin user");
             }
 
@@ -106,10 +101,8 @@ public class UserOperationHelper {
             }
 
             final var newHash = PasswordHasher.hash(request.getNewPassword());
-            final var updated = new AdminUserEntry(
-                    target.get_id(), newHash, target.isAdmin(),
-                    target.getGlobalPermissions(), target.getDatabasePermissions(),
-                    target.getCollectionPermissions());
+            final var updated = new AdminUserEntry(target.get_id(), newHash, target.isAdmin(),
+                    target.getGlobalPermissions(), target.getDatabasePermissions(), target.getCollectionPermissions());
             AdminOperationHelper.saveUserEntry(updated);
             return new SetPasswordResponse(OperationStatus.OK, "Password changed successfully");
         } catch (IOException | InterruptedException e) {
@@ -129,23 +122,20 @@ public class UserOperationHelper {
             final var wasAdmin = user.isAdmin();
             final var isBecomingAdmin = request.getAdmin();
 
-            if (wasAdmin && !isBecomingAdmin && cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1) {
+            if (wasAdmin && !isBecomingAdmin
+                    && cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1) {
                 return new ChangePermissionsResponse(OperationStatus.ERROR, "Cannot demote the last admin user");
             }
 
-            final var updatedUser = new AdminUserEntry(
-                    username,
-                    user.getPasswordHash(),
-                    isBecomingAdmin,
-                    request.getGlobalPermissions(),
-                    request.getDatabasePermissions(),
-                    request.getCollectionPermissions()
-            );
+            final var updatedUser = new AdminUserEntry(username, user.getPasswordHash(), isBecomingAdmin,
+                    request.getGlobalPermissions(), request.getDatabasePermissions(),
+                    request.getCollectionPermissions());
 
             AdminOperationHelper.saveUserEntry(updatedUser);
             return new ChangePermissionsResponse(OperationStatus.OK, "Permissions changed successfully");
         } catch (IOException | InterruptedException e) {
-            return new ChangePermissionsResponse(OperationStatus.ERROR, "Error changing permissions: " + e.getMessage());
+            return new ChangePermissionsResponse(OperationStatus.ERROR,
+                    "Error changing permissions: " + e.getMessage());
         }
     }
 }

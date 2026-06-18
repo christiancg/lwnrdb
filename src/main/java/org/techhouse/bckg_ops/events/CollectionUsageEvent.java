@@ -1,8 +1,7 @@
 package org.techhouse.bckg_ops.events;
 
-import org.techhouse.cache.AccessKind;
-
 import java.util.Objects;
+import org.techhouse.cache.AccessKind;
 
 public class CollectionUsageEvent extends Event {
     private final AccessKind kind;
@@ -12,7 +11,7 @@ public class CollectionUsageEvent extends Event {
     private final long timestampMillis;
 
     public CollectionUsageEvent(AccessKind kind, String dbName, String collName, String indexKey,
-                                long timestampMillis) {
+            long timestampMillis) {
         super(EventType.UPDATED);
         this.kind = kind;
         this.dbName = dbName;
@@ -43,12 +42,14 @@ public class CollectionUsageEvent extends Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof CollectionUsageEvent that)) return false;
-        if (!super.equals(o)) return false;
-        return timestampMillis == that.timestampMillis && kind == that.kind &&
-                Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName) &&
-                Objects.equals(indexKey, that.indexKey);
+        if (this == o)
+            return true;
+        if (!(o instanceof CollectionUsageEvent that))
+            return false;
+        if (!super.equals(o))
+            return false;
+        return timestampMillis == that.timestampMillis && kind == that.kind && Objects.equals(dbName, that.dbName)
+                && Objects.equals(collName, that.collName) && Objects.equals(indexKey, that.indexKey);
     }
 
     @Override
@@ -58,7 +59,7 @@ public class CollectionUsageEvent extends Event {
 
     @Override
     public String toString() {
-        return "CollectionUsageEvent(super=" + super.toString() + ", kind=" + kind + ", dbName=" + dbName +
-                ", collName=" + collName + ", indexKey=" + indexKey + ", timestampMillis=" + timestampMillis + ")";
+        return "CollectionUsageEvent(super=" + super.toString() + ", kind=" + kind + ", dbName=" + dbName
+                + ", collName=" + collName + ", indexKey=" + indexKey + ", timestampMillis=" + timestampMillis + ")";
     }
 }

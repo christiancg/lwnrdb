@@ -1,13 +1,18 @@
 package org.techhouse.ejson.internal;
 
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
-import org.techhouse.ejson.elements.*;
-import org.techhouse.ejson.exceptions.MissingEndOfStringException;
-import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.JsonSyntaxToken;
+import org.techhouse.ejson.exceptions.MissingEndOfStringException;
+import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
 public class Lexer {
     private static final Set<Character> JSON_SYNTAX = Set.of(',', ':', '[', ']', '{', '}');
@@ -15,7 +20,8 @@ public class Lexer {
     private static final int FALSE_LEN = "false".length();
     private static final int TRUE_LEN = "true".length();
     private static final int NULL_LEN = "null".length();
-    private static final Set<Character> NUMBER_CHARACTERS = Set.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '-', '.');
+    private static final Set<Character> NUMBER_CHARACTERS = Set.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+            '-', '.');
 
     public static List<JsonBaseElement> lex(String input) {
         final var tokens = new ArrayList<JsonBaseElement>();

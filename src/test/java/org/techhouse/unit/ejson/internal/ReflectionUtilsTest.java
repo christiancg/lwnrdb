@@ -1,22 +1,25 @@
 package org.techhouse.unit.ejson.internal;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
-import org.techhouse.ejson.internal.ReflectionUtils;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.ejson.internal.ReflectionUtils.cast;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.techhouse.ejson.internal.ReflectionUtils.cast;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.JsonSyntaxToken;
+import org.techhouse.ejson.internal.ReflectionUtils;
 
 public class ReflectionUtilsTest {
     // Get and set field values for accessible class fields
     @Test
     public void test_get_set_field_values() throws IllegalAccessException {
         class TestClass {
-            private String testField = "initial";
+            private String testField = "initial"; // NOPMD - reflection/serialization test fixture
         }
 
         TestClass instance = new TestClass();
@@ -33,8 +36,9 @@ public class ReflectionUtilsTest {
     // Access private fields and constructors by setting accessible flag
     @Test
     public void test_access_private_members() {
-        class PrivateClass {
-            private final String privateField;
+        final class PrivateClass {
+            private final String privateField; // NOPMD - reflection/serialization test fixture
+
             private PrivateClass(String value) {
                 this.privateField = value;
             }
@@ -44,7 +48,7 @@ public class ReflectionUtilsTest {
 
         assertEquals(1, constructors.length);
         assertTrue(constructors[0].canAccess(null));
-    
+
         assertEquals(1, fields.length);
         assertTrue(fields[0].canAccess(new PrivateClass("initial")));
         assertEquals("privateField", fields[0].getName());
@@ -134,7 +138,8 @@ public class ReflectionUtilsTest {
     @Test
     public void test_create_instance_with_public_no_args_constructor() throws Exception {
         class TestClass {
-            public TestClass() {}
+            TestClass() {
+            }
         }
 
         JsonObject jsonObject = new JsonObject();
@@ -149,8 +154,9 @@ public class ReflectionUtilsTest {
     // Handle class with no public constructors
     @Test
     public void test_create_instance_with_no_public_constructors() {
-        class TestClass {
-            private TestClass() {}
+        final class TestClass {
+            private TestClass() {
+            }
         }
 
         JsonObject jsonObject = new JsonObject();
@@ -170,8 +176,7 @@ public class ReflectionUtilsTest {
     }
 
     public enum TestEnum {
-        VALUE1,
-        VALUE2
+        VALUE1, VALUE2
     }
 
     // cast with NULL json type returns null

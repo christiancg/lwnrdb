@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.req.agg.mid_operators;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class ArrayParamMidOperatorTest {
     // Create ArrayParamMidOperator with valid MidOperationType and non-empty JsonArray
@@ -14,9 +14,9 @@ public class ArrayParamMidOperatorTest {
     public void test_create_with_valid_params() {
         JsonArray operands = new JsonArray();
         operands.add("test");
-    
+
         ArrayParamMidOperator operator = new ArrayParamMidOperator(MidOperationType.SIZE, operands);
-    
+
         assertEquals(MidOperationType.SIZE, operator.getType());
         assertEquals(operands, operator.getOperands());
         assertEquals(1, operator.getOperands().size());
@@ -26,7 +26,7 @@ public class ArrayParamMidOperatorTest {
     @Test
     public void test_create_with_null_operands() {
         ArrayParamMidOperator operator = new ArrayParamMidOperator(MidOperationType.AVG, null);
-    
+
         assertEquals(MidOperationType.AVG, operator.getType());
         assertNull(operator.getOperands());
     }

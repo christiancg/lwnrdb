@@ -1,5 +1,10 @@
 package org.techhouse.unit.ejson.type_adapters;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -7,12 +12,6 @@ import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
-
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class TypeAdapterFactoryTest {
     // Register and retrieve a basic type adapter for a simple class
@@ -24,7 +23,7 @@ public class TypeAdapterFactoryTest {
                 return "\"" + value + "\"";
             }
 
-            @Override 
+            @Override
             public String fromJson(JsonBaseElement value) {
                 return value.asJsonString().getValue();
             }
@@ -41,7 +40,8 @@ public class TypeAdapterFactoryTest {
     // Register new type adapter for a class type
     @Test
     public void register_type_adapter_for_class() {
-        class TestClass {}
+        class TestClass {
+        }
 
         TypeAdapter<TestClass> adapter = new TypeAdapter<>() {
             @Override
@@ -68,9 +68,20 @@ public class TypeAdapterFactoryTest {
     public void test_returns_cached_adapter_when_type_exists() throws ClassNotFoundException {
         // Create a parameterized type for List<String>
         Type listType = new ParameterizedType() {
-            public Type[] getActualTypeArguments() { return new Type[] {String.class}; }
-            public Type getRawType() { return List.class; }
-            public Type getOwnerType() { return null; }
+            @Override
+            public Type[] getActualTypeArguments() {
+                return new Type[]{String.class};
+            }
+
+            @Override
+            public Type getRawType() {
+                return List.class;
+            }
+
+            @Override
+            public Type getOwnerType() {
+                return null;
+            }
         };
 
         // Get adapter first time to cache it
@@ -86,7 +97,7 @@ public class TypeAdapterFactoryTest {
     // Handles null input type parameter
     @Test
     public void test_handles_null_type_parameter() {
-        assertThrows(NullPointerException.class, () -> TypeAdapterFactory.getAdapter((Type)null));
+        assertThrows(NullPointerException.class, () -> TypeAdapterFactory.getAdapter((Type) null));
     }
 
     // Returns cached adapter when type exists in _adapters map

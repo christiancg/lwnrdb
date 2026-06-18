@@ -1,12 +1,11 @@
 package org.techhouse.unit.bckg_ops.events;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.data.DbEntry;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class BulkEntityEventTest {
     // Creating a BulkEntityEvent with valid dbName, collName, and non-empty lists of DbEntry
@@ -18,9 +17,9 @@ public class BulkEntityEventTest {
         DbEntry entry2 = new DbEntry();
         List<DbEntry> insertedEntries = List.of(entry1);
         List<DbEntry> updatedEntries = List.of(entry2);
-    
+
         BulkEntityEvent event = new BulkEntityEvent(dbName, collName, insertedEntries, updatedEntries);
-    
+
         assertEquals(dbName, event.getDbName());
         assertEquals(collName, event.getCollName());
         assertEquals(insertedEntries, event.getInsertedEntries());
@@ -34,9 +33,9 @@ public class BulkEntityEventTest {
         String collName = "testCollection";
         List<DbEntry> insertedEntries = List.of();
         List<DbEntry> updatedEntries = List.of();
-    
+
         BulkEntityEvent event = new BulkEntityEvent(dbName, collName, insertedEntries, updatedEntries);
-    
+
         assertEquals(dbName, event.getDbName());
         assertEquals(collName, event.getCollName());
         assertTrue(event.getInsertedEntries().isEmpty());

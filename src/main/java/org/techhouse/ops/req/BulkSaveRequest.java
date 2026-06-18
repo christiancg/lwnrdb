@@ -1,9 +1,8 @@
 package org.techhouse.ops.req;
 
+import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationType;
-
-import java.util.List;
 
 public class BulkSaveRequest extends OperationRequest {
     public List<JsonObject> objects;

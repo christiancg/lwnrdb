@@ -1,9 +1,9 @@
 package org.techhouse.unit.ops.auth;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.auth.AuthorizationResult;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AuthorizationResultTest {
     @Test

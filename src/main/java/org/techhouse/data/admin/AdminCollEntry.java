@@ -1,14 +1,14 @@
 package org.techhouse.data.admin;
 
+import java.util.HashSet;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
-import java.util.HashSet;
-import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 public class AdminCollEntry extends DbEntry {
     private static final String INDEXES_FIELD_NAME = "indexes";
@@ -40,9 +40,8 @@ public class AdminCollEntry extends DbEntry {
         result.setData(object);
         final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
         result.set_id(id);
-        final var collections = object.get(INDEXES_FIELD_NAME).asJsonArray().asList()
-                .stream().map(element -> element.asJsonString().getValue())
-                .collect(Collectors.toSet());
+        final var collections = object.get(INDEXES_FIELD_NAME).asJsonArray().asList().stream()
+                .map(element -> element.asJsonString().getValue()).collect(Collectors.toSet());
         result.setIndexes(collections);
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
@@ -64,9 +63,12 @@ public class AdminCollEntry extends DbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof AdminCollEntry that)) return false;
-        if (!super.equals(o)) return false;
+        if (this == o)
+            return true;
+        if (!(o instanceof AdminCollEntry that))
+            return false;
+        if (!super.equals(o))
+            return false;
         return Objects.equals(indexes, that.indexes);
     }
 

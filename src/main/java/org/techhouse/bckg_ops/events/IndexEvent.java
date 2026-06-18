@@ -28,10 +28,14 @@ public class IndexEvent extends Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof IndexEvent that)) return false;
-        if (!super.equals(o)) return false;
-        return Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName) && Objects.equals(fieldName, that.fieldName);
+        if (this == o)
+            return true;
+        if (!(o instanceof IndexEvent that))
+            return false;
+        if (!super.equals(o))
+            return false;
+        return Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName)
+                && Objects.equals(fieldName, that.fieldName);
     }
 
     @Override
@@ -41,6 +45,7 @@ public class IndexEvent extends Event {
 
     @Override
     public String toString() {
-        return "IndexEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName + ", fieldName=" + fieldName + ")";
+        return "IndexEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName + ", fieldName="
+                + fieldName + ")";
     }
 }

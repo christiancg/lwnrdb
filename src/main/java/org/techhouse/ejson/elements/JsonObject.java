@@ -1,9 +1,8 @@
 package org.techhouse.ejson.elements;
 
-import org.techhouse.ejson.internal.LinkedTreeMap;
-
 import java.util.Map;
 import java.util.Set;
+import org.techhouse.ejson.internal.LinkedTreeMap;
 
 public class JsonObject extends JsonBaseElement {
     private final LinkedTreeMap<String, JsonBaseElement> members = new LinkedTreeMap<>(false);
@@ -60,8 +59,7 @@ public class JsonObject extends JsonBaseElement {
 
     @Override
     public boolean equals(Object o) {
-        return (o == this) || (o instanceof JsonObject
-                && ((JsonObject) o).members.equals(members));
+        return (o == this) || (o instanceof JsonObject && ((JsonObject) o).members.equals(members));
     }
 
     @Override

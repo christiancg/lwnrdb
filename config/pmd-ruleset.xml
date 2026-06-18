@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<ruleset name="lwnrdb"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+    <description>
+        Curated PMD ruleset for LWNRDB. Focuses on real bug patterns
+        (error-prone), performance, multithreading correctness, and a handful
+        of best practices. Formatting and naming are owned by Spotless and
+        Checkstyle, so PMD's codestyle category is not used; noisy/opinionated
+        rules are excluded individually.
+    </description>
+
+    <!-- Bug patterns most likely to indicate real defects -->
+    <rule ref="category/java/errorprone.xml">
+        <exclude name="AvoidLiteralsInIfCondition"/>
+        <exclude name="AvoidDuplicateLiterals"/>
+        <exclude name="AvoidFieldNameMatchingMethodName"/>
+        <exclude name="AvoidFieldNameMatchingTypeName"/>
+        <exclude name="NullAssignment"/>
+        <exclude name="AvoidCatchingThrowable"/>
+        <exclude name="AvoidAccessibilityAlteration"/>
+        <exclude name="MissingSerialVersionUID"/>
+        <exclude name="UseProperClassLoader"/>
+        <exclude name="TestClassWithoutTestCases"/>
+        <exclude name="DoNotTerminateVM"/>
+        <exclude name="CompareObjectsWithEquals"/>
+        <exclude name="AssignmentInOperand"/>
+        <exclude name="ConstructorCallsOverridableMethod"/>
+        <!-- Catching Exception at request/connection boundaries is a deliberate
+             pattern in this server (log + return an ERROR response). -->
+        <exclude name="AvoidCatchingGenericException"/>
+        <!-- LinkedTreeMap is a vendored Gson-style structure; its Serializable
+             contract is intentional and should not be restructured here. -->
+        <exclude name="NonSerializableClass"/>
+        <!-- High false-positive rate here: server socket and the long-lived
+             executor services are owned and closed on shutdown, not per-scope. -->
+        <exclude name="CloseResource"/>
+        <!-- null is used deliberately as an "absent / not-found / load-failed"
+             sentinel for index and config lookups (callers branch on null,
+             distinct from an existing-but-empty collection). -->
+        <exclude name="ReturnEmptyCollectionRatherThanNull"/>
+        <!-- Empty catch blocks are already covered by Checkstyle's EmptyBlock
+             (which accepts an explanatory comment); avoid double reporting. -->
+        <exclude name="EmptyCatchBlock"/>
+    </rule>
+
+    <!-- Performance rules that flag genuine waste -->
+    <rule ref="category/java/performance.xml">
+        <exclude name="AvoidInstantiatingObjectsInLoops"/>
+        <exclude name="ConsecutiveLiteralAppends"/>
+        <exclude name="ConsecutiveAppendsShouldReuse"/>
+        <exclude name="UseStringBufferForStringAppends"/>
+        <exclude name="RedundantFieldInitializer"/>
+        <!-- Micro-optimization opinion (Files.newInputStream over FileInputStream). -->
+        <exclude name="AvoidFileStream"/>
+    </rule>
+
+    <!-- Multithreading correctness -->
+    <rule ref="category/java/multithreading.xml">
+        <exclude name="UseConcurrentHashMap"/>
+        <exclude name="AvoidSynchronizedAtMethodLevel"/>
+        <exclude name="DoNotUseThreads"/>
+        <exclude name="AvoidUsingVolatile"/>
+    </rule>
+
+    <!-- A few high-value best practices -->
+    <rule ref="category/java/bestpractices.xml/UnusedLocalVariable"/>
+    <rule ref="category/java/bestpractices.xml/UnusedPrivateField"/>
+    <rule ref="category/java/bestpractices.xml/UnusedPrivateMethod"/>
+    <rule ref="category/java/bestpractices.xml/UnusedAssignment"/>
+    <rule ref="category/java/bestpractices.xml/PrimitiveWrapperInstantiation"/>
+    <rule ref="category/java/bestpractices.xml/CheckResultSet"/>
+    <rule ref="category/java/bestpractices.xml/DoubleBraceInitialization"/>
+    <rule ref="category/java/bestpractices.xml/MissingOverride"/>
+</ruleset>

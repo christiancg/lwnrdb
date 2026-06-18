@@ -1,13 +1,12 @@
 package org.techhouse.conn;
 
-import org.techhouse.config.Configuration;
-import org.techhouse.data.Client;
-
 import java.net.Socket;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import org.techhouse.config.Configuration;
+import org.techhouse.data.Client;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
@@ -28,7 +27,8 @@ public class ClientTracker {
     }
 
     public void updateLastCommandTime(UUID clientId) {
-        if (clientId == null) return;
+        if (clientId == null)
+            return;
         final var client = clients.get(clientId);
         if (client != null) {
             client.setLastCommandTime(LocalDateTime.now());
@@ -36,7 +36,8 @@ public class ClientTracker {
     }
 
     public void setAuthenticatedUser(UUID clientId, String username) {
-        if (clientId == null) return;
+        if (clientId == null)
+            return;
         final var client = clients.get(clientId);
         if (client != null) {
             client.setAuthenticatedUsername(username);
@@ -44,7 +45,8 @@ public class ClientTracker {
     }
 
     public String getAuthenticatedUsername(UUID clientId) {
-        if (clientId == null) return null;
+        if (clientId == null)
+            return null;
         final var client = clients.get(clientId);
         return client != null ? client.getAuthenticatedUsername() : null;
     }

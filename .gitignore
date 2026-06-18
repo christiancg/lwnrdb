@@ -44,3 +44,6 @@ CLAUDE.md
 logs/
 db/
 /test/
+
+### Test logs ###
+test_log/

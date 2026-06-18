@@ -1,9 +1,8 @@
 package org.techhouse.bckg_ops.events;
 
-import org.techhouse.data.DbEntry;
-
 import java.util.List;
 import java.util.Objects;
+import org.techhouse.data.DbEntry;
 
 public class BulkEntityEvent extends Event {
     private final String dbName;
@@ -11,7 +10,8 @@ public class BulkEntityEvent extends Event {
     private final List<DbEntry> insertedEntries;
     private final List<DbEntry> updatedEntries;
 
-    public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries, List<DbEntry> updatedEntries) {
+    public BulkEntityEvent(String dbName, String collName, List<DbEntry> insertedEntries,
+            List<DbEntry> updatedEntries) {
         super(EventType.CREATED);
         this.dbName = dbName;
         this.collName = collName;
@@ -37,10 +37,15 @@ public class BulkEntityEvent extends Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof BulkEntityEvent that)) return false;
-        if (!super.equals(o)) return false;
-        return Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName) && Objects.equals(insertedEntries, that.insertedEntries) && Objects.equals(updatedEntries, that.updatedEntries);
+        if (this == o)
+            return true;
+        if (!(o instanceof BulkEntityEvent that))
+            return false;
+        if (!super.equals(o))
+            return false;
+        return Objects.equals(dbName, that.dbName) && Objects.equals(collName, that.collName)
+                && Objects.equals(insertedEntries, that.insertedEntries)
+                && Objects.equals(updatedEntries, that.updatedEntries);
     }
 
     @Override
@@ -50,6 +55,7 @@ public class BulkEntityEvent extends Event {
 
     @Override
     public String toString() {
-        return "BulkEntityEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName + ", insertedEntries=" + insertedEntries + ", updatedEntries=" + updatedEntries + ")";
+        return "BulkEntityEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName
+                + ", insertedEntries=" + insertedEntries + ", updatedEntries=" + updatedEntries + ")";
     }
 }

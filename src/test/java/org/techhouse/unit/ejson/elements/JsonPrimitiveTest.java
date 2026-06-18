@@ -1,9 +1,13 @@
 package org.techhouse.unit.ejson.elements;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
-
 import static org.junit.jupiter.api.Assertions.*;
+
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonPrimitive;
+import org.techhouse.ejson.elements.JsonString;
 
 public class JsonPrimitiveTest {
     // Set and get primitive values of different types (String, Number, Boolean)
@@ -31,10 +35,10 @@ public class JsonPrimitiveTest {
     public void test_equals_with_null_values() {
         JsonString primitive1 = new JsonString();
         primitive1.setValue(null);
-    
+
         JsonString primitive2 = new JsonString();
         primitive2.setValue(null);
-    
+
         JsonString primitive3 = new JsonString();
         primitive3.setValue("not null");
 
@@ -82,7 +86,7 @@ public class JsonPrimitiveTest {
     public void test_equals_with_null_returns_false() {
         JsonPrimitive<String> primitive = new JsonString("test");
 
-        boolean result = primitive.equals(null);
+        boolean result = primitive.equals(null); // NOPMD - intentional equals(null) contract test
 
         assertFalse(result);
     }
@@ -94,14 +98,10 @@ public class JsonPrimitiveTest {
 
         JsonBaseElement copy = original.deepCopy();
 
-        assertAll(
-                () -> assertInstanceOf(JsonNumber.class, copy),
-                () -> assertNotSame(original, copy),
-                () -> {
-                    assert copy instanceof JsonNumber;
-                    assertEquals(original.getValue(), ((JsonNumber)copy).getValue());
-                }
-        );
+        assertAll(() -> assertInstanceOf(JsonNumber.class, copy), () -> assertNotSame(original, copy), () -> {
+            assert copy instanceof JsonNumber;
+            assertEquals(original.getValue(), ((JsonNumber) copy).getValue());
+        });
     }
 
     // deepCopy on JsonBoolean returns new instance with same value (L49)

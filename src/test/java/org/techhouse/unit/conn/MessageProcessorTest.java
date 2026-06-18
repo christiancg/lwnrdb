@@ -1,5 +1,17 @@
 package org.techhouse.unit.conn;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.HashMap;
+import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,15 +21,6 @@ import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestUtils;
-
-import java.io.*;
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.HashMap;
-import java.util.HashSet;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 public class MessageProcessorTest {
 
@@ -177,11 +180,10 @@ public class MessageProcessorTest {
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         // Use a protected op (SAVE) to exercise the authenticated+authorized dispatch path
-        String msgs =
-                """
-                        {"type":"AUTHENTICATE","username":"msgproceadmin","password":"password123"}
-                        {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
-                        """;
+        String msgs = """
+                {"type":"AUTHENTICATE","username":"msgproceadmin","password":"password123"}
+                {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
+                """;
         Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
@@ -207,11 +209,10 @@ public class MessageProcessorTest {
         UserOperationHelper.processCreateUser(createReq);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        String msgs =
-                """
-                        {"type":"AUTHENTICATE","username":"msgcloser","password":"password123"}
-                        {"type":"CLOSE_CONNECTION"}
-                        """;
+        String msgs = """
+                {"type":"AUTHENTICATE","username":"msgcloser","password":"password123"}
+                {"type":"CLOSE_CONNECTION"}
+                """;
         Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
@@ -236,11 +237,10 @@ public class MessageProcessorTest {
         UserOperationHelper.processCreateUser(createReq);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        String msgs =
-                """
-                        {"type":"AUTHENTICATE","username":"noPermsUser","password":"password123"}
-                        {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{}}
-                        """;
+        String msgs = """
+                {"type":"AUTHENTICATE","username":"noPermsUser","password":"password123"}
+                {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{}}
+                """;
         Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
 
         MessageProcessor mp = new MessageProcessor(socket);

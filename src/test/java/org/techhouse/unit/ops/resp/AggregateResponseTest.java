@@ -1,15 +1,14 @@
 package org.techhouse.unit.ops.resp;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.AggregateResponse;
-
-import java.util.ArrayList;
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AggregateResponseTest {
     // Create AggregateResponse with valid results list and OK status

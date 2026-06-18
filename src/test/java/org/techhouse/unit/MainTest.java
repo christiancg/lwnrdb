@@ -1,5 +1,10 @@
 package org.techhouse.unit;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.File;
+import java.io.IOException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.Main;
@@ -7,12 +12,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.io.File;
-import java.io.IOException;
-
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 public class MainTest {
     @AfterEach
@@ -30,7 +29,8 @@ public class MainTest {
 
     // Main initializes system with default port from Configuration when no args provided
     @Test
-    public void test_init_with_default_port() throws NoSuchFieldException, IllegalAccessException, InterruptedException {
+    public void test_init_with_default_port()
+            throws NoSuchFieldException, IllegalAccessException, InterruptedException {
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
         TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
@@ -39,12 +39,12 @@ public class MainTest {
         Thread thread = null;
         try {
             thread = new Thread(() -> {
-                    try {
-                        Main.main(args);
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                });
+                try {
+                    Main.main(args);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
             thread.start();
             Thread.sleep(1000);
             assertTrue(thread.isAlive());

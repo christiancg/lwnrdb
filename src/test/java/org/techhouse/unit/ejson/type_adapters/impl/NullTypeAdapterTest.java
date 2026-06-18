@@ -1,11 +1,11 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.NullTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class NullTypeAdapterTest {
     // toJson returns 'null' string for any input object
@@ -18,7 +18,7 @@ public class NullTypeAdapterTest {
         String result3 = adapter.toJson(new Object());
 
         assertEquals("null", result1);
-        assertEquals("null", result2); 
+        assertEquals("null", result2);
         assertEquals("null", result3);
     }
 

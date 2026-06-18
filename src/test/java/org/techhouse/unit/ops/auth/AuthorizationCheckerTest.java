@@ -1,21 +1,26 @@
 package org.techhouse.unit.ops.auth;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.data.admin.AdminUserEntry;
-import org.techhouse.data.auth.GlobalPermissionType;
-import org.techhouse.data.auth.PermissionLevel;
-import org.techhouse.ops.auth.AuthorizationChecker;
-import org.techhouse.ops.req.*;
-import org.techhouse.ops.req.agg.BaseAggregationStep;
-import org.techhouse.ops.req.agg.step.FilterAggregationStep;
-import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.data.auth.GlobalPermissionType;
+import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ops.auth.AuthorizationChecker;
+import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.CloseConnectionRequest;
+import org.techhouse.ops.req.CreateDatabaseRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
 public class AuthorizationCheckerTest {
     private AdminUserEntry createAdminUser() {

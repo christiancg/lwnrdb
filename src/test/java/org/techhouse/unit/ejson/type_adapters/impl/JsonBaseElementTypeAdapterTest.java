@@ -1,5 +1,7 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -7,8 +9,6 @@ import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.type_adapters.impl.JsonBaseElementTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonBaseElementTypeAdapterTest {
     // Convert JsonBoolean element to JSON string representation

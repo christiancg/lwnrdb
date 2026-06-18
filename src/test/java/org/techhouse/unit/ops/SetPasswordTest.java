@@ -1,5 +1,13 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+import java.net.InetAddress;
+import java.net.Socket;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -15,15 +23,6 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.test.TestUtils;
-
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 public class SetPasswordTest {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -59,8 +58,7 @@ public class SetPasswordTest {
         when(socket.getInetAddress()).thenReturn(addr);
         when(addr.getHostAddress()).thenReturn("127.0.0.1");
         try {
-            TestUtils.setPrivateField(
-                    org.techhouse.config.Configuration.getInstance(), "maxConnections", 100);
+            TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxConnections", 100);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -120,8 +118,7 @@ public class SetPasswordTest {
         assertEquals(OperationStatus.OK, resp.getStatus());
 
         // Verify new password works
-        assertTrue(PasswordHasher.verify("adminchanged1",
-                cache.getAdminUserEntry("bob").getPasswordHash()));
+        assertTrue(PasswordHasher.verify("adminchanged1", cache.getAdminUserEntry("bob").getPasswordHash()));
 
         // Restore
         final var restore = new SetPasswordRequest();
@@ -223,8 +220,8 @@ public class SetPasswordTest {
 
     @Test
     public void test_parser_parses_set_password() {
-        final var msg = "{\"type\":\"SET_PASSWORD\",\"username\":\"alice\"," +
-                "\"currentPassword\":\"oldpass\",\"newPassword\":\"newpass123\"}";
+        final var msg = "{\"type\":\"SET_PASSWORD\",\"username\":\"alice\","
+                + "\"currentPassword\":\"oldpass\",\"newPassword\":\"newpass123\"}";
         final var req = (SetPasswordRequest) RequestParser.parseRequest(msg);
         assertEquals("alice", req.getUsername());
         assertEquals("oldpass", req.getCurrentPassword());

@@ -16,9 +16,12 @@ public class DatabaseEvent extends Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof DatabaseEvent that)) return false;
-        if (!super.equals(o)) return false;
+        if (this == o)
+            return true;
+        if (!(o instanceof DatabaseEvent that))
+            return false;
+        if (!super.equals(o))
+            return false;
         return Objects.equals(dbName, that.dbName);
     }
 

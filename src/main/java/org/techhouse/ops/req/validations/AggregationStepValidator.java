@@ -3,10 +3,19 @@ package org.techhouse.ops.req.validations;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
-import org.techhouse.ops.req.agg.mid_operators.*;
+import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
-import org.techhouse.ops.req.agg.step.*;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
+import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.SkipAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 
@@ -14,15 +23,15 @@ public class AggregationStepValidator {
 
     public static ValidationResult validate(BaseAggregationStep step) {
         return switch (step.getType()) {
-            case FILTER   -> validateFilter((FilterAggregationStep) step);
-            case MAP      -> validateMap((MapAggregationStep) step);
+            case FILTER -> validateFilter((FilterAggregationStep) step);
+            case MAP -> validateMap((MapAggregationStep) step);
             case GROUP_BY -> validateGroupBy((GroupByAggregationStep) step);
-            case JOIN     -> validateJoin((JoinAggregationStep) step);
-            case COUNT    -> ValidationResult.ok();
+            case JOIN -> validateJoin((JoinAggregationStep) step);
+            case COUNT -> ValidationResult.ok();
             case DISTINCT -> ValidationResult.ok();
-            case LIMIT    -> validateLimit((LimitAggregationStep) step);
-            case SKIP     -> validateSkip((SkipAggregationStep) step);
-            case SORT     -> validateSort((SortAggregationStep) step);
+            case LIMIT -> validateLimit((LimitAggregationStep) step);
+            case SKIP -> validateSkip((SkipAggregationStep) step);
+            case SORT -> validateSort((SortAggregationStep) step);
         };
     }
 
@@ -73,7 +82,8 @@ public class AggregationStepValidator {
             return ValidationResult.fail("JOIN step requires a non-blank joinCollection");
         }
         if (!step.getJoinCollection().matches(RequestValidator.NAME_PATTERN)) {
-            return ValidationResult.fail("JOIN joinCollection name must be 3-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult
+                    .fail("JOIN joinCollection name must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
         if (step.getLocalField() == null || step.getLocalField().isBlank()) {
             return ValidationResult.fail("JOIN step requires a non-blank localField");

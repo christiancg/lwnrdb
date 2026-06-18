@@ -1,13 +1,12 @@
 package org.techhouse.ejson.type_adapters.impl;
 
+import java.lang.reflect.Field;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.ReflectionUtils;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.log.Logger;
-
-import java.lang.reflect.Field;
 
 public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 

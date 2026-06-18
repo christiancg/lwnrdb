@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.resp;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.CreateIndexResponse;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class CreateIndexResponseTest {
     // Create index response with OK status and success message

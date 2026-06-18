@@ -1,13 +1,12 @@
 package org.techhouse.data;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Objects;
+import java.util.UUID;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Objects;
-import java.util.UUID;
 
 public class DbEntry {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -25,7 +24,8 @@ public class DbEntry {
         entry.setDatabaseName(databaseName);
         entry.setCollectionName(collectionName);
         entry.setData(jsonObject);
-        entry.set_id(jsonObject.has(Globals.PK_FIELD) ? jsonObject.get(Globals.PK_FIELD).asJsonString().getValue() : null);
+        entry.set_id(
+                jsonObject.has(Globals.PK_FIELD) ? jsonObject.get(Globals.PK_FIELD).asJsonString().getValue() : null);
         return entry;
     }
 
@@ -104,9 +104,13 @@ public class DbEntry {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof DbEntry that)) return false;
-        return page == that.page && previousByteSize == that.previousByteSize && Objects.equals(_id, that._id) && Objects.equals(databaseName, that.databaseName) && Objects.equals(collectionName, that.collectionName) && Objects.equals(data, that.data);
+        if (this == o)
+            return true;
+        if (!(o instanceof DbEntry that))
+            return false;
+        return page == that.page && previousByteSize == that.previousByteSize && Objects.equals(_id, that._id)
+                && Objects.equals(databaseName, that.databaseName)
+                && Objects.equals(collectionName, that.collectionName) && Objects.equals(data, that.data);
     }
 
     @Override
@@ -116,6 +120,7 @@ public class DbEntry {
 
     @Override
     public String toString() {
-        return "DbEntry(id=" + _id + ", databaseName=" + databaseName + ", collectionName=" + collectionName + ", data=" + data + ", page=" + page + ", previousByteSize=" + previousByteSize + ")";
+        return "DbEntry(id=" + _id + ", databaseName=" + databaseName + ", collectionName=" + collectionName + ", data="
+                + data + ", page=" + page + ", previousByteSize=" + previousByteSize + ")";
     }
 }

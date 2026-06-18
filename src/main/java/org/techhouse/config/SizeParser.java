@@ -1,10 +1,10 @@
 package org.techhouse.config;
 
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 public class SizeParser {
-    private static final Pattern SIZE_PATTERN =
-            Pattern.compile("^\\s*(-?\\d+)\\s*([a-zA-Z]*)\\s*$");
+    private static final Pattern SIZE_PATTERN = Pattern.compile("^\\s*(-?\\d+)\\s*([a-zA-Z]*)\\s*$");
 
     public static long parse(String input) {
         if (input == null) {
@@ -15,7 +15,7 @@ public class SizeParser {
             throw new IllegalArgumentException("Invalid size value: " + input);
         }
         final var numericPart = Long.parseLong(matcher.group(1));
-        final var unitPart = matcher.group(2).toLowerCase();
+        final var unitPart = matcher.group(2).toLowerCase(Locale.ROOT);
         if (numericPart < 0) {
             if (numericPart == -1L && unitPart.isEmpty()) {
                 return -1L;

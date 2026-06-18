@@ -1,0 +1,98 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+        "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+        "https://checkstyle.org/dtds/configuration_1_3.dtd">
+
+<!--
+  Curated Checkstyle ruleset for LWNRDB.
+
+  Formatting (indentation, wrapping, whitespace, import ordering) is owned by
+  Spotless/Eclipse-JDT, so this config deliberately avoids those concerns and
+  focuses on correctness-adjacent and convention checks that a formatter does
+  not cover.
+-->
+<module name="Checker">
+    <property name="severity" value="error"/>
+    <property name="fileExtensions" value="java"/>
+
+    <!-- No tabs anywhere (Spotless enforces spaces, this is a backstop) -->
+    <module name="FileTabCharacter">
+        <property name="eachLine" value="true"/>
+    </module>
+
+    <module name="TreeWalker">
+        <!-- Imports. Static member wildcard imports are allowed: test classes
+             use `import static org.junit.jupiter.api.Assertions.*` and
+             `import static org.mockito.Mockito.*`, a widely accepted convention
+             for assertion/mock readability. Regular type wildcard imports are
+             still forbidden. -->
+        <module name="AvoidStarImport">
+            <property name="allowStaticMemberImports" value="true"/>
+        </module>
+        <module name="RedundantImport"/>
+        <module name="UnusedImports">
+            <property name="processJavadoc" value="true"/>
+        </module>
+        <module name="IllegalImport"/>
+
+        <!-- Coding problems -->
+        <module name="EqualsHashCode"/>
+        <module name="CovariantEquals"/>
+        <module name="StringLiteralEquality"/>
+        <module name="SimplifyBooleanExpression"/>
+        <module name="SimplifyBooleanReturn"/>
+        <module name="EmptyStatement"/>
+        <module name="FallThrough"/>
+        <module name="MissingSwitchDefault"/>
+        <module name="DefaultComesLast"/>
+        <module name="OneStatementPerLine"/>
+        <module name="MultipleVariableDeclarations"/>
+        <module name="NoFinalizer"/>
+        <module name="UnnecessarySemicolonInEnumeration"/>
+        <module name="UnnecessarySemicolonInTryWithResources"/>
+        <module name="UnnecessarySemicolonAfterTypeMemberDeclaration"/>
+        <module name="UnnecessarySemicolonAfterOuterTypeDeclaration"/>
+
+        <!-- Class design -->
+        <module name="FinalClass"/>
+        <module name="InterfaceIsType"/>
+        <module name="OneTopLevelClass"/>
+        <module name="MutableException"/>
+
+        <!-- Style / conventions -->
+        <module name="ModifierOrder"/>
+        <module name="RedundantModifier"/>
+        <module name="UpperEll"/>
+        <module name="ArrayTypeStyle"/>
+        <module name="EmptyBlock">
+            <property name="option" value="text"/>
+            <property name="tokens" value="LITERAL_TRY, LITERAL_CATCH, LITERAL_FINALLY, LITERAL_IF, LITERAL_ELSE, LITERAL_FOR, LITERAL_WHILE, LITERAL_DO, INSTANCE_INIT, STATIC_INIT"/>
+        </module>
+
+        <!--
+          Naming conventions, tuned to the project's deliberate conventions:
+          - PackageName is excluded: package names use underscores by design
+            (bckg_ops, custom_types, type_adapters, mid_operators).
+          - MethodName allows snake_case: test methods use snake_case names, and
+            the `_id` field is exposed via get_id/set_id accessors.
+          - MemberName/ParameterName allow a leading underscore: `_id` is the
+            serialized wire-protocol field name and cannot be renamed.
+          - ConstantName is excluded: `private static final` collaborators and
+            internal caches use camelCase by convention (logger, cache, config),
+            not SCREAMING_CASE.
+        -->
+        <module name="TypeName"/>
+        <module name="MethodName">
+            <property name="format" value="^[a-z][a-zA-Z0-9_]*$"/>
+        </module>
+        <module name="LocalVariableName"/>
+        <module name="LocalFinalVariableName"/>
+        <module name="MemberName">
+            <property name="format" value="^_?[a-z][a-zA-Z0-9]*$"/>
+        </module>
+        <module name="ParameterName">
+            <property name="format" value="^_?[a-z][a-zA-Z0-9]*$"/>
+        </module>
+        <module name="StaticVariableName"/>
+    </module>
+</module>

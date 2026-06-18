@@ -1,18 +1,30 @@
 package org.techhouse.unit.ops.req.validations;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ops.req.*;
+import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.CloseConnectionRequest;
+import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.CreateDatabaseRequest;
+import org.techhouse.ops.req.CreateIndexRequest;
+import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DropCollectionRequest;
+import org.techhouse.ops.req.DropDatabaseRequest;
+import org.techhouse.ops.req.DropIndexRequest;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ListCollectionsRequest;
+import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.validations.RequestValidator;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class RequestValidatorTest {
 

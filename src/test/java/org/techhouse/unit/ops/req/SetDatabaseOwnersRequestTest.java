@@ -1,12 +1,11 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class SetDatabaseOwnersRequestTest {
     @Test

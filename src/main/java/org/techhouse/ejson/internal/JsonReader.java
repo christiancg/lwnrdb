@@ -1,8 +1,12 @@
 package org.techhouse.ejson.internal;
 
-import org.techhouse.ejson.elements.*;
-import org.techhouse.ejson.exceptions.MalformedJsonException;
 import java.util.List;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.elements.JsonSyntaxToken;
+import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class JsonReader {
 
@@ -21,7 +25,8 @@ public class JsonReader {
             throw new MalformedJsonException("Empty JSON array");
         }
         final var firstToken = tokens.getFirst();
-        if (isRoot && (!firstToken.equals(JsonSyntaxToken.LEFT_BRACE) && !firstToken.equals(JsonSyntaxToken.LEFT_BRACKET))) {
+        if (isRoot && (!firstToken.equals(JsonSyntaxToken.LEFT_BRACE)
+                && !firstToken.equals(JsonSyntaxToken.LEFT_BRACKET))) {
             throw new MalformedJsonException("Json must start with either a left bracket or a left brace");
         }
         if (firstToken.equals(JsonSyntaxToken.LEFT_BRACKET)) {
@@ -41,9 +46,9 @@ public class JsonReader {
             tokensToSkip++;
             return new ParseTokenResult(obj, tokensToSkip);
         }
-        for ( ; ; ) {
+        for (;;) {
             firstToken = tokens.getFirst();
-            var propertyName = "";
+            String propertyName;
             if (firstToken.getJsonType() == JsonBaseElement.JsonType.STRING) {
                 propertyName = ((JsonString) firstToken).getValue();
                 tokens = skipOneToken(tokens);
@@ -53,7 +58,8 @@ public class JsonReader {
             }
             firstToken = tokens.getFirst();
             if (!firstToken.equals(JsonSyntaxToken.COLON)) {
-                throw new MalformedJsonException("Expected colon after key in object, got: " + firstToken.getJsonType());
+                throw new MalformedJsonException(
+                        "Expected colon after key in object, got: " + firstToken.getJsonType());
             }
             tokens = skipOneToken(tokens);
             tokensToSkip++;
@@ -66,7 +72,8 @@ public class JsonReader {
                 tokensToSkip++;
                 return new ParseTokenResult(obj, tokensToSkip);
             } else if (!firstToken.equals(JsonSyntaxToken.COMMA)) {
-                throw new MalformedJsonException("Expected comma after pair in object, got: " + firstToken.getJsonType());
+                throw new MalformedJsonException(
+                        "Expected comma after pair in object, got: " + firstToken.getJsonType());
             }
             tokens = skipOneToken(tokens);
             tokensToSkip++;
@@ -74,7 +81,7 @@ public class JsonReader {
     }
 
     private ParseTokenResult parseArray(List<JsonBaseElement> tokens) {
-        int tokensToSkip = 1;  // starts at 1 because already 1 token has been skipped on internalParse method
+        int tokensToSkip = 1; // starts at 1 because already 1 token has been skipped on internalParse method
         final var arr = new JsonArray();
         var firstToken = tokens.getFirst();
         if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACKET)) {

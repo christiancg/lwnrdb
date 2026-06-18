@@ -1,12 +1,11 @@
 package org.techhouse.conn;
 
-import org.techhouse.log.Logger;
-
 import java.io.IOException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.techhouse.log.Logger;
 
 public class SocketServer {
     private final Logger logger = Logger.logFor(SocketServer.class);
@@ -21,7 +20,7 @@ public class SocketServer {
     public void serve() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             logger.info("Server is listening on port " + port);
-            while(true) {
+            while (true) {
                 Socket socket = serverSocket.accept();
                 pool.execute(new MessageProcessor(socket));
             }

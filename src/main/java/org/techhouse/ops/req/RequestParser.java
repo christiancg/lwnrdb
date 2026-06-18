@@ -1,21 +1,38 @@
 package org.techhouse.ops.req;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.agg.*;
-import org.techhouse.ops.req.agg.mid_operators.*;
+import org.techhouse.ops.req.agg.AggregationStepType;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastToType;
+import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
+import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
-import org.techhouse.ops.req.agg.step.*;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
+import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.LimitAggregationStep;
+import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.SkipAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
-
-import java.util.ArrayList;
-import java.util.List;
 
 public class RequestParser {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -27,7 +44,7 @@ public class RequestParser {
                 case BULK_SAVE -> eJson.fromJson(message, BulkSaveRequest.class);
                 case SAVE -> {
                     final var parsed = eJson.fromJson(message, SaveRequest.class);
-                    if(parsed.getObject().has(Globals.PK_FIELD)) {
+                    if (parsed.getObject().has(Globals.PK_FIELD)) {
                         parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).asJsonString().getValue());
                     }
                     yield parsed;
@@ -64,7 +81,7 @@ public class RequestParser {
         final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
         final var crudeArrayElements = eJson.fromJson(message, JsonObject.class);
         final var jsonArray = crudeArrayElements.get("aggregationSteps").asJsonArray();
-        for (var i=0; i < roughlyParsedAggSteps.size(); i++) {
+        for (var i = 0; i < roughlyParsedAggSteps.size(); i++) {
             final var type = roughlyParsedAggSteps.get(i).getType();
             steps.add(parseAggregationStep(type, jsonArray, i));
         }
@@ -72,7 +89,8 @@ public class RequestParser {
         return aggRequest;
     }
 
-    private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray, final int index) {
+    private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray,
+            final int index) {
         final var obj = jsonArray.get(index).asJsonObject();
         return switch (type) {
             case FILTER -> parseFilterStep(obj);
@@ -119,9 +137,10 @@ public class RequestParser {
         final var midOperationType = eJson.fromJson(obj.get("type"), MidOperationType.class);
         return switch (midOperationType) {
             case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT ->
-                    new ArrayParamMidOperator(midOperationType, obj.get("operands").asJsonArray());
+                new ArrayParamMidOperator(midOperationType, obj.get("operands").asJsonArray());
             case ABS, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").asJsonString().getValue());
-            case CAST -> new CastMidOperator(obj.get("fieldName").asJsonString().getValue(), eJson.fromJson(obj.get("toType"), CastToType.class));
+            case CAST -> new CastMidOperator(obj.get("fieldName").asJsonString().getValue(),
+                    eJson.fromJson(obj.get("toType"), CastToType.class));
         };
     }
 

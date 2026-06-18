@@ -1,10 +1,9 @@
 package org.techhouse.ops.resp;
 
+import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
-
-import java.util.List;
 
 public class AggregateResponse extends OperationResponse {
     public List<JsonObject> results;

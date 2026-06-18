@@ -1,9 +1,8 @@
 package org.techhouse.ejson.custom_types;
 
+import java.time.LocalTime;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
-
-import java.time.LocalTime;
 
 public class JsonTime extends JsonCustom<LocalTime> {
     public JsonTime(LocalTime customValue) {

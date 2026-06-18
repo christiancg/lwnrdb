@@ -1,5 +1,10 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -10,17 +15,16 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.custom_types.JsonTime;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.io.IOException;
-import java.util.List;
-import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class IndexHelperTest {
     @BeforeEach
@@ -41,27 +45,27 @@ public class IndexHelperTest {
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
-    
+
         JsonObject obj1 = new JsonObject();
         obj1.addProperty(Globals.PK_FIELD, "1");
         obj1.addProperty(fieldName, 42);
-    
+
         JsonObject obj2 = new JsonObject();
-        obj2.addProperty(Globals.PK_FIELD, "2"); 
+        obj2.addProperty(Globals.PK_FIELD, "2");
         obj2.addProperty(fieldName, "test");
-    
+
         JsonObject obj3 = new JsonObject();
         obj3.addProperty(Globals.PK_FIELD, "3");
         obj3.addProperty(fieldName, true);
 
         Cache cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100,0);
+        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj3));
-    
+
         // Act
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -81,22 +85,22 @@ public class IndexHelperTest {
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
-    
+
         JsonObject obj1 = new JsonObject();
         obj1.addProperty(Globals.PK_FIELD, "1");
         obj1.addProperty(fieldName, 42);
-    
+
         JsonObject obj2 = new JsonObject();
         obj2.addProperty(Globals.PK_FIELD, "2");
         obj2.add(fieldName, JsonNull.INSTANCE);
-    
+
         Cache cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100,0);
+        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
-    
+
         // Act
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -155,7 +159,7 @@ public class IndexHelperTest {
 
         Cache cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100,0);
+        final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
         final var dbEntry1 = DbEntry.fromJsonObject(dbName, collName, obj1);
         cache.addEntryToCache(dbName, collName, dbEntry1);
@@ -217,7 +221,8 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("s2", "tag", new JsonString("beta"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+        assertDoesNotThrow(
+                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
     }
 
     // updateIndexes indexes a Boolean-valued field for a CREATED event
@@ -233,7 +238,8 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("b2", "active", new JsonBoolean(false));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+        assertDoesNotThrow(
+                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
     }
 
     // updateIndexes indexes a custom type (JsonTime) field for a CREATED event
@@ -251,7 +257,8 @@ public class IndexHelperTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
 
-        final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime", JsonTime.class);
+        final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime",
+                JsonTime.class);
         assertNotNull(index);
         assertFalse(index.isEmpty());
     }
@@ -269,7 +276,8 @@ public class IndexHelperTest {
 
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
 
-        final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "score", Double.class);
+        final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "score",
+                Double.class);
         assertTrue(index == null || index.stream().noneMatch(e -> e.getIds().contains("del1")));
     }
 }

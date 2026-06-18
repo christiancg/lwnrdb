@@ -1,15 +1,17 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.techhouse.ejson.custom_types.JsonTime;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ejson.type_adapters.impl.JsonCustomTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 public class JsonCustomTypeAdapterTest {
 
@@ -18,7 +20,7 @@ public class JsonCustomTypeAdapterTest {
     public void test_to_json_with_null_value() {
         // Arrange
         JsonCustomTypeAdapter adapter = new JsonCustomTypeAdapter();
-    
+
         // Act & Assert
         assertThrows(NullPointerException.class, () -> adapter.toJson(null));
     }
@@ -32,11 +34,9 @@ public class JsonCustomTypeAdapterTest {
         TypeAdapter<JsonBaseElement> mockBaseAdapter = mock(TypeAdapter.class);
 
         try (MockedStatic<TypeAdapterFactory> factory = mockStatic(TypeAdapterFactory.class)) {
-            factory.when(() -> TypeAdapterFactory.getAdapter(JsonBaseElement.class))
-                    .thenReturn(mockBaseAdapter);
+            factory.when(() -> TypeAdapterFactory.getAdapter(JsonBaseElement.class)).thenReturn(mockBaseAdapter);
 
-            when(mockBaseAdapter.fromJson(mockCustom))
-                    .thenReturn(mockCustom);
+            when(mockBaseAdapter.fromJson(mockCustom)).thenReturn(mockCustom);
 
             JsonCustom<?> result = adapter.fromJson(mockCustom);
 

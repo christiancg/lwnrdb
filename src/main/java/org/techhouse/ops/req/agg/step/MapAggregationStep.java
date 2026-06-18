@@ -1,10 +1,9 @@
 package org.techhouse.ops.req.agg.step;
 
+import java.util.List;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
-
-import java.util.List;
 
 public class MapAggregationStep extends BaseAggregationStep {
     private List<MapOperator> operators;
