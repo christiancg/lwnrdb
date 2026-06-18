@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class OperationRequestTest {
     // Create OperationRequest with valid type, database and collection names

@@ -7,8 +7,10 @@ public class UsageProfileCleanupEvent extends Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof UsageProfileCleanupEvent)) return false;
+        if (this == o)
+            return true;
+        if (!(o instanceof UsageProfileCleanupEvent))
+            return false;
         return super.equals(o);
     }
 

@@ -1,34 +1,38 @@
 package org.techhouse.unit.ejson.internal;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.*;
-import org.techhouse.ejson.internal.Lexer;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.Lexer;
 
 public class LexerTest {
     // Lexing valid JSON string with quotes returns JsonString element
     @Test
     public void test_lex_valid_json_string() {
         String input = "\"test string\"";
-    
+
         List<JsonBaseElement> result = Lexer.lex(input);
-    
+
         assertNotNull(result);
         assertEquals(1, result.size());
         assertInstanceOf(JsonString.class, result.getFirst());
-        assertEquals("test string", ((JsonString)result.getFirst()).getValue());
+        assertEquals("test string", ((JsonString) result.getFirst()).getValue());
     }
 
     // Lexing empty string returns empty token list
     @Test
     public void test_lex_empty_string() {
         String input = "";
-    
+
         List<JsonBaseElement> result = Lexer.lex(input);
-    
+
         assertNotNull(result);
         assertTrue(result.isEmpty());
     }

@@ -1,10 +1,10 @@
 package org.techhouse.unit.ops.req;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateIndexRequest;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class CreateIndexRequestTest {
     // Constructor correctly sets OperationType.CREATE_INDEX as type
@@ -13,9 +13,9 @@ public class CreateIndexRequestTest {
         String dbName = "testDb";
         String collName = "testColl";
         String fieldName = "testField";
-    
+
         CreateIndexRequest request = new CreateIndexRequest(dbName, collName, fieldName);
-    
+
         assertEquals(OperationType.CREATE_INDEX, request.getType());
     }
 

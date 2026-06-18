@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.resp;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.FindByIdResponse;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class FindByIdResponseTest {
     // Create FindByIdResponse with valid JsonObject and OK status

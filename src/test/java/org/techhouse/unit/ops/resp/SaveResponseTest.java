@@ -1,12 +1,12 @@
 package org.techhouse.unit.ops.resp;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.SaveResponse;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class SaveResponseTest {
     // Create SaveResponse with OK status and valid message and ID
@@ -14,9 +14,9 @@ public class SaveResponseTest {
     public void test_create_save_response_with_valid_data() {
         String id = "123abc";
         String message = "Document saved successfully";
-    
+
         SaveResponse response = new SaveResponse(OperationStatus.OK, message, id);
-    
+
         assertEquals(OperationType.SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(message, response.getMessage());
@@ -28,9 +28,9 @@ public class SaveResponseTest {
     public void test_create_save_response_with_null_id() {
         String message = "Document saved with null ID";
         String id = null;
-    
+
         SaveResponse response = new SaveResponse(OperationStatus.OK, message, id);
-    
+
         assertEquals(OperationType.SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(message, response.getMessage());

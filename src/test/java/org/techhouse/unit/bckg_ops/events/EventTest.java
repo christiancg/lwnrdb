@@ -1,10 +1,10 @@
 package org.techhouse.unit.bckg_ops.events;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EventType;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 // Event is abstract; tested via DatabaseEvent which extends it.
 public class EventTest {

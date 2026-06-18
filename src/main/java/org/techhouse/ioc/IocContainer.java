@@ -1,15 +1,13 @@
 package org.techhouse.ioc;
 
-import org.techhouse.ex.DependencyInjectionFailed;
-
 import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.techhouse.ex.DependencyInjectionFailed;
 
+public final class IocContainer {
 
-public class IocContainer {
-
-    private final static IocContainer instance = new IocContainer();
+    private static final IocContainer instance = new IocContainer();
 
     private final Map<String, Object> dependencies = new ConcurrentHashMap<>();
 
@@ -28,7 +26,8 @@ public class IocContainer {
                 } else {
                     targetedDependency = clazz.cast(IocContainer.instance.dependencies.get(clazz.getName()));
                 }
-            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException | IllegalAccessException exception) {
+            } catch (NoSuchMethodException | InvocationTargetException | InstantiationException
+                    | IllegalAccessException exception) {
                 throw new DependencyInjectionFailed(exception);
             }
         } else {

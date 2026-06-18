@@ -1,15 +1,17 @@
 package org.techhouse.unit.ops.req.validations;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.data.auth.GlobalPermissionType;
-import org.techhouse.data.auth.PermissionLevel;
-import org.techhouse.ops.req.*;
-import org.techhouse.ops.req.validations.RequestValidator;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Map;
 import java.util.Set;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.data.auth.GlobalPermissionType;
+import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.ChangePermissionsRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
+import org.techhouse.ops.req.validations.RequestValidator;
 
 public class UserRequestValidationTest {
     @Test
@@ -219,13 +221,10 @@ public class UserRequestValidationTest {
     public void test_set_database_owners_with_valid_owners() {
         // Create the user in the cache first so the existence check passes
         final var cache = org.techhouse.ioc.IocContainer.get(org.techhouse.cache.Cache.class);
-        final var userEntry = new org.techhouse.data.admin.AdminUserEntry(
-                "validowner", "hash", false,
+        final var userEntry = new org.techhouse.data.admin.AdminUserEntry("validowner", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
-        final var pkEntry = new org.techhouse.data.PkIndexEntry(
-                org.techhouse.config.Globals.ADMIN_DB_NAME,
-                org.techhouse.config.Globals.ADMIN_USERS_COLLECTION_NAME,
-                "validowner", 0, 10, 0);
+        final var pkEntry = new org.techhouse.data.PkIndexEntry(org.techhouse.config.Globals.ADMIN_DB_NAME,
+                org.techhouse.config.Globals.ADMIN_USERS_COLLECTION_NAME, "validowner", 0, 10, 0);
         cache.putAdminUserEntry(userEntry, pkEntry);
 
         final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");

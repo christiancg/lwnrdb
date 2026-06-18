@@ -1,7 +1,23 @@
 package org.techhouse.unit.cache;
 
-import org.junit.jupiter.api.*;
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -11,7 +27,12 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ejson.custom_types.JsonTime;
-import org.techhouse.ejson.elements.*;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -19,15 +40,6 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
-
-import java.io.IOException;
-import java.lang.reflect.Field;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Stream;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
 
 public class CacheTest {
 
@@ -43,7 +55,8 @@ public class CacheTest {
 
     // Loading admin data populates the databases and collections maps correctly
     @Test
-    public void test_load_admin_data_populates_maps_correctly() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_load_admin_data_populates_maps_correctly()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         Cache cache = new Cache();
 
@@ -56,7 +69,8 @@ public class CacheTest {
         arrDb.add("test_create_collection");
         jsonDb.add("collections", arrDb);
         final var adminDbEntry = AdminDbEntry.fromJsonObject(jsonDb);
-        final var pkIndexEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "test_create", 0, 100,0);
+        final var pkIndexEntry = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
+                "test_create", 0, 100, 0);
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
         final var jsonColl = new JsonObject();
@@ -68,9 +82,11 @@ public class CacheTest {
         final var adminCollEntry = AdminCollEntry.fromJsonObject(jsonColl);
         cache.putAdminCollectionEntry(adminCollEntry, pkIndexEntry);
 
-        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
+        };
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
         // Assert
@@ -80,16 +96,19 @@ public class CacheTest {
 
     // Loading admin data when the file system is empty
     @Test
-    public void test_load_admin_data_when_file_system_is_empty() throws IOException, IllegalAccessException, NoSuchFieldException {
+    public void test_load_admin_data_when_file_system_is_empty()
+            throws IOException, IllegalAccessException, NoSuchFieldException {
         // Arrange
         Cache cache = new Cache();
 
         // Act
         cache.loadAdminData();
 
-        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
+        };
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
         // Assert
         Assertions.assertTrue(databases.isEmpty());
@@ -98,26 +117,28 @@ public class CacheTest {
 
     // Retrieving field index loads data from the file system if not present in cache
     @Test
-    public void test_retrieving_field_index_loads_data() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_retrieving_field_index_loads_data()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Mocking FileSystem and setting up necessary data
         FileSystem fsMock = mock(FileSystem.class);
         Cache cache = new Cache();
         Field fsField = Cache.class.getDeclaredField("fs");
         fsField.setAccessible(true);
         fsField.set(cache, fsMock);
-    
+
         String dbName = "test_db";
         String collName = "test_coll";
         String fieldName = "test_field";
-    
+
         List<FieldIndexEntry<Double>> fieldIndexEntries = new ArrayList<>();
         fieldIndexEntries.add(new FieldIndexEntry<>(dbName, collName, 1.5, new HashSet<>(List.of("1", "2"))));
-    
+
         when(fsMock.readWholeFieldIndexFiles(dbName, collName, fieldName, Double.class)).thenReturn(fieldIndexEntries);
-    
+
         // Calling the method under test
-        List<FieldIndexEntry<Double>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
-    
+        List<FieldIndexEntry<Double>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                Double.class);
+
         // Assertions
         assertNotNull(result);
         assertEquals(1, result.size());
@@ -162,14 +183,16 @@ public class CacheTest {
     }
 
     @Test
-    public void test_returns_primary_key_index_from_cache() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_returns_primary_key_index_from_cache()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         Cache cache = new Cache();
         String dbName = "testDb";
         String collName = "testColl";
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10,0));
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        List<PkIndexEntry> expectedPkIndex = List.of(new PkIndexEntry(dbName, collName, "value1", 0, 10, 0));
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(collectionIdentifier, expectedPkIndex);
 
@@ -182,7 +205,8 @@ public class CacheTest {
 
     // Returns indexes from fieldIndexMap if already loaded
     @Test
-    public void test_returns_indexes_from_fieldIndexMap_if_already_loaded() throws NoSuchFieldException, IllegalAccessException {
+    public void test_returns_indexes_from_fieldIndexMap_if_already_loaded()
+            throws NoSuchFieldException, IllegalAccessException {
         // Arrange
         Cache cache = new Cache();
         String dbName = "testDB";
@@ -192,12 +216,14 @@ public class CacheTest {
         Map<String, List<FieldIndexEntry<?>>> expectedIndexes = new ConcurrentHashMap<>();
         expectedIndexes.put("type1", List.of(new FieldIndexEntry<>(dbName, collName, "value1", Set.of("id1"))));
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         fieldIndexMap.put(collectionIdentifier, expectedIndexes);
 
         // Act
-        Map<String, List<FieldIndexEntry<?>>> actualIndexes = cache.getAllFieldIndexesAndLoadIfNecessary(dbName, collName, fieldName);
+        Map<String, List<FieldIndexEntry<?>>> actualIndexes = cache.getAllFieldIndexesAndLoadIfNecessary(dbName,
+                collName, fieldName);
 
         // Assert
         assertEquals(expectedIndexes, actualIndexes);
@@ -205,7 +231,8 @@ public class CacheTest {
 
     // Returns null if readAllWholeFieldIndexFiles returns null
     @Test
-    public void test_returns_null_if_readAllWholeFieldIndexFiles_returns_null() throws NoSuchFieldException, IllegalAccessException {
+    public void test_returns_null_if_readAllWholeFieldIndexFiles_returns_null()
+            throws NoSuchFieldException, IllegalAccessException {
         // Arrange
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
@@ -219,7 +246,8 @@ public class CacheTest {
         when(fsMock.readAllWholeFieldIndexFiles(dbName, collName, fieldName)).thenReturn(new ConcurrentHashMap<>());
 
         // Act
-        Map<String, List<FieldIndexEntry<?>>> actualIndexes = cache.getAllFieldIndexesAndLoadIfNecessary(dbName, collName, fieldName);
+        Map<String, List<FieldIndexEntry<?>>> actualIndexes = cache.getAllFieldIndexesAndLoadIfNecessary(dbName,
+                collName, fieldName);
 
         // Assert
         assertTrue(actualIndexes.isEmpty());
@@ -241,12 +269,14 @@ public class CacheTest {
         Map<String, List<FieldIndexEntry<?>>> indexMap = new ConcurrentHashMap<>();
         indexMap.put(indexIdentifier, List.of(entry));
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         fieldIndexMap.put(collectionIdentifier, indexMap);
 
         // Act
-        List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
+        List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                indexType);
 
         // Assert
         assertNotNull(result);
@@ -256,7 +286,8 @@ public class CacheTest {
 
     // Handles empty or null field index map
     @Test
-    public void test_handles_empty_or_null_field_index_map() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_handles_empty_or_null_field_index_map()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
@@ -273,7 +304,8 @@ public class CacheTest {
         when(fsMock.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType)).thenReturn(null);
 
         // Act
-        List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
+        List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                indexType);
 
         // Assert
         assertNull(result);
@@ -291,11 +323,9 @@ public class CacheTest {
         var value = 10.0;
 
         var indexEntries = List.of(new FieldIndexEntry<Number>(dbName, collName, value, Set.of("id1", "id2")));
-        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class))
-                .thenReturn(indexEntries);
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(indexEntries);
 
-        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, value))
-                .thenCallRealMethod();
+        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, value)).thenCallRealMethod();
 
         // Act
         var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value);
@@ -337,7 +367,8 @@ public class CacheTest {
 
         // Mocking
         List<FieldIndexEntry<Boolean>> booleanIndex = new ArrayList<>();
-        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class)).thenReturn(booleanIndex);
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class))
+                .thenReturn(booleanIndex);
 
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, true)).thenCallRealMethod();
 
@@ -381,7 +412,8 @@ public class CacheTest {
 
         cache.addEntryToCache(dbName, collName, entry);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
@@ -401,7 +433,8 @@ public class CacheTest {
 
         cache.addEntryToCache(dbName, collName, entry);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
@@ -420,14 +453,13 @@ public class CacheTest {
         jsonObject1.addProperty(Globals.PK_FIELD, "1");
         var jsonObject2 = new JsonObject();
         jsonObject2.addProperty(Globals.PK_FIELD, "2");
-        List<DbEntry> entries = List.of(
-                DbEntry.fromJsonObject(dbName, collName, jsonObject1),
-                DbEntry.fromJsonObject(dbName, collName,jsonObject2)
-        );
+        List<DbEntry> entries = List.of(DbEntry.fromJsonObject(dbName, collName, jsonObject1),
+                DbEntry.fromJsonObject(dbName, collName, jsonObject2));
 
         cache.addEntriesToCache(dbName, collName, entries);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
@@ -448,14 +480,13 @@ public class CacheTest {
         var jsonObject2 = new JsonObject();
         jsonObject2.addProperty(Globals.PK_FIELD, "1");
 
-        List<DbEntry> entries = List.of(
-                DbEntry.fromJsonObject(dbName, collName, jsonObject1),
-                DbEntry.fromJsonObject(dbName, collName, jsonObject2)
-        );
+        List<DbEntry> entries = List.of(DbEntry.fromJsonObject(dbName, collName, jsonObject1),
+                DbEntry.fromJsonObject(dbName, collName, jsonObject2));
 
         cache.addEntriesToCache(dbName, collName, entries);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
 
         String collId = Cache.getCollectionIdentifier(dbName, collName);
@@ -469,7 +500,7 @@ public class CacheTest {
         // Arrange
         String dbName = "testDb";
         String collName = "testColl";
-        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100,0);
+        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100, 0);
         Cache cache = new Cache();
         DbEntry expectedEntry = new DbEntry();
         expectedEntry.setDatabaseName(dbName);
@@ -478,7 +509,8 @@ public class CacheTest {
 
         String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
         collectionMap.putIfAbsent(collectionIdentifier, new ConcurrentHashMap<>());
         collectionMap.get(collectionIdentifier).put("testValue", expectedEntry);
@@ -497,13 +529,12 @@ public class CacheTest {
         // Arrange
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
-        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100,0);
+        PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100, 0);
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
         Field fsField = Cache.class.getDeclaredField("fs");
         fsField.setAccessible(true);
         fsField.set(cache, fsMock);
-
 
         DbEntry expectedEntry = new DbEntry();
         expectedEntry.setDatabaseName(dbName);
@@ -521,7 +552,8 @@ public class CacheTest {
 
     // Returns the whole collection from the cache if it exists and is complete
     @Test
-    public void test_returns_whole_collection_from_cache_if_exists_and_complete() throws NoSuchFieldException, IllegalAccessException {
+    public void test_returns_whole_collection_from_cache_if_exists_and_complete()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -532,7 +564,8 @@ public class CacheTest {
         final var pageList = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
         pageList.add(pageEntry);
 
-        final var typePages = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var typePages = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
+        };
         final var pagesMap = TestUtils.getPrivateField(cache, "pages", typePages);
         pagesMap.put(collectionIdentifier, pageList);
 
@@ -545,7 +578,8 @@ public class CacheTest {
         wholeCollection.put("1", entry1);
         wholeCollection.put("2", entry2);
 
-        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeCollMap = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeCollMap);
         collectionMap.put(collectionIdentifier, wholeCollection);
 
@@ -558,7 +592,8 @@ public class CacheTest {
 
     // Handles IOException when reading the collection from the file system
     @Test
-    public void test_handles_ioexception_when_reading_collection_from_file_system() throws NoSuchFieldException, IllegalAccessException, IOException {
+    public void test_handles_ioexception_when_reading_collection_from_file_system()
+            throws NoSuchFieldException, IllegalAccessException, IOException {
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
         Field fsField = Cache.class.getDeclaredField("fs");
@@ -577,9 +612,10 @@ public class CacheTest {
     @Test
     public void test_retrieve_pkindexentry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L,0);
+        PkIndexEntry expectedEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L, 0);
 
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         databasesPkIndex.put("testDb", expectedEntry);
@@ -604,10 +640,11 @@ public class CacheTest {
     @Test
     public void test_add_valid_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L,0);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 0L, 100L, 0);
         cache.putPkIndexAdminDbEntry(entry);
 
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         assertEquals(entry, databasesPkIndex.get("value1"));
@@ -619,7 +656,8 @@ public class CacheTest {
         Cache cache = new Cache();
         AdminDbEntry entry = new AdminDbEntry("testDb");
 
-        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
+        };
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
 
         databases.put("testDb", entry);
@@ -644,9 +682,10 @@ public class CacheTest {
     @Test
     public void test_retrieve_existing_pkindexentry() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L,0);
+        PkIndexEntry expectedEntry = new PkIndexEntry("dbName", "collName", "value", 1L, 100L, 0);
 
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         collectionsPkIndex.put("validCollId", expectedEntry);
@@ -661,10 +700,11 @@ public class CacheTest {
     @Test
     public void test_adds_pkindexentry_to_map() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
-        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L,0);
+        PkIndexEntry entry = new PkIndexEntry("db1", "coll1", "value1", 1L, 100L, 0);
         cache.putPkIndexAdminCollEntry(entry);
 
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         assertEquals(entry, collectionsPkIndex.get("value1"));
@@ -672,13 +712,15 @@ public class CacheTest {
 
     // Retrieves an AdminCollEntry when the collection exists in the cache
     @Test
-    public void test_retrieves_admincollentry_when_exists_in_cache() throws NoSuchFieldException, IllegalAccessException {
+    public void test_retrieves_admincollentry_when_exists_in_cache()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         String dbName = "testDB";
         String collName = "testCollection";
         AdminCollEntry expectedEntry = new AdminCollEntry(dbName, collName);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
         collections.put(Cache.getCollectionIdentifier(dbName, collName), expectedEntry);
@@ -708,13 +750,15 @@ public class CacheTest {
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminDbEntry adminDbEntry = new AdminDbEntry("testDb");
-        PkIndexEntry pkIndexEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L,0);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry("testDb", "testCollection", "testValue", 1L, 100L, 0);
 
         cache.putAdminDbEntry(adminDbEntry, pkIndexEntry);
 
-        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
+        };
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         assertEquals(adminDbEntry, databases.get("testDb"));
@@ -727,11 +771,13 @@ public class CacheTest {
         Cache cache = new Cache();
         String dbName = "testDb";
         AdminDbEntry adminDbEntry = new AdminDbEntry(dbName);
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L,0);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, "testCollection", "testValue", 1L, 100L, 0);
 
-        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {};
+        final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
+        };
         final var databases = TestUtils.getPrivateField(cache, "databases", typeDbs);
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var databasesPkIndex = TestUtils.getPrivateField(cache, "databasesPkIndex", typeCollPk);
 
         databases.put(dbName, adminDbEntry);
@@ -745,16 +791,19 @@ public class CacheTest {
 
     // Successfully adds an AdminCollEntry and PkIndexEntry to their respective maps
     @Test
-    public void test_successfully_adds_entries_to_collections_maps() throws NoSuchFieldException, IllegalAccessException {
+    public void test_successfully_adds_entries_to_collections_maps()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminCollEntry dbEntry = new AdminCollEntry("testDb", "testColl");
-        PkIndexEntry indexEntry = new PkIndexEntry("testDb", "testColl", "testValue", 1L, 100L,0);
+        PkIndexEntry indexEntry = new PkIndexEntry("testDb", "testColl", "testValue", 1L, 100L, 0);
 
         cache.putAdminCollectionEntry(dbEntry, indexEntry);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         assertEquals(dbEntry, collections.get(dbEntry.get_id()));
@@ -767,13 +816,14 @@ public class CacheTest {
         Cache cache = new Cache();
         String collIdentifier = "testCollection";
         AdminCollEntry adminCollEntry = new AdminCollEntry(TestGlobals.DB, collIdentifier);
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L,0);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(TestGlobals.DB, collIdentifier, "testValue", 1L, 100L, 0);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
-
 
         collections.put(collIdentifier, adminCollEntry);
         collectionsPkIndex.put(collIdentifier, pkIndexEntry);
@@ -792,9 +842,11 @@ public class CacheTest {
 
         cache.removeAdminCollEntry(collIdentifier);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {};
+        final var typeCollPk = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
         final var collectionsPkIndex = TestUtils.getPrivateField(cache, "collectionsPkIndex", typeCollPk);
 
         assertFalse(collections.containsKey(collIdentifier));
@@ -813,7 +865,8 @@ public class CacheTest {
         Map<String, DbEntry> collection = new HashMap<>();
         collection.put(pk, new DbEntry());
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         collectionMap.put(collectionIdentifier, collection);
@@ -833,7 +886,8 @@ public class CacheTest {
 
         cache.evictEntry(dbName, collName, pk);
 
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         assertNull(collectionMap.get(Cache.getCollectionIdentifier(dbName, collName)));
@@ -846,12 +900,14 @@ public class CacheTest {
         String dbName = "testDb";
         String collectionName = dbName + "_collection";
 
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100,0);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100, 0);
         DbEntry dbEntry = new DbEntry();
 
-        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         pkIndexMap.put(collectionName, List.of(pkIndexEntry));
@@ -870,12 +926,14 @@ public class CacheTest {
         String dbName = "";
         String collectionName = dbName + "_collection";
 
-        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100,0);
+        PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100, 0);
         DbEntry dbEntry = new DbEntry();
 
-        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         pkIndexMap.put(collectionName, List.of(pkIndexEntry));
@@ -897,7 +955,8 @@ public class CacheTest {
 
         List<PkIndexEntry> pkIndexEntries = new ArrayList<>();
 
-        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
 
         pkIndexMap.put(collIdentifier, pkIndexEntries);
@@ -909,7 +968,8 @@ public class CacheTest {
 
     // evictCollection is called with a non-existent dbName and collName
     @Test
-    public void test_evict_collection_with_non_existent_collection() throws NoSuchFieldException, IllegalAccessException {
+    public void test_evict_collection_with_non_existent_collection()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         String dbName = "nonExistentDb";
         String collName = "nonExistentColl";
@@ -917,9 +977,11 @@ public class CacheTest {
 
         cache.evictCollection(dbName, collName);
 
-        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
-        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
         assertFalse(pkIndexMap.containsKey(collIdentifier));
@@ -937,7 +999,8 @@ public class CacheTest {
 
     // Handles IOException when reading the collection from the file system
     @Test
-    public void test_handles_ioexception_when_reading_collection() throws NoSuchFieldException, IllegalAccessException, IOException {
+    public void test_handles_ioexception_when_reading_collection()
+            throws NoSuchFieldException, IllegalAccessException, IOException {
         Cache cache = new Cache();
         FileSystem fsMock = mock(FileSystem.class);
         Field fsField = Cache.class.getDeclaredField("fs");
@@ -958,7 +1021,8 @@ public class CacheTest {
 
         Set<String> indexes = new HashSet<>(Arrays.asList("testField", "anotherField"));
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", type);
 
         var coll = new AdminCollEntry(dbName, collName, indexes);
@@ -981,7 +1045,8 @@ public class CacheTest {
         Map<String, List<FieldIndexEntry<?>>> fieldIndexes = new HashMap<>();
         fieldIndexes.put(fieldName, new ArrayList<>());
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
 
         fieldIndexMap.put(collectionIdentifier, fieldIndexes);
@@ -1005,7 +1070,8 @@ public class CacheTest {
     }
 
     @Test
-    public void test_retrieve_indexes_for_valid_collection_identifier() throws NoSuchFieldException, IllegalAccessException {
+    public void test_retrieve_indexes_for_valid_collection_identifier()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         AdminCollEntry adminCollEntry = mock(AdminCollEntry.class);
         Set<String> indexes = new HashSet<>();
@@ -1013,7 +1079,8 @@ public class CacheTest {
         indexes.add("index2");
         when(adminCollEntry.getIndexes()).thenReturn(indexes);
 
-        final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
         final var collections = TestUtils.getPrivateField(cache, "collections", type);
 
         collections.put("testDb|testColl", adminCollEntry);
@@ -1032,7 +1099,8 @@ public class CacheTest {
     }
 
     @Test
-    public void test_select_page_for_insert_first_fit_picks_first_page_with_room() throws NoSuchFieldException, IllegalAccessException {
+    public void test_select_page_for_insert_first_fit_picks_first_page_with_room()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         final var p0 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L);
         p0.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097150"))); // near-full
@@ -1045,8 +1113,11 @@ public class CacheTest {
         p2.setEntryCount(5);
 
         final var list = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
-        list.add(p0); list.add(p1); list.add(p2);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        list.add(p0);
+        list.add(p1);
+        list.add(p2);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
+        };
         final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
@@ -1055,7 +1126,8 @@ public class CacheTest {
     }
 
     @Test
-    public void test_select_page_for_insert_allocates_new_page_when_none_fit() throws NoSuchFieldException, IllegalAccessException {
+    public void test_select_page_for_insert_allocates_new_page_when_none_fit()
+            throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
         final var p0 = new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L);
         p0.setPageSize(2_097_150L); // 2MB-2 bytes, very near max default of 2MB
@@ -1065,8 +1137,10 @@ public class CacheTest {
         p1.setEntryCount(10);
 
         final var list = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
-        list.add(p0); list.add(p1);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        list.add(p0);
+        list.add(p1);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
+        };
         final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
@@ -1083,26 +1157,24 @@ public class CacheTest {
 
         final var list = new java.util.ArrayList<org.techhouse.data.admin.AdminPageEntry>();
         list.add(p0);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
+        };
         final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
         // 1MB existing + 500KB pending + 100KB new = 1.6MB, still under 2MB cap
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000,
-                Map.of(0L, 500_000L));
+        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 500_000L));
         assertEquals(0L, target, "Within-batch pending bytes still leave room on page 0");
 
         // 1MB existing + 1.5MB pending + 100KB new = 2.6MB, exceeds 2MB cap
-        long target2 = cache.selectPageForInsert("myDb", "myColl", 100_000,
-                Map.of(0L, 1_500_000L));
+        long target2 = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 1_500_000L));
         assertEquals(1L, target2, "Pending bytes can push selection to a new page");
     }
 
     @Test
     public void test_remove_admin_page_entries_clears_both_maps() {
         Cache cache = new Cache();
-        cache.addAdminPageEntries("myDb", "myColl",
-                new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L));
+        cache.addAdminPageEntries("myDb", "myColl", new org.techhouse.data.admin.AdminPageEntry("myDb", "myColl", 0L));
         cache.getAdminPagePkIndexes("myDb", "myColl")
                 .add(new PkIndexEntry("admin", "pages_myColl", "myDb|myColl|0", 0L, 10L, 0L));
 
@@ -1181,10 +1253,9 @@ public class CacheTest {
         var timeValue = new JsonTime("#time(10:00:00)");
         var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, timeValue);
         @SuppressWarnings("unchecked")
-        List<FieldIndexEntry<Object>> idx = (List<FieldIndexEntry<Object>>) (List<?>) List.of(
-                new FieldIndexEntry<>(dbName, collName, timeValue, Set.of("id1")));
-        when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any()))
-                .thenReturn(idx);
+        List<FieldIndexEntry<Object>> idx = (List<FieldIndexEntry<Object>>) (List<?>) List
+                .of(new FieldIndexEntry<>(dbName, collName, timeValue, Set.of("id1")));
+        when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any())).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, (Object) timeValue)).thenCallRealMethod();
 
         var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, (Object) timeValue);
@@ -1204,10 +1275,8 @@ public class CacheTest {
         arr.add(new JsonString("alpha"));
         arr.add(new JsonString("beta"));
         var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
-        var idx = List.of(
-                new FieldIndexEntry<>(dbName, collName, "alpha", Set.of("id1")),
-                new FieldIndexEntry<>(dbName, collName, "gamma", Set.of("id2"))
-        );
+        var idx = List.of(new FieldIndexEntry<>(dbName, collName, "alpha", Set.of("id1")),
+                new FieldIndexEntry<>(dbName, collName, "gamma", Set.of("id2")));
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class)).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
 
@@ -1232,8 +1301,7 @@ public class CacheTest {
         @SuppressWarnings("unchecked")
         List<FieldIndexEntry<Number>> idx = (List<FieldIndexEntry<Number>>) (List<?>) List.of(
                 new FieldIndexEntry<>(dbName, collName, 10.0, Set.of("id1")),
-                new FieldIndexEntry<>(dbName, collName, 30.0, Set.of("id2"))
-        );
+                new FieldIndexEntry<>(dbName, collName, 30.0, Set.of("id2")));
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
 
@@ -1254,10 +1322,8 @@ public class CacheTest {
         var arr = new JsonArray();
         arr.add(new JsonBoolean(true));
         var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
-        var idx = List.of(
-                new FieldIndexEntry<>(dbName, collName, true, Set.of("id1")),
-                new FieldIndexEntry<>(dbName, collName, false, Set.of("id2"))
-        );
+        var idx = List.of(new FieldIndexEntry<>(dbName, collName, true, Set.of("id1")),
+                new FieldIndexEntry<>(dbName, collName, false, Set.of("id2")));
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class)).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
 
@@ -1286,8 +1352,7 @@ public class CacheTest {
     @Test
     public void test_load_admin_data_with_existing_users_populates_users_map() throws Exception {
         // Persist a user to disk
-        final var userEntry = new org.techhouse.data.admin.AdminUserEntry(
-                "cachetestuser", "hash", false,
+        final var userEntry = new org.techhouse.data.admin.AdminUserEntry("cachetestuser", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
         org.techhouse.ops.AdminOperationHelper.saveUserEntry(userEntry);
 
@@ -1328,7 +1393,8 @@ public class CacheTest {
     @Test
     public void test_evictPkIndex_removes_only_pk_for_target_collection() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
                 List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
@@ -1342,7 +1408,8 @@ public class CacheTest {
     @Test
     public void test_evictPkIndex_noop_for_admin() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"),
                 List.of(new PkIndexEntry(Globals.ADMIN_DB_NAME, "databases", "id1", 0, 1, 0)));
@@ -1353,7 +1420,8 @@ public class CacheTest {
     @Test
     public void test_evictFieldIndex_removes_only_target_index() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
         indexes.put("field|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
@@ -1367,7 +1435,8 @@ public class CacheTest {
     @Test
     public void test_evictFieldIndex_removes_collection_entry_when_last_index_evicted() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
         indexes.put("field|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
@@ -1379,10 +1448,12 @@ public class CacheTest {
     @Test
     public void test_evictFieldIndex_noop_for_admin() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
-        indexes.put("field|String", List.of(new FieldIndexEntry<>(Globals.ADMIN_DB_NAME, "databases", "v", Set.of("id1"))));
+        indexes.put("field|String",
+                List.of(new FieldIndexEntry<>(Globals.ADMIN_DB_NAME, "databases", "v", Set.of("id1"))));
         fieldIndexMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), indexes);
         cache.evictFieldIndex(Globals.ADMIN_DB_NAME, "databases", "field|String");
         assertTrue(fieldIndexMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
@@ -1391,9 +1462,11 @@ public class CacheTest {
     @Test
     public void test_evictCollectionDocuments_removes_only_documents_not_pk() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", pkType);
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
         pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
                 List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
@@ -1406,7 +1479,8 @@ public class CacheTest {
     @Test
     public void test_evictCollectionDocuments_noop_for_admin() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
         collectionMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), new ConcurrentHashMap<>());
         cache.evictCollectionDocuments(Globals.ADMIN_DB_NAME, "databases");
@@ -1416,7 +1490,8 @@ public class CacheTest {
     @Test
     public void test_listCacheableResources_excludes_admin_entries() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
         final var inner = new ConcurrentHashMap<String, DbEntry>();
         final var obj = new JsonObject();
@@ -1432,11 +1507,13 @@ public class CacheTest {
     @Test
     public void test_listCacheableResources_includes_pk_and_field_indexes() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
-        final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var pkType = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", pkType);
         pkIndexMap.put(Cache.getCollectionIdentifier("db1", "c1"),
                 List.of(new PkIndexEntry("db1", "c1", "id1", 0, 1, 0)));
-        final var fieldType = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {};
+        final var fieldType = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", fieldType);
         final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
         indexes.put("f|String", List.of(new FieldIndexEntry<>("db1", "c1", "v", Set.of("id1"))));
@@ -1456,7 +1533,8 @@ public class CacheTest {
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
             cache.addEntryToCache("userDb", "c1", DbEntry.fromJsonObject("userDb", "c1", obj));
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
@@ -1473,8 +1551,10 @@ public class CacheTest {
             Cache cache = IocContainer.get(Cache.class);
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
-            cache.addEntryToCache(Globals.ADMIN_DB_NAME, "databases", DbEntry.fromJsonObject(Globals.ADMIN_DB_NAME, "databases", obj));
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            cache.addEntryToCache(Globals.ADMIN_DB_NAME, "databases",
+                    DbEntry.fromJsonObject(Globals.ADMIN_DB_NAME, "databases", obj));
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
         } finally {
@@ -1491,9 +1571,9 @@ public class CacheTest {
             Cache cache = IocContainer.get(Cache.class);
             final var obj = new JsonObject();
             obj.addProperty(Globals.PK_FIELD, "id1");
-            cache.addEntriesToCache("userDb", "c1",
-                    List.of(DbEntry.fromJsonObject("userDb", "c1", obj)));
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            cache.addEntriesToCache("userDb", "c1", List.of(DbEntry.fromJsonObject("userDb", "c1", obj)));
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
@@ -1504,8 +1584,8 @@ public class CacheTest {
     @Test
     public void test_collection_usage_pk_index_round_trip() {
         Cache cache = IocContainer.get(Cache.class);
-        final var pk = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                "usage-id", 0, 10, 0);
+        final var pk = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME, "usage-id", 0, 10,
+                0);
         cache.putPkIndexCollectionUsage(pk);
         assertEquals(pk, cache.getPkIndexCollectionUsage("usage-id"));
         assertTrue(cache.getCollectionUsagePkIndexes().containsKey("usage-id"));
@@ -1521,7 +1601,8 @@ public class CacheTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             collectionMap.clear();
             final var obj = new JsonObject();
@@ -1542,7 +1623,8 @@ public class CacheTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1024L * 1024L);
         try {
             Cache cache = IocContainer.get(Cache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             collectionMap.clear();
             final var obj = new JsonObject();
@@ -1562,7 +1644,8 @@ public class CacheTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             collectionMap.clear();
             final var obj1 = new JsonObject();
@@ -1571,9 +1654,8 @@ public class CacheTest {
             final var obj2 = new JsonObject();
             obj2.addProperty(Globals.PK_FIELD, "id2");
             obj2.addProperty("v", "y".repeat(128));
-            cache.addEntriesToCache("userDb", "c1",
-                    List.of(DbEntry.fromJsonObject("userDb", "c1", obj1),
-                            DbEntry.fromJsonObject("userDb", "c1", obj2)));
+            cache.addEntriesToCache("userDb", "c1", List.of(DbEntry.fromJsonObject("userDb", "c1", obj1),
+                    DbEntry.fromJsonObject("userDb", "c1", obj2)));
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
@@ -1599,7 +1681,8 @@ public class CacheTest {
                 when(fsMock.getById(pk)).thenReturn(stub);
                 final var result = cache.getById("userDb", "c1", pk);
                 assertEquals("id1", result.get_id());
-                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+                };
                 final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
                 assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier("userDb", "c1")));
             } finally {
@@ -1623,7 +1706,8 @@ public class CacheTest {
             final var originalFs = fsField.get(cache);
             fsField.set(cache, fsMock);
             try {
-                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+                final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+                };
                 final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
                 collectionMap.clear();
                 final var obj = new JsonObject();
@@ -1657,7 +1741,8 @@ public class CacheTest {
             final var stream = cache.initializeStreamIfNecessary(null, TestGlobals.DB, TestGlobals.COLL);
             assertNotNull(stream);
             stream.close();
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         } finally {
@@ -1673,7 +1758,8 @@ public class CacheTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", 100L);
         try {
             Cache cache = IocContainer.get(Cache.class);
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
             collectionMap.clear();
             // Seed an existing cached collection that already exceeds the cap (~217B > 100B).
@@ -1699,23 +1785,25 @@ public class CacheTest {
 
     private static void injectPkIndex(Cache cache, String collId, List<PkIndexEntry> entries)
             throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(collId, new ArrayList<>(entries));
     }
 
     private static void injectCachedEntry(Cache cache, String collId, DbEntry entry)
             throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
         final var inner = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
         inner.put(entry.get_id(), entry);
     }
 
-    private static void injectPages(Cache cache, String collId,
-                                    List<org.techhouse.data.admin.AdminPageEntry> pageList)
+    private static void injectPages(Cache cache, String collId, List<org.techhouse.data.admin.AdminPageEntry> pageList)
             throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
+        };
         final var pages = TestUtils.getPrivateField(cache, "pages", type);
         pages.put(collId, pageList);
     }
@@ -1783,7 +1871,8 @@ public class CacheTest {
         assertEquals("id2", requested.getFirst().getValue());
 
         // The freshly read entry should now be cached.
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
         assertTrue(collectionMap.get(collId).containsKey("id2"));
     }
@@ -1806,7 +1895,8 @@ public class CacheTest {
         final var result = cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
 
         assertEquals(1, result.size());
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
         assertFalse(collectionMap.containsKey(collId), "rejected admission must not populate the cache");
     }
@@ -1832,7 +1922,8 @@ public class CacheTest {
 
             assertEquals(1, result.size());
             verify(fsMock).getByIndexEntries(anyList());
-            final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {};
+            final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+            };
             final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
             assertFalse(collectionMap.containsKey(collId), "caching disabled must not populate the cache");
         } finally {
@@ -1874,7 +1965,7 @@ public class CacheTest {
         injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
 
         final List<DbEntry> result;
-        try (final var stream = cache.streamCollection("userDb", "c1")) {
+        try (var stream = cache.streamCollection("userDb", "c1")) {
             result = stream.toList();
         }
 
@@ -1899,14 +1990,16 @@ public class CacheTest {
         injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
 
         final var page = new HashMap<String, DbEntry>();
-        final var o1 = new JsonObject(); o1.addProperty(Globals.PK_FIELD, "id1");
-        final var o2 = new JsonObject(); o2.addProperty(Globals.PK_FIELD, "id2");
+        final var o1 = new JsonObject();
+        o1.addProperty(Globals.PK_FIELD, "id1");
+        final var o2 = new JsonObject();
+        o2.addProperty(Globals.PK_FIELD, "id2");
         page.put("id1", DbEntry.fromJsonObject("userDb", "c1", o1));
         page.put("id2", DbEntry.fromJsonObject("userDb", "c1", o2));
         when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
 
         final List<DbEntry> result;
-        try (final var stream = cache.streamCollection("userDb", "c1")) {
+        try (var stream = cache.streamCollection("userDb", "c1")) {
             result = stream.toList();
         }
 
@@ -1921,12 +2014,12 @@ public class CacheTest {
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
 
-        final var o1 = new JsonObject(); o1.addProperty(Globals.PK_FIELD, "id1");
-        when(fsMock.streamEntries("userDb", "c1"))
-                .thenReturn(Stream.of(DbEntry.fromJsonObject("userDb", "c1", o1)));
+        final var o1 = new JsonObject();
+        o1.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.streamEntries("userDb", "c1")).thenReturn(Stream.of(DbEntry.fromJsonObject("userDb", "c1", o1)));
 
         final List<DbEntry> result;
-        try (final var stream = cache.streamCollection("userDb", "c1")) {
+        try (var stream = cache.streamCollection("userDb", "c1")) {
             result = stream.toList();
         }
 
@@ -1955,12 +2048,13 @@ public class CacheTest {
             pageEntry.setEntryCount(1);
             injectPages(cache, collId, new ArrayList<>(List.of(pageEntry)));
             final var page = new HashMap<String, DbEntry>();
-            final var o1 = new JsonObject(); o1.addProperty(Globals.PK_FIELD, "fromDisk");
+            final var o1 = new JsonObject();
+            o1.addProperty(Globals.PK_FIELD, "fromDisk");
             page.put("fromDisk", DbEntry.fromJsonObject("userDb", "c1", o1));
             when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
 
             final List<DbEntry> result;
-            try (final var stream = cache.streamCollection("userDb", "c1")) {
+            try (var stream = cache.streamCollection("userDb", "c1")) {
                 result = stream.toList();
             }
 

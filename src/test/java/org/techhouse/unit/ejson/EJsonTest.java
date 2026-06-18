@@ -1,5 +1,7 @@
 package org.techhouse.unit.ejson;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -8,8 +10,6 @@ import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class EJsonTest {
     // Serialize and deserialize primitive types (boolean, number, string) correctly
@@ -30,7 +30,7 @@ public class EJsonTest {
         assertEquals(obj.strVal, result.strVal);
     }
 
-    private static class TestPrimitives {
+    private static final class TestPrimitives {
         public boolean boolVal;
         public int numVal;
         public String strVal;
@@ -52,7 +52,7 @@ public class EJsonTest {
         assertNull(result.nullableNumber);
     }
 
-    private static class TestNullable {
+    private static final class TestNullable {
         public String nullableString;
         public Integer nullableNumber;
     }
@@ -100,7 +100,7 @@ public class EJsonTest {
         assertEquals(123, result.getValue());
     }
 
-    private static class TestClass {
+    private static final class TestClass {
         private String name;
         private int value;
 
@@ -122,7 +122,7 @@ public class EJsonTest {
         assertThrows(MalformedJsonException.class, () -> eJson.fromJson(emptyJson, TestClass.class));
     }
 
-    private static class SimpleTestClass {
+    private static final class SimpleTestClass {
         private String name;
         private int value;
 

@@ -1,15 +1,14 @@
 package org.techhouse.unit.data;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
-
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class IndexedDbEntryTest {
     // Convert IndexedDbEntry to DbEntry correctly with matching fields

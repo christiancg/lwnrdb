@@ -9,8 +9,8 @@ public class JoinAggregationStep extends BaseAggregationStep {
     private String remoteField;
     private String asField;
 
-    public JoinAggregationStep(final String joinCollection, final String localField,
-                               final String remoteField, final String asField) {
+    public JoinAggregationStep(final String joinCollection, final String localField, final String remoteField,
+            final String asField) {
         super(AggregationStepType.JOIN);
         this.joinCollection = joinCollection;
         this.localField = localField;

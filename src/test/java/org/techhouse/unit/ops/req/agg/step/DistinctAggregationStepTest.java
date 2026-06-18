@@ -1,11 +1,11 @@
 package org.techhouse.unit.ops.req.agg.step;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 
 public class DistinctAggregationStepTest {
     // Constructor sets AggregationStepType to DISTINCT

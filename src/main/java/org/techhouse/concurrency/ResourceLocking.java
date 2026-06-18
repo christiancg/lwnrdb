@@ -1,11 +1,10 @@
 package org.techhouse.concurrency;
 
-import org.techhouse.cache.Cache;
-import org.techhouse.config.Globals;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 
 /**
  * Per-resource read/write locking. Each collection (keyed {@code db|coll}) and each field index

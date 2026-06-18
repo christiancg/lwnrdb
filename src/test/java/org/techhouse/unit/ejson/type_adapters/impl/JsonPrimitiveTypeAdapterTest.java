@@ -1,5 +1,7 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
@@ -7,8 +9,6 @@ import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.JsonPrimitiveTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonPrimitiveTypeAdapterTest {
 
@@ -21,11 +21,11 @@ public class JsonPrimitiveTypeAdapterTest {
     @Test
     public void test_boolean_primitive_to_json() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
-    
+
         JsonBoolean booleanValue = new JsonBoolean(true);
-    
+
         String result = adapter.toJson(booleanValue);
-    
+
         assertEquals("true", result);
     }
 

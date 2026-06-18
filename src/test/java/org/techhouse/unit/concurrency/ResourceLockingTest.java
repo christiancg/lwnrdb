@@ -1,5 +1,11 @@
 package org.techhouse.unit.concurrency;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
@@ -8,13 +14,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
-import java.util.Map;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import static org.junit.jupiter.api.Assertions.*;
-
 public class ResourceLockingTest {
 
     @AfterEach
@@ -22,8 +21,10 @@ public class ResourceLockingTest {
         TestUtils.releaseAllLocks();
     }
 
-    private Map<String, ReentrantReadWriteLock> locks(ResourceLocking rl) throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {};
+    private Map<String, ReentrantReadWriteLock> locks(ResourceLocking rl)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var type = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {
+        };
         return TestUtils.getPrivateField(rl, "locks", type);
     }
 
@@ -38,6 +39,7 @@ public class ResourceLockingTest {
                 rl.lockRead("db", "coll");
                 acquired.set(true);
             } catch (InterruptedException ignored) {
+                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -60,6 +62,7 @@ public class ResourceLockingTest {
                 acquired.set(true);
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
+                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -81,6 +84,7 @@ public class ResourceLockingTest {
                 release.await();
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
+                // test thread interrupted while awaiting release; nothing to clean up
             }
         });
         reader.start();
@@ -125,7 +129,8 @@ public class ResourceLockingTest {
     public void test_index_write_and_read_locks() throws Exception {
         final var rl = new ResourceLocking();
         rl.lockIndex("db", "coll", "field");
-        final var identifier = "db" + Globals.COLL_IDENTIFIER_SEPARATOR + "coll" + Globals.COLL_IDENTIFIER_SEPARATOR + "field";
+        final var identifier = "db" + Globals.COLL_IDENTIFIER_SEPARATOR + "coll" + Globals.COLL_IDENTIFIER_SEPARATOR
+                + "field";
         final var lock = locks(rl).get(identifier);
         assertNotNull(lock);
         assertTrue(lock.isWriteLockedByCurrentThread());

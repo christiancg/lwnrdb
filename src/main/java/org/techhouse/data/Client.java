@@ -39,9 +39,13 @@ public class Client {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Client client)) return false;
-        return Objects.equals(address, client.address) && Objects.equals(connectionTime, client.connectionTime) && Objects.equals(lastCommandTime, client.lastCommandTime) && Objects.equals(authenticatedUsername, client.authenticatedUsername);
+        if (this == o)
+            return true;
+        if (!(o instanceof Client client))
+            return false;
+        return Objects.equals(address, client.address) && Objects.equals(connectionTime, client.connectionTime)
+                && Objects.equals(lastCommandTime, client.lastCommandTime)
+                && Objects.equals(authenticatedUsername, client.authenticatedUsername);
     }
 
     @Override
@@ -51,6 +55,7 @@ public class Client {
 
     @Override
     public String toString() {
-        return "Client(address=" + address + ", connectionTime=" + connectionTime + ", lastCommandTime=" + lastCommandTime + ", authenticatedUsername=" + authenticatedUsername + ")";
+        return "Client(address=" + address + ", connectionTime=" + connectionTime + ", lastCommandTime="
+                + lastCommandTime + ", authenticatedUsername=" + authenticatedUsername + ")";
     }
 }

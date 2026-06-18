@@ -1,19 +1,18 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.EJson;
-import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.ejson.type_adapters.impl.IterableTypeAdapter;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Arrays;
 import java.util.List;
 import java.util.Spliterator;
 import java.util.Spliterators;
 import java.util.stream.StreamSupport;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.type_adapters.impl.IterableTypeAdapter;
 
 public class IterableTypeAdapterTest {
     @BeforeEach
@@ -63,8 +62,7 @@ public class IterableTypeAdapterTest {
         assertNotNull(result);
 
         List<String> resultList = StreamSupport
-                .stream(Spliterators.spliteratorUnknownSize(result.iterator(), Spliterator.ORDERED), false)
-                .toList();
+                .stream(Spliterators.spliteratorUnknownSize(result.iterator(), Spliterator.ORDERED), false).toList();
 
         assertEquals(2, resultList.size());
         assertEquals("test1", resultList.get(0));

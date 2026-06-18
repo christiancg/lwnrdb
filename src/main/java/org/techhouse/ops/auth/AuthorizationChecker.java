@@ -1,5 +1,6 @@
 package org.techhouse.ops.auth;
 
+import java.util.Set;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
@@ -10,18 +11,11 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
-import java.util.Set;
-
 public final class AuthorizationChecker {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(
-            OperationType.CREATE_USER,
-            OperationType.DELETE_USER,
-            OperationType.CHANGE_PERMISSIONS,
-            OperationType.SET_DATABASE_OWNERS,
-            OperationType.LIST_USERS,
-            OperationType.GET_DATABASE_STATS
-    );
+    private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(OperationType.CREATE_USER,
+            OperationType.DELETE_USER, OperationType.CHANGE_PERMISSIONS, OperationType.SET_DATABASE_OWNERS,
+            OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS);
 
     private AuthorizationChecker() {
     }
@@ -51,9 +45,9 @@ public final class AuthorizationChecker {
         }
 
         if (type == OperationType.CREATE_DATABASE) {
-            return user.getGlobalPermissions().contains(GlobalPermissionType.CREATE_DATABASE) ?
-                    AuthorizationResult.allow() :
-                    AuthorizationResult.deny("action is forbidden, no permissions");
+            return user.getGlobalPermissions().contains(GlobalPermissionType.CREATE_DATABASE)
+                    ? AuthorizationResult.allow()
+                    : AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
         // DROP_DATABASE requires ownership — global permission alone is not sufficient
@@ -97,8 +91,8 @@ public final class AuthorizationChecker {
         return AuthorizationResult.allow();
     }
 
-    private static boolean lacksCollectionAccess(AdminUserEntry user, String dbName,
-                                                 String collName, PermissionLevel requiredLevel) {
+    private static boolean lacksCollectionAccess(AdminUserEntry user, String dbName, String collName,
+            PermissionLevel requiredLevel) {
         if (collName != null && !collName.isBlank()) {
             final var collPerm = user.getCollectionPermissions().get(dbName + "|" + collName);
             if (collPerm != null && collPerm.covers(requiredLevel)) {
@@ -112,7 +106,8 @@ public final class AuthorizationChecker {
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
             case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS -> PermissionLevel.READ;
-            case SAVE, BULK_SAVE, DELETE, CREATE_COLLECTION, DROP_COLLECTION, CREATE_INDEX, DROP_INDEX -> PermissionLevel.READ_WRITE;
+            case SAVE, BULK_SAVE, DELETE, CREATE_COLLECTION, DROP_COLLECTION, CREATE_INDEX, DROP_INDEX ->
+                PermissionLevel.READ_WRITE;
             default -> PermissionLevel.READ_WRITE;
         };
     }

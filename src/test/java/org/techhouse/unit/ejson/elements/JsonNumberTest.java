@@ -1,10 +1,10 @@
 package org.techhouse.unit.ejson.elements;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.ejson.elements.JsonNumber;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonNumber;
 
 public class JsonNumberTest {
     // Constructor with Number value creates JsonNumber with correct value and string length
@@ -20,7 +20,7 @@ public class JsonNumberTest {
     // Constructor handles null Number input
     @Test
     public void test_number_constructor_handles_null() {
-        JsonNumber jsonNumber = new JsonNumber((Number)null);
+        JsonNumber jsonNumber = new JsonNumber((Number) null);
 
         assertNull(jsonNumber.getValue());
         assertEquals(0, jsonNumber.getStrLength());
@@ -59,7 +59,7 @@ public class JsonNumberTest {
     // Constructor handles null input by not modifying default values
     @Test
     public void test_constructor_handles_null_input() {
-        JsonNumber jsonNumber = new JsonNumber((Number)null);
+        JsonNumber jsonNumber = new JsonNumber((Number) null);
 
         assertNull(jsonNumber.getValue());
         assertEquals(0, jsonNumber.getStrLength());
@@ -78,7 +78,7 @@ public class JsonNumberTest {
     // Null input value results in null fields
     @Test
     public void test_null_input_results_in_null_value() {
-        JsonNumber jsonNumber = new JsonNumber((String)null);
+        JsonNumber jsonNumber = new JsonNumber((String) null);
 
         assertNull(jsonNumber.getValue());
         assertEquals(0, jsonNumber.getStrLength());

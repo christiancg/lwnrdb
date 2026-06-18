@@ -15,8 +15,10 @@ public abstract class Event {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof Event event)) return false;
+        if (this == o)
+            return true;
+        if (!(o instanceof Event event))
+            return false;
         return type == event.type;
     }
 

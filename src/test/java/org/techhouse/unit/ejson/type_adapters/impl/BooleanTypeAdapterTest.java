@@ -1,11 +1,11 @@
 package org.techhouse.unit.ejson.type_adapters.impl;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.BooleanTypeAdapter;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class BooleanTypeAdapterTest {
     // Converting true boolean value to JSON string returns "true"
@@ -22,7 +22,7 @@ public class BooleanTypeAdapterTest {
     @Test
     public void test_null_value_converts_to_json_string() {
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
-    
+
         assertThrows(NullPointerException.class, () -> adapter.toJson(null));
     }
 

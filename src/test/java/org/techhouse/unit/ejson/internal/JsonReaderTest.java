@@ -1,13 +1,12 @@
 package org.techhouse.unit.ejson.internal;
 
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 import org.techhouse.ejson.internal.JsonReader;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsonReaderTest {
     static class TestClass {
@@ -22,6 +21,7 @@ public class JsonReaderTest {
             return value;
         }
     }
+
     static class TestPerson {
         private String name;
         private int age;
@@ -54,12 +54,10 @@ public class JsonReaderTest {
     public void test_empty_input_string_throws_exception() {
         JsonReader reader = new JsonReader();
         String json = "";
-    
-        MalformedJsonException exception = assertThrows(
-            MalformedJsonException.class,
-            () -> reader.fromJson(json, TestPerson.class)
-        );
-    
+
+        MalformedJsonException exception = assertThrows(MalformedJsonException.class,
+                () -> reader.fromJson(json, TestPerson.class));
+
         assertEquals("Empty JSON array", exception.getMessage());
     }
 

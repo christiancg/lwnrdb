@@ -1,10 +1,10 @@
 package org.techhouse.unit.cache;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.CacheableResource;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class CacheableResourceTest {
 

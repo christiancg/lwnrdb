@@ -1,13 +1,12 @@
 package org.techhouse.unit.bckg_ops.events;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EntityEvent;
-
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class EntityEventTest {
     // Creating an EntityEvent with valid EventType, dbName, collName, and DbEntry
@@ -18,9 +17,9 @@ public class EntityEventTest {
         String collName = "testCollection";
         JsonObject jsonObject = new JsonObject();
         DbEntry dbEntry = DbEntry.fromJsonObject(dbName, collName, jsonObject);
-    
+
         EntityEvent entityEvent = new EntityEvent(type, dbName, collName, dbEntry);
-    
+
         assertEquals(type, entityEvent.getType());
         assertEquals(dbName, entityEvent.getDbName());
         assertEquals(collName, entityEvent.getCollName());

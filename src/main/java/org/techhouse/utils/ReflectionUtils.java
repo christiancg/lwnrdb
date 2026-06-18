@@ -1,8 +1,7 @@
 package org.techhouse.utils;
 
-import org.techhouse.ejson.custom_types.CustomTypeFactory;
-
 import java.lang.reflect.ParameterizedType;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 
 public class ReflectionUtils {
 
@@ -15,9 +14,9 @@ public class ReflectionUtils {
                 if (type instanceof Class) {
                     return (Class<T>) type;
                 } else {
-                    return (Class<T>) ((ParameterizedType)type).getRawType();
+                    return (Class<T>) ((ParameterizedType) type).getRawType();
                 }
-            }     // Check for raw TypeToken as superclass
+            } // Check for raw TypeToken as superclass
             else if (superclass == TypeToken.class) {
                 throw new IllegalStateException(
                         "TypeToken must be created with a type argument: new TypeToken<...>() {}; When using code"
@@ -33,7 +32,7 @@ public class ReflectionUtils {
             case "String" -> String.class;
             case "Number" -> Number.class;
             case "Boolean" -> Boolean.class;
-            default ->  {
+            default -> {
                 final var customTypes = CustomTypeFactory.getCustomTypes();
                 final var customType = customTypes.get(className);
                 if (customType != null) {

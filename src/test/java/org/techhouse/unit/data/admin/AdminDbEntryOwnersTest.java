@@ -1,12 +1,11 @@
 package org.techhouse.unit.data.admin;
 
-import org.junit.jupiter.api.Test;
-import org.techhouse.data.admin.AdminDbEntry;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.Test;
+import org.techhouse.data.admin.AdminDbEntry;
 
 public class AdminDbEntryOwnersTest {
     @Test

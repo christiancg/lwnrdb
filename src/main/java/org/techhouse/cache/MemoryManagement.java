@@ -1,5 +1,13 @@
 package org.techhouse.cache;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.concurrency.ResourceLocking;
@@ -9,15 +17,6 @@ import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MemoryManagement {
     static final long SWEEP_INTERVAL_SECONDS = 5L;
@@ -35,9 +34,8 @@ public class MemoryManagement {
     private ScheduledExecutorService scheduler;
 
     public static String buildKey(AccessKind kind, String dbName, String collName, String indexKey) {
-        return kind.name() + Globals.COLL_IDENTIFIER_SEPARATOR + dbName +
-                Globals.COLL_IDENTIFIER_SEPARATOR + collName +
-                Globals.COLL_IDENTIFIER_SEPARATOR + (indexKey == null ? "" : indexKey);
+        return kind.name() + Globals.COLL_IDENTIFIER_SEPARATOR + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                + Globals.COLL_IDENTIFIER_SEPARATOR + (indexKey == null ? "" : indexKey);
     }
 
     public void recordAccess(AccessKind kind, String dbName, String collName, String indexKey) {
@@ -86,26 +84,29 @@ public class MemoryManagement {
             return;
         }
         try {
-            try (final var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME)) {
+            try (var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME)) {
                 pagesStream.forEach(map -> {
                     for (var e : map.values()) {
                         try {
                             final var data = e.getData();
                             data.addProperty(Globals.PK_FIELD, e.get_id());
                             final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
-                            final var counter = new UsageCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
-                                    usage.getIndexKey(), usage.getAccessCount(), usage.getLastAccessMillis());
-                            counters.put(buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()), counter);
+                            final var counter = new UsageCounter(usage.getKind(), usage.getDbName(),
+                                    usage.getCollName(), usage.getIndexKey(), usage.getAccessCount(),
+                                    usage.getLastAccessMillis());
+                            counters.put(
+                                    buildKey(counter.kind(), counter.dbName(), counter.collName(), counter.indexKey()),
+                                    counter);
                         } catch (Exception inner) {
-                            logger.warning("Skipping malformed collection_usage entry '" + e.get_id() + "': " +
-                                    inner.getMessage());
+                            logger.warning("Skipping malformed collection_usage entry '" + e.get_id() + "': "
+                                    + inner.getMessage());
                         }
                     }
                 });
             }
         } catch (Exception e) {
-            logger.warning("Failed to load collection usage profile, continuing with empty counters: " +
-                    e.getMessage());
+            logger.warning(
+                    "Failed to load collection usage profile, continuing with empty counters: " + e.getMessage());
         }
     }
 
@@ -118,10 +119,10 @@ public class MemoryManagement {
             t.setDaemon(true);
             return t;
         });
-        scheduler.scheduleAtFixedRate(this::runEvictionSweepSafely,
-                SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS, TimeUnit.SECONDS);
-        scheduler.scheduleAtFixedRate(this::submitCleanupTask,
-                USAGE_CLEANUP_INTERVAL_SECONDS, USAGE_CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::runEvictionSweepSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
+                TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::submitCleanupTask, USAGE_CLEANUP_INTERVAL_SECONDS,
+                USAGE_CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     public void stopSweepThread() {
@@ -193,10 +194,8 @@ public class MemoryManagement {
             return;
         }
         final var ranked = new ArrayList<>(resources);
-        ranked.sort(Comparator
-                .comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
-                .thenComparingLong(this::counterAccessCount)
-                .thenComparingLong(this::counterLastAccess));
+        ranked.sort(Comparator.comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
+                .thenComparingLong(this::counterAccessCount).thenComparingLong(this::counterLastAccess));
         for (var resource : ranked) {
             if (userCacheBytes() <= targetBytes) {
                 break;
@@ -207,9 +206,11 @@ public class MemoryManagement {
             try {
                 switch (resource.kind()) {
                     case PK_INDEX -> cache.evictPkIndex(resource.dbName(), resource.collName());
-                    case FIELD_INDEX -> cache.evictFieldIndex(resource.dbName(), resource.collName(),
-                            resource.indexKey());
+                    case FIELD_INDEX ->
+                        cache.evictFieldIndex(resource.dbName(), resource.collName(), resource.indexKey());
                     case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
+                    default -> {
+                    }
                 }
             } finally {
                 locks.releaseWrite(resource.dbName(), resource.collName());

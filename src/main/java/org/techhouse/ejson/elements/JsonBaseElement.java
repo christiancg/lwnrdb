@@ -2,14 +2,7 @@ package org.techhouse.ejson.elements;
 
 public abstract class JsonBaseElement {
     public enum JsonType {
-        ARRAY,
-        OBJECT,
-        BOOLEAN,
-        NULL,
-        STRING,
-        NUMBER,
-        SYNTAX,
-        CUSTOM
+        ARRAY, OBJECT, BOOLEAN, NULL, STRING, NUMBER, SYNTAX, CUSTOM
     }
 
     public JsonType getJsonType() {

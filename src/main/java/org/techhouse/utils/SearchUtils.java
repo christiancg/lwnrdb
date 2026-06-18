@@ -1,18 +1,18 @@
 package org.techhouse.utils;
 
-import org.techhouse.data.FieldIndexEntry;
-import org.techhouse.ejson.elements.JsonCustom;
-import org.techhouse.ops.req.agg.FieldOperatorType;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ops.req.agg.FieldOperatorType;
 
 public class SearchUtils {
-    public static <T> Set<String> findingByOperator(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType, T value) {
+    public static <T> Set<String> findingByOperator(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,
+            T value) {
         return switch (operatorType) {
             case EQUALS -> findingEquals(entries, value);
             case NOT_EQUALS -> findingNotEquals(entries, value);
@@ -42,20 +42,21 @@ public class SearchUtils {
         } else {
             resultStream = entries.stream();
         }
-        return resultStream.flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream())
-                .collect(Collectors.toSet());
+        return resultStream.flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream()).collect(Collectors.toSet());
     }
 
-    private static <T, K> List<FieldIndexEntry<K>> castToJsonCustomList(List<FieldIndexEntry<T>> entries, Class<K> jsonCustomClass) {
-        return entries.stream().map(entry ->
-                new FieldIndexEntry<>(entry.getDatabaseName(), entry.getCollectionName(),
-                        jsonCustomClass.cast(entry.getValue()), entry.getIds())).toList();
+    private static <T, K> List<FieldIndexEntry<K>> castToJsonCustomList(List<FieldIndexEntry<T>> entries,
+            Class<K> jsonCustomClass) {
+        return entries.stream().map(entry -> new FieldIndexEntry<>(entry.getDatabaseName(), entry.getCollectionName(),
+                jsonCustomClass.cast(entry.getValue()), entry.getIds())).toList();
     }
 
     private static <T> List<FieldIndexEntry<Double>> castToDoubleList(List<FieldIndexEntry<T>> entries) {
-        return entries.stream().map(doubleFieldIndexEntry ->
-                new FieldIndexEntry<>(doubleFieldIndexEntry.getDatabaseName(), doubleFieldIndexEntry.getCollectionName(),
-                        ((Number) doubleFieldIndexEntry.getValue()).doubleValue(), doubleFieldIndexEntry.getIds())).toList();
+        return entries.stream()
+                .map(doubleFieldIndexEntry -> new FieldIndexEntry<>(doubleFieldIndexEntry.getDatabaseName(),
+                        doubleFieldIndexEntry.getCollectionName(),
+                        ((Number) doubleFieldIndexEntry.getValue()).doubleValue(), doubleFieldIndexEntry.getIds()))
+                .toList();
     }
 
     private static <T> Set<String> findingGreaterThan(List<FieldIndexEntry<T>> entries, T value) {
@@ -128,45 +129,42 @@ public class SearchUtils {
 
     private static <T> Set<String> toIdSet(List<FieldIndexEntry<T>> entries, int start, int foundIndex) {
         return entries.subList(start, foundIndex).stream()
-                .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream())
-                .collect(Collectors.toSet());
+                .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream()).collect(Collectors.toSet());
     }
 
-    public static <T> Set<String> findingInNotIn(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType, List<T> value) {
+    public static <T> Set<String> findingInNotIn(List<FieldIndexEntry<T>> entries, FieldOperatorType operatorType,
+            List<T> value) {
         return switch (operatorType) {
-            case EQUALS, GREATER_THAN, GREATER_THAN_EQUALS, NOT_EQUALS, SMALLER_THAN,
-                    SMALLER_THAN_EQUALS, CONTAINS -> throw new UnsupportedOperationException();
+            case EQUALS, GREATER_THAN, GREATER_THAN_EQUALS, NOT_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, CONTAINS ->
+                throw new UnsupportedOperationException();
             case IN -> findingIn(entries, value);
             case NOT_IN -> findingNotIn(entries, value);
         };
     }
 
     private static <T> Set<String> findingIn(List<FieldIndexEntry<T>> entries, List<T> value) {
-        return entries.stream()
-                .filter(tFieldIndexEntry -> value.contains(tFieldIndexEntry.getValue()))
-                .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream())
-                .collect(Collectors.toSet());
+        return entries.stream().filter(tFieldIndexEntry -> value.contains(tFieldIndexEntry.getValue()))
+                .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream()).collect(Collectors.toSet());
     }
 
     private static <T> Set<String> findingNotIn(List<FieldIndexEntry<T>> entries, List<T> value) {
-        return entries.stream()
-                .filter(tFieldIndexEntry -> !value.contains(tFieldIndexEntry.getValue()))
-                .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream())
-                .collect(Collectors.toSet());
+        return entries.stream().filter(tFieldIndexEntry -> !value.contains(tFieldIndexEntry.getValue()))
+                .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream()).collect(Collectors.toSet());
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {
         if (value instanceof String) {
-            return entries.stream().filter(tFieldIndexEntry -> ((String) tFieldIndexEntry.getValue()).contains((String) value))
-                    .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream())
-                    .collect(Collectors.toSet());
+            return entries.stream()
+                    .filter(tFieldIndexEntry -> ((String) tFieldIndexEntry.getValue()).contains((String) value))
+                    .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream()).collect(Collectors.toSet());
         }
         return Set.of();
     }
 
     private static <T extends JsonCustom<K>, K> int internalGreaterSmallerEquals(List<FieldIndexEntry<T>> entries,
-                                                        JsonCustom<K> value, GreaterSmallerEqualsType type) {
-        int start = 0, end = entries.size() - 1;
+            JsonCustom<K> value, GreaterSmallerEqualsType type) {
+        int start = 0;
+        int end = entries.size() - 1;
         // Minimum size of the array should be 1
         if (end == 0) {
             return -1;
@@ -198,14 +196,16 @@ public class SearchUtils {
                     return start;
                 }
             }
+            default -> {
+            }
         }
         int ans = -1;
         if (type == GreaterSmallerEqualsType.SMALLER_THAN || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS) {
             while (start <= end) {
                 int mid = (start + end) / 2; // Move to the left side if the target is smaller
                 final var midValue = entries.get(mid).getValue();
-                if (type == GreaterSmallerEqualsType.SMALLER_THAN && midValue.compare(value.getCustomValue()) >= 0 ||
-                        midValue.compare(value.getCustomValue()) > 0) {
+                if (type == GreaterSmallerEqualsType.SMALLER_THAN && midValue.compare(value.getCustomValue()) >= 0
+                        || midValue.compare(value.getCustomValue()) > 0) {
                     end = mid - 1;
                 } else { // Move right side
                     ans = mid;
@@ -217,8 +217,8 @@ public class SearchUtils {
                 int mid = (start + end) / 2;
                 final var midValue = entries.get(mid).getValue();
                 // Move to right side if target is greater.
-                if (type == GreaterSmallerEqualsType.GREATER_THAN && midValue.compare(value.getCustomValue()) <= 0 ||
-                        midValue.compare(value.getCustomValue()) < 0) {
+                if (type == GreaterSmallerEqualsType.GREATER_THAN && midValue.compare(value.getCustomValue()) <= 0
+                        || midValue.compare(value.getCustomValue()) < 0) {
                     start = mid + 1;
                 } else { // Move left side.
                     ans = mid;
@@ -229,8 +229,10 @@ public class SearchUtils {
         return ans;
     }
 
-    private static int internalGreaterSmallerEquals(List<FieldIndexEntry<Double>> entries, Double value, GreaterSmallerEqualsType type) {
-        int start = 0, end = entries.size() - 1;
+    private static int internalGreaterSmallerEquals(List<FieldIndexEntry<Double>> entries, Double value,
+            GreaterSmallerEqualsType type) {
+        int start = 0;
+        int end = entries.size() - 1;
         // Minimum size of the array should be 1
         if (end == 0) {
             return -1;
@@ -262,6 +264,8 @@ public class SearchUtils {
                     return start;
                 }
             }
+            default -> {
+            }
         }
         int ans = -1;
         if (type == GreaterSmallerEqualsType.SMALLER_THAN || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS) {
@@ -292,9 +296,6 @@ public class SearchUtils {
     }
 
     private enum GreaterSmallerEqualsType {
-        GREATER_THAN,
-        GREATER_THAN_EQUALS,
-        SMALLER_THAN,
-        SMALLER_THAN_EQUALS,
+        GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS,
     }
 }

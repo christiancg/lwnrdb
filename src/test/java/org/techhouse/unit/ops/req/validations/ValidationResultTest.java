@@ -1,9 +1,9 @@
 package org.techhouse.unit.ops.req.validations;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ops.req.validations.ValidationResult;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class ValidationResultTest {
 
