@@ -3,12 +3,14 @@ package org.techhouse;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
+import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.SocketServer;
+import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PasswordHasher;
@@ -51,8 +53,18 @@ public class Main {
         memoryManagement.startSweepThread();
         warnIfXmxExceedsMaxMemory();
         warnIfDefaultAdminPassword();
-        final var server = new SocketServer(port);
+        // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
+        // not lazily on the first client connection.
+        final var sslServerSocketFactory = createTlsFactory();
+        final var server = new SocketServer(port, sslServerSocketFactory);
         server.serve();
+    }
+
+    static SSLServerSocketFactory createTlsFactory() {
+        if (!config.isTlsEnabled()) {
+            return null;
+        }
+        return TlsContextFactory.createServerSocketFactory(config);
     }
 
     static void warnIfDefaultAdminPassword() {

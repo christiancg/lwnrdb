@@ -59,12 +59,33 @@ public class ConfigReaderTest {
         expectedConfig.put("defaultAdminUsername", "admin");
         expectedConfig.put("defaultAdminPassword", "administrator");
         expectedConfig.put("maxMemory", "512mb");
+        expectedConfig.put("tlsEnabled", "false");
+        expectedConfig.put("tlsKeystorePath", "certs/lwnrdb.p12");
+        expectedConfig.put("tlsKeystorePassword", "change_it");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();
 
         // Assert
         assertEquals(expectedConfig, actualConfig);
+    }
+
+    // TLS keys missing from lwnrdb.cfg fall back to the bundled defaults
+    @Test
+    public void test_tls_keys_fall_back_to_defaults_when_missing() throws IOException {
+        String configContent = "port=8989\nmaxConnections=100\n";
+        File configFile = new File(
+                Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
+        try {
+            Files.writeString(configFile.toPath(), configContent);
+            var config = ConfigReader.loadConfiguration();
+            assertEquals("false", config.get("tlsEnabled"));
+            assertEquals("certs/lwnrdb.p12", config.get("tlsKeystorePath"));
+            assertEquals("change_it", config.get("tlsKeystorePassword"));
+        } finally {
+            final var deleted = configFile.delete();
+            assertTrue(deleted);
+        }
     }
 
     // Handles empty configuration files gracefully

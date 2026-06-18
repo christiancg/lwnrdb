@@ -47,3 +47,8 @@ db/
 
 ### Test logs ###
 test_log/
+
+### TLS keystores (auto-generated, contain private keys — never commit) ###
+certs/
+*.p12
+*.jks

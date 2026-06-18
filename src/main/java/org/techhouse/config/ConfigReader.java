@@ -18,7 +18,8 @@ public final class ConfigReader {
     }
     private static final Set<String> configKeys = Set.of("port", "maxConnections", "filePath",
             "backgroundProcessingThreads", "logPath", "maxLogFiles", "maxPageSize", "maxEntrySize",
-            "defaultAdminUsername", "defaultAdminPassword", "maxMemory");
+            "defaultAdminUsername", "defaultAdminPassword", "maxMemory", "tlsEnabled", "tlsKeystorePath",
+            "tlsKeystorePassword");
     private static final String COMMENT_PREFIX = "#";
     private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
     private static final Logger logger = Logger.logFor(ConfigReader.class);
