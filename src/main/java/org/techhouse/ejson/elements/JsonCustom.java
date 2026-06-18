@@ -8,7 +8,7 @@ public abstract class JsonCustom<T> extends JsonString {
 
     public JsonCustom(T customValue) {
         this.customValue = customValue;
-        this.value = getValue();
+        this.value = "#" + getCustomTypeName() + "(" + customValue + ")";
     }
 
     public JsonCustom(String strValue) {

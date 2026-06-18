@@ -84,7 +84,6 @@ public final class AggregationOperationHelper {
             Stream<JsonObject> resultStream, String dbName, String collName) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var groupByStep = (GroupByAggregationStep) baseGroupByStep;
-        // TODO: use indexes
         return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, groupByStep.getFieldName()))
                 .collect(Collectors
                         .groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, groupByStep.getFieldName())))
@@ -111,9 +110,7 @@ public final class AggregationOperationHelper {
         final var as = joinStep.getAsField();
         // Blocking step (documented exception): JOIN needs the full remote collection
         // grouped in memory, so it loads the whole collection rather than streaming.
-        // TODO: find a better way to do this, because it might cause an OOM exception
         final var joinCollectionMap = cache.getWholeCollection(dbName, joinCollectionName);
-        // TODO: use indexes
         final var joinedCollection = joinCollectionMap.values().stream().map(DbEntry::getData)
                 .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, joinCollectionRemoteField))
                 .collect(Collectors.groupingBy(
@@ -163,7 +160,6 @@ public final class AggregationOperationHelper {
                 return result;
             }).distinct();
         } else {
-            // TODO: use indexes if fieldName has an index
             return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
                 final var json = new JsonObject();
                 json.add(fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
@@ -190,7 +186,6 @@ public final class AggregationOperationHelper {
             String dbName, String collName) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var sortStep = (SortAggregationStep) baseSortStep;
-        // TODO: use indexes
         if (sortStep.getAscending()) {
             return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionAscending(o1, o2, sortStep.getFieldName()));
         } else {

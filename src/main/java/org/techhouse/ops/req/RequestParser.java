@@ -142,8 +142,14 @@ public final class RequestParser {
             case AVG, SUM, SUBS, MAX, MIN, MULTIPLY, DIVIDE, POW, ROOT, CONCAT ->
                 new ArrayParamMidOperator(midOperationType, obj.get("operands").asJsonArray());
             case ABS, SIZE -> new OneParamMidOperator(midOperationType, obj.get("operand").asJsonString().getValue());
-            case CAST -> new CastMidOperator(obj.get("fieldName").asJsonString().getValue(),
-                    eJson.fromJson(obj.get("toType"), CastToType.class));
+            case CAST -> {
+                final var toType = eJson.fromJson(obj.get("toType"), CastToType.class);
+                if (toType == CastToType.JSON_CUSTOM) {
+                    yield new CastMidOperator(obj.get("fieldName").asJsonString().getValue(),
+                            obj.get("customTypeName").asJsonString().getValue());
+                }
+                yield new CastMidOperator(obj.get("fieldName").asJsonString().getValue(), toType);
+            }
         };
     }
 
