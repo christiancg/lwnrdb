@@ -8,7 +8,7 @@
         Curated PMD ruleset for LWNRDB. Focuses on real bug patterns
         (error-prone), performance, multithreading correctness, and a handful
         of best practices. Formatting and naming are owned by Spotless and
-        Checkstyle, so PMD's codestyle category is not used; noisy/opinionated
+        Checkstyle, so PMD's code style category is not used; noisy/opinionated
         rules are excluded individually.
     </description>
 
