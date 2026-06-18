@@ -130,6 +130,7 @@ public class ConfigurationTest {
         map.put("defaultAdminUsername", "admin");
         map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512mb");
+        map.put("tlsEnabled", "false");
         return map;
     }
 
@@ -218,6 +219,32 @@ public class ConfigurationTest {
             if (!newConfigFile.delete()) {
                 fail("Failed deleting temp test file");
             }
+        }
+    }
+
+    @Test
+    public void test_loads_tls_values() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "port", 0);
+        final var configMap = fullValidConfig();
+        configMap.put("tlsEnabled", "true");
+        configMap.put("tlsKeystorePath", "certs/server.p12");
+        configMap.put("tlsKeystorePassword", "topsecret");
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(configMap);
+            final var config = Configuration.getInstance();
+            assertTrue(config.isTlsEnabled());
+            assertEquals("certs/server.p12", config.getTlsKeystorePath());
+            assertEquals("topsecret", config.getTlsKeystorePassword());
+        }
+    }
+
+    @Test
+    public void test_tls_disabled_by_default() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "port", 0);
+        try (MockedStatic<ConfigReader> mockConfigReader = mockStatic(ConfigReader.class)) {
+            mockConfigReader.when(ConfigReader::loadConfiguration).thenReturn(fullValidConfig());
+            final var config = Configuration.getInstance();
+            assertFalse(config.isTlsEnabled());
         }
     }
 

@@ -55,6 +55,38 @@ public class MainTest {
         }
     }
 
+    // Main starts a TLS server and generates a self-signed keystore when tlsEnabled is true
+    @Test
+    public void test_init_with_tls_enabled() throws NoSuchFieldException, IllegalAccessException, InterruptedException {
+        Configuration config = Configuration.getInstance();
+        TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
+        TestUtils.setPrivateField(config, "logPath", TestGlobals.LOG_PATH);
+        TestUtils.setPrivateField(config, "port", 9092);
+        TestUtils.setPrivateField(config, "tlsEnabled", true);
+        TestUtils.setPrivateField(config, "tlsKeystorePath", TestGlobals.PATH + "/lwnrdb.p12");
+        TestUtils.setPrivateField(config, "tlsKeystorePassword", "change_it");
+        String[] args = new String[]{};
+        Thread thread = null;
+        try {
+            thread = new Thread(() -> {
+                try {
+                    Main.main(args);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            });
+            thread.start();
+            Thread.sleep(1000);
+            assertTrue(thread.isAlive());
+            assertTrue(new File(TestGlobals.PATH + "/lwnrdb.p12").exists());
+        } finally {
+            if (thread != null) {
+                thread.interrupt();
+            }
+            TestUtils.setPrivateField(config, "tlsEnabled", false);
+        }
+    }
+
     // Invalid port number provided as command line argument
     @Test
     public void test_invalid_port_throws_exception() {

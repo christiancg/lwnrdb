@@ -26,6 +26,7 @@ public class ConfigurationValidatorTest {
         map.put("defaultAdminUsername", "admin");
         map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512Mb");
+        map.put("tlsEnabled", "false");
         return map;
     }
 
@@ -141,6 +142,71 @@ public class ConfigurationValidatorTest {
         config.put("maxLogFiles", "0");
         final var errors = ConfigurationValidator.validate(config);
         assertTrue(errors.size() >= 3);
+    }
+
+    @Test
+    public void test_tls_disabled_ignores_keystore_keys(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "false");
+        config.remove("tlsKeystorePath");
+        config.remove("tlsKeystorePassword");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_tls_enabled_valid_keystore(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "true");
+        config.put("tlsKeystorePath", tempDir.resolve("certs").resolve("lwnrdb.p12").toString());
+        config.put("tlsKeystorePassword", "change_it");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_tls_enabled_requires_non_blank_path(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "true");
+        config.put("tlsKeystorePath", "  ");
+        config.put("tlsKeystorePassword", "change_it");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("tlsKeystorePath")));
+    }
+
+    @Test
+    public void test_tls_enabled_requires_non_blank_password(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "true");
+        config.put("tlsKeystorePath", tempDir.resolve("lwnrdb.p12").toString());
+        config.put("tlsKeystorePassword", "  ");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("tlsKeystorePassword")));
+    }
+
+    @Test
+    public void test_tls_enabled_uncreatable_parent_dir_fails(@TempDir Path tempDir) throws IOException {
+        final var regularFile = Files.createFile(tempDir.resolve("not-a-dir"));
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "true");
+        config.put("tlsKeystorePath", regularFile.resolve("sub").resolve("lwnrdb.p12").toString());
+        config.put("tlsKeystorePassword", "change_it");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("tlsKeystorePath")));
+    }
+
+    @Test
+    public void test_tls_invalid_boolean_fails(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("tlsEnabled", "maybe");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("tlsEnabled")));
+    }
+
+    @Test
+    public void test_tls_missing_enabled_key_fails(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.remove("tlsEnabled");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("tlsEnabled")));
     }
 
     private void assertHasError(Path tempDir, String key, String value, String expectedFragment) {

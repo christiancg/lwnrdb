@@ -44,6 +44,11 @@ jobs:
           STREAM_TEST_DOCS: "2000"
           STREAM_TEST_PAYLOAD_BYTES: "512"
         run: python3 test_utils/test_streaming_reads.py
+      - name: Run TLS integration tests
+        # Self-contained: starts its own TLS-enabled server on a dedicated port
+        # (9443) and working directory, then stops it — independent of the
+        # plaintext server on 8989 used by the other suites.
+        run: python3 test_utils/test_tls.py
       - name: Run cache warmup benchmark
         # The benchmark restarts the server itself to measure cold-cache latency,
         # so any tracked server.pid is stale after this step.

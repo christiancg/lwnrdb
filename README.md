@@ -55,7 +55,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxMemory` configuration)
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
-- [ ] Secure connections with TLS or something similar
+- [x] Secure connections with TLS or something similar
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
 - [x] Check that in join aggregations, the user should have permissions to the collection that is being joined
@@ -393,6 +393,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminUsername` | Non-blank string |
 | `defaultAdminPassword` | Non-blank string, at least 8 characters |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
+| `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
+| `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
+| `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true` |
 
 ```
 # the port the server listens on
@@ -406,7 +409,33 @@ maxEntrySize=1Mb
 defaultAdminUsername=admin
 defaultAdminPassword=administrator
 maxMemory=512Mb
+# TLS: when enabled, plaintext clients are rejected at the handshake
+tlsEnabled=false
+tlsKeystorePath=certs/lwnrdb.p12
+tlsKeystorePassword=change_it
 ```
+
+### TLS / secure connections
+
+When `tlsEnabled=true`, the server listens with a JSSE `SSLServerSocket`, so the
+same line-delimited JSON wire protocol runs over an encrypted TLS channel: every
+request is decrypted and every response is encrypted at the transport layer — the
+message format is unchanged. A client that connects without TLS fails the TLS
+handshake and its connection is dropped; it never reaches an operation.
+
+The server loads its private key and certificate from a **PKCS12 keystore** at
+`tlsKeystorePath`, unlocked with `tlsKeystorePassword`. For production, point
+`tlsKeystorePath` at a keystore containing a CA-issued certificate.
+
+If `tlsEnabled=true` but no keystore exists at `tlsKeystorePath`, the server
+**generates a self-signed certificate** in-process (using only the JDK — no
+external libraries or `keytool` subprocess), writes it to that path so it stays
+stable across restarts, and logs a prominent `SECURITY WARNING` at startup. The
+self-signed certificate is suitable for development only; clients will not trust
+it. Replace it with a proper keystore before running in production.
+
+When `tlsEnabled=false` (the default) the server listens in plaintext exactly as
+before.
 
 ### Memory management
 
