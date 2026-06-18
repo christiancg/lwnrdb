@@ -185,8 +185,8 @@ def test_bad_credentials(s, f):
 def test_no_db_permission(s, f):
     section("User without CREATE_DATABASE / DROP_DATABASE — must return FORBIDDEN")
 
-    check("AUTHENTICATE as 'noperms'",
-          authenticate(s, f, "noperms", "noperms1234"),
+    check("AUTHENTICATE as 'no_perms'",
+          authenticate(s, f, "no_perms", "no_perms1234"),
           "OK")
 
     check("CREATE_DATABASE without global permission",
@@ -201,8 +201,8 @@ def test_no_db_permission(s, f):
 def test_collection_read_allowed(s, f):
     section("User with db READ permission — reads must succeed, writes must fail")
 
-    check("AUTHENTICATE as 'dbreader'",
-          authenticate(s, f, "dbreader", "dbreader1234"),
+    check("AUTHENTICATE as 'db_reader'",
+          authenticate(s, f, "db_reader", "db_reader1234"),
           "OK")
 
     check("FIND_BY_ID on allowed collection (OK)",
@@ -229,8 +229,8 @@ def test_collection_read_allowed(s, f):
 def test_collection_permission_boundary(s, f):
     section("User with READ on one collection, no access to another — collection boundary")
 
-    check("AUTHENTICATE as 'collreader'",
-          authenticate(s, f, "collreader", "collreader1234"),
+    check("AUTHENTICATE as 'coll_reader'",
+          authenticate(s, f, "coll_reader", "coll_reader1234"),
           "OK")
 
     check("FIND_BY_ID on permitted collection (OK)",
@@ -311,38 +311,38 @@ def test_user_management(s, f):
           authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
           "OK")
 
-    check("CREATE_USER 'tmpuser'",
-          create_user(s, f, "tmpuser", "tmpuser1234", admin=False,
+    check("CREATE_USER 'tmp_user'",
+          create_user(s, f, "tmp_user", "tmp_user1234", admin=False,
                       db_perms={"auth_db": "READ"}),
           "OK")
 
     check("CREATE_USER duplicate returns ERROR",
-          create_user(s, f, "tmpuser", "tmpuser1234"),
+          create_user(s, f, "tmp_user", "tmp_user1234"),
           "ERROR")
 
-    check("CHANGE_PERMISSIONS — grant WRITE to 'tmpuser'",
-          change_permissions(s, f, "tmpuser", db_perms={"auth_db": "READ_WRITE"}),
+    check("CHANGE_PERMISSIONS — grant WRITE to 'tmp_user'",
+          change_permissions(s, f, "tmp_user", db_perms={"auth_db": "READ_WRITE"}),
           "OK")
 
-    check("CHANGE_PERMISSIONS — promote 'tmpuser' to admin",
-          change_permissions(s, f, "tmpuser", admin=True),
+    check("CHANGE_PERMISSIONS — promote 'tmp_user' to admin",
+          change_permissions(s, f, "tmp_user", admin=True),
           "OK")
 
-    check("CHANGE_PERMISSIONS — demote 'tmpuser' back",
-          change_permissions(s, f, "tmpuser", admin=False, db_perms={"auth_db": "READ"}),
+    check("CHANGE_PERMISSIONS — demote 'tmp_user' back",
+          change_permissions(s, f, "tmp_user", admin=False, db_perms={"auth_db": "READ"}),
           "OK")
 
-    check("DELETE_USER 'tmpuser'",
-          delete_user(s, f, "tmpuser"),
+    check("DELETE_USER 'tmp_user'",
+          delete_user(s, f, "tmp_user"),
           "OK")
 
     check("DELETE_USER non-existent returns NOT_FOUND",
-          delete_user(s, f, "tmpuser"),
+          delete_user(s, f, "tmp_user"),
           "NOT_FOUND")
 
     # Verify non-admin cannot manage users
-    check("AUTHENTICATE as 'dbreader' (non-admin)",
-          authenticate(s, f, "dbreader", "dbreader1234"),
+    check("AUTHENTICATE as 'db_reader' (non-admin)",
+          authenticate(s, f, "db_reader", "db_reader1234"),
           "OK")
 
     check("CREATE_USER as non-admin (FORBIDDEN)",
@@ -350,11 +350,11 @@ def test_user_management(s, f):
           "FORBIDDEN")
 
     check("DELETE_USER as non-admin (FORBIDDEN)",
-          delete_user(s, f, "dbreader"),
+          delete_user(s, f, "db_reader"),
           "FORBIDDEN")
 
     check("CHANGE_PERMISSIONS as non-admin (FORBIDDEN)",
-          change_permissions(s, f, "dbreader", admin=True),
+          change_permissions(s, f, "db_reader", admin=True),
           "FORBIDDEN")
 
     check("GET_DATABASE_STATS as non-admin (FORBIDDEN)",
@@ -376,34 +376,34 @@ def test_set_password(s, f):
           authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
           "OK")
 
-    check("Create test user 'pwduser'",
-          create_user(s, f, "pwduser", "originalpass1"),
+    check("Create test user 'pwd_user'",
+          create_user(s, f, "pwd_user", "original_pass_1"),
           "OK")
 
     # ── Non-admin changing own password ────────────────────────────────────
 
-    check("AUTHENTICATE as 'pwduser'",
-          authenticate(s, f, "pwduser", "originalpass1"),
+    check("AUTHENTICATE as 'pwd_user'",
+          authenticate(s, f, "pwd_user", "original_pass_1"),
           "OK")
 
     check("User can change own password with correct currentPassword",
-          set_password(s, f, "pwduser", "changedpass1", current_password="originalpass1"),
+          set_password(s, f, "pwd_user", "changed_pass_1", current_password="original_pass_1"),
           "OK")
 
     check("Old password no longer authenticates after change",
-          authenticate(s, f, "pwduser", "originalpass1"),
+          authenticate(s, f, "pwd_user", "original_pass_1"),
           "ERROR")
 
     check("New password authenticates successfully",
-          authenticate(s, f, "pwduser", "changedpass1"),
+          authenticate(s, f, "pwd_user", "changed_pass_1"),
           "OK")
 
     check("User cannot change own password with wrong currentPassword",
-          set_password(s, f, "pwduser", "anothernew1", current_password="wrong_password"),
+          set_password(s, f, "pwd_user", "another_new_1", current_password="wrong_password"),
           "ERROR")
 
     check("User cannot change another user's password (FORBIDDEN)",
-          set_password(s, f, ADMIN_USERNAME, "hacked12345", current_password="changedpass1"),
+          set_password(s, f, ADMIN_USERNAME, "hacked12345", current_password="changed_pass_1"),
           "FORBIDDEN")
 
     # ── Admin changing another user's password ────────────────────────────
@@ -413,14 +413,14 @@ def test_set_password(s, f):
           "OK")
 
     check("Admin can change another user's password without currentPassword",
-          set_password(s, f, "pwduser", "adminreset1"),
+          set_password(s, f, "pwd_user", "admin_reset_1"),
           "OK")
 
     check("Admin-reset password works for login",
-          authenticate(s, f, "pwduser", "adminreset1"),
+          authenticate(s, f, "pwd_user", "admin_reset_1"),
           "OK")
 
-    check("AUTHENTICATE as admin (re-auth after pwduser session)",
+    check("AUTHENTICATE as admin (re-auth after pwd_user session)",
           authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
           "OK")
 
@@ -481,12 +481,12 @@ def test_list_users(s, f):
 
     check("LIST_USERS filter by databasePermissions ownership field (users with any db perm)",
           list_users(s, f, [{"type": "FILTER", "operator": {
-              "fieldOperatorType": "EQUALS", "field": "_id", "value": "dbreader"
+              "fieldOperatorType": "EQUALS", "field": "_id", "value": "db_reader"
           }}]),
           "OK")
 
-    check("AUTHENTICATE as 'dbreader' (non-admin)",
-          authenticate(s, f, "dbreader", "dbreader1234"),
+    check("AUTHENTICATE as 'db_reader' (non-admin)",
+          authenticate(s, f, "db_reader", "db_reader1234"),
           "OK")
 
     check("LIST_USERS as non-admin returns FORBIDDEN",
@@ -499,11 +499,11 @@ def test_ownership(s, f):
 
     # ── Auto-ownership: the user who creates a database becomes its owner ──
 
-    check("AUTHENTICATE as 'dbmaker' (has CREATE_DATABASE permission)",
-          authenticate(s, f, "dbmaker", "dbmaker1234"),
+    check("AUTHENTICATE as 'db_maker' (has CREATE_DATABASE permission)",
+          authenticate(s, f, "db_maker", "db_maker1234"),
           "OK")
 
-    check("CREATE_DATABASE 'owned_db' — dbmaker becomes owner automatically",
+    check("CREATE_DATABASE 'owned_db' — db_maker becomes owner automatically",
           send(s, f, {"type": "CREATE_DATABASE", "databaseName": "owned_db"}),
           "OK")
 
@@ -536,8 +536,8 @@ def test_ownership(s, f):
           send(s, f, {"type": "CREATE_DATABASE", "databaseName": "no_drop_db"}),
           "OK")
 
-    check("AUTHENTICATE as 'dbmaker' (has CREATE_DATABASE global perm, not owner of no_drop_db)",
-          authenticate(s, f, "dbmaker", "dbmaker1234"),
+    check("AUTHENTICATE as 'db_maker' (has CREATE_DATABASE global perm, not owner of no_drop_db)",
+          authenticate(s, f, "db_maker", "db_maker1234"),
           "OK")
 
     check("DROP_DATABASE without ownership is FORBIDDEN even with global perm",
@@ -561,8 +561,8 @@ def test_ownership(s, f):
                       "collectionName": "stuff"}),
           "OK")
 
-    check("SET_DATABASE_OWNERS — transfer ownership to 'newowner'",
-          set_database_owners(s, f, "transfer_db", ["newowner"]),
+    check("SET_DATABASE_OWNERS — transfer ownership to 'new_owner'",
+          set_database_owners(s, f, "transfer_db", ["new_owner"]),
           "OK")
 
     check("SET_DATABASE_OWNERS with non-existent user returns ERROR",
@@ -571,12 +571,12 @@ def test_ownership(s, f):
 
     # ── New owner has full access, non-owner is denied ─────────────────────
 
-    check("AUTHENTICATE as 'newowner'",
-          authenticate(s, f, "newowner", "newowner1234"),
+    check("AUTHENTICATE as 'new_owner'",
+          authenticate(s, f, "new_owner", "new_owner1234"),
           "OK")
 
     check("SET_DATABASE_OWNERS as non-admin (FORBIDDEN)",
-          set_database_owners(s, f, "transfer_db", ["dbmaker"]),
+          set_database_owners(s, f, "transfer_db", ["db_maker"]),
           "FORBIDDEN")
 
     check("New owner can SAVE with no explicit permissions",
@@ -593,13 +593,13 @@ def test_ownership(s, f):
           send(s, f, {"type": "DROP_DATABASE", "databaseName": "transfer_db"}),
           "OK")
 
-    # ── Former owner (admin) loses ownership when replaced; dbmaker never had it ─
+    # ── Former owner (admin) loses ownership when replaced; db_maker never had it ─
 
-    check("AUTHENTICATE as 'dbmaker'",
-          authenticate(s, f, "dbmaker", "dbmaker1234"),
+    check("AUTHENTICATE as 'db_maker'",
+          authenticate(s, f, "db_maker", "db_maker1234"),
           "OK")
 
-    check("'dbmaker' has no access to 'auth_db' (not owner, no permissions)",
+    check("'db_maker' has no access to 'auth_db' (not owner, no permissions)",
           send(s, f, {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                       "object": {"x": 99}}),
           "FORBIDDEN")
@@ -628,13 +628,13 @@ def main():
 
         print("\n  Setting up fixtures and test users...")
         setup_fixtures(s, f)
-        create_user(s, f, "noperms", "noperms1234", db_perms={})
-        create_user(s, f, "dbreader", "dbreader1234", db_perms={"auth_db": "READ"})
-        create_user(s, f, "collreader", "collreader1234",
+        create_user(s, f, "no_perms", "no_perms1234", db_perms={})
+        create_user(s, f, "db_reader", "db_reader1234", db_perms={"auth_db": "READ"})
+        create_user(s, f, "coll_reader", "coll_reader1234",
                     coll_perms={"auth_db|allowed": "READ"})
-        create_user(s, f, "dbmaker", "dbmaker1234",
+        create_user(s, f, "db_maker", "db_maker1234",
                     global_perms=["CREATE_DATABASE"])
-        create_user(s, f, "newowner", "newowner1234")
+        create_user(s, f, "new_owner", "new_owner1234")
 
     # ── run each test group on a fresh connection ──────────────────────
     with new_conn() as (s, f):
@@ -671,7 +671,7 @@ def main():
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(s, f)
-        for u in ("noperms", "dbreader", "collreader", "dbmaker", "newowner", "pwduser"):
+        for u in ("no_perms", "db_reader", "coll_reader", "db_maker", "new_owner", "pwd_user"):
             delete_user(s, f, u)
 
     # ── summary ───────────────────────────────────────────────────────

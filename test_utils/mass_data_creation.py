@@ -40,8 +40,8 @@ def one_by_one_creation(s, f):
 def bulk_creation(s, f):
     arr = []
     for i in range(0, NUM_ENTRIES_PER_THREAD):
-        rstr = randomString(size=3)
-        obj = {"aNumber": randomInt(size=3), "aString": rstr, "aBoolean": randomBool(), "aDatetime": randomDatetime()}
+        random_str = randomString(size=3)
+        obj = {"aNumber": randomInt(size=3), "aString": random_str, "aBoolean": randomBool(), "aDatetime": randomDatetime()}
         arr.append(obj)
     message = json.dumps({**base_message_bulk, "objects": arr})
     s.sendall(message.encode() + b'\n')
