@@ -283,6 +283,7 @@ public class Cache {
                 System.currentTimeMillis()));
     }
 
+    @SuppressWarnings("unchecked")
     private <T> Set<String> doGetIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
             T value) throws IOException {
         return switch (value) {

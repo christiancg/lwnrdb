@@ -711,6 +711,7 @@ public class FileSystem {
                             case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
                             case JsonCustom<?> c -> {
                                 final var customClass = c.getClass();
+                                //noinspection unchecked
                                 yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
                             }
                             default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
