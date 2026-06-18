@@ -501,16 +501,16 @@ public final class LinkedTreeMap<K, V> extends AbstractMap<K, V> implements Seri
 
         @Override
         public boolean contains(Object o) {
-            return o instanceof Entry && findByEntry((Entry<?, ?>) o) != null;
+            return o instanceof Entry<?, ?> e && findByEntry(e) != null;
         }
 
         @Override
         public boolean remove(Object o) {
-            if (!(o instanceof Entry)) {
+            if (!(o instanceof Entry<?, ?> e)) {
                 return false;
             }
 
-            Node<K, V> node = findByEntry((Entry<?, ?>) o);
+            Node<K, V> node = findByEntry(e);
             if (node == null) {
                 return false;
             }

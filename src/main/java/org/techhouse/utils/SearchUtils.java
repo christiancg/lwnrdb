@@ -60,8 +60,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingGreaterThan(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
+        if (value instanceof Number n) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
                     GreaterSmallerEqualsType.GREATER_THAN);
             if (index >= 0) {
                 return toIdSet(entries, index, entries.size());
@@ -77,8 +77,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingGreaterThanEquals(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
+        if (value instanceof Number n) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
                     GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
             if (index >= 0) {
                 return toIdSet(entries, index, entries.size());
@@ -94,8 +94,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingLessThan(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
+        if (value instanceof Number n) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
                     GreaterSmallerEqualsType.SMALLER_THAN);
             if (index >= 0) {
                 return toIdSet(entries, 0, ++index);
@@ -111,8 +111,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingLessThanEquals(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), ((Number) value).doubleValue(),
+        if (value instanceof Number n) {
+            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
                     GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
             if (index >= 0) {
                 return toIdSet(entries, 0, ++index);
@@ -153,9 +153,8 @@ public class SearchUtils {
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof String) {
-            return entries.stream()
-                    .filter(tFieldIndexEntry -> ((String) tFieldIndexEntry.getValue()).contains((String) value))
+        if (value instanceof String s) {
+            return entries.stream().filter(tFieldIndexEntry -> ((String) tFieldIndexEntry.getValue()).contains(s))
                     .flatMap(tFieldIndexEntry -> tFieldIndexEntry.getIds().stream()).collect(Collectors.toSet());
         }
         return Set.of();

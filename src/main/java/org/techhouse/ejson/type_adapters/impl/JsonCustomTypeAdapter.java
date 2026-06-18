@@ -14,7 +14,7 @@ public class JsonCustomTypeAdapter implements TypeAdapter<JsonCustom<?>> {
 
     @Override
     public JsonCustom<?> fromJson(JsonBaseElement value) {
-        if (value instanceof JsonCustom) {
+        if (value instanceof JsonCustom<?>) {
             return (JsonCustom<?>) TypeAdapterFactory.getAdapter(JsonBaseElement.class).fromJson(value);
         } else {
             return null;

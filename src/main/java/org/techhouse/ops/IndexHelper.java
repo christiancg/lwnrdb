@@ -148,9 +148,9 @@ public class IndexHelper {
                 }
             }
         }
-        if (value instanceof JsonCustom<?>) {
-            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, (JsonCustom<?>) value, type,
-                    toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom);
+        if (value instanceof JsonCustom<?> jsonCustom) {
+            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, jsonCustom, type, toRemoveBoolean,
+                    toRemoveNumber, toRemoveString, toRemoveJsonCustom);
         } else {
             internalUpdateIndex(dbName, collName, fieldName, entryId, value, type, tClass, toRemoveBoolean,
                     toRemoveNumber, toRemoveString, toRemoveJsonCustom);

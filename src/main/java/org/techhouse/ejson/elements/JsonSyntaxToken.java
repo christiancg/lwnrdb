@@ -36,7 +36,7 @@ public final class JsonSyntaxToken extends JsonBaseElement {
 
     @Override
     public boolean equals(Object other) {
-        return other instanceof JsonSyntaxToken && ((JsonSyntaxToken) other).value == this.value;
+        return other instanceof JsonSyntaxToken st && st.value == this.value;
     }
 
     @Override

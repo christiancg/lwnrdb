@@ -5,14 +5,14 @@ import org.techhouse.ejson.custom_types.CustomTypeFactory;
 
 public class ReflectionUtils {
 
-    @SuppressWarnings("unchecked cast")
+    @SuppressWarnings("unchecked")
     public abstract static class TypeToken<T> {
         public Class<T> getTypeParameter() {
             final var superclass = this.getClass().getGenericSuperclass();
-            if (superclass instanceof ParameterizedType) {
-                final var type = ((ParameterizedType) superclass).getActualTypeArguments()[0];
-                if (type instanceof Class) {
-                    return (Class<T>) type;
+            if (superclass instanceof ParameterizedType pt) {
+                final var type = pt.getActualTypeArguments()[0];
+                if (type instanceof Class<?> c) {
+                    return (Class<T>) c;
                 } else {
                     return (Class<T>) ((ParameterizedType) type).getRawType();
                 }

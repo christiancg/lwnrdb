@@ -23,8 +23,8 @@ public class FieldIndexEntry<T> implements Comparable<T> {
 
     public String toFileEntry() {
         String strValue;
-        if (value instanceof JsonCustom<?>) {
-            strValue = ((JsonCustom<?>) value).getValue();
+        if (value instanceof JsonCustom<?> jc) {
+            strValue = jc.getValue();
         } else {
             strValue = value.toString();
         }
@@ -91,8 +91,10 @@ public class FieldIndexEntry<T> implements Comparable<T> {
             case String s -> s.compareToIgnoreCase((String) otherIndexValue);
             case null -> 0;
             default -> {
-                if (otherIndexValue instanceof JsonCustom) {
+                if (otherIndexValue instanceof JsonCustom<?>) {
+                    @SuppressWarnings("unchecked")
                     final var ownValue = (JsonCustom<T>) value;
+                    @SuppressWarnings("unchecked")
                     final var toCompareValue = (JsonCustom<T>) otherIndexValue;
                     yield ownValue.compare(toCompareValue.getCustomValue());
                 } else {
