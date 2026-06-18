@@ -193,7 +193,7 @@ public class RequestParserTest {
         assertEquals(new JsonNumber(18), secondOp.getValue().asJsonObject().get("$numberInt").asJsonNumber());
     }
 
-    // Parse mid operators with array parameters (AVG, SUM, etc)
+    // Parse mid-operators with array parameters (AVG, SUM, etc.)
     @Test
     public void test_parse_mid_operators_with_array_parameters() {
         String jsonMessage = """

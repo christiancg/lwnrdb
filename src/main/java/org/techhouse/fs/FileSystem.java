@@ -46,7 +46,7 @@ public class FileSystem {
     // Per-file read/write locks guaranteeing physical-I/O atomicity: a file's bytes are never read
     // while they are being rewritten. This is the finer-grained tier below the collection-level
     // locks in ResourceLocking, and is what makes dirty reads safe (a dirty read skips the
-    // collection lock but still serialises against the in-progress physical write of each file).
+    // collection lock but still serializes against the in-progress physical write of each file).
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
 
     private ReentrantReadWriteLock fileLock(File file) {
