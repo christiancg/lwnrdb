@@ -24,7 +24,7 @@ public class ConfigurationValidatorTest {
         map.put("maxPageSize", "2Mb");
         map.put("maxEntrySize", "1Mb");
         map.put("defaultAdminUsername", "admin");
-        map.put("defaultAdminPassword", "adminstrator");
+        map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512Mb");
         return map;
     }
@@ -110,7 +110,7 @@ public class ConfigurationValidatorTest {
     public void test_path_pointing_inside_a_file_fails(@TempDir Path tempDir) throws IOException {
         final var regularFile = Files.createFile(tempDir.resolve("a-file"));
         final var config = baseValid(tempDir);
-        config.put("filePath", regularFile.resolve("subdir").toString());
+        config.put("filePath", regularFile.resolve("sub_dir").toString());
         final var errors = ConfigurationValidator.validate(config);
         assertTrue(errors.stream().anyMatch(e -> e.contains("filePath")));
     }

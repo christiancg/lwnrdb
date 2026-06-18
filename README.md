@@ -189,7 +189,7 @@ Every connection must authenticate before sending any protected operation. `LIST
 
 #### `AUTHENTICATE`
 ```json
-{"type":"AUTHENTICATE","username":"alice","password":"secret"}
+{"type":"AUTHENTICATE","username":"Alice","password":"secret"}
 ```
 
 #### `CREATE_USER` (admin only)
@@ -234,18 +234,18 @@ A user can change their own password by providing `currentPassword` for verifica
 | `currentPassword` | for non-admins changing own password | Not required when an admin changes another user's password |
 
 ```json
-{"type":"SET_PASSWORD","username":"alice","currentPassword":"oldpass","newPassword":"newpass1234"}
+{"type":"SET_PASSWORD","username":"Alice","currentPassword":"old_pass","newPassword":"new_pass_1234"}
 ```
 
 Admin changing another user's password (no `currentPassword` needed):
 ```json
-{"type":"SET_PASSWORD","username":"alice","newPassword":"newpass1234"}
+{"type":"SET_PASSWORD","username":"Alice","newPassword":"new_pass_1234"}
 ```
 
 #### `SET_DATABASE_OWNERS` (admin only)
 Replaces the full owners list for a database. All usernames must already exist. The creator of a database is automatically set as its first owner.
 ```json
-{"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["alice","bob"]}
+{"type":"SET_DATABASE_OWNERS","databaseName":"my_db","owners":["Alice","bob"]}
 ```
 
 #### `GET_DATABASE_STATS` (admin only)
@@ -337,7 +337,7 @@ Example filters:
 
 | Goal | Step |
 |---|---|
-| Find user by username | `FILTER` with `_id EQUALS "alice"` |
+| Find user by username | `FILTER` with `_id EQUALS "Alice"` |
 | Find all admins | `FILTER` with `admin EQUALS true` |
 | Find owners of a database | `FILTER` with `ownedDatabases CONTAINS "mydb"` |
 | Count users | `COUNT` |
@@ -403,7 +403,7 @@ logPath=logs
 maxPageSize=2Mb
 maxEntrySize=1Mb
 defaultAdminUsername=admin
-defaultAdminPassword=adminstrator
+defaultAdminPassword=administrator
 maxMemory=512Mb
 ```
 

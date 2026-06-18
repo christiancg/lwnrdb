@@ -57,7 +57,7 @@ public class ConfigReaderTest {
         expectedConfig.put("maxPageSize", "2Mb");
         expectedConfig.put("maxEntrySize", "1Mb");
         expectedConfig.put("defaultAdminUsername", "admin");
-        expectedConfig.put("defaultAdminPassword", "adminstrator");
+        expectedConfig.put("defaultAdminPassword", "administrator");
         expectedConfig.put("maxMemory", "512mb");
 
         // Act

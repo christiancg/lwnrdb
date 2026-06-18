@@ -68,7 +68,7 @@ public class FieldIndexEntryTest {
     }
 
     @Test
-    public void test_roundtrip_with_pipe_in_value() {
+    public void test_round_trip_with_pipe_in_value() {
         FieldIndexEntry<String> original = new FieldIndexEntry<>("testDB", "testCollection", "foo|bar",
                 Set.of("id1", "id2"));
         String line = original.toFileEntry();
@@ -130,7 +130,7 @@ public class FieldIndexEntryTest {
 
     // Throws IllegalStateException for non-JsonCustom objects in default case
     @Test
-    public void test_illegal_state_exception_for_non_jsoncustom() {
+    public void test_illegal_state_exception_for_non_json_custom() {
         FieldIndexEntry<Object> entry = new FieldIndexEntry<>("db", "collection", new Object(), Set.of("id1"));
         assertThrows(IllegalStateException.class, () -> entry.compareTo(new Object()));
     }

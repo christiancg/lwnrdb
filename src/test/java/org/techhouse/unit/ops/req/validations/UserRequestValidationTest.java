@@ -41,7 +41,7 @@ public class UserRequestValidationTest {
     @Test
     public void test_authenticate_valid_request() {
         final var req = new AuthenticateRequest();
-        req.setUsername("validuser");
+        req.setUsername("valid_user");
         req.setPassword("password");
         assertTrue(RequestValidator.validate(req).isValid());
     }
@@ -68,7 +68,7 @@ public class UserRequestValidationTest {
         final var req = new CreateUserRequest();
         req.setUsername("user");
         req.setPassword("password123");
-        req.setCollectionPermissions(Map.of("invalidkey", PermissionLevel.READ));
+        req.setCollectionPermissions(Map.of("invalid_key", PermissionLevel.READ));
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
@@ -93,7 +93,7 @@ public class UserRequestValidationTest {
     @Test
     public void test_delete_user_valid() {
         final var req = new DeleteUserRequest();
-        req.setUsername("validuser");
+        req.setUsername("valid_user");
         assertTrue(RequestValidator.validate(req).isValid());
     }
 
@@ -164,7 +164,7 @@ public class UserRequestValidationTest {
         final var req = new CreateUserRequest();
         req.setUsername("user");
         req.setPassword("password123");
-        req.setCollectionPermissions(Map.of("admin|mycoll", PermissionLevel.READ));
+        req.setCollectionPermissions(Map.of("admin|my_coll", PermissionLevel.READ));
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
@@ -173,7 +173,7 @@ public class UserRequestValidationTest {
         final var req = new CreateUserRequest();
         req.setUsername("user");
         req.setPassword("password123");
-        req.setCollectionPermissions(Map.of("ab|mycoll", PermissionLevel.READ));
+        req.setCollectionPermissions(Map.of("ab|my_coll", PermissionLevel.READ));
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
@@ -221,23 +221,23 @@ public class UserRequestValidationTest {
     public void test_set_database_owners_with_valid_owners() {
         // Create the user in the cache first so the existence check passes
         final var cache = org.techhouse.ioc.IocContainer.get(org.techhouse.cache.Cache.class);
-        final var userEntry = new org.techhouse.data.admin.AdminUserEntry("validowner", "hash", false,
+        final var userEntry = new org.techhouse.data.admin.AdminUserEntry("valid_owner", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
         final var pkEntry = new org.techhouse.data.PkIndexEntry(org.techhouse.config.Globals.ADMIN_DB_NAME,
-                org.techhouse.config.Globals.ADMIN_USERS_COLLECTION_NAME, "validowner", 0, 10, 0);
+                org.techhouse.config.Globals.ADMIN_USERS_COLLECTION_NAME, "valid_owner", 0, 10, 0);
         cache.putAdminUserEntry(userEntry, pkEntry);
 
         final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
-        req.setOwners(java.util.List.of("validowner"));
+        req.setOwners(java.util.List.of("valid_owner"));
         assertTrue(RequestValidator.validate(req).isValid());
 
-        cache.removeAdminUserEntry("validowner");
+        cache.removeAdminUserEntry("valid_owner");
     }
 
     @Test
     public void test_set_database_owners_rejects_nonexistent_user() {
         final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
-        req.setOwners(java.util.List.of("ghostuser"));
+        req.setOwners(java.util.List.of("ghost_user"));
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
@@ -256,7 +256,7 @@ public class UserRequestValidationTest {
         req.setPassword("password123");
         // valid db key but invalid level — reaches the catch block via validateRawPermissionMaps
         final var rawCollPerms = new org.techhouse.ejson.elements.JsonObject();
-        rawCollPerms.add("validdb|validcoll", new org.techhouse.ejson.elements.JsonString("NOTAVALIDLEVEL"));
+        rawCollPerms.add("valid_db|valid_coll", new org.techhouse.ejson.elements.JsonString("NOT_A_VALID_LEVEL"));
         // inject via reflection to bypass the setter (which only accepts valid PermissionLevel)
         try {
             final var field = CreateUserRequest.class.getDeclaredField("collectionPermissions");

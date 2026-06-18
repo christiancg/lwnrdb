@@ -39,7 +39,7 @@ public class BooleanTypeAdapterTest {
 
     // Convert JsonString element with 'true' value to Boolean
     @Test
-    public void test_convert_jsonstring_true_to_boolean() {
+    public void test_convert_json_string_true_to_boolean() {
         JsonString jsonString = new JsonString("true");
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
         Boolean result = adapter.fromJson(jsonString);

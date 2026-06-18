@@ -170,7 +170,7 @@ public class MessageProcessorTest {
     public void test_authenticated_request_is_processed() throws Exception {
         // Create an admin user first
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("msgproceadmin");
+        createReq.setUsername("msg_proce_admin");
         createReq.setPassword("password123");
         createReq.setAdmin(true);
         createReq.setGlobalPermissions(new HashSet<>());
@@ -180,11 +180,11 @@ public class MessageProcessorTest {
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         // Use a protected op (SAVE) to exercise the authenticated+authorized dispatch path
-        String msgs = """
-                {"type":"AUTHENTICATE","username":"msgproceadmin","password":"password123"}
+        String messages = """
+                {"type":"AUTHENTICATE","username":"msg_proce_admin","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -200,7 +200,7 @@ public class MessageProcessorTest {
     @Test
     public void test_authenticated_close_connection() throws Exception {
         final var createReq = new CreateUserRequest();
-        createReq.setUsername("msgcloser");
+        createReq.setUsername("msg_closer");
         createReq.setPassword("password123");
         createReq.setAdmin(true);
         createReq.setGlobalPermissions(new HashSet<>());
@@ -209,11 +209,11 @@ public class MessageProcessorTest {
         UserOperationHelper.processCreateUser(createReq);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        String msgs = """
-                {"type":"AUTHENTICATE","username":"msgcloser","password":"password123"}
+        String messages = """
+                {"type":"AUTHENTICATE","username":"msg_closer","password":"password123"}
                 {"type":"CLOSE_CONNECTION"}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -237,11 +237,11 @@ public class MessageProcessorTest {
         UserOperationHelper.processCreateUser(createReq);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        String msgs = """
+        String messages = """
                 {"type":"AUTHENTICATE","username":"noPermsUser","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{}}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(msgs.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);

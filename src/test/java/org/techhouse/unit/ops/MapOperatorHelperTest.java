@@ -589,7 +589,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a numeric field reference uses toJson for non-string element (L270)
     @Test
-    public void test_concat_non_string_field_uses_tojson() {
+    public void test_concat_non_string_field_uses_to_json() {
         JsonObject input = new JsonObject();
         input.addProperty("score", 42);
         JsonArray operands = new JsonArray();
@@ -602,7 +602,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a JsonNumber operand directly uses toJson (L275)
     @Test
-    public void test_concat_json_number_operand_uses_tojson() {
+    public void test_concat_json_number_operand_uses_to_json() {
         JsonObject input = new JsonObject();
         JsonArray operands = new JsonArray();
         operands.add(new JsonNumber(99));
@@ -613,7 +613,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a JsonArray operand appends its primitive elements (L278-282)
     @Test
-    public void test_concat_jsonarray_operand() {
+    public void test_concat_json_array_operand() {
         JsonObject input = new JsonObject();
         JsonArray arr = new JsonArray();
         arr.add(new JsonString("x"));
@@ -627,7 +627,7 @@ public class MapOperatorHelperTest {
 
     // CONCAT with a JsonNull operand appends null string (L284)
     @Test
-    public void test_concat_jsonnull_operand() {
+    public void test_concat_json_null_operand() {
         JsonObject input = new JsonObject();
         JsonArray operands = new JsonArray();
         operands.add(JsonNull.INSTANCE);

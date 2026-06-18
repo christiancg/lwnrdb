@@ -5,7 +5,7 @@ Manual test playbook — send each JSON command to the server over TCP, one line
 Authenticate (must be done before any protected operation)
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "adminstrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
 ```
 
 Create database
@@ -789,13 +789,13 @@ Users and permissions
 Re-authenticate after reconnecting
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "adminstrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
 ```
 
 Create a non-admin user with read-write access to one database
 
 ```json
-{"type": "CREATE_USER", "username": "alice", "password": "secret1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
+{"type": "CREATE_USER", "username": "Alice", "password": "secret1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
 ```
 
 Create a read-only user scoped to a single collection
@@ -810,34 +810,34 @@ Create a user that can create and drop databases
 {"type": "CREATE_USER", "username": "dbadmin", "password": "dbadmin1234", "admin": false, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
 ```
 
-Grant alice admin rights and update her permissions
+Grant Alice admin rights and update her permissions
 
 ```json
-{"type": "CHANGE_PERMISSIONS", "username": "alice", "admin": true, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
+{"type": "CHANGE_PERMISSIONS", "username": "Alice", "admin": true, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
 ```
 
-Downgrade alice back to a regular user
+Downgrade Alice back to a regular user
 
 ```json
-{"type": "CHANGE_PERMISSIONS", "username": "alice", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
+{"type": "CHANGE_PERMISSIONS", "username": "Alice", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
 ```
 
-Authenticate as alice
+Authenticate as Alice
 
 ```json
-{"type": "AUTHENTICATE", "username": "alice", "password": "secret1234"}
+{"type": "AUTHENTICATE", "username": "Alice", "password": "secret1234"}
 ```
 
 Authenticate back as admin
 
 ```json
-{"type": "AUTHENTICATE", "username": "admin", "password": "adminstrator"}
+{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
 ```
 
-Delete alice
+Delete Alice
 
 ```json
-{"type": "DELETE_USER", "username": "alice"}
+{"type": "DELETE_USER", "username": "Alice"}
 ```
 
 Delete readonly
@@ -846,10 +846,10 @@ Delete readonly
 {"type": "DELETE_USER", "username": "readonly"}
 ```
 
-Delete dbadmin
+Delete db_admin
 
 ```json
-{"type": "DELETE_USER", "username": "dbadmin"}
+{"type": "DELETE_USER", "username": "db_admin"}
 ```
 
 Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown)

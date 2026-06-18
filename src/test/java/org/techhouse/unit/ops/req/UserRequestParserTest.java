@@ -15,19 +15,19 @@ import org.techhouse.ops.req.RequestParser;
 public class UserRequestParserTest {
     @Test
     public void test_parses_authenticate_request() {
-        final var msg = "{\"type\":\"AUTHENTICATE\",\"username\":\"alice\",\"password\":\"secret\"}";
+        final var msg = "{\"type\":\"AUTHENTICATE\",\"username\":\"Alice\",\"password\":\"secret\"}";
         final var req = (AuthenticateRequest) RequestParser.parseRequest(msg);
         assertEquals(OperationType.AUTHENTICATE, req.getType());
-        assertEquals("alice", req.getUsername());
+        assertEquals("Alice", req.getUsername());
         assertEquals("secret", req.getPassword());
     }
 
     @Test
     public void test_parses_delete_user_request() {
-        final var msg = "{\"type\":\"DELETE_USER\",\"username\":\"alice\"}";
+        final var msg = "{\"type\":\"DELETE_USER\",\"username\":\"Alice\"}";
         final var req = (DeleteUserRequest) RequestParser.parseRequest(msg);
         assertEquals(OperationType.DELETE_USER, req.getType());
-        assertEquals("alice", req.getUsername());
+        assertEquals("Alice", req.getUsername());
     }
 
     @Test
@@ -62,15 +62,15 @@ public class UserRequestParserTest {
     @Test
     public void test_parses_change_permissions_request() {
         final var msg = "{" + "\"type\":\"CHANGE_PERMISSIONS\"," + "\"username\":\"bob\"," + "\"admin\":true,"
-                + "\"globalPermissions\":[\"DROP_DATABASE\"]," + "\"databasePermissions\":{\"ordersdb\":\"READ\"},"
-                + "\"collectionPermissions\":{\"ordersdb|invoices\":\"READ_WRITE\"}" + "}";
+                + "\"globalPermissions\":[\"DROP_DATABASE\"]," + "\"databasePermissions\":{\"orders_db\":\"READ\"},"
+                + "\"collectionPermissions\":{\"orders_db|invoices\":\"READ_WRITE\"}" + "}";
         final var req = (ChangePermissionsRequest) RequestParser.parseRequest(msg);
         assertEquals(OperationType.CHANGE_PERMISSIONS, req.getType());
         assertEquals("bob", req.getUsername());
         assertTrue(req.getAdmin());
         assertTrue(req.getGlobalPermissions().contains(GlobalPermissionType.DROP_DATABASE));
-        assertEquals(PermissionLevel.READ, req.getDatabasePermissions().get("ordersdb"));
-        assertEquals(PermissionLevel.READ_WRITE, req.getCollectionPermissions().get("ordersdb|invoices"));
+        assertEquals(PermissionLevel.READ, req.getDatabasePermissions().get("orders_db"));
+        assertEquals(PermissionLevel.READ_WRITE, req.getCollectionPermissions().get("orders_db|invoices"));
     }
 
     @Test

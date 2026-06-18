@@ -147,7 +147,7 @@ public class RequestParserTest {
     // Parse map operations with add field and remove field operators
     @Test
     public void test_parse_map_operations_with_add_and_remove_field_operators() {
-        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"MAP\", \"operators\": [{ \"fieldName\": \"newField\", \"operator\": { \"type\": \"SUM\", \"operands\": [\"aField\", 30] }}] }] }";
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"MAP\", \"operators\": [{ \"fieldName\": \"newField\", \"operator\": { \"type\": \"SUM\", \"operands\": [\"a_field\", 30] }}] }] }";
         OperationRequest request = RequestParser.parseRequest(message);
         assertInstanceOf(AggregateRequest.class, request);
         AggregateRequest aggRequest = (AggregateRequest) request;
@@ -162,7 +162,7 @@ public class RequestParserTest {
         assertEquals("newField", addOp.getFieldName());
         assertInstanceOf(ArrayParamMidOperator.class, addOp.getOperator());
         ArrayParamMidOperator addParamOperator = (ArrayParamMidOperator) addOp.getOperator();
-        assertEquals("aField", addParamOperator.getOperands().asList().getFirst().asJsonString().getValue());
+        assertEquals("a_field", addParamOperator.getOperands().asList().getFirst().asJsonString().getValue());
     }
 
     // Parse conjunction operators with nested operators (AND, OR)

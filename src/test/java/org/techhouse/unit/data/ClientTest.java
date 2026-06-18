@@ -89,8 +89,8 @@ public class ClientTest {
     @Test
     public void test_set_authenticated_username() {
         Client client = new Client("127.0.0.1");
-        client.setAuthenticatedUsername("alice");
-        assertEquals("alice", client.getAuthenticatedUsername());
+        client.setAuthenticatedUsername("Alice");
+        assertEquals("Alice", client.getAuthenticatedUsername());
     }
 
     @Test
@@ -98,7 +98,7 @@ public class ClientTest {
         Client client1 = new Client("127.0.0.1");
         Client client2 = new Client("127.0.0.1");
         // Force same connectionTime via reflection isn't needed — different auth username should differ
-        client1.setAuthenticatedUsername("alice");
+        client1.setAuthenticatedUsername("Alice");
         client2.setAuthenticatedUsername("bob");
         assertNotEquals(client1, client2);
     }

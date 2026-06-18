@@ -291,9 +291,9 @@ public class AdminOperationHelper {
             final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             final var adminDbEntry = cache.getAdminDbEntry(split[0]);
             var adminDbPkIndexEntry = cache.getPkIndexAdminDbEntry(split[0]);
-            final var colls = adminDbEntry.getCollections();
-            colls.add(split[1]);
-            adminDbEntry.setCollections(colls);
+            final var collections = adminDbEntry.getCollections();
+            collections.add(split[1]);
+            adminDbEntry.setCollections(collections);
             adminDbEntry.setPage(adminDbPkIndexEntry.getPage());
             adminDbPkIndexEntry = fs.updateFromCollection(adminDbEntry, adminDbPkIndexEntry);
             cache.putPkIndexAdminDbEntry(adminDbPkIndexEntry);
