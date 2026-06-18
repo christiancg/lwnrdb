@@ -9,14 +9,14 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "adminstrator"
+ADMIN_PASSWORD = "administrator"
 
 # Knobs — tweak via env or here. Defaults try to push enough data through that
 # eviction is forced when maxMemory is configured tight (e.g. 8mb).
 HOT_COLL = "hot_coll"
 COLD_COLL = "cold_coll"
 DOCS_PER_COLLECTION = 5_000
-PAYLOAD_BYTES = 512                # per-doc filler — total ~2.5MB/coll, x2 colls = ~5MB
+PAYLOAD_BYTES = 512                # per-doc filler — total ~2.5MB/coll, x2 collections = ~5MB
 BULK_BATCH_SIZE = 500
 LATENCY_PROBE_INTERVAL = 50        # probe every Nth bulk batch
 LATENCY_BUDGET_MS = 2_000          # a single small query should not exceed this under pressure
@@ -181,13 +181,13 @@ def rand_str(size: int) -> str:
 # ── fixtures ───────────────────────────────────────────────────────────────
 
 def setup_fixtures(s, f):
-    send(s, f, {"type": "CREATE_DATABASE", "databaseName": "memdb"})
-    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "memdb", "collectionName": HOT_COLL})
-    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "memdb", "collectionName": COLD_COLL})
+    send(s, f, {"type": "CREATE_DATABASE", "databaseName": "mem_db"})
+    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": HOT_COLL})
+    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": COLD_COLL})
 
 
 def teardown_fixtures(s, f):
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": "memdb"})
+    send(s, f, {"type": "DROP_DATABASE", "databaseName": "mem_db"})
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -209,7 +209,7 @@ def test_mass_insert_with_eviction(s, f):
             doc_id = f"{coll}_{i:06d}"
             batch.append({"_id": doc_id, "v": i, "payload": rand_str(PAYLOAD_BYTES)})
             if len(batch) >= BULK_BATCH_SIZE:
-                r = send(s, f, {"type": "BULK_SAVE", "databaseName": "memdb",
+                r = send(s, f, {"type": "BULK_SAVE", "databaseName": "mem_db",
                                 "collectionName": coll, "objects": batch})
                 if r.get("status") != "OK":
                     check("BULK_SAVE during mass insert", r, "OK")
@@ -226,7 +226,7 @@ def test_mass_insert_with_eviction(s, f):
                     dt_ms = (time.perf_counter() - t0) * 1000.0
                     max_probe_ms = max(max_probe_ms, dt_ms)
         if batch:
-            send(s, f, {"type": "BULK_SAVE", "databaseName": "memdb",
+            send(s, f, {"type": "BULK_SAVE", "databaseName": "mem_db",
                         "collectionName": coll, "objects": batch})
 
     check_true(
@@ -244,7 +244,7 @@ def test_correctness_after_eviction(s, f, sample_ids: dict):
     misses = []
     for coll, ids in sample_ids.items():
         for doc_id in ids:
-            r = send(s, f, {"type": "FIND_BY_ID", "databaseName": "memdb",
+            r = send(s, f, {"type": "FIND_BY_ID", "databaseName": "mem_db",
                             "collectionName": coll, "_id": doc_id})
             if r.get("status") != "OK":
                 misses.append((coll, doc_id, r.get("status")))
@@ -264,17 +264,17 @@ def test_hot_collection_remains_warm(s, f):
 
     # Warm "hot" hard
     for _ in range(200):
-        send(s, f, {"type": "AGGREGATE", "databaseName": "memdb",
+        send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
                     "collectionName": HOT_COLL,
                     "aggregationSteps": [{"type": "COUNT"}]})
     # Touch "cold" once
-    send(s, f, {"type": "AGGREGATE", "databaseName": "memdb",
+    send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
                 "collectionName": COLD_COLL,
                 "aggregationSteps": [{"type": "COUNT"}]})
 
     # After all that access, hot queries must still complete promptly.
     t0 = time.perf_counter()
-    r = send(s, f, {"type": "AGGREGATE", "databaseName": "memdb",
+    r = send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
                     "collectionName": HOT_COLL,
                     "aggregationSteps": [{"type": "COUNT"}]})
     dt_ms = (time.perf_counter() - t0) * 1000.0
@@ -293,7 +293,7 @@ def test_repeated_full_scan(s, f):
 
     counts = []
     for _ in range(5):
-        r = send(s, f, {"type": "AGGREGATE", "databaseName": "memdb",
+        r = send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
                         "collectionName": HOT_COLL,
                         "aggregationSteps": [{"type": "COUNT"}]})
         if r.get("status") != "OK":

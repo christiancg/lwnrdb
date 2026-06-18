@@ -5,14 +5,14 @@ import org.techhouse.ejson.custom_types.CustomTypeFactory;
 
 public class ReflectionUtils {
 
-    @SuppressWarnings("unchecked cast")
+    @SuppressWarnings("unchecked")
     public abstract static class TypeToken<T> {
         public Class<T> getTypeParameter() {
             final var superclass = this.getClass().getGenericSuperclass();
-            if (superclass instanceof ParameterizedType) {
-                final var type = ((ParameterizedType) superclass).getActualTypeArguments()[0];
-                if (type instanceof Class) {
-                    return (Class<T>) type;
+            if (superclass instanceof ParameterizedType pt) {
+                final var type = pt.getActualTypeArguments()[0];
+                if (type instanceof Class<?> c) {
+                    return (Class<T>) c;
                 } else {
                     return (Class<T>) ((ParameterizedType) type).getRawType();
                 }
@@ -22,7 +22,7 @@ public class ReflectionUtils {
                         "TypeToken must be created with a type argument: new TypeToken<...>() {}; When using code"
                                 + " shrinkers (ProGuard, R8, ...) make sure that generic signatures are preserved.");
             }
-            // User created subclass of subclass of TypeToken
+            // User created sub subclass of TypeToken
             throw new IllegalStateException("Must only create direct subclasses of TypeToken");
         }
     }

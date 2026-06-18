@@ -35,7 +35,7 @@ public abstract class UnsafeAllocator {
             // OK: try the next way
         }
 
-        // try dalvikvm, post-gingerbread
+        // try Dalvik vm, post-gingerbread
         try {
             Method getConstructorId = ObjectStreamClass.class.getDeclaredMethod("getConstructorId", Class.class);
             getConstructorId.setAccessible(true);
@@ -53,7 +53,7 @@ public abstract class UnsafeAllocator {
             // OK: try the next way
         }
 
-        // try dalvikvm, pre-gingerbread
+        // try Dalvik vm, pre-gingerbread
         try {
             final Method newInstance = ObjectInputStream.class.getDeclaredMethod("newInstance", Class.class,
                     Class.class);

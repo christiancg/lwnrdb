@@ -20,8 +20,7 @@ public class DistinctAggregationStepTest {
     // Constructor handles null fieldName parameter
     @Test
     public void test_constructor_accepts_null_field_name() {
-        String fieldName = null;
-        DistinctAggregationStep step = new DistinctAggregationStep(fieldName);
+        DistinctAggregationStep step = new DistinctAggregationStep(null);
 
         assertNull(step.getFieldName());
         assertEquals(AggregationStepType.DISTINCT, step.getType());

@@ -20,7 +20,7 @@ public class SocketServer {
     public void serve() {
         try (ServerSocket serverSocket = new ServerSocket(port)) {
             logger.info("Server is listening on port " + port);
-            while (true) {
+            while (!Thread.currentThread().isInterrupted()) {
                 Socket socket = serverSocket.accept();
                 pool.execute(new MessageProcessor(socket));
             }

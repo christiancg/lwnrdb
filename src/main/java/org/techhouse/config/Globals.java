@@ -2,7 +2,9 @@ package org.techhouse.config;
 
 import java.nio.file.FileSystems;
 
-public class Globals {
+public final class Globals {
+    private Globals() {
+    }
     public static final String PK_FIELD = "_id";
     public static final String PK_FIELD_TYPE = "String";
     public static final int BUFFER_SIZE = 32768;
@@ -26,7 +28,7 @@ public class Globals {
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;
     public static final int PASSWORD_MIN_LENGTH = 8;
-    public static final String DEFAULT_ADMIN_PASSWORD = "adminstrator";
+    public static final String DEFAULT_ADMIN_PASSWORD = "administrator";
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";

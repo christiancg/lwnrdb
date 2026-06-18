@@ -141,6 +141,7 @@ public class IndexHelper {
                         final var foundJsonCustom = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId,
                                 customType);
                         if (foundJsonCustom != null) {
+                            //noinspection unchecked
                             toRemoveJsonCustom = (FieldIndexEntry<JsonCustom<?>>) foundJsonCustom;
                             break;
                         }
@@ -148,9 +149,9 @@ public class IndexHelper {
                 }
             }
         }
-        if (value instanceof JsonCustom<?>) {
-            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, (JsonCustom<?>) value, type,
-                    toRemoveBoolean, toRemoveNumber, toRemoveString, toRemoveJsonCustom);
+        if (value instanceof JsonCustom<?> jsonCustom) {
+            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, jsonCustom, type, toRemoveBoolean,
+                    toRemoveNumber, toRemoveString, toRemoveJsonCustom);
         } else {
             internalUpdateIndex(dbName, collName, fieldName, entryId, value, type, tClass, toRemoveBoolean,
                     toRemoveNumber, toRemoveString, toRemoveJsonCustom);
@@ -205,6 +206,7 @@ public class IndexHelper {
             JsonCustom<?> value) throws IOException {
         final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, value.getClass());
         if (indexEntries != null) {
+            //noinspection unchecked
             return indexEntries.stream()
                     .filter(indexEntry -> indexEntry.getValue().compare(value.getCustomValue()) == 0).findFirst()
                     .orElse(null);

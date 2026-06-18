@@ -30,9 +30,9 @@ HOST = "127.0.0.1"
 PORT = 8989
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "adminstrator"
+ADMIN_PASSWORD = "administrator"
 
-DB = "memstress"
+DB = "mem_stress"
 NUM_COLLECTIONS = int(os.environ.get("MEM_TEST_COLLECTIONS", "8"))
 DOCS_PER_COLLECTION = int(os.environ.get("MEM_TEST_DOCS", "10000"))
 PAYLOAD_BYTES = int(os.environ.get("MEM_TEST_PAYLOAD_BYTES", "768"))
@@ -164,7 +164,7 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
 
     Total raw data ~= NUM_COLLECTIONS * DOCS * PAYLOAD_BYTES (well over the cap).
     """
-    section(f"Mass insert: {NUM_COLLECTIONS} colls x {DOCS_PER_COLLECTION} docs "
+    section(f"Mass insert: {NUM_COLLECTIONS} collections x {DOCS_PER_COLLECTION} docs "
             f"x {PAYLOAD_BYTES}B "
             f"(~{(NUM_COLLECTIONS * DOCS_PER_COLLECTION * PAYLOAD_BYTES) // (1024*1024)}MB)")
 
@@ -385,12 +385,12 @@ def main():
     final = snapshot(c)
     print(f"  final — {fmt_snap(final, pid)}")
 
-    fmem = final.get("memory", {})
-    ftot = final.get("totals", {})
-    max_cache_seen = max(cache_samples) if cache_samples else fmem.get("userCacheBytes", 0)
-    max_heap_seen = max(heap_samples) if heap_samples else (fmem.get("heapUsedBytes", 0) / max(fmem.get("heapMaxBytes", 1), 1))
+    final_memory = final.get("memory", {})
+    final_total = final.get("totals", {})
+    max_cache_seen = max(cache_samples) if cache_samples else final_memory.get("userCacheBytes", 0)
+    max_heap_seen = max(heap_samples) if heap_samples else (final_memory.get("heapUsedBytes", 0) / max(final_memory.get("heapMaxBytes", 1), 1))
     max_rss_seen = max(rss_samples) if rss_samples else (get_pid_rss_mb(pid) or 0)
-    on_disk = ftot.get("sizeBytes", 0)
+    on_disk = final_total.get("sizeBytes", 0)
 
     print(f"\n  Peaks across {len(cache_samples)} snapshots: "
           f"cache_max={max_cache_seen/1024/1024:.2f}MB "
@@ -400,20 +400,20 @@ def main():
 
     section("Memory-cap assertions")
     assert_cap("peak userCacheBytes vs cap", max_cache_seen, cap_bytes)
-    assert_cap("final userCacheBytes vs cap", fmem.get("userCacheBytes", 0), cap_bytes)
+    assert_cap("final userCacheBytes vs cap", final_memory.get("userCacheBytes", 0), cap_bytes)
 
     # Confirm we actually exceeded the cap on disk — otherwise the cap was not exercised.
     if on_disk > cap_bytes:
         check(f"on-disk size {on_disk/1024/1024:.1f}MB > cap "
               f"{cap_bytes/1024/1024:.0f}MB → cache MUST be a subset",
-              fmem.get("userCacheBytes", 0) < on_disk,
+              final_memory.get("userCacheBytes", 0) < on_disk,
               detail="cache holds a strict subset of total data — eviction in effect")
     else:
         warn("on-disk size did not exceed cap — eviction was not exercised; "
              "increase DOCS_PER_COLLECTION or PAYLOAD_BYTES")
 
     assert_heap("peak heap usage", max_heap_seen, 0.85)
-    assert_heap("final heap usage", (fmem.get("heapUsedBytes", 0) / max(fmem.get("heapMaxBytes", 1), 1)), 0.85)
+    assert_heap("final heap usage", (final_memory.get("heapUsedBytes", 0) / max(final_memory.get("heapMaxBytes", 1), 1)), 0.85)
     assert_rss_bounded("peak process RSS", max_rss_seen, 1024)
 
     verify_correctness(c, samples)

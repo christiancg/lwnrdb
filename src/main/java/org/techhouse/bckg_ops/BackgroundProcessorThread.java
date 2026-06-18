@@ -12,10 +12,12 @@ public class BackgroundProcessorThread implements Runnable {
     }
     @Override
     public void run() {
-        while (true) {
+        while (!Thread.currentThread().isInterrupted()) {
             try {
                 final var event = queue.take();
                 EventProcessorHelper.processEvent(event);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
                 logger.error("Error while processing background task: ", e);
             }

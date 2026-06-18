@@ -18,6 +18,7 @@ public class NoConstructorExceptionTest {
     // Create exception with null class parameter
     @Test
     public void test_create_exception_with_null_class() {
+        //noinspection ThrowableNotThrown
         assertThrows(NullPointerException.class, () -> new NoConstructorException(null));
     }
 }

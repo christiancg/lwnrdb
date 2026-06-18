@@ -23,7 +23,9 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
-public class AdminOperationHelper {
+public final class AdminOperationHelper {
+    private AdminOperationHelper() {
+    }
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
@@ -291,9 +293,9 @@ public class AdminOperationHelper {
             final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             final var adminDbEntry = cache.getAdminDbEntry(split[0]);
             var adminDbPkIndexEntry = cache.getPkIndexAdminDbEntry(split[0]);
-            final var colls = adminDbEntry.getCollections();
-            colls.add(split[1]);
-            adminDbEntry.setCollections(colls);
+            final var collections = adminDbEntry.getCollections();
+            collections.add(split[1]);
+            adminDbEntry.setCollections(collections);
             adminDbEntry.setPage(adminDbPkIndexEntry.getPage());
             adminDbPkIndexEntry = fs.updateFromCollection(adminDbEntry, adminDbPkIndexEntry);
             cache.putPkIndexAdminDbEntry(adminDbPkIndexEntry);

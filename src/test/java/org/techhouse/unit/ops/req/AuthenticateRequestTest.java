@@ -16,15 +16,15 @@ public class AuthenticateRequestTest {
     @Test
     public void test_username_setter_getter() {
         final var req = new AuthenticateRequest();
-        req.setUsername("testuser");
-        assertEquals("testuser", req.getUsername());
+        req.setUsername("test_user");
+        assertEquals("test_user", req.getUsername());
     }
 
     @Test
     public void test_password_setter_getter() {
         final var req = new AuthenticateRequest();
-        req.setPassword("testpass");
-        assertEquals("testpass", req.getPassword());
+        req.setPassword("test_pass");
+        assertEquals("test_pass", req.getPassword());
     }
 
     @Test

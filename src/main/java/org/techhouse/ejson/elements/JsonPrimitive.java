@@ -40,9 +40,9 @@ public class JsonPrimitive<T> extends JsonBaseElement {
         if (value == null) {
             return other.value == null;
         }
-        if (value instanceof Number && other.value instanceof Number) {
-            double a = ((Number) value).doubleValue();
-            double b = ((Number) other.value).doubleValue();
+        if (value instanceof Number numA && other.value instanceof Number numB) {
+            double a = numA.doubleValue();
+            double b = numB.doubleValue();
             return a == b || (Double.isNaN(a) && Double.isNaN(b));
         }
         return value.equals(other.value);

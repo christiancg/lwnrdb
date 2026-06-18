@@ -35,14 +35,12 @@ public class RequestValidator {
             case FIND_BY_ID -> validateFindById((FindByIdRequest) request);
             case DELETE -> validateDelete((DeleteRequest) request);
             case AGGREGATE -> validateAggregate((AggregateRequest) request);
-            case CREATE_DATABASE -> validateDbOnly(request, true);
-            case DROP_DATABASE -> validateDbOnly(request, true);
-            case LIST_DATABASES -> ValidationResult.ok();
+            case CREATE_DATABASE, DROP_DATABASE -> validateDbOnly(request, true);
+            case LIST_DATABASES, CLOSE_CONNECTION, GET_DATABASE_STATS -> ValidationResult.ok();
             case CREATE_COLLECTION, DROP_COLLECTION -> validateDbAndColl(request, true);
             case LIST_COLLECTIONS -> validateDbOnly(request, false);
             case CREATE_INDEX -> validateCreateIndex((CreateIndexRequest) request);
             case DROP_INDEX -> validateDropIndex((DropIndexRequest) request);
-            case CLOSE_CONNECTION -> ValidationResult.ok();
             case AUTHENTICATE -> validateAuthenticate((AuthenticateRequest) request);
             case CREATE_USER -> validateCreateUser((CreateUserRequest) request);
             case DELETE_USER -> validateDeleteUser((DeleteUserRequest) request);
@@ -50,7 +48,6 @@ public class RequestValidator {
             case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
             case LIST_USERS -> validateListUsers((ListUsersRequest) request);
             case SET_PASSWORD -> validateSetPassword((SetPasswordRequest) request);
-            case GET_DATABASE_STATS -> ValidationResult.ok();
         };
     }
 

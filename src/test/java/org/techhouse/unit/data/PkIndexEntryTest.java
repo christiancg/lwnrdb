@@ -37,7 +37,7 @@ public class PkIndexEntryTest {
     }
 
     @Test
-    public void test_roundtrip_with_pipe_in_value() {
+    public void test_round_trip_with_pipe_in_value() {
         PkIndexEntry original = new PkIndexEntry("testDB", "testCollection", "foo|bar|baz", 200L, 75L, 1L);
         PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", original.toFileEntry());
         assertEquals(original.getValue(), parsed.getValue());

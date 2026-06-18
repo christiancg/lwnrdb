@@ -134,9 +134,9 @@ public class ClientTrackerTest {
         Mockito.when(mockInetAddress.getHostAddress()).thenReturn("127.0.0.1");
 
         UUID clientId = clientTracker.addClient(mockSocket);
-        clientTracker.setAuthenticatedUser(clientId, "alice");
+        clientTracker.setAuthenticatedUser(clientId, "Alice");
 
-        assertEquals("alice", clientTracker.getAuthenticatedUsername(clientId));
+        assertEquals("Alice", clientTracker.getAuthenticatedUsername(clientId));
     }
 
     @Test
@@ -164,7 +164,7 @@ public class ClientTrackerTest {
     @Test
     public void test_set_authenticated_user_null_client_id_no_throw() {
         ClientTracker clientTracker = new ClientTracker();
-        assertDoesNotThrow(() -> clientTracker.setAuthenticatedUser(null, "alice"));
+        assertDoesNotThrow(() -> clientTracker.setAuthenticatedUser(null, "Alice"));
     }
 
     @Test

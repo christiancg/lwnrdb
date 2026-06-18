@@ -21,9 +21,9 @@ import time
 HOST = "127.0.0.1"
 PORT = 8989
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "adminstrator"
+ADMIN_PASSWORD = "administrator"
 
-DB = "benchdb"
+DB = "bench_db"
 COLL = "items"
 DOCS = int(os.environ.get("BENCH_DOCS", "20000"))
 PAYLOAD_BYTES = int(os.environ.get("BENCH_PAYLOAD_BYTES", "512"))

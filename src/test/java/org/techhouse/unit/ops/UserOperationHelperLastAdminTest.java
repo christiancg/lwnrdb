@@ -21,7 +21,7 @@ public class UserOperationHelperLastAdminTest {
         TestUtils.standardInitialSetup();
         // Create exactly one admin user
         final var req = new CreateUserRequest();
-        req.setUsername("soleadmin");
+        req.setUsername("sole_admin");
         req.setPassword("password123");
         req.setAdmin(true);
         req.setGlobalPermissions(new HashSet<>());
@@ -38,7 +38,7 @@ public class UserOperationHelperLastAdminTest {
     @Test
     public void test_delete_last_admin_refused() {
         final var req = new DeleteUserRequest();
-        req.setUsername("soleadmin");
+        req.setUsername("sole_admin");
         final var resp = UserOperationHelper.processDeleteUser(req);
         assertEquals(OperationStatus.ERROR, resp.getStatus());
         assertTrue(resp.getMessage().contains("last admin"));
@@ -47,7 +47,7 @@ public class UserOperationHelperLastAdminTest {
     @Test
     public void test_demote_last_admin_refused() {
         final var req = new ChangePermissionsRequest();
-        req.setUsername("soleadmin");
+        req.setUsername("sole_admin");
         req.setAdmin(false);
         req.setGlobalPermissions(new HashSet<>());
         req.setDatabasePermissions(new HashMap<>());

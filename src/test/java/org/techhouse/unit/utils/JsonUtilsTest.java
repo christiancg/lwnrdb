@@ -280,12 +280,6 @@ public class JsonUtilsTest {
         assertEquals(JsonNull.INSTANCE, JsonUtils.getFromPath(obj, "missing"));
     }
 
-    // JsonUtils instantiation covers implicit default constructor (L7)
-    @Test
-    public void test_json_utils_instantiation() {
-        assertNotNull(new JsonUtils());
-    }
-
     // sortFunctionDescending: first is primitive, second is non-primitive (object) returns 1 (L98)
     @Test
     public void test_sort_descending_first_primitive_second_non_primitive_returns_positive() {

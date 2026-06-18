@@ -39,7 +39,7 @@ public class EventProcessorHelperTest {
     }
 
     @AfterEach
-    public void tearDown() throws IOException, InterruptedException, NoSuchFieldException, IllegalAccessException {
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
 
@@ -77,10 +77,6 @@ public class EventProcessorHelperTest {
     @Test
     public void processProcessEventWithInvalidEventTest() {
         final var event = new Event(EventType.CREATED) {
-            @Override
-            public EventType getType() {
-                return super.getType();
-            }
         };
         Assertions.assertThrows(IllegalStateException.class, () -> EventProcessorHelper.processEvent(event));
     }

@@ -25,7 +25,9 @@ import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.utils.JsonUtils;
 
-public class AggregationOperationHelper {
+public final class AggregationOperationHelper {
+    private AggregationOperationHelper() {
+    }
     private static final String GROUP_FIELD_NAME = "group";
     private static final String COUNT_FIELD_NAME = "count";
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -152,7 +154,7 @@ public class AggregationOperationHelper {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var distinctStep = (DistinctAggregationStep) baseDistinctStep;
         final var fieldName = distinctStep.getFieldName();
-        if (fieldName == null || fieldName.isEmpty() || fieldName.isBlank()) {
+        if (fieldName == null || fieldName.isBlank()) {
             return resultStream.map(jsonObject -> {
                 final var result = jsonObject.deepCopy();
                 if (result.has(Globals.PK_FIELD)) {

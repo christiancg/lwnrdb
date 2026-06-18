@@ -19,10 +19,6 @@ public class BackgroundProcessorThreadTest {
     public void testRunWhenQueueHasEvent() throws InterruptedException {
         LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
         Event mockEvent = new Event(EventType.CREATED) {
-            @Override
-            public EventType getType() {
-                return super.getType();
-            }
         };
         queue.add(mockEvent);
 

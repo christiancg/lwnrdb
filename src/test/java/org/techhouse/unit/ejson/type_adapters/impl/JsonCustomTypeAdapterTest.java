@@ -31,6 +31,7 @@ public class JsonCustomTypeAdapterTest {
         JsonCustomTypeAdapter adapter = new JsonCustomTypeAdapter();
 
         JsonCustom<?> mockCustom = mock(JsonCustom.class);
+        //noinspection unchecked
         TypeAdapter<JsonBaseElement> mockBaseAdapter = mock(TypeAdapter.class);
 
         try (MockedStatic<TypeAdapterFactory> factory = mockStatic(TypeAdapterFactory.class)) {
