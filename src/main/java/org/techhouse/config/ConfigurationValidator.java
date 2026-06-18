@@ -30,7 +30,48 @@ public final class ConfigurationValidator {
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateMaxMemory(configs, errors);
+        validateTls(configs, errors);
         return errors;
+    }
+
+    private static void validateTls(Map<String, String> configs, List<String> errors) {
+        final var enabledValue = configs.get("tlsEnabled");
+        if (enabledValue == null || !isBoolean(enabledValue)) {
+            errors.add("tlsEnabled must be true or false, but was: " + enabledValue);
+            return;
+        }
+        if (!Boolean.parseBoolean(enabledValue.trim())) {
+            // When TLS is disabled the keystore keys are ignored.
+            return;
+        }
+        final var keystorePath = configs.get("tlsKeystorePath");
+        if (keystorePath == null || keystorePath.isBlank()) {
+            errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled is true");
+        } else {
+            // The keystore file itself may not exist yet (it is generated on first start),
+            // so we only require its parent directory to be creatable and writable.
+            final Path parent = Paths.get(keystorePath.trim()).toAbsolutePath().getParent();
+            if (parent != null) {
+                try {
+                    Files.createDirectories(parent);
+                    if (!Files.isWritable(parent)) {
+                        errors.add("tlsKeystorePath (" + keystorePath + ") parent directory is not writable");
+                    }
+                } catch (IOException | RuntimeException e) {
+                    errors.add("tlsKeystorePath (" + keystorePath + ") parent directory could not be created: "
+                            + e.getMessage());
+                }
+            }
+        }
+        final var keystorePassword = configs.get("tlsKeystorePassword");
+        if (keystorePassword == null || keystorePassword.isBlank()) {
+            errors.add("tlsKeystorePassword must be a non-blank string when tlsEnabled is true");
+        }
+    }
+
+    private static boolean isBoolean(String value) {
+        final var trimmed = value.trim();
+        return trimmed.equalsIgnoreCase("true") || trimmed.equalsIgnoreCase("false");
     }
 
     private static void validatePort(Map<String, String> configs, List<String> errors) {

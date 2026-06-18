@@ -7,6 +7,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.util.UUID;
+import javax.net.ssl.SSLException;
 import org.techhouse.cache.Cache;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.InvalidCommandException;
@@ -112,6 +113,12 @@ public class MessageProcessor implements Runnable {
                 writer.newLine();
                 writer.flush();
             }
+        } catch (SSLException e) {
+            // A plaintext or otherwise incompatible client failed the TLS handshake; drop it quietly.
+            if (clientId != null) {
+                clientTracker.removeById(clientId);
+            }
+            logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
             if (clientId != null) {
                 clientTracker.removeById(clientId);

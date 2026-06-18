@@ -18,6 +18,9 @@ public final class Configuration {
     private String defaultAdminUsername;
     private String defaultAdminPassword;
     private long maxMemoryBytes;
+    private boolean tlsEnabled;
+    private String tlsKeystorePath;
+    private String tlsKeystorePassword;
 
     private Configuration() {
     }
@@ -43,6 +46,9 @@ public final class Configuration {
                 case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
                 case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
                 case "maxMemory" -> maxMemoryBytes = SizeParser.parse(config.getValue());
+                case "tlsEnabled" -> tlsEnabled = Boolean.parseBoolean(config.getValue());
+                case "tlsKeystorePath" -> tlsKeystorePath = config.getValue();
+                case "tlsKeystorePassword" -> tlsKeystorePassword = config.getValue();
                 default -> {
                 }
             }
@@ -106,5 +112,17 @@ public final class Configuration {
 
     public boolean isCacheUnlimited() {
         return maxMemoryBytes == Globals.CACHE_UNLIMITED;
+    }
+
+    public boolean isTlsEnabled() {
+        return tlsEnabled;
+    }
+
+    public String getTlsKeystorePath() {
+        return tlsKeystorePath;
+    }
+
+    public String getTlsKeystorePassword() {
+        return tlsKeystorePassword;
     }
 }
