@@ -108,17 +108,17 @@ def set_password(s, f, username: str, new_password: str, current_password: str =
 def setup_fixtures(s, f):
     """Create databases and collections used by the tests. Runs as admin."""
     for msg in [
-        {"type": "CREATE_DATABASE", "databaseName": "authdb"},
-        {"type": "CREATE_COLLECTION", "databaseName": "authdb", "collectionName": "allowed"},
-        {"type": "CREATE_COLLECTION", "databaseName": "authdb", "collectionName": "forbidden"},
-        {"type": "SAVE", "databaseName": "authdb", "collectionName": "allowed",
+        {"type": "CREATE_DATABASE", "databaseName": "auth_db"},
+        {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "allowed"},
+        {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "forbidden"},
+        {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
          "object": {"_id": "doc1", "value": 42}},
     ]:
         send(s, f, msg)
 
 
 def teardown_fixtures(s, f):
-    for db in ("authdb", "newdb", "transferdb", "nodropdb"):
+    for db in ("auth_db", "new_db", "transfer_db", "no_drop_db"):
         send(s, f, {"type": "DROP_DATABASE", "databaseName": db})
 
 
@@ -130,26 +130,26 @@ def test_unauthenticated(s, f):
     section("Unauthenticated requests — all must return UNAUTHENTICATED")
 
     check("SAVE without auth",
-          send(s, f, {"type": "SAVE", "databaseName": "authdb", "collectionName": "allowed",
+          send(s, f, {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                       "object": {"x": 1}}),
           "UNAUTHENTICATED")
 
     check("FIND_BY_ID without auth",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "authdb",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "auth_db",
                       "collectionName": "allowed", "_id": "doc1"}),
           "UNAUTHENTICATED")
 
     check("AGGREGATE without auth",
-          send(s, f, {"type": "AGGREGATE", "databaseName": "authdb",
+          send(s, f, {"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "allowed", "aggregationSteps": []}),
           "UNAUTHENTICATED")
 
     check("CREATE_DATABASE without auth",
-          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "newdb"}),
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "new_db"}),
           "UNAUTHENTICATED")
 
     check("DROP_DATABASE without auth",
-          send(s, f, {"type": "DROP_DATABASE", "databaseName": "authdb"}),
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
     check("CREATE_USER without auth",
@@ -157,7 +157,7 @@ def test_unauthenticated(s, f):
           "UNAUTHENTICATED")
 
     check("LIST_COLLECTIONS without auth",
-          send(s, f, {"type": "LIST_COLLECTIONS", "databaseName": "authdb"}),
+          send(s, f, {"type": "LIST_COLLECTIONS", "databaseName": "auth_db"}),
           "UNAUTHENTICATED")
 
     # These two are intentionally public — verify they still work unauthenticated
@@ -190,11 +190,11 @@ def test_no_db_permission(s, f):
           "OK")
 
     check("CREATE_DATABASE without global permission",
-          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "newdb"}),
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "new_db"}),
           "FORBIDDEN")
 
     check("DROP_DATABASE without global permission",
-          send(s, f, {"type": "DROP_DATABASE", "databaseName": "authdb"}),
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "auth_db"}),
           "FORBIDDEN")
 
 
@@ -206,22 +206,22 @@ def test_collection_read_allowed(s, f):
           "OK")
 
     check("FIND_BY_ID on allowed collection (OK)",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "authdb",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "auth_db",
                       "collectionName": "allowed", "_id": "doc1"}),
           "OK")
 
     check("AGGREGATE (COUNT) on allowed collection (OK)",
-          send(s, f, {"type": "AGGREGATE", "databaseName": "authdb",
+          send(s, f, {"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "allowed", "aggregationSteps": [{"type": "COUNT"}]}),
           "OK")
 
     check("SAVE on read-only db (FORBIDDEN)",
-          send(s, f, {"type": "SAVE", "databaseName": "authdb", "collectionName": "allowed",
+          send(s, f, {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                       "object": {"x": 1}}),
           "FORBIDDEN")
 
     check("DELETE on read-only db (FORBIDDEN)",
-          send(s, f, {"type": "DELETE", "databaseName": "authdb",
+          send(s, f, {"type": "DELETE", "databaseName": "auth_db",
                       "collectionName": "allowed", "_id": "doc1"}),
           "FORBIDDEN")
 
@@ -234,17 +234,17 @@ def test_collection_permission_boundary(s, f):
           "OK")
 
     check("FIND_BY_ID on permitted collection (OK)",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "authdb",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "auth_db",
                       "collectionName": "allowed", "_id": "doc1"}),
           "OK")
 
     check("FIND_BY_ID on forbidden collection (FORBIDDEN)",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "authdb",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "auth_db",
                       "collectionName": "forbidden", "_id": "doc1"}),
           "FORBIDDEN")
 
     check("AGGREGATE on forbidden collection (FORBIDDEN)",
-          send(s, f, {"type": "AGGREGATE", "databaseName": "authdb",
+          send(s, f, {"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "forbidden", "aggregationSteps": []}),
           "FORBIDDEN")
 
@@ -257,46 +257,46 @@ def test_admin_operations(s, f):
           "OK")
 
     check("CREATE_DATABASE",
-          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "newdb"}),
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "new_db"}),
           "OK")
 
     check("CREATE_COLLECTION",
-          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "newdb",
+          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "new_db",
                       "collectionName": "stuff"}),
           "OK")
 
     check("SAVE",
-          send(s, f, {"type": "SAVE", "databaseName": "newdb", "collectionName": "stuff",
+          send(s, f, {"type": "SAVE", "databaseName": "new_db", "collectionName": "stuff",
                       "object": {"_id": "x1", "val": 99}}),
           "OK")
 
     check("FIND_BY_ID",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "newdb",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "new_db",
                       "collectionName": "stuff", "_id": "x1"}),
           "OK")
 
     check("AGGREGATE (COUNT) on stuff (doc present, should return OK)",
-          send(s, f, {"type": "AGGREGATE", "databaseName": "newdb",
+          send(s, f, {"type": "AGGREGATE", "databaseName": "new_db",
                       "collectionName": "stuff", "aggregationSteps": [{"type": "COUNT"}]}),
           "OK")
 
     check("DELETE",
-          send(s, f, {"type": "DELETE", "databaseName": "newdb",
+          send(s, f, {"type": "DELETE", "databaseName": "new_db",
                       "collectionName": "stuff", "_id": "x1"}),
           "OK")
 
     check("AGGREGATE after delete (empty collection returns NOT_FOUND)",
-          send(s, f, {"type": "AGGREGATE", "databaseName": "newdb",
+          send(s, f, {"type": "AGGREGATE", "databaseName": "new_db",
                       "collectionName": "stuff", "aggregationSteps": []}),
           "NOT_FOUND")
 
     check("DROP_COLLECTION",
-          send(s, f, {"type": "DROP_COLLECTION", "databaseName": "newdb",
+          send(s, f, {"type": "DROP_COLLECTION", "databaseName": "new_db",
                       "collectionName": "stuff"}),
           "OK")
 
-    check("DROP_DATABASE newdb",
-          send(s, f, {"type": "DROP_DATABASE", "databaseName": "newdb"}),
+    check("DROP_DATABASE new_db",
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "new_db"}),
           "OK")
 
     check("GET_DATABASE_STATS as admin returns OK",
@@ -313,7 +313,7 @@ def test_user_management(s, f):
 
     check("CREATE_USER 'tmpuser'",
           create_user(s, f, "tmpuser", "tmpuser1234", admin=False,
-                      db_perms={"authdb": "READ"}),
+                      db_perms={"auth_db": "READ"}),
           "OK")
 
     check("CREATE_USER duplicate returns ERROR",
@@ -321,7 +321,7 @@ def test_user_management(s, f):
           "ERROR")
 
     check("CHANGE_PERMISSIONS — grant WRITE to 'tmpuser'",
-          change_permissions(s, f, "tmpuser", db_perms={"authdb": "READ_WRITE"}),
+          change_permissions(s, f, "tmpuser", db_perms={"auth_db": "READ_WRITE"}),
           "OK")
 
     check("CHANGE_PERMISSIONS — promote 'tmpuser' to admin",
@@ -329,7 +329,7 @@ def test_user_management(s, f):
           "OK")
 
     check("CHANGE_PERMISSIONS — demote 'tmpuser' back",
-          change_permissions(s, f, "tmpuser", admin=False, db_perms={"authdb": "READ"}),
+          change_permissions(s, f, "tmpuser", admin=False, db_perms={"auth_db": "READ"}),
           "OK")
 
     check("DELETE_USER 'tmpuser'",
@@ -532,41 +532,41 @@ def test_ownership(s, f):
           authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
           "OK")
 
-    check("Admin creates 'nodropdb'",
-          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "nodropdb"}),
+    check("Admin creates 'no_drop_db'",
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "no_drop_db"}),
           "OK")
 
-    check("AUTHENTICATE as 'dbmaker' (has CREATE_DATABASE global perm, not owner of nodropdb)",
+    check("AUTHENTICATE as 'dbmaker' (has CREATE_DATABASE global perm, not owner of no_drop_db)",
           authenticate(s, f, "dbmaker", "dbmaker1234"),
           "OK")
 
     check("DROP_DATABASE without ownership is FORBIDDEN even with global perm",
-          send(s, f, {"type": "DROP_DATABASE", "databaseName": "nodropdb"}),
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "no_drop_db"}),
           "FORBIDDEN")
 
-    check("AUTHENTICATE as admin to clean up nodropdb",
+    check("AUTHENTICATE as admin to clean up no_drop_db",
           authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD),
           "OK")
 
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": "nodropdb"})
+    send(s, f, {"type": "DROP_DATABASE", "databaseName": "no_drop_db"})
 
     # ── SET_DATABASE_OWNERS transfers ownership ────────────────────────────
 
-    check("Admin creates 'transferdb' (admin is owner)",
-          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "transferdb"}),
+    check("Admin creates 'transfer_db' (admin is owner)",
+          send(s, f, {"type": "CREATE_DATABASE", "databaseName": "transfer_db"}),
           "OK")
 
-    check("Admin creates a collection in 'transferdb'",
-          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "transferdb",
+    check("Admin creates a collection in 'transfer_db'",
+          send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "transfer_db",
                       "collectionName": "stuff"}),
           "OK")
 
     check("SET_DATABASE_OWNERS — transfer ownership to 'newowner'",
-          set_database_owners(s, f, "transferdb", ["newowner"]),
+          set_database_owners(s, f, "transfer_db", ["newowner"]),
           "OK")
 
     check("SET_DATABASE_OWNERS with non-existent user returns ERROR",
-          set_database_owners(s, f, "transferdb", ["ghost_user999"]),
+          set_database_owners(s, f, "transfer_db", ["ghost_user999"]),
           "ERROR")
 
     # ── New owner has full access, non-owner is denied ─────────────────────
@@ -576,21 +576,21 @@ def test_ownership(s, f):
           "OK")
 
     check("SET_DATABASE_OWNERS as non-admin (FORBIDDEN)",
-          set_database_owners(s, f, "transferdb", ["dbmaker"]),
+          set_database_owners(s, f, "transfer_db", ["dbmaker"]),
           "FORBIDDEN")
 
     check("New owner can SAVE with no explicit permissions",
-          send(s, f, {"type": "SAVE", "databaseName": "transferdb", "collectionName": "stuff",
+          send(s, f, {"type": "SAVE", "databaseName": "transfer_db", "collectionName": "stuff",
                       "object": {"_id": "t1", "val": 42}}),
           "OK")
 
     check("New owner can FIND_BY_ID",
-          send(s, f, {"type": "FIND_BY_ID", "databaseName": "transferdb",
+          send(s, f, {"type": "FIND_BY_ID", "databaseName": "transfer_db",
                       "collectionName": "stuff", "_id": "t1"}),
           "OK")
 
-    check("New owner can DROP_DATABASE 'transferdb'",
-          send(s, f, {"type": "DROP_DATABASE", "databaseName": "transferdb"}),
+    check("New owner can DROP_DATABASE 'transfer_db'",
+          send(s, f, {"type": "DROP_DATABASE", "databaseName": "transfer_db"}),
           "OK")
 
     # ── Former owner (admin) loses ownership when replaced; dbmaker never had it ─
@@ -599,8 +599,8 @@ def test_ownership(s, f):
           authenticate(s, f, "dbmaker", "dbmaker1234"),
           "OK")
 
-    check("'dbmaker' has no access to 'authdb' (not owner, no permissions)",
-          send(s, f, {"type": "SAVE", "databaseName": "authdb", "collectionName": "allowed",
+    check("'dbmaker' has no access to 'auth_db' (not owner, no permissions)",
+          send(s, f, {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                       "object": {"x": 99}}),
           "FORBIDDEN")
 
@@ -629,9 +629,9 @@ def main():
         print("\n  Setting up fixtures and test users...")
         setup_fixtures(s, f)
         create_user(s, f, "noperms", "noperms1234", db_perms={})
-        create_user(s, f, "dbreader", "dbreader1234", db_perms={"authdb": "READ"})
+        create_user(s, f, "dbreader", "dbreader1234", db_perms={"auth_db": "READ"})
         create_user(s, f, "collreader", "collreader1234",
-                    coll_perms={"authdb|allowed": "READ"})
+                    coll_perms={"auth_db|allowed": "READ"})
         create_user(s, f, "dbmaker", "dbmaker1234",
                     global_perms=["CREATE_DATABASE"])
         create_user(s, f, "newowner", "newowner1234")
