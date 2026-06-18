@@ -153,6 +153,7 @@ public class ReflectionUtils {
                 return parameterType.cast(numberClass.cast(jsonValue).longValue());
             }
         } else if (parameterType.isPrimitive()) {
+            //noinspection unchecked
             return (T) jsonValue;
         } else if (jsonValue != null && fieldValue.isJsonObject()) {
             final var adapter = TypeAdapterFactory.getAdapter(parameterType);

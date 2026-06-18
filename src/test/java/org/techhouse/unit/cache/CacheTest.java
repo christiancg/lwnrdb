@@ -1865,7 +1865,9 @@ public class CacheTest {
         assertEquals(2, result.size());
         // Only the missing entry should have been targeted-read.
         final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        //noinspection unchecked
         verify(fsMock).getByIndexEntries(captor.capture());
+        //noinspection unchecked
         final List<PkIndexEntry> requested = captor.getValue();
         assertEquals(1, requested.size());
         assertEquals("id2", requested.getFirst().getValue());

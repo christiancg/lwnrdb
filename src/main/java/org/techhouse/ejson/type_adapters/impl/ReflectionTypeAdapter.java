@@ -81,6 +81,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     private <P> String hardCast(Object value, Class<P> pClass, Field field) throws ClassNotFoundException {
         P casted;
         if (field.getType().isPrimitive()) {
+            //noinspection unchecked
             casted = (P) value;
         } else {
             casted = pClass.cast(value);

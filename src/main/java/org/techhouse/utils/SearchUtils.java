@@ -70,6 +70,7 @@ public final class SearchUtils {
                 return toIdSet(entries, index, entries.size());
             }
         } else if (value instanceof JsonCustom<?> as) {
+            //noinspection unchecked
             int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
                     GreaterSmallerEqualsType.GREATER_THAN);
             if (index >= 0) {
@@ -87,6 +88,7 @@ public final class SearchUtils {
                 return toIdSet(entries, index, entries.size());
             }
         } else if (value instanceof JsonCustom<?> as) {
+            //noinspection unchecked
             int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
                     GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
             if (index >= 0) {
@@ -104,6 +106,7 @@ public final class SearchUtils {
                 return toIdSet(entries, 0, ++index);
             }
         } else if (value instanceof JsonCustom<?> as) {
+            //noinspection unchecked
             int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
                     GreaterSmallerEqualsType.SMALLER_THAN);
             if (index >= 0) {
@@ -121,6 +124,7 @@ public final class SearchUtils {
                 return toIdSet(entries, 0, ++index);
             }
         } else if (value instanceof JsonCustom<?> as) {
+            //noinspection unchecked
             int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
                     GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
             if (index >= 0) {
