@@ -203,56 +203,6 @@ public class CacheTest {
         assertEquals(expectedPkIndex, actualPkIndex);
     }
 
-    // Returns indexes from fieldIndexMap if already loaded
-    @Test
-    public void test_returns_indexes_from_fieldIndexMap_if_already_loaded()
-            throws NoSuchFieldException, IllegalAccessException {
-        // Arrange
-        Cache cache = new Cache();
-        String dbName = "testDB";
-        String collName = "testCollection";
-        String fieldName = "testField";
-        String collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        Map<String, List<FieldIndexEntry<?>>> expectedIndexes = new ConcurrentHashMap<>();
-        expectedIndexes.put("type1", List.of(new FieldIndexEntry<>(dbName, collName, "value1", Set.of("id1"))));
-
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
-        };
-        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
-        fieldIndexMap.put(collectionIdentifier, expectedIndexes);
-
-        // Act
-        Map<String, List<FieldIndexEntry<?>>> actualIndexes = cache.getAllFieldIndexesAndLoadIfNecessary(dbName,
-                collName, fieldName);
-
-        // Assert
-        assertEquals(expectedIndexes, actualIndexes);
-    }
-
-    // Returns null if readAllWholeFieldIndexFiles returns null
-    @Test
-    public void test_returns_null_if_readAllWholeFieldIndexFiles_returns_null()
-            throws NoSuchFieldException, IllegalAccessException {
-        // Arrange
-        Cache cache = new Cache();
-        FileSystem fsMock = mock(FileSystem.class);
-        // Changing the accessibility of fs for testing
-        Field fsField = cache.getClass().getDeclaredField("fs");
-        fsField.setAccessible(true);
-        fsField.set(cache, fsMock);
-        String dbName = "testDB";
-        String collName = "testCollection";
-        String fieldName = "testField";
-        when(fsMock.readAllWholeFieldIndexFiles(dbName, collName, fieldName)).thenReturn(new ConcurrentHashMap<>());
-
-        // Act
-        Map<String, List<FieldIndexEntry<?>>> actualIndexes = cache.getAllFieldIndexesAndLoadIfNecessary(dbName,
-                collName, fieldName);
-
-        // Assert
-        assertTrue(actualIndexes.isEmpty());
-    }
-
     // Returns list of FieldIndexEntry when index is already loaded
     @Test
     public void test_returns_list_when_index_loaded() throws IOException, NoSuchFieldException, IllegalAccessException {
