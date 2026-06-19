@@ -215,28 +215,6 @@ public class Cache {
         return memoryManagement().admissionCheck(estimatedBytes) == AdmissionDecision.ADMIT;
     }
 
-    public Map<String, List<FieldIndexEntry<?>>> getAllFieldIndexesAndLoadIfNecessary(String dbName, String collName,
-            String fieldName) {
-        final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
-        var indexes = fieldIndexMap.get(collectionIdentifier);
-        Map<String, List<FieldIndexEntry<?>>> indexMap;
-        if (indexes == null) {
-            final var allIndexesForField = fs.readAllWholeFieldIndexFiles(dbName, collName, fieldName);
-            indexMap = new ConcurrentHashMap<>(allIndexesForField);
-            long total = 0L;
-            for (var list : indexMap.values()) {
-                total += estimateFieldIndexSize(list);
-            }
-            if (shouldCache(dbName, total)) {
-                fieldIndexMap.put(collectionIdentifier, indexMap);
-            }
-            return allIndexesForField;
-        } else {
-            indexMap = indexes;
-        }
-        return indexMap;
-    }
-
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         final var collectionIdentifier = getCollectionIdentifier(dbName, collName);
@@ -277,7 +255,7 @@ public class Cache {
         return result;
     }
 
-    private void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
+    public void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
         memoryManagement().recordAccess(AccessKind.FIELD_INDEX, dbName, collName, fieldName);
         taskManager().submitBackgroundTask(new CollectionUsageEvent(AccessKind.FIELD_INDEX, dbName, collName, fieldName,
                 System.currentTimeMillis()));

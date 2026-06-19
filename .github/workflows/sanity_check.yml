@@ -44,6 +44,14 @@ jobs:
           STREAM_TEST_DOCS: "2000"
           STREAM_TEST_PAYLOAD_BYTES: "512"
         run: python3 test_utils/test_streaming_reads.py
+      - name: Run index-backed aggregation tests
+        env:
+          # CI runners are slower; dial the workload down so the run stays quick
+          # while still being large enough for the index fast-paths to clearly
+          # beat the full-scan paths (GROUP_BY / JOIN / SORT / DISTINCT).
+          INDEX_TEST_DOCS: "2000"
+          INDEX_TEST_PAYLOAD_BYTES: "512"
+        run: python3 test_utils/test_index_aggregations.py
       - name: Run TLS integration tests
         # Self-contained: starts its own TLS-enabled server on a dedicated port
         # (9443) and working directory, then stops it — independent of the
