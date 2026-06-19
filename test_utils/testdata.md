@@ -932,3 +932,31 @@ Custom types
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "_id": "aDatetimeTest", "aDatetime": "#time(12:00:00)" }}
 ```
 
+Index-backed aggregations
+
+The `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` steps use a field index when one exists on the step's field and the step is the first step in the pipeline. Create an index on the field, then run the step as the only step to exercise the index path (the same commands return the same results with or without the index — the index just makes them faster).
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "testCollection", "fieldName": "aNumber"}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "DISTINCT", "fieldName": "aNumber"}]}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "GROUP_BY", "fieldName": "aNumber"}]}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "SORT", "fieldName": "aNumber", "ascending": true}]}
+```
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "joinMe", "fieldName": "joinField"}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "JOIN", "joinCollection": "joinMe", "localField": "aNumber", "remoteField": "joinField", "asField": "joined"}]}
+```
+

@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -13,6 +14,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
@@ -72,6 +74,67 @@ public class IndexHelper {
 
     public static boolean dropIndex(String dbName, String collName, String fieldName) {
         return fs.dropIndex(dbName, collName, fieldName);
+    }
+
+    // Read-side index usage for aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT). Returns every
+    // FieldIndexEntry across all value-type files for the field (value -> ids), or null when the
+    // field is not indexed or no index entries could be loaded, in which case the caller falls back
+    // to the existing scan path. Entries are gathered through the field-and-type-specific loader (the
+    // same one the FILTER path uses) so only this field's indexes are returned. A field index access
+    // is recorded so index-backed aggregations feed the LFU usage stats, exactly like indexed
+    // filters do.
+    public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
+            throws IOException {
+        if (!cache.hasIndex(dbName, collName, fieldName)) {
+            return null;
+        }
+        final var combined = new ArrayList<FieldIndexEntry<?>>();
+        addEntriesOfType(combined, dbName, collName, fieldName, Number.class);
+        addEntriesOfType(combined, dbName, collName, fieldName, Boolean.class);
+        addEntriesOfType(combined, dbName, collName, fieldName, String.class);
+        for (var customType : CustomTypeFactory.getCustomTypes().values()) {
+            addEntriesOfType(combined, dbName, collName, fieldName, customType);
+        }
+        if (combined.isEmpty()) {
+            return null;
+        }
+        if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
+            cache.recordFieldIndexAccess(dbName, collName, fieldName);
+        }
+        return combined;
+    }
+
+    private static void addEntriesOfType(List<FieldIndexEntry<?>> combined, String dbName, String collName,
+            String fieldName, Class<?> type) throws IOException {
+        final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
+        if (entries != null) {
+            combined.addAll(entries);
+        }
+    }
+
+    // Converts a FieldIndexEntry value back to its wire element so it can be used as a group key,
+    // distinct value, or join key. Numbers/strings/booleans are stored as raw Java types; custom
+    // types and nulls are already JsonBaseElements and pass through unchanged.
+    public static JsonBaseElement indexValueToElement(Object value) {
+        return switch (value) {
+            case null -> JsonNull.INSTANCE;
+            case JsonBaseElement element -> element;
+            case Number number -> numberToElement(number);
+            case Boolean bool -> new JsonBoolean(bool);
+            case String string -> new JsonString(string);
+            default -> throw new IllegalStateException("Unexpected index value: " + value);
+        };
+    }
+
+    // Field indexes persist numbers as doubles, but documents represent integral numbers as
+    // integers; normalize so an index-derived number hashes and compares equal to the same value
+    // read from a document (this matters for JOIN key lookups, which rely on hashCode).
+    private static JsonBaseElement numberToElement(Number number) {
+        final var asDouble = number.doubleValue();
+        if (asDouble % 1.0 == 0 && asDouble >= Integer.MIN_VALUE && asDouble <= Integer.MAX_VALUE) {
+            return new JsonNumber((int) asDouble);
+        }
+        return new JsonNumber(asDouble);
     }
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<DbEntry> insertedEntries,

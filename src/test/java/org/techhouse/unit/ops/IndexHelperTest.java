@@ -280,4 +280,61 @@ public class IndexHelperTest {
                 Double.class);
         assertTrue(index == null || index.stream().noneMatch(e -> e.getIds().contains("del1")));
     }
+
+    // getIndexEntriesForField returns null when the field has no index (caller falls back to scan)
+    @Test
+    public void test_get_index_entries_for_field_returns_null_when_no_index() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("n1", "tag", new JsonString("alpha"));
+        setupCollection(cache, entry);
+        // No index created on "tag"
+        assertNull(IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag"));
+    }
+
+    // getIndexEntriesForField returns all entries (value -> ids) for an indexed field
+    @Test
+    public void test_get_index_entries_for_field_returns_entries_when_indexed() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("n1", "tag", new JsonString("alpha")),
+                entryWith("n2", "tag", new JsonString("beta")), entryWith("n3", "tag", new JsonString("alpha")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tag");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("tag"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag");
+        assertNotNull(entries);
+        // Two distinct values: alpha (ids n1, n3) and beta (id n2)
+        assertEquals(2, entries.size());
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("n1", "n2", "n3"), allIds);
+    }
+
+    // indexValueToElement converts each stored value kind back to its wire element
+    @Test
+    public void test_index_value_to_element_for_all_value_kinds() {
+        // Integral numbers normalize so they compare/hash equal to a document-read integer
+        final var numberElement = IndexHelper.indexValueToElement(42.0);
+        assertTrue(numberElement.isJsonNumber());
+        assertEquals(42, numberElement.asJsonNumber().asInteger());
+        assertEquals(new JsonNumber(42), numberElement);
+
+        // Non-integral numbers stay as doubles
+        final var doubleElement = IndexHelper.indexValueToElement(5.5);
+        assertTrue(doubleElement.isJsonNumber());
+        assertEquals(5.5, doubleElement.asJsonNumber().getValue().doubleValue());
+
+        final var stringElement = IndexHelper.indexValueToElement("hello");
+        assertTrue(stringElement.isJsonString());
+        assertEquals("hello", stringElement.asJsonString().getValue());
+
+        final var booleanElement = IndexHelper.indexValueToElement(Boolean.TRUE);
+        assertTrue(booleanElement.isJsonBoolean());
+        assertTrue(booleanElement.asJsonBoolean().getValue());
+
+        final var custom = new JsonTime("#time(10:00:00)");
+        assertSame(custom, IndexHelper.indexValueToElement(custom));
+
+        assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(null));
+        assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(JsonNull.INSTANCE));
+    }
 }

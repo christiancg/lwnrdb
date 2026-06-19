@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,11 +15,13 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -494,6 +497,261 @@ public class AggregationOperationHelperTest {
         request.setAggregationSteps(steps);
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
+
+        assertEquals(0, result.size());
+    }
+
+    // ---- Index-backed aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT) ----
+
+    private void addDoc(Cache cache, String id, String field, JsonBaseElement value) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(field, value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private void enableIndex(Cache cache, String field) {
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
+    }
+
+    private void addJoinDoc(Cache cache, String id, int refKey, String label) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.addProperty("refKey", refKey);
+        obj.addProperty("label", label);
+        final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.JOIN_COLL, obj);
+        e.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.JOIN_COLL, e);
+    }
+
+    // DISTINCT over an indexed field returns the same values as a non-indexed scan
+    @Test
+    public void test_distinct_uses_index_returns_same_values_as_scan() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "color", new JsonString("red"));
+        addDoc(cache, "c2", "color", new JsonString("blue"));
+        addDoc(cache, "c3", "color", new JsonString("red"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));
+        final var scanValues = AggregationOperationHelper.processAggregation(req).stream()
+                .map(o -> o.get("color").asJsonString().getValue()).collect(java.util.stream.Collectors.toSet());
+
+        enableIndex(cache, "color");
+        final var indexed = AggregationOperationHelper.processAggregation(req);
+        final var indexValues = indexed.stream().map(o -> o.get("color").asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertEquals(2, indexed.size());
+        assertEquals(scanValues, indexValues);
+    }
+
+    // Index-backed DISTINCT does not read any documents (still works after the doc cache is evicted)
+    @Test
+    public void test_distinct_indexed_reads_no_documents() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "color", new JsonString("red"));
+        addDoc(cache, "c2", "color", new JsonString("blue"));
+        enableIndex(cache, "color");
+        cache.evictCollectionDocuments(TestGlobals.DB, TestGlobals.COLL);
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+    }
+
+    // GROUP_BY over an indexed field produces the same groups as a non-indexed scan
+    @Test
+    public void test_group_by_uses_index_groups_match_scan() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "g1", "type", new JsonString("A"));
+        addDoc(cache, "g2", "type", new JsonString("B"));
+        addDoc(cache, "g3", "type", new JsonString("A"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("type")));
+        final var scan = AggregationOperationHelper.processAggregation(req);
+
+        enableIndex(cache, "type");
+        final var indexed = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(scan.size(), indexed.size());
+        assertEquals(2, indexed.size());
+        final var groupA = indexed.stream().filter(o -> o.get("type").asJsonString().getValue().equals("A")).findFirst()
+                .orElseThrow();
+        assertEquals(2, groupA.get("group").asJsonArray().size());
+        final var groupB = indexed.stream().filter(o -> o.get("type").asJsonString().getValue().equals("B")).findFirst()
+                .orElseThrow();
+        assertEquals(1, groupB.get("group").asJsonArray().size());
+    }
+
+    // SORT ascending over an indexed field orders documents like the non-indexed path
+    @Test
+    public void test_sort_ascending_uses_index_matches_scan_order() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "score", new JsonNumber(30));
+        addDoc(cache, "s2", "score", new JsonNumber(10));
+        addDoc(cache, "s3", "score", new JsonNumber(20));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("score", true)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(3, result.size());
+        assertEquals(10, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(20, result.get(1).get("score").asJsonNumber().asInteger());
+        assertEquals(30, result.get(2).get("score").asJsonNumber().asInteger());
+    }
+
+    // SORT descending over an indexed field orders documents in reverse
+    @Test
+    public void test_sort_descending_uses_index_matches_scan_order() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "score", new JsonNumber(30));
+        addDoc(cache, "s2", "score", new JsonNumber(10));
+        addDoc(cache, "s3", "score", new JsonNumber(20));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("score", false)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(3, result.size());
+        assertEquals(30, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(20, result.get(1).get("score").asJsonNumber().asInteger());
+        assertEquals(10, result.get(2).get("score").asJsonNumber().asInteger());
+    }
+
+    // JOIN using a remote-field index attaches only the matching remote documents
+    @Test
+    public void test_join_uses_remote_index_returns_only_matching() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 42);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+
+        addJoinDoc(cache, "j1", 42, "matched");
+        addJoinDoc(cache, "j2", 7, "nope");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.JOIN_COLL).setIndexes(Set.of("refKey"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        final var joined = result.getFirst().get("joined").asJsonArray();
+        assertEquals(1, joined.size());
+        assertEquals("matched", joined.get(0).asJsonObject().get("label").asJsonString().getValue());
+    }
+
+    // DISTINCT with a null field name ignores the index and deduplicates whole documents
+    @Test
+    public void test_distinct_null_field_ignores_index() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "d1", "color", new JsonString("red"));
+        addDoc(cache, "d2", "color", new JsonString("red"));
+        enableIndex(cache, "color");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep(null)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+    }
+
+    // GROUP_BY after a FILTER must operate on the filtered subset (no index fast-path)
+    @Test
+    public void test_group_by_with_upstream_filter_does_not_use_index() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "g1", "type", new JsonString("A"));
+        addDoc(cache, "g2", "type", new JsonString("B"));
+        addDoc(cache, "g3", "type", new JsonString("A"));
+        enableIndex(cache, "type");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "type", new JsonString("A"))),
+                new GroupByAggregationStep("type")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        assertEquals("A", result.getFirst().get("type").asJsonString().getValue());
+        assertEquals(2, result.getFirst().get("group").asJsonArray().size());
+    }
+
+    // SORT after a FILTER must sort only the filtered subset (no index fast-path)
+    @Test
+    public void test_sort_with_upstream_stream_does_not_use_index() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "score", new JsonNumber(30));
+        addDoc(cache, "s2", "score", new JsonNumber(10));
+        addDoc(cache, "s3", "score", new JsonNumber(20));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.GREATER_THAN, "score", new JsonNumber(10))),
+                new SortAggregationStep("score", true)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+        assertEquals(20, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(30, result.get(1).get("score").asJsonNumber().asInteger());
+    }
+
+    // Without an index the step falls back to the scan path
+    @Test
+    public void test_distinct_without_index_falls_back_to_scan() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "color", new JsonString("red"));
+        addDoc(cache, "c2", "color", new JsonString("blue"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+    }
+
+    // Option B: documents whose indexed field holds an object/array are not in the index, so an
+    // index-backed DISTINCT does not include them
+    @Test
+    public void test_object_valued_field_excluded_from_indexed_distinct() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "o1", "data", new JsonString("scalar"));
+        final var objVal = new JsonObject();
+        objVal.addProperty("nested", 1);
+        addDoc(cache, "o2", "data", objVal);
+        enableIndex(cache, "data");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("data")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        assertEquals("scalar", result.getFirst().get("data").asJsonString().getValue());
+    }
+
+    // An indexed step on an empty collection returns no results
+    @Test
+    public void test_indexed_distinct_on_empty_collection_returns_empty() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        enableIndex(cache, "color");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));
+        final var result = AggregationOperationHelper.processAggregation(req);
 
         assertEquals(0, result.size());
     }
