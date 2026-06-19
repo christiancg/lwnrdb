@@ -35,7 +35,6 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [x] Date type support 
 - [ ] Geo type support
   - [ ] Distance operator
   - [ ] Within operator
@@ -47,6 +46,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [ ] Separated caches for admin entries and user entries
+- [x] Date type support
 - [x] Index usage in:
   - [x] group by
   - [x] join
