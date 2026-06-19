@@ -35,19 +35,23 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [x] Date type support 
 - [ ] Geo type support
   - [ ] Distance operator
   - [ ] Within operator
 - [ ] Vector type support
   - [ ] Semantic search
-- [ ] Index usage in:
-  - [ ] group by
-  - [ ] join
-  - [ ] sort
-  - [ ] distinct
+- [ ] Index usage for object and array fields (currently indexes only cover scalar/custom/null values)
+- [ ] Index usage in count (push a `COUNT` that follows an indexed `FILTER` down to the index id-set size, so matching documents are never read)
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
+- [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
+- [ ] Separated caches for admin entries and user entries
+- [x] Date type support
+- [x] Index usage in:
+  - [x] group by
+  - [x] join
+  - [x] sort
+  - [x] distinct
 - [x] Better file locks
 - [x] 95% test coverage
 - [x] Request validation
@@ -56,7 +60,6 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [x] Numerical values that are integers shouldn't be printed with ".0"
 - [x] Users and permissions
 - [x] Secure connections with TLS or something similar
-- [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Remove lombok
 - [x] Check that in join aggregations, the user should have permissions to the collection that is being joined
 - [x] Validation of configurations
@@ -164,6 +167,8 @@ Queries run through a pipeline of steps. `aggregationSteps` may be empty (return
 | `LIMIT` | `limit` (> 0) | |
 | `SKIP` | `skip` (>= 0) | |
 | `SORT` | `fieldName`, `ascending` | |
+
+`GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. Indexes model scalar/custom/null values, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)).
 
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
@@ -447,7 +452,9 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 
 **Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
 
-**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC. The inherently blocking steps — `SORT`, `GROUP_BY`, `JOIN`, `DISTINCT` — still materialize their working set in memory.
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
+
+`SORT`, `GROUP_BY`, `JOIN`, and `DISTINCT` also use a single-field index when one exists on the step's field **and** the step is the pipeline source (no earlier step has already produced a stream). The field index maps each value to its matching ids, so the step works from that grouping instead of scanning the whole collection: `DISTINCT` reads no documents at all (the index keys are the distinct values), `GROUP_BY`/`SORT` fetch only the grouped/ordered documents via positioned reads, and `JOIN` fetches only the remote documents whose value matches a local value. Because indexes model scalar/custom/null values only, documents whose indexed field holds a JSON object or array are outside index scope and do not appear in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results; run the step on a non-indexed field if you need those included. When no index applies, these steps still materialize their working set in memory as before.
 
 ### Concurrency & locking
 
