@@ -767,8 +767,7 @@ public class AggregationOperationHelperTest {
         return result.getFirst().get("count").asJsonNumber().asInteger();
     }
 
-    private void addDocWithFields(Cache cache, String id, JsonBaseElement v1, String f2,
-                                  JsonBaseElement v2) {
+    private void addDocWithFields(Cache cache, String id, JsonBaseElement v1, String f2, JsonBaseElement v2) {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("status", v1);

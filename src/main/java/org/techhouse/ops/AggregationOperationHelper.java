@@ -64,7 +64,7 @@ public final class AggregationOperationHelper {
                 case MAP -> processMapStep(step, resultStream, dbName, collName);
                 case GROUP_BY -> processGroupByStep(step, resultStream, dbName, collName);
                 case JOIN -> processJoinStep(step, resultStream, dbName, collName);
-                case COUNT -> CountOperatorHelper.processCountStep(resultStream, dbName, collName);
+                case COUNT -> processCountStep(resultStream, dbName, collName);
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName);
                 case LIMIT -> processLimitStep(step, resultStream, dbName, collName);
                 case SKIP -> processSkipStep(step, resultStream, dbName, collName);
@@ -72,6 +72,11 @@ public final class AggregationOperationHelper {
             };
         }
         return resultStream != null ? resultStream.toList() : new ArrayList<>();
+    }
+
+    private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName,
+            String collName) {
+        return CountOperatorHelper.processCountStep(resultStream, dbName, collName);
     }
 
     private static Stream<JsonObject> processFilterStep(BaseAggregationStep baseFilterStep,
