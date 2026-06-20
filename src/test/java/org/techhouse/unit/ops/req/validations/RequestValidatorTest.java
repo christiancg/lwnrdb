@@ -22,6 +22,7 @@ import org.techhouse.ops.req.ListDatabasesRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.validations.RequestValidator;
@@ -317,6 +318,33 @@ public class RequestValidatorTest {
         final var req = new AggregateRequest("myDb", "myColl");
         req.setAggregationSteps(List.of(new LimitAggregationStep(-1)));
         assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_aggregate_countAsLastStep_returnsOk() {
+        final var req = new AggregateRequest("myDb", "myColl");
+        final var filter = new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("test")));
+        req.setAggregationSteps(List.of(filter, new CountAggregationStep()));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_aggregate_countOnlyStep_returnsOk() {
+        final var req = new AggregateRequest("myDb", "myColl");
+        req.setAggregationSteps(List.of(new CountAggregationStep()));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_aggregate_countNotLast_returnsFail() {
+        final var req = new AggregateRequest("myDb", "myColl");
+        final var filter = new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("test")));
+        req.setAggregationSteps(List.of(filter, new CountAggregationStep(), filter));
+        final var result = RequestValidator.validate(req);
+        assertFalse(result.isValid());
+        assertEquals("COUNT must be the last aggregation step", result.getErrorMessage());
     }
 
     // CREATE_INDEX
