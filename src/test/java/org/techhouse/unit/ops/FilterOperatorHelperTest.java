@@ -771,4 +771,181 @@ public class FilterOperatorHelperTest {
 
         assertEquals(1, result.size());
     }
+
+    // ---- resolveIdsViaIndex (index-only id-set resolution, used by index-backed COUNT) ----
+
+    private void addIndexedDoc(Cache cache, String id, JsonBaseElement value) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("status", value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private void index(Cache cache, String... fields) {
+        for (final var field : fields) {
+            org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
+        }
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(java.util.Set.of(fields));
+    }
+
+    // Populates the PK index in the user cache directly so NOR/NAND can compute the full id universe
+    // without a real on-disk collection.
+    private void injectPkIndex() throws Exception {
+        final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
+        final var list = new ArrayList<PkIndexEntry>();
+        for (final var id : new String[]{"r1", "r2", "r3"}) {
+            list.add(new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, id, 0, 100, 0));
+        }
+        final var pkMap = new java.util.concurrent.ConcurrentHashMap<String, List<PkIndexEntry>>();
+        pkMap.put(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), list);
+        TestUtils.setPrivateField(userCache, "pkIndexMap", pkMap);
+    }
+
+    // A single indexed field operator resolves to exactly the matching ids.
+    @Test
+    public void test_resolve_ids_single_field_returns_index_ids() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addIndexedDoc(cache, "r1", new JsonString("active"));
+        addIndexedDoc(cache, "r2", new JsonString("inactive"));
+        addIndexedDoc(cache, "r3", new JsonString("active"));
+        index(cache, "status");
+
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));
+        final var ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(java.util.Set.of("r1", "r3"), ids);
+    }
+
+    // A field without an index cannot be resolved → null signals the caller to fall back.
+    @Test
+    public void test_resolve_ids_unindexed_field_returns_null() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addIndexedDoc(cache, "r1", new JsonString("active"));
+
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // AND intersects the child id-sets.
+    @Test
+    public void test_resolve_ids_and_intersects_child_sets() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addTwoFieldDoc(cache, "r1", "active", 1);
+        addTwoFieldDoc(cache, "r2", "active", 2);
+        addTwoFieldDoc(cache, "r3", "inactive", 1);
+        index(cache, "status", "level");
+
+        final var and = new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
+        assertEquals(java.util.Set.of("r1"),
+                FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // OR unions the child id-sets.
+    @Test
+    public void test_resolve_ids_or_unions_child_sets() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addTwoFieldDoc(cache, "r1", "active", 1);
+        addTwoFieldDoc(cache, "r2", "active", 2);
+        addTwoFieldDoc(cache, "r3", "inactive", 3);
+        index(cache, "status", "level");
+
+        final var or = new ConjunctionOperator(ConjunctionOperatorType.OR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(3))));
+        assertEquals(java.util.Set.of("r1", "r2", "r3"),
+                FilterOperatorHelper.resolveIdsViaIndex(or, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // XOR keeps ids that appear in exactly one child id-set.
+    @Test
+    public void test_resolve_ids_xor_keeps_exactly_one() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addTwoFieldDoc(cache, "r1", "active", 1); // matches both leaves
+        addTwoFieldDoc(cache, "r2", "active", 2); // matches only status
+        addTwoFieldDoc(cache, "r3", "inactive", 1); // matches only level
+        index(cache, "status", "level");
+
+        final var xor = new ConjunctionOperator(ConjunctionOperatorType.XOR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
+        assertEquals(java.util.Set.of("r2", "r3"),
+                FilterOperatorHelper.resolveIdsViaIndex(xor, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // NOR is the complement of the union against the full id universe (from the PK index).
+    @Test
+    public void test_resolve_ids_nor_complements_against_pk_index() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addTwoFieldDoc(cache, "r1", "active", 1);
+        addTwoFieldDoc(cache, "r2", "active", 2);
+        addTwoFieldDoc(cache, "r3", "inactive", 3);
+        index(cache, "status", "level");
+        injectPkIndex();
+
+        final var nor = new ConjunctionOperator(ConjunctionOperatorType.NOR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(3))));
+        // union(active = r1,r2; level3 = r3) = {r1,r2,r3}; complement against {r1,r2,r3} = {}
+        assertEquals(java.util.Set.of(),
+                FilterOperatorHelper.resolveIdsViaIndex(nor, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // NAND is the complement of the intersection against the full id universe.
+    @Test
+    public void test_resolve_ids_nand_complements_against_pk_index() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addTwoFieldDoc(cache, "r1", "active", 1);
+        addTwoFieldDoc(cache, "r2", "active", 2);
+        addTwoFieldDoc(cache, "r3", "inactive", 1);
+        index(cache, "status", "level");
+        injectPkIndex();
+
+        final var nand = new ConjunctionOperator(ConjunctionOperatorType.NAND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
+        // intersection(active = r1,r2; level1 = r1,r3) = {r1}; complement against {r1,r2,r3} = {r2,r3}
+        assertEquals(java.util.Set.of("r2", "r3"),
+                FilterOperatorHelper.resolveIdsViaIndex(nand, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // A conjunction with one unindexed leaf cannot be resolved purely from indexes → null.
+    @Test
+    public void test_resolve_ids_conjunction_with_unindexed_leaf_returns_null() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addTwoFieldDoc(cache, "r1", "active", 1);
+        index(cache, "status"); // "level" is not indexed
+
+        final var and = new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    // An indexed value with no matches resolves to an empty set (count 0), not null.
+    @Test
+    public void test_resolve_ids_no_matches_returns_empty_set() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addIndexedDoc(cache, "r1", new JsonString("active"));
+        index(cache, "status");
+
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("missing"));
+        final var ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL);
+
+        assertNotNull(ids);
+        assertTrue(ids.isEmpty());
+    }
+
+    private void addTwoFieldDoc(Cache cache, String id, String status, int level) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.addProperty("status", status);
+        obj.addProperty("level", level);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
 }

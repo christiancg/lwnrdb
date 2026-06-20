@@ -13,7 +13,6 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
-import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
@@ -34,7 +33,6 @@ public final class AggregationOperationHelper {
     private AggregationOperationHelper() {
     }
     private static final String GROUP_FIELD_NAME = "group";
-    private static final String COUNT_FIELD_NAME = "count";
     private static final Cache cache = IocContainer.get(Cache.class);
 
     public static List<JsonObject> processStepsOnStream(List<BaseAggregationStep> steps,
@@ -49,13 +47,24 @@ public final class AggregationOperationHelper {
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
             String dbName, String collName) throws IOException {
         Stream<JsonObject> resultStream = initialStream;
-        for (var step : steps) {
+        var startIndex = 0;
+        if (resultStream == null) {
+            final var fastCount = CountOperatorHelper.tryIndexOnlyCount(steps, dbName, collName);
+            if (fastCount != null) {
+                resultStream = Stream.of(fastCount.result());
+                // The steps up to and including the COUNT have been answered from the indexes; any
+                // steps after the COUNT still run normally on the produced {count:N} stream.
+                startIndex = fastCount.nextStepIndex();
+            }
+        }
+        for (var i = startIndex; i < steps.size(); i++) {
+            final var step = steps.get(i);
             resultStream = switch (step.getType()) {
                 case FILTER -> processFilterStep(step, resultStream, dbName, collName);
                 case MAP -> processMapStep(step, resultStream, dbName, collName);
                 case GROUP_BY -> processGroupByStep(step, resultStream, dbName, collName);
                 case JOIN -> processJoinStep(step, resultStream, dbName, collName);
-                case COUNT -> processCountStep(resultStream, dbName, collName);
+                case COUNT -> CountOperatorHelper.processCountStep(resultStream, dbName, collName);
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName);
                 case LIMIT -> processLimitStep(step, resultStream, dbName, collName);
                 case SKIP -> processSkipStep(step, resultStream, dbName, collName);
@@ -197,21 +206,6 @@ public final class AggregationOperationHelper {
             }
         }
         return lookup;
-    }
-
-    private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName,
-            String collName) {
-        final var result = new JsonObject();
-        if (resultStream != null) {
-            result.addProperty(COUNT_FIELD_NAME, resultStream.count());
-        } else {
-            final var adminPageEntries = cache.getAdminPageEntries(dbName, collName);
-            final var totalCount = adminPageEntries != null
-                    ? adminPageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum()
-                    : 0;
-            result.addProperty(COUNT_FIELD_NAME, totalCount);
-        }
-        return Stream.of(result);
     }
 
     private static Stream<JsonObject> processDistinctStep(BaseAggregationStep baseDistinctStep,

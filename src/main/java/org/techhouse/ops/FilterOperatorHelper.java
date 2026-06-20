@@ -2,7 +2,10 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiPredicate;
@@ -179,19 +182,7 @@ public class FilterOperatorHelper {
             FieldOperator operator, Stream<JsonObject> resultStream, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
-        final var value = operator.getValue();
-        Set<String> matchingValues;
-        matchingValues = switch (value) {
-            case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
-            case JsonBoolean jsonBoolean ->
-                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
-            case JsonNumber jsonNumber ->
-                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonNumber.getValue());
-            case JsonCustom<?> jsonCustom -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonCustom);
-            case JsonString jsonString ->
-                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
-            default -> null;
-        };
+        final var matchingValues = indexMatchingIds(operator, dbName, collName);
         if (matchingValues != null) {
             if (resultStream == null) {
                 // Index hit with no upstream stream: fetch only the matched entries via
@@ -219,5 +210,91 @@ public class FilterOperatorHelper {
             }
         }
         return resultStream;
+    }
+
+    // Resolves the matching document ids for a filter operator using ONLY indexes (and, for
+    // NOR/NAND, the PK index as the full id universe). Returns null if any leaf field operator is
+    // not index-resolvable, signaling the caller to fall back to the document-reading path. No
+    // documents are read, so a COUNT that immediately follows an index-resolvable FILTER can be
+    // answered from the size of this set.
+    public static Set<String> resolveIdsViaIndex(BaseOperator operator, String dbName, String collName)
+            throws IOException {
+        return switch (operator.getType()) {
+            case FIELD -> indexMatchingIds((FieldOperator) operator, dbName, collName);
+            case CONJUNCTION -> resolveConjunctionIds((ConjunctionOperator) operator, dbName, collName);
+        };
+    }
+
+    private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
+            throws IOException {
+        final var fieldName = operator.getField();
+        final var value = operator.getValue();
+        return switch (value) {
+            case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
+            case JsonBoolean jsonBoolean ->
+                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());
+            case JsonNumber jsonNumber ->
+                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonNumber.getValue());
+            case JsonCustom<?> jsonCustom -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonCustom);
+            case JsonString jsonString ->
+                cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonString.getValue());
+            default -> null;
+        };
+    }
+
+    private static Set<String> resolveConjunctionIds(ConjunctionOperator operator, String dbName, String collName)
+            throws IOException {
+        final var childSets = new ArrayList<Set<String>>();
+        for (var child : operator.getOperators()) {
+            final var ids = resolveIdsViaIndex(child, dbName, collName);
+            if (ids == null) {
+                return null; // a leaf isn't index-resolvable -> caller falls back to reading documents
+            }
+            childSets.add(ids);
+        }
+        return switch (operator.getConjunctionType()) {
+            case AND -> occurringExactly(childSets, childSets.size());
+            case XOR -> occurringExactly(childSets, 1);
+            case OR -> union(childSets);
+            case NOR -> complement(union(childSets), dbName, collName);
+            case NAND -> complement(occurringExactly(childSets, childSets.size()), dbName, collName);
+        };
+    }
+
+    private static Set<String> union(List<Set<String>> sets) {
+        final var result = new HashSet<String>();
+        for (var set : sets) {
+            result.addAll(set);
+        }
+        return result;
+    }
+
+    // Tallies how many child sets each id appears in and keeps the ids whose count equals times.
+    // Models AND (times == number of operators) and XOR (times == 1) exactly like the stream-based
+    // andXorConjunction does.
+    private static Set<String> occurringExactly(List<Set<String>> sets, int times) {
+        final var counts = new HashMap<String, Integer>();
+        for (var set : sets) {
+            for (var id : set) {
+                counts.merge(id, 1, Integer::sum);
+            }
+        }
+        return counts.entrySet().stream().filter(entry -> entry.getValue() == times).map(Map.Entry::getKey)
+                .collect(Collectors.toSet());
+    }
+
+    // The complement of matched relative to every id in the collection. The full id set comes from
+    // the PK index (metadata only, no documents read), matching the stream-based NOR/NAND path that
+    // diffs against the whole collection.
+    private static Set<String> complement(Set<String> matched, String dbName, String collName) throws IOException {
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var result = new HashSet<String>();
+        for (var entry : pkIndex) {
+            final var id = entry.getValue();
+            if (!matched.contains(id)) {
+                result.add(id);
+            }
+        }
+        return result;
     }
 }
