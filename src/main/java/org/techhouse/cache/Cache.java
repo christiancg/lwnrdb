@@ -111,18 +111,6 @@ public class Cache {
         userCache.evictCollection(dbName, collName);
     }
 
-    public void evictCollectionDocuments(String dbName, String collName) {
-        userCache.evictCollectionDocuments(dbName, collName);
-    }
-
-    public void evictPkIndex(String dbName, String collName) {
-        userCache.evictPkIndex(dbName, collName);
-    }
-
-    public void evictFieldIndex(String dbName, String collName, String indexKey) {
-        userCache.evictFieldIndex(dbName, collName, indexKey);
-    }
-
     public List<CacheableResource> listCacheableResources() {
         return userCache.listCacheableResources();
     }

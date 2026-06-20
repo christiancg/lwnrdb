@@ -70,14 +70,12 @@ public class AdminCache {
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         usersPkIndex.putAll(pkIndexAdminUserEntriesMap);
         if (!pkIndexAdminDbEntriesMap.isEmpty()) {
-            final var adminDatabasesColl = readWholeAdminCollection(
-                    Globals.ADMIN_DATABASES_COLLECTION_NAME);
+            final var adminDatabasesColl = readWholeAdminCollection(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             loadAdminEntries(adminDatabasesColl, Globals.ADMIN_DATABASES_COLLECTION_NAME, AdminDbEntry::fromJsonObject,
                     databases);
         }
         if (!pkIndexAdminCollEntries.isEmpty()) {
-            final var adminCollectionsColl = readWholeAdminCollection(
-                    Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+            final var adminCollectionsColl = readWholeAdminCollection(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             loadAdminEntries(adminCollectionsColl, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
                     AdminCollEntry::fromJsonObject, collections);
         }
