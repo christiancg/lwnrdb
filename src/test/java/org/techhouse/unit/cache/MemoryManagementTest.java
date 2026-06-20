@@ -96,7 +96,7 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_noop_when_unlimited() throws Exception {
         setMaxMemory(0L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "userColl", 10);
+        seedCollectionCache("userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.runEvictionSweep();
         assertEquals(1, cache.listCacheableResources().size());
@@ -106,7 +106,7 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_noop_when_disabled() throws Exception {
         setMaxMemory(-1L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "userColl", 10);
+        seedCollectionCache("userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.runEvictionSweep();
         assertEquals(1, cache.listCacheableResources().size());
@@ -116,7 +116,7 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_noop_when_cache_under_cap() throws Exception {
         setMaxMemory(10L * 1024L * 1024L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "userColl", 10);
+        seedCollectionCache("userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.runEvictionSweep();
         assertEquals(1, cache.listCacheableResources().size());
@@ -126,8 +126,8 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_evicts_lowest_LFU_first() throws Exception {
         setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "hot", 10);
-        seedCollectionCache(cache, "cold", 10);
+        seedCollectionCache("hot", 10);
+        seedCollectionCache("cold", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         for (int i = 0; i < 5; i++) {
             mm.recordAccess(AccessKind.COLLECTION, "userDb", "hot", null);
@@ -142,7 +142,7 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_skips_resource_held_by_reader() throws Exception {
         setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "lockedColl", 10);
+        seedCollectionCache("lockedColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "lockedColl", null);
         final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
@@ -162,8 +162,8 @@ public class MemoryManagementTest {
         // PK index sizes by ESTIMATED_PK_ENTRY_BYTES (small); collection by entry bytes.
         // Set cap so PK index alone fits, but collection + PK index together do not.
         final var cache = IocContainer.get(Cache.class);
-        seedPkIndex(cache, "coll");
-        seedCollectionCache(cache, "coll", 10);
+        seedPkIndex("coll");
+        seedCollectionCache("coll", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "coll", null);
         mm.recordAccess(AccessKind.PK_INDEX, "userDb", "coll", null);
@@ -182,13 +182,13 @@ public class MemoryManagementTest {
     @Test
     public void test_runEvictionSweep_never_touches_admin() throws Exception {
         setMaxMemory(1L);
-        final var cache = IocContainer.get(Cache.class);
-        seedRawCollection(cache);
+        seedRawCollection();
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.runEvictionSweep();
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
+                "collectionMap", type);
         assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
     }
 
@@ -286,7 +286,7 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_handles_field_index_tier() throws Exception {
         setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
-        seedFieldIndex(cache, "coll");
+        seedFieldIndex("coll");
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.FIELD_INDEX, "userDb", "coll", "f|String");
         mm.runEvictionSweep();
@@ -299,7 +299,7 @@ public class MemoryManagementTest {
     public void test_runEvictionSweep_skips_concurrent_call() throws Exception {
         setMaxMemory(1L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
+        seedCollectionCache("coll", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         final var sweepRunning = TestUtils.getPrivateField(mm, "sweepRunning",
                 java.util.concurrent.atomic.AtomicBoolean.class);
@@ -331,10 +331,9 @@ public class MemoryManagementTest {
     @Test
     public void test_tier_ordinal_covers_all_kinds() throws Exception {
         setMaxMemory(1L);
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll1", 5);
-        seedPkIndex(cache, "coll2");
-        seedFieldIndex(cache, "coll3");
+        seedCollectionCache("coll1", 5);
+        seedPkIndex("coll2");
+        seedFieldIndex("coll3");
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "coll1", null);
         mm.recordAccess(AccessKind.PK_INDEX, "userDb", "coll2", null);
@@ -366,7 +365,7 @@ public class MemoryManagementTest {
     @Test
     public void test_admission_check_rejects_when_admission_would_exceed_cap() throws Exception {
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
+        seedCollectionCache("coll", 10);
         final var existing = cache.listCacheableResources().stream().mapToLong(CacheableResource::estimatedSizeBytes)
                 .sum();
         setMaxMemory(existing + 100L);
@@ -379,8 +378,7 @@ public class MemoryManagementTest {
     public void test_userCacheBytes_reflects_resources() throws Exception {
         final var mm = IocContainer.get(MemoryManagement.class);
         assertEquals(0L, mm.userCacheBytes());
-        final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "coll", 10);
+        seedCollectionCache("coll", 10);
         assertTrue(mm.userCacheBytes() > 0L);
     }
 
@@ -394,7 +392,7 @@ public class MemoryManagementTest {
     public void test_ensureHeadroomForBytes_noop_under_budget() throws Exception {
         setMaxMemory(10L * 1024L * 1024L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "userColl", 10);
+        seedCollectionCache("userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.ensureHeadroomForBytes(100L);
         assertEquals(1, cache.listCacheableResources().size());
@@ -404,7 +402,7 @@ public class MemoryManagementTest {
     public void test_ensureHeadroomForBytes_noop_when_disabled() throws Exception {
         setMaxMemory(-1L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "userColl", 10);
+        seedCollectionCache("userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.ensureHeadroomForBytes(1_000_000L);
         assertEquals(1, cache.listCacheableResources().size());
@@ -414,7 +412,7 @@ public class MemoryManagementTest {
     public void test_ensureHeadroomForBytes_noop_when_unlimited() throws Exception {
         setMaxMemory(0L);
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "userColl", 10);
+        seedCollectionCache("userColl", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.ensureHeadroomForBytes(1_000_000L);
         assertEquals(1, cache.listCacheableResources().size());
@@ -423,8 +421,8 @@ public class MemoryManagementTest {
     @Test
     public void test_ensureHeadroomForBytes_evicts_lfu_to_make_room() throws Exception {
         final var cache = IocContainer.get(Cache.class);
-        seedCollectionCache(cache, "hot", 10);
-        seedCollectionCache(cache, "cold", 10);
+        seedCollectionCache("hot", 10);
+        seedCollectionCache("cold", 10);
         final var mm = IocContainer.get(MemoryManagement.class);
         for (int i = 0; i < 5; i++) {
             mm.recordAccess(AccessKind.COLLECTION, "userDb", "hot", null);
@@ -438,21 +436,22 @@ public class MemoryManagementTest {
                 "cold should be evicted first to make headroom");
     }
 
-    private void seedFieldIndex(Cache cache, String collName) throws NoSuchFieldException, IllegalAccessException {
+    private void seedFieldIndex(String collName) throws NoSuchFieldException, IllegalAccessException {
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
         };
-        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        final var fieldIndexMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
+                "fieldIndexMap", type);
         final Map<String, List<FieldIndexEntry<?>>> indexes = new ConcurrentHashMap<>();
         indexes.put("f|String",
                 List.of(new FieldIndexEntry<>("userDb", collName, "value", new HashSet<>(List.of("id1")))));
         fieldIndexMap.put(Cache.getCollectionIdentifier("userDb", collName), indexes);
     }
 
-    private void seedCollectionCache(Cache cache, String collName, int count)
-            throws NoSuchFieldException, IllegalAccessException {
+    private void seedCollectionCache(String collName, int count) throws NoSuchFieldException, IllegalAccessException {
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
+                "collectionMap", type);
         final var inner = new ConcurrentHashMap<String, DbEntry>();
         for (int i = 0; i < count; i++) {
             final var obj = new JsonObject();
@@ -464,10 +463,11 @@ public class MemoryManagementTest {
         collectionMap.put(Cache.getCollectionIdentifier("userDb", collName), inner);
     }
 
-    private void seedRawCollection(Cache cache) throws NoSuchFieldException, IllegalAccessException {
+    private void seedRawCollection() throws NoSuchFieldException, IllegalAccessException {
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var collectionMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
+                "collectionMap", type);
         final var inner = new ConcurrentHashMap<String, DbEntry>();
         for (int i = 0; i < 5; i++) {
             final var obj = new JsonObject();
@@ -477,10 +477,11 @@ public class MemoryManagementTest {
         collectionMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), inner);
     }
 
-    private void seedPkIndex(Cache cache, String collName) throws NoSuchFieldException, IllegalAccessException {
+    private void seedPkIndex(String collName) throws NoSuchFieldException, IllegalAccessException {
         final var type = new org.techhouse.utils.ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
-        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
+        final var pkIndexMap = TestUtils.getPrivateField(IocContainer.get(org.techhouse.cache.UserCache.class),
+                "pkIndexMap", type);
         final var list = new ArrayList<PkIndexEntry>();
         list.add(new PkIndexEntry("userDb", collName, "id0", 0, 10, 0));
         pkIndexMap.put(Cache.getCollectionIdentifier("userDb", collName), list);
