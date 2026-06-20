@@ -42,9 +42,11 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Semantic search
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
+- [ ] Stored procedures
+- [ ] Jobs
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
+- [ ] Standardized error messages with error code, following HTTP patterns: 4xx → user error, 5xx → server error, ending with a specific number per error. Ie 401-1 "need to authenticate"
 - [ ] Index usage for object and array fields (currently indexes only cover scalar/custom/null values)
-- [ ] Index usage in count (push a `COUNT` that follows an indexed `FILTER` down to the index id-set size, so matching documents are never read)
 - [x] Separated caches for admin entries and user entries (the `Cache` facade composes an `AdminCache` for admin metadata and a `UserCache` for memory-managed user documents/indexes)
 - [x] Date type support
 - [x] Index usage in:
@@ -52,6 +54,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [x] join
   - [x] sort
   - [x] distinct
+  - [x] count
 - [x] Better file locks
 - [x] 95% test coverage
 - [x] Request validation
@@ -455,6 +458,8 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 **Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
 
 `SORT`, `GROUP_BY`, `JOIN`, and `DISTINCT` also use a single-field index when one exists on the step's field **and** the step is the pipeline source (no earlier step has already produced a stream). The field index maps each value to its matching ids, so the step works from that grouping instead of scanning the whole collection: `DISTINCT` reads no documents at all (the index keys are the distinct values), `GROUP_BY`/`SORT` fetch only the grouped/ordered documents via positioned reads, and `JOIN` fetches only the remote documents whose value matches a local value. Because indexes model scalar/custom/null values only, documents whose indexed field holds a JSON object or array are outside index scope and do not appear in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results; run the step on a non-indexed field if you need those included. When no index applies, these steps still materialize their working set in memory as before.
+
+A `COUNT` (with the collection as the pipeline source) is answered from the indexes alone — without reading any documents — whenever every step before it either filters via an index or leaves the document count unchanged. `FILTER` steps are resolved to id-sets through their indexes; sequential filters compose as `AND`, so the count is the size of the **intersection** of their id-sets. A single indexed field operator resolves through its field index; a conjunction resolves when every leaf is index-resolvable, combining the per-leaf id-sets with set algebra (`AND` = intersection, `OR` = union, `XOR` = exactly-one, and `NOR`/`NAND` = the complement against the full id universe taken from the PK index). Count-preserving steps between the filters and the `COUNT` — `MAP`, `JOIN`, `SORT` — are skipped entirely (they emit one row per input row, and `COUNT` discards their transformed output; `JOIN` permissions are still checked before execution). A `FILTER` is only index-resolvable while it still sees the stored documents, so once a `MAP`/`JOIN` has modified them no later `FILTER` can use its index. If a step changes the count in a data-dependent way (`GROUP_BY`, `DISTINCT`, `LIMIT`, `SKIP`), or any leaf lacks a usable index, the count falls back to counting the filtered stream as before.
 
 ### Concurrency & locking
 
