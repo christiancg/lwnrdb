@@ -556,7 +556,8 @@ public class AggregationOperationHelperTest {
         addDoc(cache, "c1", "color", new JsonString("red"));
         addDoc(cache, "c2", "color", new JsonString("blue"));
         enableIndex(cache, "color");
-        cache.evictCollectionDocuments(TestGlobals.DB, TestGlobals.COLL);
+        IocContainer.get(org.techhouse.cache.UserCache.class).evictCollectionDocuments(TestGlobals.DB,
+                TestGlobals.COLL);
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));

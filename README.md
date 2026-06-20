@@ -40,12 +40,12 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Within operator
 - [ ] Vector type support
   - [ ] Semantic search
-- [ ] Index usage for object and array fields (currently indexes only cover scalar/custom/null values)
-- [ ] Index usage in count (push a `COUNT` that follows an indexed `FILTER` down to the index id-set size, so matching documents are never read)
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
-- [ ] Separated caches for admin entries and user entries
+- [ ] Index usage for object and array fields (currently indexes only cover scalar/custom/null values)
+- [ ] Index usage in count (push a `COUNT` that follows an indexed `FILTER` down to the index id-set size, so matching documents are never read)
+- [x] Separated caches for admin entries and user entries (the `Cache` facade composes an `AdminCache` for admin metadata and a `UserCache` for memory-managed user documents/indexes)
 - [x] Date type support
 - [x] Index usage in:
   - [x] group by
