@@ -1,5 +1,6 @@
 package org.techhouse.ops.req.validations;
 
+import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
@@ -20,6 +21,8 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.req.agg.AggregationStepType;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public class RequestValidator {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -132,10 +135,21 @@ public class RequestValidator {
         if (request.getAggregationSteps() == null) {
             return ValidationResult.fail("AGGREGATE request requires an aggregationSteps array");
         }
-        for (var step : request.getAggregationSteps()) {
+        return validateAggregationSteps(request.getAggregationSteps());
+    }
+
+    // Validates each step in isolation and enforces the only positional rule: COUNT collapses the
+    // stream to a single {count:N} document, so it is only meaningful as the final step. A COUNT
+    // anywhere but last (e.g. followed by a FILTER) is rejected.
+    private static ValidationResult validateAggregationSteps(List<BaseAggregationStep> steps) {
+        for (var i = 0; i < steps.size(); i++) {
+            final var step = steps.get(i);
             final var stepResult = AggregationStepValidator.validate(step);
             if (!stepResult.isValid()) {
                 return stepResult;
+            }
+            if (step.getType() == AggregationStepType.COUNT && i < steps.size() - 1) {
+                return ValidationResult.fail("COUNT must be the last aggregation step");
             }
         }
         return ValidationResult.ok();
@@ -257,13 +271,7 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateListUsers(ListUsersRequest request) {
-        for (var step : request.getAggregationSteps()) {
-            final var result = AggregationStepValidator.validate(step);
-            if (!result.isValid()) {
-                return result;
-            }
-        }
-        return ValidationResult.ok();
+        return validateAggregationSteps(request.getAggregationSteps());
     }
 
     private static ValidationResult validateSetDatabaseOwners(SetDatabaseOwnersRequest request) {
