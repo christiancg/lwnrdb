@@ -7,7 +7,9 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminCollEntry;
@@ -36,19 +38,20 @@ public class TestUtils {
     }
 
     private static void clearCache() throws NoSuchFieldException, IllegalAccessException {
-        Cache cache = IocContainer.get(Cache.class);
-        TestUtils.setPrivateField(cache, "collections", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "databases", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "users", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "databasesPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "collectionsPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "usersPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "collectionMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "fieldIndexMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pkIndexMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pages", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pagesPkIndexes", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
+        AdminCache adminCache = IocContainer.get(AdminCache.class);
+        UserCache userCache = IocContainer.get(UserCache.class);
+        TestUtils.setPrivateField(adminCache, "collections", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "databases", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "users", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "databasesPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "collectionsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "usersPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(userCache, "collectionMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(userCache, "fieldIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(userCache, "pkIndexMap", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "pagesPkIndexes", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) {

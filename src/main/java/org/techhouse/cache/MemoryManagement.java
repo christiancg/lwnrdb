@@ -26,7 +26,7 @@ public class MemoryManagement {
     private final Logger logger = Logger.logFor(MemoryManagement.class);
     private final Configuration config = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
-    private final Cache cache = IocContainer.get(Cache.class);
+    private final UserCache userCache = IocContainer.get(UserCache.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ConcurrentHashMap<String, UsageCounter> counters = new ConcurrentHashMap<>();
@@ -189,7 +189,7 @@ public class MemoryManagement {
     }
 
     private void evictDownTo(long targetBytes) {
-        var resources = cache.listCacheableResources();
+        var resources = userCache.listCacheableResources();
         if (sumBytes(resources) <= targetBytes) {
             return;
         }
@@ -205,10 +205,10 @@ public class MemoryManagement {
             }
             try {
                 switch (resource.kind()) {
-                    case PK_INDEX -> cache.evictPkIndex(resource.dbName(), resource.collName());
+                    case PK_INDEX -> userCache.evictPkIndex(resource.dbName(), resource.collName());
                     case FIELD_INDEX ->
-                        cache.evictFieldIndex(resource.dbName(), resource.collName(), resource.indexKey());
-                    case COLLECTION -> cache.evictCollectionDocuments(resource.dbName(), resource.collName());
+                        userCache.evictFieldIndex(resource.dbName(), resource.collName(), resource.indexKey());
+                    case COLLECTION -> userCache.evictCollectionDocuments(resource.dbName(), resource.collName());
                     default -> {
                     }
                 }
@@ -219,7 +219,7 @@ public class MemoryManagement {
     }
 
     public long userCacheBytes() {
-        return sumBytes(cache.listCacheableResources());
+        return sumBytes(userCache.listCacheableResources());
     }
 
     private long sumBytes(java.util.List<CacheableResource> resources) {
