@@ -99,10 +99,12 @@ public class AggregationOperationHelperTest {
         assertEquals(0, countResult.get("count").asJsonNumber().asInteger());
     }
 
-    // Process each aggregation step type correctly with valid input data
+    // The engine processes every step type in a single pipeline without error. This drives the
+    // engine directly (bypassing request validation), so the COUNT-not-last shape is intentional:
+    // it exercises the dispatcher for all step types, not a request the validator would accept.
     @Test
-    public void test_process_aggregation_with_valid_steps() throws IOException {
-        System.out.println("Running test_process_aggregation_with_valid_steps");
+    public void test_engine_processes_all_step_types_in_sequence() throws IOException {
+        System.out.println("Running test_engine_processes_all_step_types_in_sequence");
         // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         List<BaseAggregationStep> steps = List.of(
@@ -755,5 +757,351 @@ public class AggregationOperationHelperTest {
         final var result = AggregationOperationHelper.processAggregation(req);
 
         assertEquals(0, result.size());
+    }
+
+    // ---- Index usage in COUNT (FILTER directly followed by COUNT) ----
+
+    private static int countOf(List<JsonObject> result) {
+        assertEquals(1, result.size());
+        assertTrue(result.getFirst().has("count"));
+        return result.getFirst().get("count").asJsonNumber().asInteger();
+    }
+
+    private void addDocWithFields(Cache cache, String id, JsonBaseElement v1, String f2,
+                                  JsonBaseElement v2) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("status", v1);
+        obj.add(f2, v2);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    // COUNT after an indexed FILTER is answered from the index id-set size without reading any
+    // documents (still correct after the document cache is evicted).
+    @Test
+    public void test_count_after_indexed_filter_reads_no_documents() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("inactive"));
+        addDoc(cache, "c3", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+        IocContainer.get(org.techhouse.cache.UserCache.class).evictCollectionDocuments(TestGlobals.DB,
+                TestGlobals.COLL);
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new CountAggregationStep()));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, countOf(result));
+    }
+
+    // Without an index the COUNT after a FILTER falls back to counting the scanned, filtered stream.
+    @Test
+    public void test_count_after_unindexed_filter_falls_back_and_is_correct() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("inactive"));
+        addDoc(cache, "c3", "status", new JsonString("active"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new CountAggregationStep()));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, countOf(result));
+    }
+
+    // The index-backed COUNT yields the same number as the unindexed scan path.
+    @Test
+    public void test_count_after_filter_indexed_matches_unindexed() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("inactive"));
+        addDoc(cache, "c3", "status", new JsonString("active"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new CountAggregationStep()));
+        final var scanCount = countOf(AggregationOperationHelper.processAggregation(req));
+
+        enableIndex(cache, "status");
+        final var indexedCount = countOf(AggregationOperationHelper.processAggregation(req));
+
+        assertEquals(scanCount, indexedCount);
+        assertEquals(2, indexedCount);
+    }
+
+    // Engine robustness: the request validator rejects a COUNT that is not the last step, but if
+    // such a pipeline reaches the engine directly the fast-path {count:N} stream is still fed to the
+    // trailing steps.
+    @Test
+    public void test_count_after_filter_with_trailing_step_still_runs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new CountAggregationStep(), new SkipAggregationStep(1)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        // The single count object is skipped, proving the trailing step executed on the fast-path stream.
+        assertTrue(result.isEmpty());
+    }
+
+    // COUNT after an indexed AND conjunction counts the intersection of the matched id-sets.
+    @Test
+    public void test_count_after_indexed_and_conjunction() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
+        addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
+        addDocWithFields(cache, "c3", new JsonString("inactive"), "level", new JsonNumber(1));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "level");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status", "level"));
+
+        final var and = new org.techhouse.ops.req.agg.operators.ConjunctionOperator(
+                org.techhouse.ops.req.agg.ConjunctionOperatorType.AND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new FilterAggregationStep(and), new CountAggregationStep()));
+
+        assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // COUNT after an indexed OR conjunction counts the union of the matched id-sets.
+    @Test
+    public void test_count_after_indexed_or_conjunction() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
+        addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
+        addDocWithFields(cache, "c3", new JsonString("inactive"), "level", new JsonNumber(3));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "level");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status", "level"));
+
+        final var or = new org.techhouse.ops.req.agg.operators.ConjunctionOperator(
+                org.techhouse.ops.req.agg.ConjunctionOperatorType.OR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(3))));
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new FilterAggregationStep(or), new CountAggregationStep()));
+
+        // c1 + c2 (active) ∪ c3 (level 3) = 3
+        assertEquals(3, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // A conjunction with one unindexed leaf cannot use the fast path, but still counts correctly.
+    @Test
+    public void test_count_after_partially_indexed_conjunction_falls_back() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
+        addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
+        addDocWithFields(cache, "c3", new JsonString("inactive"), "level", new JsonNumber(1));
+        // Only "status" is indexed; "level" is not.
+        enableIndex(cache, "status");
+
+        final var and = new org.techhouse.ops.req.agg.operators.ConjunctionOperator(
+                org.techhouse.ops.req.agg.ConjunctionOperatorType.AND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new FilterAggregationStep(and), new CountAggregationStep()));
+
+        assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // COUNT is not the second step, so the fast path does not fire (still correct).
+    @Test
+    public void test_count_only_step_is_unaffected() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new CountAggregationStep()));
+
+        assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // An indexed FILTER on a value with no matches yields a count of zero (empty id-set, not a fallback).
+    @Test
+    public void test_count_after_indexed_filter_no_matches_returns_zero() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("missing"))),
+                new CountAggregationStep()));
+
+        assertEquals(0, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // Sequential indexed FILTER steps compose as AND: the count is the intersection of their id-sets.
+    @Test
+    public void test_count_after_multiple_indexed_filters_intersects() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
+        addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
+        addDocWithFields(cache, "c3", new JsonString("inactive"), "level", new JsonNumber(1));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "level");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status", "level"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))),
+                new CountAggregationStep()));
+
+        // active = {c1,c2}; level 1 = {c1,c3}; intersection = {c1}
+        assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // A count-preserving MAP between the FILTER and COUNT is skipped (still reads no documents).
+    @Test
+    public void test_count_after_indexed_filter_then_map_skips_map() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("inactive"));
+        addDoc(cache, "c3", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+        IocContainer.get(org.techhouse.cache.UserCache.class).evictCollectionDocuments(TestGlobals.DB,
+                TestGlobals.COLL);
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new MapAggregationStep(
+                        List.of(new org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator("extra", null))),
+                new CountAggregationStep()));
+
+        assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // A count-preserving JOIN between the FILTER and COUNT is skipped.
+    @Test
+    public void test_count_after_indexed_filter_then_join_skips_join() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDocWithFields(cache, "c1", new JsonString("active"), "ref", new JsonNumber(1));
+        addDocWithFields(cache, "c2", new JsonString("active"), "ref", new JsonNumber(2));
+        addDocWithFields(cache, "c3", new JsonString("inactive"), "ref", new JsonNumber(1));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined"), new CountAggregationStep()));
+
+        assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // A count-preserving SORT between the FILTER and COUNT is skipped.
+    @Test
+    public void test_count_after_indexed_filter_then_sort_skips_sort() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("active"));
+        addDoc(cache, "c3", "status", new JsonString("inactive"));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new SortAggregationStep("status", true), new CountAggregationStep()));
+
+        assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // With no FILTER, count-preserving steps before COUNT yield the whole-collection count.
+    @Test
+    public void test_count_after_map_only_uses_whole_collection_count() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        insertEntry(cache, "c1", "status", "active");
+        insertEntry(cache, "c2", "status", "inactive");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new MapAggregationStep(
+                        List.of(new org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator("extra", null))),
+                new CountAggregationStep()));
+
+        assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // GROUP_BY changes the count, so the fast path is disabled and the group count is returned.
+    @Test
+    public void test_count_after_group_by_falls_back_to_group_count() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new GroupByAggregationStep("status"), new CountAggregationStep()));
+
+        // Two active docs collapse into one "status" group, so the count is the group count (1).
+        assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // A FILTER after a MAP cannot use its index, so the whole pipeline runs normally (count correct).
+    @Test
+    public void test_count_with_filter_after_map_falls_back() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("inactive"));
+        addDoc(cache, "c3", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new MapAggregationStep(
+                        List.of(new org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator("extra", null))),
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new CountAggregationStep()));
+
+        assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // LIMIT changes the count, so the fast path is disabled and the capped count is returned.
+    @Test
+    public void test_count_after_limit_falls_back() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "c1", "status", new JsonString("active"));
+        addDoc(cache, "c2", "status", new JsonString("active"));
+        enableIndex(cache, "status");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
+                new LimitAggregationStep(1), new CountAggregationStep()));
+
+        assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 }
