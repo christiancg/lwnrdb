@@ -21,6 +21,7 @@
         <pmd.version>7.25.0</pmd.version>
         <spotbugs.plugin.version>4.10.2.0</spotbugs.plugin.version>
         <spotbugs.version>4.10.2</spotbugs.version>
+        <native.maven.plugin.version>1.1.2</native.maven.plugin.version>
     </properties>
 
     <dependencies>
@@ -222,4 +223,31 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <profile>
+            <id>native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>${native.maven.plugin.version}</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                                <phase>package</phase>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>org.techhouse.Main</mainClass>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

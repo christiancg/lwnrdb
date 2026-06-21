@@ -42,6 +42,17 @@ failures = 0
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Server launch is configurable: by default the suite runs against the JAR, but
+# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
+# it launch that binary instead. Native images honor -Xmx as a runtime arg.
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+
+
+def server_argv(xmx: str):
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(REPO_ROOT, JAR)]
+
 
 # ── reporting helpers (mirrors the other suites) ────────────────────────────
 
@@ -123,9 +134,8 @@ def port_open() -> bool:
 
 
 def start_server(work_dir: str, log_path: str):
-    jar = os.path.join(REPO_ROOT, JAR)
     log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", "-Xmx512m", "-jar", jar],
+    proc = subprocess.Popen(server_argv("512m"),
                             stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
