@@ -32,6 +32,12 @@ PORT = 8989
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 
+# Pattern pgrep uses to locate the running server process. Defaults to the JAR
+# name; set LWNRDB_SERVER_BIN to the GraalVM native executable path to match it
+# instead (this suite connects to an externally-started server, it does not
+# launch one).
+SERVER_PROC_PATTERN = os.environ.get("LWNRDB_SERVER_BIN") or "lwnrdb-1.0-SNAPSHOT.jar"
+
 DB = "mem_stress"
 NUM_COLLECTIONS = int(os.environ.get("MEM_TEST_COLLECTIONS", "8"))
 DOCS_PER_COLLECTION = int(os.environ.get("MEM_TEST_DOCS", "10000"))
@@ -110,7 +116,7 @@ def get_pid_rss_mb(pid):
 def find_server_pid():
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb-1.0-SNAPSHOT.jar"], text=True).strip()
+            ["pgrep", "-f", SERVER_PROC_PATTERN], text=True).strip()
         return int(out.splitlines()[0])
     except Exception:
         return None

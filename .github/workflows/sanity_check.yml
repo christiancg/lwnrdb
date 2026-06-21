@@ -7,20 +7,42 @@ jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
+    env:
+      # All integration scripts run against the GraalVM native executable. The
+      # scripts that launch/locate the server themselves (TLS, benchmark,
+      # extensive-memory) read this to use the native binary instead of the JAR;
+      # the shared server below is launched from the same path so process
+      # matching (pgrep) is consistent.
+      LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'temurin'
-          architecture: x64
+          distribution: 'graalvm-community'
+          cache: 'maven'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install native-image build dependencies
+        # native-image links against the system C toolchain and zlib; these are
+        # usually present on ubuntu-latest but install them explicitly so the
+        # native build never fails on a missing dependency.
+        run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
       - name: Run Maven Verify
         run: mvn verify
+      - name: Build native image
+        # GraalVM is JAVA_HOME (set by setup-graalvm), so the native-maven-plugin
+        # finds native-image. Tests already ran in `verify`.
+        run: mvn -Pnative package -DskipTests
       - name: Set admin credentials for integration tests
         run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
-      - name: Start server
+      - name: Start native server
+        # Launches the GraalVM native executable (not the JAR). The suites below
+        # that connect to 127.0.0.1:8989 (auth, memory limits/extensive,
+        # streaming, index aggregations) therefore exercise the native binary;
+        # this also validates the META-INF/native-image reflection metadata end
+        # to end. Native images honor -Xmx as a runtime arg.
         run: |
-          java -Xmx1g -jar target/lwnrdb-1.0-SNAPSHOT.jar &
+          "$LWNRDB_SERVER_BIN" -Xmx1g &
           echo $! > server.pid
           until nc -z 127.0.0.1 8989; do sleep 0.2; done
       - name: Run auth integration tests
@@ -66,4 +88,4 @@ jobs:
         run: python3 test_utils/bench_cache_warmup.py
       - name: Stop server
         if: always()
-        run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
+        run: pkill -f "$LWNRDB_SERVER_BIN" || true

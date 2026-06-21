@@ -1,0 +1,655 @@
+{
+  "reflection": [
+    {
+      "type": "org.techhouse.data.Client",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.DbEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.FieldIndexEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.IndexedDbEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.PkIndexEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminCollEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminCollectionUsageEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminDbEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminPageEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminUserEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.auth.GlobalPermissionType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.auth.PasswordHasher",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.auth.PermissionLevel",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.AggregateRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.AuthenticateRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.BulkSaveRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ChangePermissionsRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.CloseConnectionRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateCollectionRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateDatabaseRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateIndexRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateUserRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteUserRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.DropCollectionRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.DropDatabaseRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.DropIndexRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.FindByIdRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.GetDatabaseStatsRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ListCollectionsRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ListDatabasesRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ListUsersRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.OperationRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.RequestParser",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.RequestParser$1",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.SetDatabaseOwnersRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.SetPasswordRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.AggregationStepType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.BaseAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.BaseOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.ConjunctionOperatorType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.FieldOperatorType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.OperatorType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.BaseMidOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.CastMidOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.CastToType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.MidOperationType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.operators.ConjunctionOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.operators.FieldOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.CountAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.DistinctAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.FilterAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.GroupByAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.JoinAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.LimitAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.MapAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.SkipAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.SortAggregationStep",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.AddFieldMapOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.MapOperationType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.MapOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.validations.AggregationStepValidator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.validations.AggregationStepValidator$1",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.validations.RequestValidator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.validations.RequestValidator$1",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.validations.ValidationResult",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.AggregateResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.AuthenticateResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.BulkSaveResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ChangePermissionsResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.CloseConnectionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.CreateCollectionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.CreateDatabaseResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.CreateIndexResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.CreateUserResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DeleteResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DeleteUserResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DropCollectionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DropDatabaseResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DropIndexResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.FindByIdResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.GetDatabaseStatsResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListCollectionsResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListDatabasesResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListUsersResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.OperationResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.SetDatabaseOwnersResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.SetPasswordResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    }
+  ]
+}

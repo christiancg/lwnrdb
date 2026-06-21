@@ -1,0 +1,1216 @@
+{
+  "reflection": [
+    {
+      "type": "java.io.IOException",
+      "serializable": true
+    },
+    {
+      "type": "java.lang.Integer"
+    },
+    {
+      "type": "java.lang.String",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "java.util.concurrent.TimeUnit",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.BackgroundTaskManager",
+      "fields": [
+        {
+          "name": "pool"
+        },
+        {
+          "name": "queue"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.bckg_ops.events.CollectionEvent"
+    },
+    {
+      "type": "org.techhouse.bckg_ops.events.Event"
+    },
+    {
+      "type": "org.techhouse.cache.AdminCache",
+      "fields": [
+        {
+          "name": "collectionUsagePkIndex"
+        },
+        {
+          "name": "collections"
+        },
+        {
+          "name": "collectionsPkIndex"
+        },
+        {
+          "name": "databases"
+        },
+        {
+          "name": "databasesPkIndex"
+        },
+        {
+          "name": "pages"
+        },
+        {
+          "name": "pagesPkIndexes"
+        },
+        {
+          "name": "users"
+        },
+        {
+          "name": "usersPkIndex"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.Cache",
+      "fields": [
+        {
+          "name": "adminCache"
+        },
+        {
+          "name": "fs"
+        },
+        {
+          "name": "memoryManagement"
+        },
+        {
+          "name": "userCache"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.MemoryManagement",
+      "fields": [
+        {
+          "name": "counters"
+        },
+        {
+          "name": "scheduler"
+        },
+        {
+          "name": "sweepRunning"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "runEvictionSweepSafely",
+          "parameterTypes": []
+        },
+        {
+          "name": "submitCleanupTask",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.cache.UserCache",
+      "fields": [
+        {
+          "name": "collectionMap"
+        },
+        {
+          "name": "fieldIndexMap"
+        },
+        {
+          "name": "fs"
+        },
+        {
+          "name": "memoryManagement"
+        },
+        {
+          "name": "pkIndexMap"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.concurrency.ResourceLocking",
+      "fields": [
+        {
+          "name": "locks"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.config.ConfigReader"
+    },
+    {
+      "type": "org.techhouse.config.Configuration",
+      "fields": [
+        {
+          "name": "backgroundProcessingThreads"
+        },
+        {
+          "name": "filePath"
+        },
+        {
+          "name": "logPath"
+        },
+        {
+          "name": "maxConnections"
+        },
+        {
+          "name": "maxLogFiles"
+        },
+        {
+          "name": "maxMemoryBytes"
+        },
+        {
+          "name": "port"
+        },
+        {
+          "name": "tlsEnabled"
+        },
+        {
+          "name": "tlsKeystorePassword"
+        },
+        {
+          "name": "tlsKeystorePath"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.conn.ClientTracker",
+      "fields": [
+        {
+          "name": "clients"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.IndexedDbEntry",
+      "fields": [
+        {
+          "name": "eJson"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.data.admin.AdminCollEntry"
+    },
+    {
+      "type": "org.techhouse.ejson.EJson",
+      "fields": [
+        {
+          "name": "reader"
+        },
+        {
+          "name": "writer"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonDateTime",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonTime",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonBaseElement"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonObject"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonPrimitive"
+    },
+    {
+      "type": "org.techhouse.ejson.elements.JsonString"
+    },
+    {
+      "type": "org.techhouse.ejson.type_adapters.TypeAdapterFactory"
+    },
+    {
+      "type": "org.techhouse.fs.FileSystem",
+      "fields": [
+        {
+          "name": "dbPath"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.log.LogWriter"
+    },
+    {
+      "type": "org.techhouse.log.Logger",
+      "fields": [
+        {
+          "name": "tClass"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.OperationProcessor",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.OperationType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.AggregateRequest",
+      "fields": [
+        {
+          "name": "aggregationSteps"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.AuthenticateRequest",
+      "fields": [
+        {
+          "name": "password"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.BulkSaveRequest",
+      "fields": [
+        {
+          "name": "objects"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ChangePermissionsRequest",
+      "fields": [
+        {
+          "name": "admin"
+        },
+        {
+          "name": "collectionPermissions"
+        },
+        {
+          "name": "databasePermissions"
+        },
+        {
+          "name": "globalPermissions"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CloseConnectionRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateCollectionRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateDatabaseRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateIndexRequest",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.CreateUserRequest",
+      "fields": [
+        {
+          "name": "admin"
+        },
+        {
+          "name": "collectionPermissions"
+        },
+        {
+          "name": "databasePermissions"
+        },
+        {
+          "name": "globalPermissions"
+        },
+        {
+          "name": "password"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteUserRequest",
+      "fields": [
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.DropCollectionRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.DropDatabaseRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.DropIndexRequest",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.FindByIdRequest",
+      "fields": [
+        {
+          "name": "_id"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListCollectionsRequest"
+    },
+    {
+      "type": "org.techhouse.ops.req.ListDatabasesRequest",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.ListUsersRequest",
+      "fields": [
+        {
+          "name": "aggregationSteps"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.OperationRequest",
+      "fields": [
+        {
+          "name": "collectionName"
+        },
+        {
+          "name": "databaseName"
+        },
+        {
+          "name": "dirtyRead"
+        },
+        {
+          "name": "type"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "org.techhouse.ops.OperationType",
+            "java.lang.String",
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SaveRequest",
+      "fields": [
+        {
+          "name": "object"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SetDatabaseOwnersRequest",
+      "fields": [
+        {
+          "name": "owners"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.SetPasswordRequest",
+      "fields": [
+        {
+          "name": "currentPassword"
+        },
+        {
+          "name": "newPassword"
+        },
+        {
+          "name": "username"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.AggregationStepType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.BaseAggregationStep",
+      "fields": [
+        {
+          "name": "type"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "org.techhouse.ops.req.agg.AggregationStepType"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.ConjunctionOperatorType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.FieldOperatorType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.CastToType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.mid_operators.MidOperationType",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.CountAggregationStep",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.DistinctAggregationStep",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.GroupByAggregationStep",
+      "fields": [
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.JoinAggregationStep",
+      "fields": [
+        {
+          "name": "asField"
+        },
+        {
+          "name": "joinCollection"
+        },
+        {
+          "name": "localField"
+        },
+        {
+          "name": "remoteField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.LimitAggregationStep",
+      "fields": [
+        {
+          "name": "limit"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.SkipAggregationStep",
+      "fields": [
+        {
+          "name": "skip"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.step.SortAggregationStep",
+      "fields": [
+        {
+          "name": "ascending"
+        },
+        {
+          "name": "fieldName"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.AuthenticateResponse"
+    },
+    {
+      "type": "org.techhouse.ops.resp.CloseConnectionResponse"
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListDatabasesResponse",
+      "fields": [
+        {
+          "name": "databases"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.OperationResponse",
+      "fields": [
+        {
+          "name": "message"
+        },
+        {
+          "name": "status"
+        },
+        {
+          "name": "type"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveResponse",
+      "fields": [
+        {
+          "name": "_id"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.EJsonTest$SimpleTestClass",
+      "fields": [
+        {
+          "name": "name"
+        },
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.EJsonTest$TestClass",
+      "fields": [
+        {
+          "name": "name"
+        },
+        {
+          "name": "value"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.EJsonTest$TestNullable",
+      "fields": [
+        {
+          "name": "nullableNumber"
+        },
+        {
+          "name": "nullableString"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.EJsonTest$TestPrimitives",
+      "fields": [
+        {
+          "name": "boolVal"
+        },
+        {
+          "name": "numVal"
+        },
+        {
+          "name": "strVal"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.custom_types.CustomTypeFactoryTest$InvalidCustomType"
+    },
+    {
+      "type": "org.techhouse.unit.ejson.custom_types.CustomTypeFactoryTest$TestCustomType",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.custom_types.CustomTypeFactoryTest$ValidCustomType",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.AssignerTest$Person",
+      "fields": [
+        {
+          "name": "age"
+        },
+        {
+          "name": "name"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$1ClassWithArray",
+      "fields": [
+        {
+          "name": "stringArray"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$1EmptyClass"
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$1InnerClass",
+      "fields": [
+        {
+          "name": "key"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$1MyClass",
+      "fields": [
+        {
+          "name": "outer"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$1OuterClass",
+      "fields": [
+        {
+          "name": "inner"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$1PrimitiveClass",
+      "fields": [
+        {
+          "name": "booleanKey"
+        },
+        {
+          "name": "numberKey"
+        },
+        {
+          "name": "stringKey"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$TestClass",
+      "fields": [
+        {
+          "name": "name"
+        },
+        {
+          "name": "value"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonReaderTest$TestPerson",
+      "fields": [
+        {
+          "name": "age"
+        },
+        {
+          "name": "name"
+        }
+      ],
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonWriterTest$1TestPojo",
+      "fields": [
+        {
+          "name": "name"
+        },
+        {
+          "name": "value"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.JsonWriterTest$2TestPojo",
+      "fields": [
+        {
+          "name": "intField"
+        },
+        {
+          "name": "stringField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.ReflectionUtilsTest$1PrivateClass"
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.ReflectionUtilsTest$1TestClass",
+      "fields": [
+        {
+          "name": "testField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.ReflectionUtilsTest$2TestClass"
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.ReflectionUtilsTest$3TestClass"
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.ReflectionUtilsTest$TestClass",
+      "fields": [
+        {
+          "name": "publicField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.internal.ReflectionUtilsTest$TestEnum",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.type_adapters.impl.EnumTypeAdapterTest$TestEnum",
+      "methods": [
+        {
+          "name": "valueOf",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.type_adapters.impl.ReflectionTypeAdapterTest$1TestClass",
+      "fields": [
+        {
+          "name": "boolField"
+        },
+        {
+          "name": "doubleField"
+        },
+        {
+          "name": "intField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.type_adapters.impl.ReflectionTypeAdapterTest$2TestClass",
+      "fields": [
+        {
+          "name": "nullField"
+        },
+        {
+          "name": "nullInteger"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.type_adapters.impl.ReflectionTypeAdapterTest$3TestClass",
+      "fields": [
+        {
+          "name": "boolField"
+        },
+        {
+          "name": "intField"
+        },
+        {
+          "name": "stringField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.type_adapters.impl.ReflectionTypeAdapterTest$4TestClass",
+      "fields": [
+        {
+          "name": "nullField"
+        },
+        {
+          "name": "nullInteger"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.ejson.type_adapters.impl.ReflectionTypeAdapterTest$5TestClass",
+      "fields": [
+        {
+          "name": "intField"
+        },
+        {
+          "name": "stringField"
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.unit.utils.ReflectionUtilsTest$MyCustomType",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "sun.misc.Unsafe",
+      "fields": [
+        {
+          "name": "theUnsafe"
+        }
+      ],
+      "methods": [
+        {
+          "name": "allocateInstance",
+          "parameterTypes": [
+            "java.lang.Class"
+          ]
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "glob": "META-INF/services/java.net.spi.InetAddressResolverProvider"
+    },
+    {
+      "glob": "META-INF/services/java.net.spi.URLStreamHandlerProvider"
+    },
+    {
+      "glob": "META-INF/services/java.time.zone.ZoneRulesProvider"
+    },
+    {
+      "glob": "META-INF/services/org.apache.maven.surefire.spi.MasterProcessChannelProcessorFactory"
+    },
+    {
+      "glob": "META-INF/services/org.junit.platform.commons.support.scanning.ClasspathScanner"
+    },
+    {
+      "glob": "META-INF/services/org.junit.platform.engine.TestEngine"
+    },
+    {
+      "glob": "META-INF/services/org.junit.platform.launcher.LauncherDiscoveryListener"
+    },
+    {
+      "glob": "META-INF/services/org.junit.platform.launcher.LauncherSessionListener"
+    },
+    {
+      "glob": "META-INF/services/org.junit.platform.launcher.PostDiscoveryFilter"
+    },
+    {
+      "glob": "META-INF/services/org.junit.platform.launcher.TestExecutionListener"
+    },
+    {
+      "glob": "default.cfg"
+    },
+    {
+      "glob": "junit-platform.properties"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.AnnotationEngine"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.DoNotMockEnforcer"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.DoNotMockEnforcerWithType"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.InstantiatorProvider2"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.MemberAccessor"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.MockMaker"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.MockResolver"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.MockitoLogger"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.PluginSwitch"
+    },
+    {
+      "glob": "mockito-extensions/org.mockito.plugins.StackTraceCleanerProvider"
+    },
+    {
+      "glob": "org/mockito/internal/creation/bytebuddy/MockMethodAdvice$ForEquals.class"
+    },
+    {
+      "glob": "org/mockito/internal/creation/bytebuddy/MockMethodAdvice$ForHashCode.class"
+    },
+    {
+      "glob": "org/mockito/internal/creation/bytebuddy/MockMethodAdvice$ForStatic.class"
+    },
+    {
+      "glob": "org/mockito/internal/creation/bytebuddy/MockMethodAdvice.class"
+    },
+    {
+      "glob": "org/mockito/internal/creation/bytebuddy/inject-MockMethodDispatcher.raw"
+    },
+    {
+      "module": "java.base",
+      "glob": "jdk/internal/icu/impl/data/icudt76b/nfc.nrm"
+    },
+    {
+      "module": "java.base",
+      "glob": "jdk/internal/icu/impl/data/icudt76b/nfkc.nrm"
+    },
+    {
+      "module": "jdk.jfr",
+      "glob": "jdk/jfr/internal/types/metadata.bin"
+    }
+  ]
+}

@@ -112,6 +112,19 @@ def time_query(s, f, value):
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 
+# Server launch is configurable: by default the benchmark runs against the JAR,
+# but setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable)
+# makes it launch that binary instead. SERVER_PROC_PATTERN is what pgrep matches
+# to find/stop the running server (the JAR name, or the native binary path).
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+SERVER_PROC_PATTERN = SERVER_BIN if SERVER_BIN else JAR
+
+
+def server_argv(xmx, repo_root):
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(repo_root, JAR)]
+
 
 SERVER_LOG = "/tmp/lwnrdb-bench.log"
 
@@ -128,7 +141,7 @@ def kill_server():
     pids = []
     try:
         out = subprocess.check_output(
-            ["pgrep", "-f", "lwnrdb-1.0-SNAPSHOT.jar"], text=True).strip()
+            ["pgrep", "-f", SERVER_PROC_PATTERN], text=True).strip()
         pids = [int(p) for p in out.splitlines() if p.strip()]
     except subprocess.CalledProcessError:
         return
@@ -153,7 +166,7 @@ def kill_server():
 def start_server():
     log = open(SERVER_LOG, "ab")
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    subprocess.Popen(["java", "-Xmx1g", "-jar", JAR],
+    subprocess.Popen(server_argv("1g", repo_root),
                      stdout=log, stderr=log, cwd=repo_root)
     deadline = time.time() + 60.0
     while time.time() < deadline:

@@ -53,3 +53,7 @@ test_log/
 certs/
 *.p12
 *.jks
+
+### Runtime artifacts ###
+# Server PID file written by the CI workflow / integration scripts when launching the server.
+server.pid
