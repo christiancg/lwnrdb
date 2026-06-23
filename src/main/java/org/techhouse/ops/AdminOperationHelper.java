@@ -338,10 +338,6 @@ public final class AdminOperationHelper {
         return cache.getAdminCollectionEntry(dbName, collName);
     }
 
-    public static boolean hasIndexEntry(String dbName, String collName, String fieldName) {
-        return cache.hasLoadedIndex(dbName, collName, fieldName);
-    }
-
     public static void saveNewIndex(String dbName, String collName, String fieldName)
             throws IOException, InterruptedException {
         internalUpdateAdminColl(dbName, collName, fieldName, true);

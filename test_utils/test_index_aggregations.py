@@ -2,6 +2,7 @@ import os
 import socket
 import json
 import sys
+import threading
 import time
 
 HOST = "127.0.0.1"
@@ -40,6 +41,7 @@ CONS_SORT = "idxagg_cons_sort"  # score-indexed: SORT
 CONS_COUNT = "idxagg_cons_count"  # no index: whole-collection COUNT (from PK index size)
 CONS_JOIN = "idxagg_cons_join"  # joinKey-indexed remote side
 CONS_LEFT = "idxagg_cons_left"  # left side of the JOIN (one shared-key row)
+CONS_CREATE = "idxagg_cons_create"  # built mid-flight: CREATE_INDEX racing concurrent saves
 CONS_REPEATS = int(os.environ.get("INDEX_TEST_CONSISTENCY_REPEATS", "30"))
 
 failures = 0
@@ -290,7 +292,7 @@ def save_doc(s, f, coll, obj) -> dict:
 
 
 def setup_consistency(s, f):
-    for coll in (CONS, CONS_SORT, CONS_COUNT, CONS_JOIN, CONS_LEFT):
+    for coll in (CONS, CONS_SORT, CONS_COUNT, CONS_JOIN, CONS_LEFT, CONS_CREATE):
         send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
     # JOIN left side: a single row that shares the key every remote row will be saved with.
     save_doc(s, f, CONS_LEFT, {"_id": "left_shared", "joinKey": "shared"})
@@ -484,6 +486,58 @@ def probe_save_delete_converges(s, f):
                detail=f"{bad}/{CONS_REPEATS} deleted values still present after settling")
 
 
+def probe_concurrent_save_during_create_index(s, f):
+    # A document saved concurrently with CREATE_INDEX must not be lost from the new index. The build
+    # holds the collection write lock and registers the field synchronously, so each concurrent save is
+    # serialized: it is either captured by the build's whole-collection read or indexed afterwards
+    # because the field is already a known index. Without the fix, saves landing in the build window
+    # were silently missing from the index forever.
+    seed = 40
+    for i in range(seed):
+        save_doc(s, f, CONS_CREATE, {"_id": f"seed_{i}", "tag": f"t{i % 5}"})
+
+    saved_ids = []
+    saved_lock = threading.Lock()
+    stop = threading.Event()
+
+    def writer():
+        with new_conn() as (ws, wf):
+            authenticate(ws, wf, ADMIN_USERNAME, ADMIN_PASSWORD)
+            i = 0
+            while not stop.is_set():
+                doc_id = f"conc_{i}"
+                r = save_doc(ws, wf, CONS_CREATE, {"_id": doc_id, "tag": "concurrent"})
+                if r.get("status") == "OK":
+                    with saved_lock:
+                        saved_ids.append(doc_id)
+                i += 1
+
+    t = threading.Thread(target=writer)
+    t.start()
+    try:
+        # Let several concurrent writes land, then build the index mid-flight, then let a few more
+        # land after the build — exercising both sides of the build's write-locked section.
+        time.sleep(0.05)
+        send(s, f, {"type": "CREATE_INDEX", "databaseName": DB,
+                    "collectionName": CONS_CREATE, "fieldName": "tag"})
+        time.sleep(0.05)
+    finally:
+        stop.set()
+        t.join()
+    wait_for_background()
+
+    r = agg(s, f, CONS_CREATE, [{"type": "FILTER",
+                                 "operator": {"fieldOperatorType": "EQUALS", "field": "tag",
+                                              "value": "concurrent"}}])
+    found = {row.get("_id") for row in (r.get("results") or [])}
+    with saved_lock:
+        expected = list(saved_ids)
+    missing = [i for i in expected if i not in found]
+    check_true("no document saved concurrently with CREATE_INDEX is missing from the index",
+               not missing,
+               detail=f"{len(missing)} of {len(expected)} concurrently-saved docs missing from the index")
+
+
 def probe_convergence(s, f):
     # After the background settles, the document is found via the (now-updated, re-evicted) index.
     save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
@@ -512,6 +566,7 @@ def consistency_suite(s, f):
     probe_delete_consistency(s, f)
     probe_same_id_rapid_updates_converge(s, f)
     probe_save_delete_converges(s, f)
+    probe_concurrent_save_during_create_index(s, f)
     probe_convergence(s, f)
 
 

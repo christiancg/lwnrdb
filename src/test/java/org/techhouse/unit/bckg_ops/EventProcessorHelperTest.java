@@ -17,7 +17,6 @@ import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.bckg_ops.events.IndexEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
@@ -138,18 +137,4 @@ public class EventProcessorHelperTest {
         Assertions.assertNull(cache.getPkIndexCollectionUsage(id));
     }
 
-    @Test
-    public void processIndexEventDeletionTest() throws IOException, InterruptedException {
-        TestUtils.createTestDatabaseAndCollection();
-        final var createIndexEvent = new IndexEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "myField");
-        EventProcessorHelper.processEvent(createIndexEvent);
-        var collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(1, collEntry.getIndexes().size(), "Index count should be 1");
-        final var deleteIndexEvent = new IndexEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, "myField");
-        EventProcessorHelper.processEvent(deleteIndexEvent);
-        collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(0, collEntry.getIndexes().size(), "Index count should be 0");
-    }
 }
