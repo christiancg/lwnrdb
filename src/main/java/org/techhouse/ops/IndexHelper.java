@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -13,12 +14,14 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -28,6 +31,8 @@ public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    // The element-match (hashed) index families; the remaining IndexKind values are scalar.
+    private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
     public static void createIndex(String dbName, String collName, String fieldName) {
         final var coll = cache.getWholeCollection(dbName, collName);
@@ -70,6 +75,33 @@ public class IndexHelper {
                     return clazz;
                 }));
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
+        writeHashIndexes(dbName, collName, fieldName, entriesToBeIndexed);
+    }
+
+    // Object- and array-valued documents are reduced to a single hex hash (element-match key) and
+    // written to their own per-kind index files, keeping them fully separate from the scalar/custom
+    // index built above. Equal objects/arrays already grouped together via their equals/hashCode.
+    private static void writeHashIndexes(String dbName, String collName, String fieldName,
+            Map<JsonBaseElement, List<JsonObject>> grouped) {
+        final var objectEntries = new ArrayList<FieldIndexEntry<String>>();
+        final var arrayEntries = new ArrayList<FieldIndexEntry<String>>();
+        for (var groupedEntry : grouped.entrySet()) {
+            final var key = groupedEntry.getKey();
+            if (!key.isJsonObject() && !key.isJsonArray()) {
+                continue;
+            }
+            final var ids = groupedEntry.getValue().stream()
+                    .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
+                    .collect(Collectors.toSet());
+            final var hashEntry = new FieldIndexEntry<>(dbName, collName, JsonUtils.hashElement(key), ids);
+            if (key.isJsonObject()) {
+                objectEntries.add(hashEntry);
+            } else {
+                arrayEntries.add(hashEntry);
+            }
+        }
+        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.OBJECT, objectEntries);
+        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.ARRAY, arrayEntries);
     }
 
     public static boolean dropIndex(String dbName, String collName, String fieldName) {
@@ -165,24 +197,95 @@ public class IndexHelper {
     private static void internalSelectIndexType(DbEntry entry, String dbName, String collName, String fieldName,
             EventType type) throws IOException {
         final var element = JsonUtils.getFromPath(entry.getData(), fieldName);
+        final var entryId = entry.get_id();
+        // The id may currently live in any family, and an update can change its value or even its kind
+        // (object <-> array, scalar <-> object/array). Clearing it from the hash families up front in a
+        // single, unconditional pass covers every shape change; the scalar families are then cleared on
+        // the branches that don't already rewrite them in place.
+        removeIdFromHashIndexes(dbName, collName, fieldName, entryId);
         if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
             final var primitive = element.asJsonPrimitive();
             switch (primitive) {
-                case JsonNumber jsonNumber -> findExistingValuesAndUpdate(dbName, collName, fieldName, entry.get_id(),
-                        type, jsonNumber.getValue(), Number.class);
+                case JsonNumber jsonNumber -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type,
+                        jsonNumber.getValue(), Number.class);
                 case JsonString jsonString -> {
                     if (jsonString.isJsonCustom()) {
                         final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
-                        findExistingValuesAndUpdate(dbName, collName, fieldName, entry.get_id(), type, custom, null);
+                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type, custom, null);
                     } else {
-                        findExistingValuesAndUpdate(dbName, collName, fieldName, entry.get_id(), type,
-                                jsonString.getValue(), String.class);
+                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type, jsonString.getValue(),
+                                String.class);
                     }
                 }
-                case JsonBoolean jsonBoolean -> findExistingValuesAndUpdate(dbName, collName, fieldName, entry.get_id(),
-                        type, jsonBoolean.getValue(), Boolean.class);
+                case JsonBoolean jsonBoolean -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type,
+                        jsonBoolean.getValue(), Boolean.class);
                 default -> throw new IllegalStateException("Unexpected value: " + primitive);
             }
+        } else if (element.isJsonObject()) {
+            removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
+            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.OBJECT, JsonUtils.hashElement(element),
+                    type);
+        } else if (element.isJsonArray()) {
+            removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
+            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.ARRAY, JsonUtils.hashElement(element), type);
+        } else {
+            // null or absent value (e.g. DELETE, or a field removed on update): the id must not linger
+            // in any index family, and there is nothing to add.
+            removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
+        }
+    }
+
+    // Element-match counterpart of the scalar add: for a CREATE/UPDATE, adds the id to the matching
+    // hash entry of the target kind (creating the entry when the value is new). The id has already
+    // been cleared from every hash family by internalSelectIndexType, so this only adds.
+    private static void addToHashIndex(String dbName, String collName, String fieldName, String entryId, IndexKind kind,
+            String hash, EventType type) throws IOException {
+        if (type != EventType.CREATED && type != EventType.UPDATED) {
+            return;
+        }
+        final var entries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+        final var found = entries == null
+                ? null
+                : entries.stream().filter(e -> e.getValue().equals(hash)).findFirst().orElse(null);
+        if (found != null) {
+            found.getIds().add(entryId);
+            fs.updateHashIndexFiles(dbName, collName, fieldName, kind, found, null);
+        } else {
+            final var indexEntry = new FieldIndexEntry<>(dbName, collName, hash, new HashSet<>(Set.of(entryId)));
+            fs.updateHashIndexFiles(dbName, collName, fieldName, kind, indexEntry, null);
+        }
+    }
+
+    private static void removeIdFromHashIndexes(String dbName, String collName, String fieldName, String entryId)
+            throws IOException {
+        for (var kind : HASH_INDEX_KINDS) {
+            final var entries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+            if (entries != null) {
+                for (var entry : entries) {
+                    if (entry.getIds().remove(entryId)) {
+                        fs.updateHashIndexFiles(dbName, collName, fieldName, kind, null, entry);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private static void removeIdFromScalarIndexes(String dbName, String collName, String fieldName, String entryId)
+            throws IOException {
+        removeScalarOfType(dbName, collName, fieldName, entryId, Boolean.class);
+        removeScalarOfType(dbName, collName, fieldName, entryId, Number.class);
+        removeScalarOfType(dbName, collName, fieldName, entryId, String.class);
+        for (var customType : CustomTypeFactory.getCustomTypes().values()) {
+            removeScalarOfType(dbName, collName, fieldName, entryId, customType);
+        }
+    }
+
+    private static <T> void removeScalarOfType(String dbName, String collName, String fieldName, String entryId,
+            Class<T> type) throws IOException {
+        final var removed = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId, type);
+        if (removed != null) {
+            fs.updateIndexFiles(dbName, collName, fieldName, null, removed);
         }
     }
 

@@ -12,6 +12,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -59,6 +60,10 @@ public class Cache {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + parts[parts.length - 1];
     }
 
+    public static String getIndexIdentifier(String fieldName, String typeLabel) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
+    }
+
     public void loadAdminData() throws IOException {
         adminCache.loadAdminData();
     }
@@ -72,6 +77,11 @@ public class Cache {
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
+    }
+
+    public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
+            String fieldName, IndexKind kind) throws IOException {
+        return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
     }
 
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,

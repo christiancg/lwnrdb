@@ -12,15 +12,19 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.test.TestGlobals;
@@ -307,6 +311,109 @@ public class IndexHelperTest {
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
         assertEquals(Set.of("n1", "n2", "n3"), allIds);
+    }
+
+    private static JsonObject objectValue(int n) {
+        final var val = new JsonObject();
+        val.addProperty("n", n);
+        return val;
+    }
+
+    private static JsonArray arrayValue(String... items) {
+        final var arr = new JsonArray();
+        for (var item : items) {
+            arr.add(item);
+        }
+        return arr;
+    }
+
+    // Reads the persisted hash index straight from disk. The hash index cache follows the same
+    // eventually-consistent path as the scalar index cache, so verification reads the file state.
+    private static List<FieldIndexEntry<String>> readHashIndex(IndexKind kind) throws IOException {
+        return IocContainer.get(FileSystem.class).readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "data",
+                kind);
+    }
+
+    // createIndex builds separate Object and Array hash index files for object/array valued fields
+    @Test
+    public void test_create_index_with_object_and_array_values() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(1)), entryWith("o2", "data", objectValue(1)),
+                entryWith("o3", "data", objectValue(2)), entryWith("a1", "data", arrayValue("x", "y")),
+                entryWith("s1", "data", new JsonString("scalar")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+
+        final var objIndex = readHashIndex(IndexKind.OBJECT);
+        assertNotNull(objIndex);
+        // Two distinct objects: {n:1} (ids o1, o2) and {n:2} (id o3)
+        assertEquals(2, objIndex.size());
+        final var objIds = objIndex.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o1", "o2", "o3"), objIds);
+
+        final var arrIndex = readHashIndex(IndexKind.ARRAY);
+        assertNotNull(arrIndex);
+        assertEquals(1, arrIndex.size());
+        assertTrue(arrIndex.getFirst().getIds().contains("a1"));
+
+        // The scalar value still lands in its own String index
+        final var stringIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "data",
+                String.class);
+        assertNotNull(stringIndex);
+    }
+
+    // updateIndexes adds an object value to the Object hash index for a CREATED event
+    @Test
+    public void test_update_indexes_object_value() throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(1)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        DbEntry newEntry = entryWith("o2", "data", objectValue(2));
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
+
+        final var objIndex = readHashIndex(IndexKind.OBJECT);
+        assertNotNull(objIndex);
+        final var ids = objIndex.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(ids.contains("o1"));
+        assertTrue(ids.contains("o2"));
+    }
+
+    // updateIndexes moves an id from the Object index to the Array index on an object->array change
+    @Test
+    public void test_update_indexes_moves_id_object_to_array() throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("m1", "data", objectValue(1)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        DbEntry changed = entryWith("m1", "data", arrayValue("x"));
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, changed);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, changed, EventType.UPDATED);
+
+        final var objIndex = readHashIndex(IndexKind.OBJECT);
+        assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("m1")));
+        final var arrIndex = readHashIndex(IndexKind.ARRAY);
+        assertNotNull(arrIndex);
+        assertTrue(arrIndex.stream().anyMatch(e -> e.getIds().contains("m1")));
+    }
+
+    // updateIndexes with a DELETED event removes the id from the Object hash index
+    @Test
+    public void test_update_indexes_deleted_removes_object_entry() throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("d1", "data", objectValue(7));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
+
+        final var objIndex = readHashIndex(IndexKind.OBJECT);
+        assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("d1")));
     }
 
     // indexValueToElement converts each stored value kind back to its wire element
