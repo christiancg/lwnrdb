@@ -143,10 +143,14 @@ def setup_fixtures(s, f):
         send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
 
     # Main collection: category is low-cardinality (good for GROUP_BY/DISTINCT), score is unique (SORT).
+    # meta (object) and tags (array) are unique per doc so an element-match FILTER hits a single row,
+    # giving the hashed object/array index a clear win over the full scan.
     bulk_load(s, f, COLL, ({
         "_id": f"doc_{v:06d}",
         "category": category_for(v),
         "score": v,
+        "meta": {"n": v, "category": category_for(v)},
+        "tags": ["t", str(v)],
         "payload": rand_payload(PAYLOAD_BYTES),
     } for v in range(NUM_DOCS)))
 
@@ -182,8 +186,12 @@ def wait_for_indexes(s, f, expected, timeout_s=20.0):
 def create_indexes(s, f):
     send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "category"})
     send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "score"})
+    # Element-match indexes for object- and array-valued fields (hashed object/array indexes).
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "meta"})
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "tags"})
     send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": JOIN_BIG, "fieldName": "joinKey"})
-    wait_for_indexes(s, f, [(COLL, "category"), (COLL, "score"), (JOIN_BIG, "joinKey")])
+    wait_for_indexes(s, f, [(COLL, "category"), (COLL, "score"), (COLL, "meta"), (COLL, "tags"),
+                            (JOIN_BIG, "joinKey")])
 
 
 def teardown_fixtures(s, f):
@@ -197,6 +205,19 @@ GROUP_BY_STEPS = [{"type": "GROUP_BY", "fieldName": "category"}]
 SORT_STEPS = [{"type": "SORT", "fieldName": "score", "ascending": True}, {"type": "LIMIT", "limit": 10}]
 JOIN_STEPS = [{"type": "JOIN", "joinCollection": JOIN_BIG, "localField": "joinKey",
                "remoteField": "joinKey", "asField": "joined"}]
+
+# Element-match: the whole object/array is the operand. EQUALS hits a single unique doc; the hashed
+# object/array index resolves it to one id (one positioned read) instead of scanning every document.
+TARGET_OBJECT = {"n": 0, "category": category_for(0)}
+TARGET_ARRAY = ["t", "0"]
+FILTER_OBJECT_STEPS = [{"type": "FILTER",
+                        "operator": {"fieldOperatorType": "EQUALS", "field": "meta", "value": TARGET_OBJECT}}]
+FILTER_ARRAY_STEPS = [{"type": "FILTER",
+                       "operator": {"fieldOperatorType": "EQUALS", "field": "tags", "value": TARGET_ARRAY}}]
+# IN over a list of objects: each candidate object is hashed and resolved through the object index.
+FILTER_OBJECT_IN_STEPS = [{"type": "FILTER", "operator": {
+    "fieldOperatorType": "IN", "field": "meta",
+    "value": [{"n": v, "category": category_for(v)} for v in range(3)]}}]
 
 
 def distinct_signature(r):
@@ -218,6 +239,10 @@ def join_signature(r):
         joined = row.get("joined") or []
         labels.append(tuple(sorted(j.get("label") for j in joined)))
     return (len(rows), sorted(labels))
+
+
+def filter_signature(r):
+    return sorted(d.get("_id") for d in (r.get("results") or []))
 
 
 # ── the comparison harness ───────────────────────────────────────────────────
@@ -253,9 +278,10 @@ def main():
     print("  LWNRDB — index-backed aggregation performance test suite")
     print("═" * 60)
     print(f"  Connecting to {HOST}:{PORT}")
-    print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories), "
-          f"{LEFT_DOCS} left + {NUM_DOCS} right docs for JOIN.")
-    print(f"        Measure GROUP_BY/JOIN/SORT/DISTINCT unindexed, then create indexes and re-measure.")
+    print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
+          f"meta + array tags), {LEFT_DOCS} left + {NUM_DOCS} right docs for JOIN.")
+    print(f"        Measure GROUP_BY/JOIN/SORT/DISTINCT and object/array element-match FILTER unindexed, "
+          f"then create indexes and re-measure.")
 
     with new_conn() as (s, f):
         r = authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
@@ -271,6 +297,9 @@ def main():
         ("GROUP_BY on category", COLL, GROUP_BY_STEPS, group_by_signature, False),
         ("SORT on score (+LIMIT 10)", COLL, SORT_STEPS, sort_signature, False),
         ("JOIN against a large remote collection", JOIN_LEFT, JOIN_STEPS, join_signature, True),
+        ("FILTER element-match on object field", COLL, FILTER_OBJECT_STEPS, filter_signature, True),
+        ("FILTER element-match on array field", COLL, FILTER_ARRAY_STEPS, filter_signature, True),
+        ("FILTER IN over a list of objects", COLL, FILTER_OBJECT_IN_STEPS, filter_signature, True),
     ]
 
     # Phase 1 — measure every case while no index exists (full scan path).

@@ -1010,6 +1010,36 @@ public class FilterOperatorHelperTest {
         assertFalse(notEqualsTester.test(match, "data"));
     }
 
+    // getTester: IN over a list of objects matches an object-valued field by element equality
+    // (scan path, no index) — must agree with the index-backed resolution
+    @Test
+    public void test_in_operator_tester_matches_object_and_array_members() {
+        JsonArray objectList = new JsonArray();
+        objectList.add(objField(1));
+        objectList.add(objField(2));
+        FieldOperator inOp = new FieldOperator(FieldOperatorType.IN, "data", objectList);
+        BiPredicate<JsonObject, String> inTester = FilterOperatorHelper.getTester(inOp, FieldOperatorType.IN);
+        JsonObject inDoc = new JsonObject();
+        inDoc.add("data", objField(1));
+        JsonObject outDoc = new JsonObject();
+        outDoc.add("data", objField(9));
+        assertTrue(inTester.test(inDoc, "data"));
+        assertFalse(inTester.test(outDoc, "data"));
+
+        FieldOperator notInOp = new FieldOperator(FieldOperatorType.NOT_IN, "data", objectList);
+        BiPredicate<JsonObject, String> notInTester = FilterOperatorHelper.getTester(notInOp, FieldOperatorType.NOT_IN);
+        assertFalse(notInTester.test(inDoc, "data"));
+        assertTrue(notInTester.test(outDoc, "data"));
+
+        // arrays as candidates work the same way
+        JsonArray arrayList = new JsonArray();
+        arrayList.add(arrField("x", "y"));
+        FieldOperator arrInOp = new FieldOperator(FieldOperatorType.IN, "data", arrayList);
+        JsonObject arrDoc = new JsonObject();
+        arrDoc.add("data", arrField("x", "y"));
+        assertTrue(FilterOperatorHelper.getTester(arrInOp, FieldOperatorType.IN).test(arrDoc, "data"));
+    }
+
     // resolveIdsViaIndex: an object EQUALS filter is answered from the Object hash index
     @Test
     public void test_resolve_ids_via_index_object_equals() throws IOException {
