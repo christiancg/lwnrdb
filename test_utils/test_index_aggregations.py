@@ -30,6 +30,18 @@ SPEED_TOLERANCE = float(os.environ.get("INDEX_TEST_SPEED_TOLERANCE", "1.25"))
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
+# Consistency suite (separate from the perf suite): index maintenance is asynchronous, so right after
+# a write the field index may not yet reflect it. These probes write then *immediately* query the
+# index-backed path (no sleep) and assert the answer is correct, repeating to land inside the
+# committed-but-not-yet-indexed window. Each iteration must be correct whether or not the background
+# has caught up, so a single stale/missing/duplicate result fails the probe.
+CONS = "idxagg_cons"            # status-indexed: FILTER, COUNT-with-filter, DISTINCT, GROUP_BY
+CONS_SORT = "idxagg_cons_sort"  # score-indexed: SORT
+CONS_COUNT = "idxagg_cons_count"  # no index: whole-collection COUNT (from PK index size)
+CONS_JOIN = "idxagg_cons_join"  # joinKey-indexed remote side
+CONS_LEFT = "idxagg_cons_left"  # left side of the JOIN (one shared-key row)
+CONS_REPEATS = int(os.environ.get("INDEX_TEST_CONSISTENCY_REPEATS", "30"))
+
 failures = 0
 
 
@@ -270,6 +282,175 @@ def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, s
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Consistency under asynchronous index maintenance
+# ══════════════════════════════════════════════════════════════════════════
+
+def save_doc(s, f, coll, obj) -> dict:
+    return send(s, f, {"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": obj})
+
+
+def setup_consistency(s, f):
+    for coll in (CONS, CONS_SORT, CONS_COUNT, CONS_JOIN, CONS_LEFT):
+        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    # JOIN left side: a single row that shares the key every remote row will be saved with.
+    save_doc(s, f, CONS_LEFT, {"_id": "left_shared", "joinKey": "shared"})
+    # Build the indexes on the (empty) collections, so every subsequent write exercises the
+    # committed-but-not-yet-indexed path.
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS, "fieldName": "status"})
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_SORT, "fieldName": "score"})
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_JOIN, "fieldName": "joinKey"})
+    wait_for_indexes(s, f, [(CONS, "status"), (CONS_SORT, "score"), (CONS_JOIN, "joinKey")])
+
+
+def filter_status(s, f, value):
+    r = agg(s, f, CONS, [{"type": "FILTER",
+                          "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": value}}])
+    return sorted(d.get("_id") for d in (r.get("results") or []))
+
+
+def probe_filter_no_false_negative(s, f):
+    # A just-saved matching document must be returned immediately, even before it is indexed.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"fn_val_{i}"
+        save_doc(s, f, CONS, {"_id": f"fn_{i}", "status": value})
+        if filter_status(s, f, value) != [f"fn_{i}"]:
+            bad += 1
+    check_true("FILTER never misses a just-written match (no false negative)", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} immediate queries were stale")
+
+
+def probe_filter_no_false_positive_on_update(s, f):
+    # Re-pointing a document's indexed value must not leave it visible under the old value, and it
+    # must be visible under the new value — immediately.
+    save_doc(s, f, CONS, {"_id": "upd", "status": "upd_v0"})
+    prev = "upd_v0"
+    bad = 0
+    for i in range(1, CONS_REPEATS + 1):
+        cur = f"upd_v{i}"
+        save_doc(s, f, CONS, {"_id": "upd", "status": cur})
+        if "upd" in filter_status(s, f, prev):
+            bad += 1  # stale false positive under the old value
+        if filter_status(s, f, cur) != ["upd"]:
+            bad += 1  # missing under the new value
+        prev = cur
+    check_true("FILTER reflects updates immediately (no stale false positive / no false negative)",
+               bad == 0, detail=f"{bad} inconsistent immediate queries")
+
+
+def probe_count_with_filter(s, f):
+    # An index-only COUNT with a filter must reflect every committed matching document.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS, {"_id": f"cf_{i}", "status": "countme"})
+        r = agg(s, f, CONS, [{"type": "FILTER",
+                              "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "countme"}},
+                             {"type": "COUNT"}])
+        got = (r.get("results") or [{}])[0].get("count")
+        if got != i + 1:
+            bad += 1
+    check_true("index-only COUNT (with filter) counts committed docs immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} counts were stale")
+
+
+def probe_whole_collection_count(s, f):
+    # The no-filter COUNT comes from the synchronously-maintained PK index, so it is exact at once.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS_COUNT, {"_id": f"wc_{i}", "n": i})
+        r = agg(s, f, CONS_COUNT, [{"type": "COUNT"}])
+        got = (r.get("results") or [{}])[0].get("count")
+        if got != i + 1:
+            bad += 1
+    check_true("whole-collection COUNT is exact immediately after each save", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} counts were stale")
+
+
+def probe_distinct_new_value(s, f):
+    # A brand-new indexed value must appear in DISTINCT immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"dv_{i}"
+        save_doc(s, f, CONS, {"_id": f"di_{i}", "status": value})
+        r = agg(s, f, CONS, DISTINCT_STATUS_STEPS)
+        values = {d.get("status") for d in (r.get("results") or [])}
+        if value not in values:
+            bad += 1
+    check_true("DISTINCT includes a just-written new value immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} distinct results were missing the new value")
+
+
+def probe_group_by(s, f):
+    # A just-written document must land in its group immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"gv_{i}"
+        save_doc(s, f, CONS, {"_id": f"gi_{i}", "status": value})
+        r = agg(s, f, CONS, [{"type": "GROUP_BY", "fieldName": "status"}])
+        sizes = {d.get("status"): len(d.get("group") or []) for d in (r.get("results") or [])}
+        if sizes.get(value) != 1:
+            bad += 1
+    check_true("GROUP_BY places a just-written doc in its group immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} group-by results were stale")
+
+
+def probe_sort(s, f):
+    # SORT must include and correctly order a just-written value immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS_SORT, {"_id": f"s_{i}", "score": i})
+        r = agg(s, f, CONS_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+        scores = [d.get("score") for d in (r.get("results") or [])]
+        if scores != sorted(scores) or i not in scores or len(scores) != i + 1:
+            bad += 1
+    check_true("SORT includes and orders a just-written value immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} sort results were stale or misordered")
+
+
+def probe_join(s, f):
+    # A just-written remote document must be matched by an index-backed JOIN immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS_JOIN, {"_id": f"r_{i}", "joinKey": "shared", "label": f"lbl_{i}"})
+        r = agg(s, f, CONS_LEFT, [{"type": "JOIN", "joinCollection": CONS_JOIN, "localField": "joinKey",
+                                   "remoteField": "joinKey", "asField": "joined"}])
+        rows = r.get("results") or []
+        joined = rows[0].get("joined") if rows else None
+        if joined is None or len(joined) != i + 1:
+            bad += 1
+    check_true("index-backed JOIN matches a just-written remote doc immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} join results were stale")
+
+
+def probe_convergence(s, f):
+    # After the background settles, the document is found via the (now-updated, re-evicted) index.
+    save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
+    wait_for_background()
+    check_true("index converges after the background settles", filter_status(s, f, "converged") == ["converge"])
+
+
+def wait_for_background():
+    time.sleep(2)
+
+
+DISTINCT_STATUS_STEPS = [{"type": "DISTINCT", "fieldName": "status"}]
+
+
+def consistency_suite(s, f):
+    section("Consistency under asynchronous index maintenance (pending-write window)")
+    setup_consistency(s, f)
+    probe_filter_no_false_negative(s, f)
+    probe_filter_no_false_positive_on_update(s, f)
+    probe_count_with_filter(s, f)
+    probe_whole_collection_count(s, f)
+    probe_distinct_new_value(s, f)
+    probe_group_by(s, f)
+    probe_sort(s, f)
+    probe_join(s, f)
+    probe_convergence(s, f)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -329,6 +510,11 @@ def main():
         u_time, u_resp = unindexed[name]
         i_time, i_resp = indexed[name]
         compare(name, u_time, u_resp, i_time, i_resp, sig, strict)
+
+    # Phase 3 — correctness under asynchronous index maintenance (the consistency fixes).
+    with new_conn() as (s, f):
+        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+        consistency_suite(s, f)
 
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
