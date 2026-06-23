@@ -2,12 +2,14 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -22,6 +24,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -31,6 +34,7 @@ public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     // The element-match (hashed) index families; the remaining IndexKind values are scalar.
     private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
@@ -76,6 +80,7 @@ public class IndexHelper {
                 }));
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
         writeHashIndexes(dbName, collName, fieldName, entriesToBeIndexed);
+        cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
     // Object- and array-valued documents are reduced to a single hex hash (element-match key) and
@@ -105,7 +110,9 @@ public class IndexHelper {
     }
 
     public static boolean dropIndex(String dbName, String collName, String fieldName) {
-        return fs.dropIndex(dbName, collName, fieldName);
+        final var result = fs.dropIndex(dbName, collName, fieldName);
+        cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+        return result;
     }
 
     // Read-side index usage for aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT). Returns every
@@ -115,17 +122,39 @@ public class IndexHelper {
     // same one the FILTER path uses) so only this field's indexes are returned. A field index access
     // is recorded so index-backed aggregations feed the LFU usage stats, exactly like indexed
     // filters do.
+    //
+    // The entries are loaded under the field's index read lock and returned as deep copies (the id
+    // sets are copied) so the background index writer can never mutate a set a consumer is iterating.
+    // Documents committed but not yet indexed are reconciled in via reconcilePending so these steps
+    // are consistent with the actual documents; a pending document whose value falls outside the
+    // scalar/custom scope these steps support forces a null return (full-scan fallback).
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
             throws IOException {
         if (!cache.hasIndex(dbName, collName, fieldName)) {
             return null;
         }
-        final var combined = new ArrayList<FieldIndexEntry<?>>();
-        addEntriesOfType(combined, dbName, collName, fieldName, Number.class);
-        addEntriesOfType(combined, dbName, collName, fieldName, Boolean.class);
-        addEntriesOfType(combined, dbName, collName, fieldName, String.class);
-        for (var customType : CustomTypeFactory.getCustomTypes().values()) {
-            addEntriesOfType(combined, dbName, collName, fieldName, customType);
+        final List<FieldIndexEntry<?>> combined = new ArrayList<>();
+        try {
+            rl.lockIndexRead(dbName, collName, fieldName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while acquiring index read lock", e);
+        }
+        try {
+            addEntriesOfType(combined, dbName, collName, fieldName, Number.class);
+            addEntriesOfType(combined, dbName, collName, fieldName, Boolean.class);
+            addEntriesOfType(combined, dbName, collName, fieldName, String.class);
+            for (var customType : CustomTypeFactory.getCustomTypes().values()) {
+                addEntriesOfType(combined, dbName, collName, fieldName, customType);
+            }
+        } finally {
+            rl.releaseIndexRead(dbName, collName, fieldName);
+        }
+        // Snapshot pending ids AFTER the index read so any write that committed before the read is
+        // either already indexed (index accurate) or still pending (covered here).
+        final var pendingIds = pendingIndexWrites.idsFor(dbName, collName);
+        if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds)) {
+            return null;
         }
         if (combined.isEmpty()) {
             return null;
@@ -136,12 +165,70 @@ public class IndexHelper {
         return combined;
     }
 
+    // Adds deep copies (entry + id set) of a type's cached entries to combined, so the returned list
+    // is fully detached from the cache.
     private static void addEntriesOfType(List<FieldIndexEntry<?>> combined, String dbName, String collName,
             String fieldName, Class<?> type) throws IOException {
         final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
         if (entries != null) {
-            combined.addAll(entries);
+            for (var entry : entries) {
+                combined.add(new FieldIndexEntry<>(entry.getDatabaseName(), entry.getCollectionName(), entry.getValue(),
+                        new HashSet<>(entry.getIds())));
+            }
         }
+    }
+
+    // Reconciles documents committed but not yet indexed into the loaded index entries: their index
+    // membership is untrustworthy, so every pending id is dropped from all entries and then re-added
+    // to the entry matching its CURRENT scalar/custom value (creating the entry when the value is
+    // new). Emptied entries are dropped so DISTINCT does not surface phantom values. Returns false
+    // when a pending document's value is present but not scalar/custom (object/array), signaling the
+    // caller to fall back to a full scan, which sees every committed document. The mutated entries are
+    // the deep copies built above, so the cache is never touched.
+    private static boolean reconcilePending(List<FieldIndexEntry<?>> combined, String dbName, String collName,
+            String fieldName, Set<String> pendingIds) throws IOException {
+        for (var entry : combined) {
+            entry.getIds().removeAll(pendingIds);
+        }
+        final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<?>>();
+        for (var entry : combined) {
+            byValue.put(indexValueToElement(entry.getValue()), entry);
+        }
+        for (var dbEntry : cache.getEntriesByIds(dbName, collName, pendingIds)) {
+            final var data = dbEntry.getData();
+            if (!JsonUtils.hasInPath(data, fieldName)) {
+                continue;
+            }
+            final var element = JsonUtils.getFromPath(data, fieldName);
+            if (!element.isJsonPrimitive() || element.isJsonNull()) {
+                return false;
+            }
+            final var existing = byValue.get(element);
+            if (existing != null) {
+                existing.getIds().add(dbEntry.get_id());
+            } else {
+                final var newEntry = scalarEntryFor(dbName, collName, element.asJsonPrimitive(), dbEntry.get_id());
+                combined.add(newEntry);
+                byValue.put(element, newEntry);
+            }
+        }
+        combined.removeIf(entry -> entry.getIds().isEmpty());
+        return true;
+    }
+
+    // Builds a fresh scalar/custom FieldIndexEntry for a single pending document, mirroring the value
+    // conversion used when an index is first created.
+    private static FieldIndexEntry<?> scalarEntryFor(String dbName, String collName, JsonPrimitive<?> primitive,
+            String id) {
+        final var ids = new HashSet<>(Set.of(id));
+        return switch (primitive) {
+            case JsonNumber jsonNumber -> new FieldIndexEntry<>(dbName, collName, jsonNumber.getValue(), ids);
+            case JsonBoolean jsonBoolean -> new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
+            case JsonString jsonString -> jsonString.isJsonCustom()
+                    ? new FieldIndexEntry<>(dbName, collName, CustomTypeFactory.getCustomTypeInstance(jsonString), ids)
+                    : new FieldIndexEntry<>(dbName, collName, jsonString.getValue(), ids);
+            default -> throw new IllegalStateException("Unexpected value: " + primitive);
+        };
     }
 
     // Converts a FieldIndexEntry value back to its wire element so it can be used as a group key,
@@ -174,13 +261,19 @@ public class IndexHelper {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
         for (var fieldName : existingIndexes) {
             rl.lockIndex(dbName, collName, fieldName);
-            for (var insertedEntry : insertedEntries) {
-                internalSelectIndexType(insertedEntry, dbName, collName, fieldName, EventType.CREATED);
+            try {
+                for (var insertedEntry : insertedEntries) {
+                    internalSelectIndexType(insertedEntry, dbName, collName, fieldName, EventType.CREATED);
+                }
+                for (var updatedEntry : updatedEntries) {
+                    internalSelectIndexType(updatedEntry, dbName, collName, fieldName, EventType.UPDATED);
+                }
+                // The cached index now diverges from the rewritten .idx files; drop it so the next
+                // read reloads the up-to-date index from disk.
+                cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+            } finally {
+                rl.releaseIndex(dbName, collName, fieldName);
             }
-            for (var updatedEntry : updatedEntries) {
-                internalSelectIndexType(updatedEntry, dbName, collName, fieldName, EventType.UPDATED);
-            }
-            rl.releaseIndex(dbName, collName, fieldName);
         }
     }
 
@@ -189,8 +282,14 @@ public class IndexHelper {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
         for (var fieldName : existingIndexes) {
             rl.lockIndex(dbName, collName, fieldName);
-            internalSelectIndexType(entry, dbName, collName, fieldName, type);
-            rl.releaseIndex(dbName, collName, fieldName);
+            try {
+                internalSelectIndexType(entry, dbName, collName, fieldName, type);
+                // The cached index now diverges from the rewritten .idx files; drop it so the next
+                // read reloads the up-to-date index from disk.
+                cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+            } finally {
+                rl.releaseIndex(dbName, collName, fieldName);
+            }
         }
     }
 

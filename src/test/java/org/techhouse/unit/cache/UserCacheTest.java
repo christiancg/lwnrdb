@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.UserCache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -38,6 +39,18 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
 public class UserCacheTest {
+
+    // Mockito mocks skip field initializers, so the real getIdsFromIndex (called via thenCallRealMethod)
+    // would see a null index lock. Inject a real ResourceLocking so the read lock can be acquired.
+    private static void injectRealLocking(UserCache mock) {
+        try {
+            final var rlField = UserCache.class.getDeclaredField("rl");
+            rlField.setAccessible(true);
+            rlField.set(mock, new ResourceLocking());
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -163,6 +176,7 @@ public class UserCacheTest {
     public void test_retrieves_ids_for_double_values() throws IOException {
         // Arrange
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "testDB";
         var collName = "testCollection";
         var fieldName = "testField";
@@ -206,6 +220,7 @@ public class UserCacheTest {
     @Test
     public void test_retrieves_ids_for_boolean_values() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         // Setup
         String dbName = "testDB";
         String collName = "testCollection";
@@ -230,6 +245,7 @@ public class UserCacheTest {
     @Test
     public void test_retrieves_ids_for_string_values() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         // Setup
         String dbName = "testDB";
         String collName = "testCollection";
@@ -572,6 +588,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_custom_type() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "time";
@@ -593,6 +610,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_json_array_of_strings() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "tag";
@@ -616,6 +634,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_json_array_of_numbers() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "score";
@@ -641,6 +660,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_json_array_of_booleans() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "active";

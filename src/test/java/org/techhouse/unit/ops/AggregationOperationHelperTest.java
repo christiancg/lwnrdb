@@ -6,14 +6,17 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.UserCache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -39,6 +42,7 @@ import org.techhouse.ops.req.agg.step.map.MapOperationType;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.ReflectionUtils;
 
 public class AggregationOperationHelperTest {
     @BeforeEach
@@ -252,13 +256,28 @@ public class AggregationOperationHelperTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
+    // The whole-collection COUNT is derived from the (synchronously-maintained) PK index size, so
+    // register the ids there. Populated directly to be independent of cache admission decisions.
+    private void registerPkIndex(String... ids) throws NoSuchFieldException, IllegalAccessException {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var token = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        final var pkIndexMap = TestUtils.getPrivateField(userCache, "pkIndexMap", token);
+        final var list = new ArrayList<PkIndexEntry>();
+        for (var id : ids) {
+            list.add(new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, id, 0, 100, 0));
+        }
+        pkIndexMap.put(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), list);
+    }
+
     // COUNT returns the number of documents in the collection
     @Test
-    public void test_count_returns_document_count() throws IOException {
+    public void test_count_returns_document_count() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
         insertEntry(cache, "c1", "val", "a");
         insertEntry(cache, "c2", "val", "b");
         insertEntry(cache, "c3", "val", "c");
+        registerPkIndex("c1", "c2", "c3");
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(new CountAggregationStep()));
@@ -925,10 +944,11 @@ public class AggregationOperationHelperTest {
 
     // COUNT is not the second step, so the fast path does not fire (still correct).
     @Test
-    public void test_count_only_step_is_unaffected() throws IOException {
+    public void test_count_only_step_is_unaffected() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", "status", new JsonString("active"));
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
+        registerPkIndex("c1");
         enableIndex(cache, "status");
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -1035,10 +1055,12 @@ public class AggregationOperationHelperTest {
 
     // With no FILTER, count-preserving steps before COUNT yield the whole-collection count.
     @Test
-    public void test_count_after_map_only_uses_whole_collection_count() throws IOException {
+    public void test_count_after_map_only_uses_whole_collection_count()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
         insertEntry(cache, "c1", "status", "active");
         insertEntry(cache, "c2", "status", "inactive");
+        registerPkIndex("c1", "c2");
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of(

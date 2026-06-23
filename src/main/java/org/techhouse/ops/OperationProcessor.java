@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
@@ -71,6 +72,7 @@ public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
+    private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
@@ -237,11 +239,15 @@ public class OperationProcessor {
             cache.addEntriesToCache(dbName, collName, updatedDbEntries);
             final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
             cache.addEntriesToCache(dbName, collName, insertedDbEntries);
+            final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
+            final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
+            // Mark all committed ids pending before releasing the write lock, so index-backed reads
+            // reconcile them until their asynchronous field-index update completes.
+            pendingIndexWrites.mark(dbName, collName, updatedIds);
+            pendingIndexWrites.mark(dbName, collName, insertedIds);
             taskManager
                     .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
             recordCollectionAccess(dbName, collName);
-            final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
-            final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
             return new BulkSaveResponse(OperationStatus.OK, "Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
             return new BulkSaveResponse(OperationStatus.ERROR, "Error while saving entries: " + exception.getMessage(),
@@ -287,6 +293,9 @@ public class OperationProcessor {
             }
             primaryKeyIndex.add(insertAt, savedPkIndexEntry);
             cache.addEntryToCache(dbName, collName, entry);
+            // Mark the id pending (committed, but its field-index update is asynchronous) before
+            // releasing the write lock, so index-backed reads reconcile it until indexing completes.
+            pendingIndexWrites.mark(dbName, collName, entry.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
             recordCollectionAccess(dbName, collName);
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
