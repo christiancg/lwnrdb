@@ -165,11 +165,25 @@ public class FilterOperatorHelper {
                         }
                     }
                 } else if (operatorElement.isJsonArray()) {
+                    if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
+                        if (toTestElement != null && toTestElement.isJsonArray()) {
+                            final var equal = operatorElement.asJsonArray().equals(toTestElement.asJsonArray());
+                            return (operation == FieldOperatorType.EQUALS) == equal;
+                        }
+                        return false;
+                    }
                     if (toTestElement != null && toTestElement.isJsonPrimitive()) {
                         final var jsonArray = operatorElement.asJsonArray();
                         final var result = jsonArray.contains(toTestElement);
                         return (operation == FieldOperatorType.IN) == result;
                     }
+                } else if (operatorElement.isJsonObject()) {
+                    if ((operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS)
+                            && toTestElement != null && toTestElement.isJsonObject()) {
+                        final var equal = operatorElement.asJsonObject().equals(toTestElement.asJsonObject());
+                        return (operation == FieldOperatorType.EQUALS) == equal;
+                    }
+                    return false;
                 } else if (operatorElement.isJsonNull()) {
                     return toTestElement.isJsonNull();
                 }
@@ -230,6 +244,7 @@ public class FilterOperatorHelper {
         final var fieldName = operator.getField();
         final var value = operator.getValue();
         return switch (value) {
+            case JsonObject jsonObject -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonObject);
             case JsonArray jsonArray -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
             case JsonBoolean jsonBoolean ->
                 cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonBoolean.getValue());

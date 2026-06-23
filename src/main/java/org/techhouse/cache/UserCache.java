@@ -14,6 +14,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonArray;
@@ -21,10 +22,13 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SearchUtils;
 
 /**
@@ -123,6 +127,40 @@ public class UserCache {
         return indexEntries;
     }
 
+    // Hash index counterpart of getFieldIndexAndLoadIfNecessary: loads (and caches) the element-match
+    // entries (value = hex hash) for the object or array index family. Cached under the
+    // field|Object / field|Array identifier, kept apart from the scalar/custom index entries.
+    public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
+            String fieldName, IndexKind kind) throws IOException {
+        final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        final var indexIdentifier = Cache.getIndexIdentifier(fieldName, kind.label());
+        var index = fieldIndexMap.get(collectionIdentifier);
+        List<FieldIndexEntry<String>> indexEntries = null;
+        if (index == null || index.keySet().stream().noneMatch(string -> string.contains(indexIdentifier))) {
+            indexEntries = fs.readWholeHashIndexFile(dbName, collName, fieldName, kind);
+            if (indexEntries == null) {
+                return null;
+            } else if (index == null) {
+                index = new ConcurrentHashMap<>();
+            }
+            final var asWildcard = new ArrayList<FieldIndexEntry<?>>(indexEntries);
+            if (shouldCache(dbName, estimateFieldIndexSize(asWildcard))) {
+                index.put(indexIdentifier, new ArrayList<>(indexEntries));
+                fieldIndexMap.put(collectionIdentifier, index);
+            }
+        } else {
+            final var existingIndex = index.get(indexIdentifier);
+            if (existingIndex != null) {
+                indexEntries = existingIndex.stream()
+                        .map(fieldIndexEntry -> new FieldIndexEntry<>(fieldIndexEntry.getDatabaseName(),
+                                fieldIndexEntry.getCollectionName(), (String) fieldIndexEntry.getValue(),
+                                fieldIndexEntry.getIds()))
+                        .collect(Collectors.toList());
+            }
+        }
+        return indexEntries;
+    }
+
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
             T value) throws IOException {
         final var result = doGetIdsFromIndex(dbName, collName, fieldName, operator, value);
@@ -177,67 +215,98 @@ public class UserCache {
                     yield null;
                 }
             }
-            case JsonArray arr -> {
-                final var firstElement = arr.get(0);
-                if (firstElement.isJsonPrimitive()) {
-                    final var prim = firstElement.asJsonPrimitive();
-                    final var listStream = arr.asList().stream();
-                    switch (prim) {
-                        case JsonCustom<?> c -> {
-                            final var customTypes = CustomTypeFactory.getCustomTypes();
-                            final var customClass = customTypes.get(c.getCustomTypeName());
-                            final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                                    (Class<T>) customClass);
-                            if (customIndex != null) {
-                                final var custList = listStream.map(JsonBaseElement::asJsonCustom).toList();
-                                yield SearchUtils.findingInNotIn(customIndex, operator.getFieldOperatorType(),
-                                        (List<T>) custList);
-                            } else {
-                                yield null;
-                            }
-                        }
-                        case JsonString ignored -> {
-                            final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                                    String.class);
-                            if (stringIndex != null) {
-                                final var strList = listStream.map(x -> x.asJsonString().getValue()).toList();
-                                yield SearchUtils.findingInNotIn(stringIndex, operator.getFieldOperatorType(), strList);
-                            } else {
-                                yield null;
-                            }
-                        }
-                        case JsonNumber ignored -> {
-                            final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                                    Number.class);
-                            if (numberIndex != null) {
-                                final var numberList = listStream.map(x -> x.asJsonNumber().getValue()).toList();
-                                yield SearchUtils.findingInNotIn(numberIndex, operator.getFieldOperatorType(),
-                                        numberList);
-                            } else {
-                                yield null;
-                            }
-                        }
-                        case JsonBoolean ignored -> {
-                            final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                                    Boolean.class);
-                            if (booleanIndex != null) {
-                                final var booleanList = listStream.map(x -> x.asJsonBoolean().getValue()).toList();
-                                yield SearchUtils.findingInNotIn(booleanIndex, operator.getFieldOperatorType(),
-                                        booleanList);
-                            } else {
-                                yield null;
-                            }
-                        }
-                        default -> {
-                            yield null;
-                        }
-                    }
+            case JsonObject obj -> {
+                final var opType = operator.getFieldOperatorType();
+                if (opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS) {
+                    final var hashIndex = getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, IndexKind.OBJECT);
+                    yield hashIndex != null
+                            ? SearchUtils.findingByOperator(hashIndex, opType, JsonUtils.hashElement(obj))
+                            : null;
                 } else {
                     yield null;
                 }
             }
+            case JsonArray arr -> {
+                final var opType = operator.getFieldOperatorType();
+                yield switch (opType) {
+                    // EQUALS/NOT_EQUALS against an array operand means element-match on the whole array.
+                    case EQUALS, NOT_EQUALS -> {
+                        final var hashIndex = getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                                IndexKind.ARRAY);
+                        yield hashIndex != null
+                                ? SearchUtils.findingByOperator(hashIndex, opType, JsonUtils.hashElement(arr))
+                                : null;
+                    }
+                    // IN/NOT_IN against an array operand means membership in the list of candidate values.
+                    case IN, NOT_IN -> getIdsFromInList(dbName, collName, fieldName, operator, arr);
+                    default -> null;
+                };
+            }
             default -> throw new IllegalStateException("Unexpected value: " + value);
         };
+    }
+
+    // Resolves IN/NOT_IN against the list of candidate values. Primitive elements use their scalar /
+    // custom index; object and array elements are hashed and resolved through the element-match hash
+    // index of the matching kind. The candidate list is assumed homogeneous (dispatched off its
+    // first element), mirroring how the scalar path already worked.
+    @SuppressWarnings("unchecked")
+    private <T> Set<String> getIdsFromInList(String dbName, String collName, String fieldName, FieldOperator operator,
+            JsonArray arr) throws IOException {
+        if (arr.isEmpty()) {
+            return null;
+        }
+        final var firstElement = arr.get(0);
+        final var listStream = arr.asList().stream();
+        final var opType = operator.getFieldOperatorType();
+        if (firstElement.isJsonObject()) {
+            final var hashIndex = getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, IndexKind.OBJECT);
+            return hashIndex != null
+                    ? SearchUtils.findingInNotIn(hashIndex, opType, listStream.map(JsonUtils::hashElement).toList())
+                    : null;
+        } else if (firstElement.isJsonArray()) {
+            final var hashIndex = getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, IndexKind.ARRAY);
+            return hashIndex != null
+                    ? SearchUtils.findingInNotIn(hashIndex, opType, listStream.map(JsonUtils::hashElement).toList())
+                    : null;
+        } else if (firstElement.isJsonPrimitive()) {
+            final var prim = firstElement.asJsonPrimitive();
+            return switch (prim) {
+                case JsonCustom<?> c -> {
+                    final var customClass = CustomTypeFactory.getCustomTypes().get(c.getCustomTypeName());
+                    final var customIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                            (Class<T>) customClass);
+                    yield customIndex != null
+                            ? SearchUtils.findingInNotIn(customIndex, opType,
+                                    (List<T>) listStream.map(JsonBaseElement::asJsonCustom).toList())
+                            : null;
+                }
+                case JsonString ignored -> {
+                    final var stringIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class);
+                    yield stringIndex != null
+                            ? SearchUtils.findingInNotIn(stringIndex, opType,
+                                    listStream.map(x -> x.asJsonString().getValue()).toList())
+                            : null;
+                }
+                case JsonNumber ignored -> {
+                    final var numberIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class);
+                    yield numberIndex != null
+                            ? SearchUtils.findingInNotIn(numberIndex, opType,
+                                    listStream.map(x -> x.asJsonNumber().getValue()).toList())
+                            : null;
+                }
+                case JsonBoolean ignored -> {
+                    final var booleanIndex = getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                            Boolean.class);
+                    yield booleanIndex != null
+                            ? SearchUtils.findingInNotIn(booleanIndex, opType,
+                                    listStream.map(x -> x.asJsonBoolean().getValue()).toList())
+                            : null;
+                }
+                default -> null;
+            };
+        }
+        return null;
     }
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {

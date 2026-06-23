@@ -28,6 +28,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
@@ -509,7 +510,7 @@ public class FileSystem {
     public void writeIndexFile(String dbName, String collName, String fieldName,
             Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap) {
         for (var indexTypeList : indexEntryMap.entrySet()) {
-            final var type = indexTypeList.getKey().getSimpleName();
+            final var type = IndexKind.fileLabel(indexTypeList.getKey());
             final var indexFile = getIndexFile(dbName, collName, fieldName, type);
             final var lock = fileLock(indexFile).writeLock();
             lock.lock();
@@ -520,6 +521,70 @@ public class FileSystem {
                 writer.append(strData);
             } catch (IOException e) {
                 throw new RuntimeException(e);
+            } finally {
+                lock.unlock();
+            }
+        }
+    }
+
+    // Hash index counterpart of writeIndexFile: appends the element-match entries (value = hex hash)
+    // for a single kind (object or array) to its own {coll}-{field}-Object.idx / -Array.idx file.
+    public void writeHashIndexFile(String dbName, String collName, String fieldName, IndexKind kind,
+            List<FieldIndexEntry<String>> entries) {
+        if (entries.isEmpty()) {
+            return;
+        }
+        final var indexFile = getIndexFile(dbName, collName, fieldName, kind.label());
+        final var lock = fileLock(indexFile).writeLock();
+        lock.lock();
+        try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
+            var strData = entries.stream().map(FieldIndexEntry::toFileEntry)
+                    .collect(Collectors.joining(Globals.NEWLINE));
+            strData += Globals.NEWLINE;
+            writer.append(strData);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Hash index counterpart of updateIndexFiles: removes then (re)writes a single hash entry in the
+    // kind-specific index file. The entry value is already the hex hash, so getStringValue/
+    // searchIndexValue locate it the same way as for scalar indexes.
+    public void updateHashIndexFiles(String dbName, String collName, String fieldName, IndexKind kind,
+            FieldIndexEntry<String> insertedEntry, FieldIndexEntry<String> removedEntry) throws IOException {
+        final var indexFile = getIndexFile(dbName, collName, fieldName, kind.label());
+        if (removedEntry != null) {
+            final var lock = fileLock(indexFile).writeLock();
+            lock.lock();
+            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
+                final var strWholeFile = readFully(writer);
+                final var indexOfExisting = searchIndexValue(strWholeFile, removedEntry.getValue());
+                if (indexOfExisting >= 0) {
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                    if (!removedEntry.getIds().isEmpty()) {
+                        writer.writeBytes(removedEntry.toFileEntry());
+                        writer.writeBytes(Globals.NEWLINE);
+                    }
+                }
+            } finally {
+                lock.unlock();
+            }
+        }
+        if (insertedEntry != null) {
+            final var lock = fileLock(indexFile).writeLock();
+            lock.lock();
+            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
+                final var strWholeFile = readFully(writer);
+                final var indexOfExisting = searchIndexValue(strWholeFile, insertedEntry.getValue());
+                if (indexOfExisting >= 0) {
+                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                } else {
+                    writer.seek(strWholeFile.length());
+                }
+                writer.writeBytes(insertedEntry.toFileEntry());
+                writer.writeBytes(Globals.NEWLINE);
             } finally {
                 lock.unlock();
             }
@@ -565,10 +630,7 @@ public class FileSystem {
     public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
             FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry) throws IOException {
         if (removedEntry != null) {
-            final var clazz = removedEntry.getValue().getClass();
-            final var strIndexType = Number.class.isAssignableFrom(clazz)
-                    ? Number.class.getSimpleName()
-                    : clazz.getSimpleName();
+            final var strIndexType = IndexKind.fileLabel(removedEntry.getValue().getClass());
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             final var lock = fileLock(indexFile).writeLock();
             lock.lock();
@@ -589,10 +651,7 @@ public class FileSystem {
             }
         }
         if (insertedEntry != null) {
-            final var clazz = insertedEntry.getValue().getClass();
-            final var strIndexType = Number.class.isAssignableFrom(clazz)
-                    ? Number.class.getSimpleName()
-                    : clazz.getSimpleName();
+            final var strIndexType = IndexKind.fileLabel(insertedEntry.getValue().getClass());
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             final var lock = fileLock(indexFile).writeLock();
             lock.lock();
@@ -692,9 +751,7 @@ public class FileSystem {
             Class<T> indexType) throws IOException {
         final var collectionFolder = getCollectionFolder(dbName, collName);
         if (collectionFolder.exists()) {
-            final var strIndexType = Number.class.isAssignableFrom(indexType)
-                    ? Number.class.getSimpleName()
-                    : indexType.getSimpleName();
+            final var strIndexType = IndexKind.fileLabel(indexType);
             final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
             if (indexFile.exists()) {
                 final var lock = fileLock(indexFile).readLock();
@@ -716,6 +773,31 @@ public class FileSystem {
                             }
                             default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
                         }).collect(Collectors.toList());
+            }
+        }
+        return null;
+    }
+
+    // Hash index counterpart of readWholeFieldIndexFiles: loads every element-match entry (value =
+    // hex hash) for the given kind, sorted by hash so SearchUtils' binary search works.
+    public List<FieldIndexEntry<String>> readWholeHashIndexFile(String dbName, String collName, String fieldName,
+            IndexKind kind) throws IOException {
+        final var collectionFolder = getCollectionFolder(dbName, collName);
+        if (collectionFolder.exists()) {
+            final var indexFile = getIndexFile(dbName, collName, fieldName, kind.label());
+            if (indexFile.exists()) {
+                final var lock = fileLock(indexFile).readLock();
+                lock.lock();
+                final List<String> lines;
+                try {
+                    lines = Files.readAllLines(indexFile.toPath());
+                } finally {
+                    lock.unlock();
+                }
+                return lines.stream().filter(s -> !s.isBlank())
+                        .map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, String.class))
+                        .sorted(Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase))
+                        .collect(Collectors.toList());
             }
         }
         return null;

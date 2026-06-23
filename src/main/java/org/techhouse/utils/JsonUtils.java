@@ -1,11 +1,109 @@
 package org.techhouse.utils;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 
 public final class JsonUtils {
     private JsonUtils() {
+    }
+
+    // Produces a stable, type-disambiguated textual form of a JSON element so that two values that
+    // are equal (JsonObject/JsonArray equals) always serialize identically. Object members are
+    // emitted sorted by key (object equality is key-order independent); array elements keep their
+    // order (array equality is order dependent); integral numbers drop their trailing ".0" so a
+    // query value of 1 matches a stored 1.0. Used only to feed hashElement.
+    public static String canonicalize(JsonBaseElement element) {
+        final var sb = new StringBuilder();
+        appendCanonical(element, sb);
+        return sb.toString();
+    }
+
+    private static void appendCanonical(JsonBaseElement element, StringBuilder sb) {
+        switch (element) {
+            case null -> sb.append("null");
+            case JsonNull ignored -> sb.append("null");
+            case JsonObject object -> appendCanonicalObject(object, sb);
+            case JsonArray array -> appendCanonicalArray(array, sb);
+            case JsonCustom<?> custom -> sb.append(custom.getValue());
+            case JsonNumber number -> sb.append(normalizeNumber(number.getValue()));
+            case JsonBoolean bool -> sb.append(bool.getValue().booleanValue());
+            case JsonString string -> appendCanonicalString(string.getValue(), sb);
+            default -> sb.append(element);
+        }
+    }
+
+    private static void appendCanonicalObject(JsonObject object, StringBuilder sb) {
+        final var entries = new ArrayList<>(object.entrySet());
+        entries.sort(java.util.Map.Entry.comparingByKey());
+        sb.append('{');
+        var first = true;
+        for (final var entry : entries) {
+            if (!first) {
+                sb.append(',');
+            }
+            first = false;
+            appendCanonicalString(entry.getKey(), sb);
+            sb.append(':');
+            appendCanonical(entry.getValue(), sb);
+        }
+        sb.append('}');
+    }
+
+    private static void appendCanonicalArray(JsonArray array, StringBuilder sb) {
+        sb.append('[');
+        var first = true;
+        for (final var element : array) {
+            if (!first) {
+                sb.append(',');
+            }
+            first = false;
+            appendCanonical(element, sb);
+        }
+        sb.append(']');
+    }
+
+    private static void appendCanonicalString(String value, StringBuilder sb) {
+        sb.append('"');
+        for (var i = 0; i < value.length(); i++) {
+            final var c = value.charAt(i);
+            if (c == '"' || c == '\\') {
+                sb.append('\\');
+            }
+            sb.append(c);
+        }
+        sb.append('"');
+    }
+
+    private static String normalizeNumber(Number value) {
+        final var asDouble = value.doubleValue();
+        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble)) {
+            return String.valueOf((long) asDouble);
+        }
+        return String.valueOf(asDouble);
+    }
+
+    // Hashes the whole element (object or array, possibly nested) into a hex SHA-256 string used as
+    // the element-match index key. Equal values hash equally; the hex form is separator/newline-safe
+    // so it slots straight into the existing value|ids index line format.
+    public static String hashElement(JsonBaseElement element) {
+        try {
+            final var digest = MessageDigest.getInstance("SHA-256");
+            final var bytes = digest.digest(canonicalize(element).getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(bytes);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 
     public static boolean hasInPath(JsonObject obj, String path) {

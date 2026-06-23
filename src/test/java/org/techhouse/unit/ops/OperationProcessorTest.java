@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -228,6 +229,55 @@ public class OperationProcessorTest {
         assertEquals("Ok", aggregateResponse.getMessage());
         assertNotNull(aggregateResponse.getResults());
         assertEquals(1, aggregateResponse.getResults().size());
+    }
+
+    // End-to-end: save docs with object/array fields, index them, then filter by element-match
+    @Test
+    public void test_aggregate_element_match_object_and_array() {
+        final var coll = "elementMatchColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+
+        for (var spec : List.of(new String[]{"em1", "obj", "1"}, new String[]{"em2", "obj", "1"},
+                new String[]{"em3", "obj", "2"}, new String[]{"em4", "arr", "x"})) {
+            final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+            final var obj = new JsonObject();
+            obj.add(Globals.PK_FIELD, new JsonString(spec[0]));
+            if ("obj".equals(spec[1])) {
+                final var inner = new JsonObject();
+                inner.addProperty("n", Integer.valueOf(spec[2]));
+                obj.add("payload", inner);
+            } else {
+                final var arr = new JsonArray();
+                arr.add(new JsonString(spec[2]));
+                obj.add("payload", arr);
+            }
+            saveRequest.setObject(obj);
+            assertEquals(OperationStatus.OK, processor.processMessage(saveRequest).getStatus());
+        }
+
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, coll, "payload"));
+
+        // Object element-match: {n:1} matches em1 and em2 only
+        final var objQuery = new JsonObject();
+        objQuery.addProperty("n", 1);
+        final var objAgg = new AggregateRequest(TestGlobals.DB, coll);
+        objAgg.setAggregationSteps(
+                List.of(new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "payload", objQuery))));
+        final var objResp = (AggregateResponse) processor.processMessage(objAgg);
+        assertEquals(OperationStatus.OK, objResp.getStatus());
+        assertEquals(2, objResp.getResults().size());
+
+        // Array element-match: ["x"] matches em4 only
+        final var arrQuery = new JsonArray();
+        arrQuery.add(new JsonString("x"));
+        final var arrAgg = new AggregateRequest(TestGlobals.DB, coll);
+        arrAgg.setAggregationSteps(
+                List.of(new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "payload", arrQuery))));
+        final var arrResp = (AggregateResponse) processor.processMessage(arrAgg);
+        assertEquals(OperationStatus.OK, arrResp.getStatus());
+        assertEquals(1, arrResp.getResults().size());
+
+        processor.processMessage(new DropCollectionRequest(TestGlobals.DB, coll));
     }
 
     // create a test to create a collection and then drop it

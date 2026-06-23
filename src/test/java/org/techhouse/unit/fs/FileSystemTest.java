@@ -26,6 +26,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -1177,5 +1178,83 @@ public class FileSystemTest {
             ids = stream.map(DbEntry::get_id).collect(java.util.stream.Collectors.toSet());
         }
         assertEquals(Set.of("a", "b"), ids);
+    }
+
+    // writeHashIndexFile + readWholeHashIndexFile round-trip for OBJECT and ARRAY kinds
+    @Test
+    public void test_hash_index_write_and_read_round_trip()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "payload";
+
+        FieldIndexEntry<String> objEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aaaa1111",
+                new HashSet<>(Set.of("id1", "id2")));
+        fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, List.of(objEntry));
+        FieldIndexEntry<String> arrEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "bbbb2222",
+                new HashSet<>(Set.of("id3")));
+        fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.ARRAY, List.of(arrEntry));
+
+        final var objIndex = fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName,
+                IndexKind.OBJECT);
+        assertNotNull(objIndex);
+        assertEquals(1, objIndex.size());
+        assertEquals("aaaa1111", objIndex.getFirst().getValue());
+        assertEquals(Set.of("id1", "id2"), objIndex.getFirst().getIds());
+
+        final var arrIndex = fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName,
+                IndexKind.ARRAY);
+        assertNotNull(arrIndex);
+        assertEquals(1, arrIndex.size());
+        assertEquals("bbbb2222", arrIndex.getFirst().getValue());
+    }
+
+    // writeHashIndexFile with an empty list writes nothing; reading returns null
+    @Test
+    public void test_hash_index_write_empty_list_is_noop()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "payload", IndexKind.OBJECT, List.of());
+        assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "payload", IndexKind.OBJECT));
+    }
+
+    // updateHashIndexFiles inserts a new entry then removes it again
+    @Test
+    public void test_hash_index_update_insert_then_remove()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "payload";
+
+        FieldIndexEntry<String> inserted = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "cccc3333",
+                new HashSet<>(Set.of("id1")));
+        fileSystem.updateHashIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, inserted, null);
+        var index = fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT);
+        assertNotNull(index);
+        assertEquals(1, index.size());
+
+        FieldIndexEntry<String> removed = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "cccc3333",
+                new HashSet<>());
+        fileSystem.updateHashIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, null, removed);
+        index = fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT);
+        assertTrue(index == null || index.stream().noneMatch(e -> e.getValue().equals("cccc3333")));
+    }
+
+    // dropIndex removes the per-kind hash index files alongside scalar ones
+    @Test
+    public void test_drop_index_removes_hash_index_files()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        String fieldName = "payload";
+        fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, List
+                .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "dddd4444", new HashSet<>(Set.of("a")))));
+        fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.ARRAY, List
+                .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "eeee5555", new HashSet<>(Set.of("b")))));
+
+        assertTrue(fileSystem.dropIndex(TestGlobals.DB, TestGlobals.COLL, fieldName));
+        assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT));
+        assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.ARRAY));
     }
 }
