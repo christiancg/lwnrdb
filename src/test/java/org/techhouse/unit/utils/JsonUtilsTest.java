@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.utils.JsonUtils;
 
 public class JsonUtilsTest {
@@ -290,5 +293,93 @@ public class JsonUtilsTest {
         JsonObject obj2 = new JsonObject();
         obj2.add("field", inner);
         assertTrue(JsonUtils.sortFunctionDescending(obj1, obj2, "field") > 0);
+    }
+
+    // canonicalize: object member order does not matter (object equality is key-order independent)
+    @Test
+    public void test_canonicalize_sorts_object_keys() {
+        JsonObject a = new JsonObject();
+        a.addProperty("b", "2");
+        a.addProperty("a", "1");
+        JsonObject b = new JsonObject();
+        b.addProperty("a", "1");
+        b.addProperty("b", "2");
+        assertEquals(JsonUtils.canonicalize(a), JsonUtils.canonicalize(b));
+        assertEquals(JsonUtils.hashElement(a), JsonUtils.hashElement(b));
+    }
+
+    // canonicalize: array element order matters (array equality is order dependent)
+    @Test
+    public void test_canonicalize_preserves_array_order() {
+        JsonArray a = new JsonArray();
+        a.add("x");
+        a.add("y");
+        JsonArray b = new JsonArray();
+        b.add("y");
+        b.add("x");
+        assertNotEquals(JsonUtils.canonicalize(a), JsonUtils.canonicalize(b));
+        assertNotEquals(JsonUtils.hashElement(a), JsonUtils.hashElement(b));
+    }
+
+    // canonicalize: integral numbers normalize so 1 and 1.0 hash equal while 1.5 differs
+    @Test
+    public void test_canonicalize_normalizes_integral_numbers() {
+        JsonObject intObj = new JsonObject();
+        intObj.add("n", new JsonNumber(1));
+        JsonObject doubleObj = new JsonObject();
+        doubleObj.add("n", new JsonNumber(1.0));
+        JsonObject otherObj = new JsonObject();
+        otherObj.add("n", new JsonNumber(1.5));
+        assertEquals(JsonUtils.hashElement(intObj), JsonUtils.hashElement(doubleObj));
+        assertNotEquals(JsonUtils.hashElement(intObj), JsonUtils.hashElement(otherObj));
+    }
+
+    // hashElement: equal nested values hash equal; different values differ
+    @Test
+    public void test_hash_element_stable_for_equal_nested_values() {
+        JsonObject nestedA = new JsonObject();
+        JsonArray innerA = new JsonArray();
+        innerA.add("a");
+        innerA.add("b");
+        nestedA.add("list", innerA);
+        nestedA.addProperty("flag", Boolean.TRUE);
+
+        JsonObject nestedB = new JsonObject();
+        nestedB.addProperty("flag", Boolean.TRUE);
+        JsonArray innerB = new JsonArray();
+        innerB.add("a");
+        innerB.add("b");
+        nestedB.add("list", innerB);
+
+        assertEquals(JsonUtils.hashElement(nestedA), JsonUtils.hashElement(nestedB));
+
+        JsonObject different = new JsonObject();
+        different.addProperty("flag", Boolean.FALSE);
+        assertNotEquals(JsonUtils.hashElement(nestedA), JsonUtils.hashElement(different));
+    }
+
+    // hashElement: produces a 64-char hex string; types are disambiguated and null handled
+    @Test
+    public void test_hash_element_format_and_type_disambiguation() {
+        JsonObject obj = new JsonObject();
+        obj.addProperty("k", "v");
+        final var hash = JsonUtils.hashElement(obj);
+        assertEquals(64, hash.length());
+        assertTrue(hash.matches("[0-9a-f]+"));
+        // A string "true" must not canonicalize to the boolean true
+        JsonObject strObj = new JsonObject();
+        strObj.add("v", new JsonString("true"));
+        JsonObject boolObj = new JsonObject();
+        boolObj.add("v", new JsonBoolean(true));
+        assertNotEquals(JsonUtils.hashElement(strObj), JsonUtils.hashElement(boolObj));
+        assertEquals("null", JsonUtils.canonicalize(JsonNull.INSTANCE));
+    }
+
+    // canonicalize: empty object and empty array are valid and distinct
+    @Test
+    public void test_canonicalize_empty_object_and_array() {
+        assertEquals("{}", JsonUtils.canonicalize(new JsonObject()));
+        assertEquals("[]", JsonUtils.canonicalize(new JsonArray()));
+        assertNotEquals(JsonUtils.hashElement(new JsonObject()), JsonUtils.hashElement(new JsonArray()));
     }
 }
