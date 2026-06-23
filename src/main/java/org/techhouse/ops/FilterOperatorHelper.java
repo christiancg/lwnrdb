@@ -172,7 +172,11 @@ public class FilterOperatorHelper {
                         }
                         return false;
                     }
-                    if (toTestElement != null && toTestElement.isJsonPrimitive()) {
+                    // IN / NOT_IN: membership of the field value in the candidate list. JsonArray.contains
+                    // uses element equality, so this also matches object/array field values against a list
+                    // of candidate objects/arrays (mirroring the index path's element-match resolution).
+                    if ((operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN)
+                            && toTestElement != null && !toTestElement.isJsonNull()) {
                         final var jsonArray = operatorElement.asJsonArray();
                         final var result = jsonArray.contains(toTestElement);
                         return (operation == FieldOperatorType.IN) == result;
