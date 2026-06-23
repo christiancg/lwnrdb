@@ -30,8 +30,11 @@ import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -401,6 +404,46 @@ public class IndexConsistencyTest {
 
         assertEquals(Set.of("p"), filterIds(new JsonString("present")));
         assertTrue(filterIds(new JsonString("gone")).isEmpty());
+    }
+
+    // ── CREATE_INDEX / DROP_INDEX synchronous registration (Finding 3) ───────--
+
+    private Set<String> indexesOf() {
+        return cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).getIndexes();
+    }
+
+    // CREATE_INDEX builds the index files and registers the field as a known index synchronously
+    // (under the collection write lock), so the field is usable the instant the request returns —
+    // no background event is required. Documents committed before the build are captured.
+    @Test
+    public void test_create_index_registers_field_and_indexes_existing_docs_synchronously() throws IOException {
+        final var processor = new OperationProcessor();
+        saveViaProcessor(processor, "1", "active");
+        saveViaProcessor(processor, "2", "inactive");
+
+        final var resp = processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "status"));
+
+        assertEquals(OperationStatus.OK, resp.getStatus());
+        // Registered synchronously — no IndexEvent processed in this test.
+        assertTrue(indexesOf().contains("status"));
+        // The pre-existing documents are present in the freshly built index.
+        assertEquals(Set.of("1"), filterIds(new JsonString("active")));
+        assertEquals(Set.of("2"), filterIds(new JsonString("inactive")));
+    }
+
+    // DROP_INDEX deletes the index files and unregisters the field synchronously, so the field is no
+    // longer a known index the instant the request returns.
+    @Test
+    public void test_drop_index_unregisters_field_synchronously() {
+        final var processor = new OperationProcessor();
+        saveViaProcessor(processor, "1", "active");
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "status"));
+        assertTrue(indexesOf().contains("status"));
+
+        final var resp = processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "status"));
+
+        assertEquals(OperationStatus.OK, resp.getStatus());
+        assertFalse(indexesOf().contains("status"));
     }
 
     // ── UserCache helpers ────────────────────────────────────────────────────

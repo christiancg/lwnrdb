@@ -15,7 +15,6 @@ import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.bckg_ops.events.IndexEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
@@ -510,15 +509,23 @@ public class OperationProcessor {
     }
 
     private CreateIndexResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
+        final var dbName = createIndexRequest.getDatabaseName();
+        final var collName = createIndexRequest.getCollectionName();
+        final var fieldName = createIndexRequest.getFieldName();
         try {
-            final var dbName = createIndexRequest.getDatabaseName();
-            final var collName = createIndexRequest.getCollectionName();
-            final var fieldName = createIndexRequest.getFieldName();
+            // Hold the collection write lock so no save can commit a document between the index build
+            // and its registration. Building the index files and registering the field as a known
+            // index happen atomically here (synchronously), so any concurrent save is serialized: it
+            // either commits before (and is captured by the whole-collection read) or after (and its
+            // background index update sees the field already registered and indexes it).
+            locks.lock(dbName, collName);
             IndexHelper.createIndex(dbName, collName, fieldName);
-            taskManager.submitBackgroundTask(new IndexEvent(EventType.CREATED, dbName, collName, fieldName));
+            AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
             return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
         } catch (Exception e) {
             return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 
@@ -543,19 +550,25 @@ public class OperationProcessor {
     }
 
     private DropIndexResponse processDropIndex(DropIndexRequest dropIndexRequest) {
+        final var dbName = dropIndexRequest.getDatabaseName();
+        final var collName = dropIndexRequest.getCollectionName();
+        final var fieldName = dropIndexRequest.getFieldName();
         try {
-            final var dbName = dropIndexRequest.getDatabaseName();
-            final var collName = dropIndexRequest.getCollectionName();
-            final var fieldName = dropIndexRequest.getFieldName();
+            // Hold the collection write lock so the index files are deleted and the field is
+            // unregistered atomically with respect to saves and the background indexer. Unregister
+            // first so no read or background index update can use the field after this returns.
+            locks.lock(dbName, collName);
             final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
             if (result) {
-                taskManager.submitBackgroundTask(new IndexEvent(EventType.DELETED, dbName, collName, fieldName));
+                AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
                 return new DropIndexResponse(OperationStatus.OK, "Successfully dropped index: " + fieldName);
             } else {
                 return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + fieldName);
             }
         } catch (Exception e) {
             return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + e.getMessage());
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 }

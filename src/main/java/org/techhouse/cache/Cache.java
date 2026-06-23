@@ -129,10 +129,6 @@ public class Cache {
         return userCache.listCacheableResources();
     }
 
-    public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {
-        return userCache.hasLoadedIndex(dbName, collName, fieldName);
-    }
-
     // ── Cross-cutting reads (combine user documents with admin page metadata) ──
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {

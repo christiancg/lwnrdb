@@ -10,7 +10,6 @@ import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.bckg_ops.events.IndexEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.DbEntry;
@@ -29,7 +28,6 @@ public class EventProcessorHelper {
             case DatabaseEvent databaseEvent -> processDatabaseEvent(databaseEvent);
             case CollectionEvent collectionEvent -> processCollectionEvent(collectionEvent);
             case EntityEvent entityEvent -> processEntityEvent(entityEvent);
-            case IndexEvent indexEvent -> processIndexEvent(indexEvent);
             case BulkEntityEvent bulkEntityEvent -> processBulkEntityEvent(bulkEntityEvent);
             case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
             case UsageProfileCleanupEvent ignored ->
@@ -117,16 +115,4 @@ public class EventProcessorHelper {
         }
     }
 
-    private static void processIndexEvent(IndexEvent event) throws IOException, InterruptedException {
-        final var dbName = event.getDbName();
-        final var collName = event.getCollName();
-        final var fieldName = event.getFieldName();
-        if (event.getType() == EventType.CREATED) {
-            if (!AdminOperationHelper.hasIndexEntry(dbName, collName, fieldName)) {
-                AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
-            }
-        } else {
-            AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
-        }
-    }
 }
