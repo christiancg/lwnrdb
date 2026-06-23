@@ -365,6 +365,10 @@ public class OperationProcessor {
                 primaryKeyIndex.remove(idxEntry);
                 primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
                 cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
+                // Mark pending until the async index removal completes: the field index still maps the
+                // value to this id, so index-only reads that don't re-fetch the document (COUNT, DISTINCT)
+                // would otherwise count/surface the deleted doc. The DELETED event clears it.
+                pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
                 taskManager
                         .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
                 recordCollectionAccess(dbName, collName);
