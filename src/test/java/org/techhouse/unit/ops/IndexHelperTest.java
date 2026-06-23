@@ -330,7 +330,8 @@ public class IndexHelperTest {
     // Reads the persisted hash index straight from disk. The hash index cache follows the same
     // eventually-consistent path as the scalar index cache, so verification reads the file state.
     private static List<FieldIndexEntry<String>> readHashIndex(IndexKind kind) throws IOException {
-        return IocContainer.get(FileSystem.class).readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "data", kind);
+        return IocContainer.get(FileSystem.class).readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "data",
+                kind);
     }
 
     // createIndex builds separate Object and Array hash index files for object/array valued fields
