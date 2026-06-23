@@ -241,6 +241,41 @@ public class AdminCacheTest {
         assertNull(result3);
     }
 
+    // A collection dropped while a background index event is still in flight is no longer in the
+    // cache; getIndexesForCollection must return an empty set (not throw) so background maintenance
+    // becomes a clean no-op.
+    @Test
+    public void test_get_indexes_for_missing_collection_returns_empty() {
+        AdminCache cache = new AdminCache();
+
+        Set<String> result = cache.getIndexesForCollection("goneDb", "goneColl");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+        // hasIndex builds on the same method and must report false rather than throwing.
+        assertFalse(cache.hasIndex("goneDb", "goneColl", "anyField"));
+    }
+
+    // When the collection exists, its registered indexes are returned as-is.
+    @Test
+    public void test_get_indexes_for_existing_collection_returns_indexes()
+            throws NoSuchFieldException, IllegalAccessException {
+        AdminCache cache = new AdminCache();
+        String dbName = "testDB";
+        String collName = "testCollection";
+        AdminCollEntry entry = new AdminCollEntry(dbName, collName);
+        entry.setIndexes(Set.of("status", "score"));
+
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
+        TestUtils.getPrivateField(cache, "collections", typeColl).put(Cache.getCollectionIdentifier(dbName, collName),
+                entry);
+
+        assertEquals(Set.of("status", "score"), cache.getIndexesForCollection(dbName, collName));
+        assertTrue(cache.hasIndex(dbName, collName, "status"));
+        assertFalse(cache.hasIndex(dbName, collName, "missing"));
+    }
+
     // Successfully adds AdminDbEntry and PkIndexEntry to respective maps
     @Test
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {

@@ -273,6 +273,12 @@ public class AdminCache {
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {
         final var collection = collections.get(Cache.getCollectionIdentifier(dbName, collName));
+        // The collection may have been dropped while a background index event for it was still
+        // queued. Treat a missing collection as "no indexes" so background maintenance becomes a
+        // clean no-op (and hasIndex returns false) instead of throwing.
+        if (collection == null) {
+            return Set.of();
+        }
         return collection.getIndexes();
     }
 

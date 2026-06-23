@@ -406,6 +406,15 @@ public class IndexConsistencyTest {
         assertTrue(filterIds(new JsonString("gone")).isEmpty());
     }
 
+    // A collection dropped while its index event is still queued must not crash background maintenance:
+    // getIndexesForCollection returns empty for the missing collection, so updateIndexes/bulkUpdateIndexes
+    // are clean no-ops instead of throwing an NPE.
+    @Test
+    public void test_update_indexes_is_noop_for_missing_collection() {
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, "nonexistent_coll", "1"));
+        assertDoesNotThrow(() -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, "nonexistent_coll", List.of("1", "2")));
+    }
+
     // ── CREATE_INDEX / DROP_INDEX synchronous registration (Finding 3) ───────--
 
     private Set<String> indexesOf() {
