@@ -10,7 +10,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -256,45 +255,84 @@ public class IndexHelper {
         return new JsonNumber(asDouble);
     }
 
-    public static void bulkUpdateIndexes(String dbName, String collName, List<DbEntry> insertedEntries,
-            List<DbEntry> updatedEntries) throws IOException, InterruptedException {
-        final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
-        for (var fieldName : existingIndexes) {
-            rl.lockIndex(dbName, collName, fieldName);
-            try {
-                for (var insertedEntry : insertedEntries) {
-                    internalSelectIndexType(insertedEntry, dbName, collName, fieldName, EventType.CREATED);
-                }
-                for (var updatedEntry : updatedEntries) {
-                    internalSelectIndexType(updatedEntry, dbName, collName, fieldName, EventType.UPDATED);
-                }
-                // The cached index now diverges from the rewritten .idx files; drop it so the next
-                // read reloads the up-to-date index from disk.
-                cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-            } finally {
-                rl.releaseIndex(dbName, collName, fieldName);
-            }
-        }
-    }
-
-    public static void updateIndexes(String dbName, String collName, DbEntry entry, EventType type)
+    // Bulk counterpart of updateIndexes: re-reads the current state of every affected id once, then
+    // applies it to each field index. Same order-independent convergence as updateIndexes.
+    public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
-        for (var fieldName : existingIndexes) {
-            rl.lockIndex(dbName, collName, fieldName);
-            try {
-                internalSelectIndexType(entry, dbName, collName, fieldName, type);
-                // The cached index now diverges from the rewritten .idx files; drop it so the next
-                // read reloads the up-to-date index from disk.
-                cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-            } finally {
-                rl.releaseIndex(dbName, collName, fieldName);
+        if (existingIndexes.isEmpty() || ids.isEmpty()) {
+            return;
+        }
+        rl.lockRead(dbName, collName);
+        try {
+            final var byId = new HashMap<String, DbEntry>();
+            for (var doc : cache.getEntriesByIds(dbName, collName, new HashSet<>(ids))) {
+                byId.put(doc.get_id(), doc);
             }
+            for (var fieldName : existingIndexes) {
+                rl.lockIndex(dbName, collName, fieldName);
+                try {
+                    for (var id : ids) {
+                        applyCurrentState(dbName, collName, fieldName, id, byId.get(id));
+                    }
+                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+                } finally {
+                    rl.releaseIndex(dbName, collName, fieldName);
+                }
+            }
+        } finally {
+            rl.releaseRead(dbName, collName);
         }
     }
 
-    private static void internalSelectIndexType(DbEntry entry, String dbName, String collName, String fieldName,
-            EventType type) throws IOException {
+    // Index maintenance for a single committed write. Background events for the same id may be
+    // processed out of order by the worker pool, so rather than trusting the (possibly stale) event
+    // snapshot we re-read the CURRENT committed document by id and index that — whichever event runs
+    // last observes the final committed state, so the index converges regardless of processing order.
+    // The collection read lock gives a stable view of the document's existence and value (it blocks a
+    // concurrent commit until maintenance finishes; that commit then converges via its own event).
+    public static void updateIndexes(String dbName, String collName, String id)
+            throws IOException, InterruptedException {
+        final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
+        if (existingIndexes.isEmpty()) {
+            return;
+        }
+        rl.lockRead(dbName, collName);
+        try {
+            final var current = cache.getEntriesByIds(dbName, collName, Set.of(id));
+            final var doc = current.isEmpty() ? null : current.getFirst();
+            for (var fieldName : existingIndexes) {
+                rl.lockIndex(dbName, collName, fieldName);
+                try {
+                    applyCurrentState(dbName, collName, fieldName, id, doc);
+                    // The cached index now diverges from the rewritten .idx files; drop it so the next
+                    // read reloads the up-to-date index from disk.
+                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+                } finally {
+                    rl.releaseIndex(dbName, collName, fieldName);
+                }
+            }
+        } finally {
+            rl.releaseRead(dbName, collName);
+        }
+    }
+
+    // Applies the current committed state of a document to one field index: upsert when the document
+    // still exists (internalSelectIndexType clears the id from every family, then adds it to the
+    // current value), or remove the id from every family when it no longer exists (deleted). Must be
+    // called holding the field index write lock.
+    private static void applyCurrentState(String dbName, String collName, String fieldName, String id, DbEntry doc)
+            throws IOException {
+        if (doc != null) {
+            internalSelectIndexType(doc, dbName, collName, fieldName);
+        } else {
+            removeIdFromScalarIndexes(dbName, collName, fieldName, id);
+            removeIdFromHashIndexes(dbName, collName, fieldName, id);
+        }
+    }
+
+    private static void internalSelectIndexType(DbEntry entry, String dbName, String collName, String fieldName)
+            throws IOException {
         final var element = JsonUtils.getFromPath(entry.getData(), fieldName);
         final var entryId = entry.get_id();
         // The id may currently live in any family, and an update can change its value or even its kind
@@ -305,28 +343,27 @@ public class IndexHelper {
         if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
             final var primitive = element.asJsonPrimitive();
             switch (primitive) {
-                case JsonNumber jsonNumber -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type,
+                case JsonNumber jsonNumber -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId,
                         jsonNumber.getValue(), Number.class);
                 case JsonString jsonString -> {
                     if (jsonString.isJsonCustom()) {
                         final var custom = CustomTypeFactory.getCustomTypeInstance(jsonString);
-                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type, custom, null);
+                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, custom, null);
                     } else {
-                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type, jsonString.getValue(),
+                        findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, jsonString.getValue(),
                                 String.class);
                     }
                 }
-                case JsonBoolean jsonBoolean -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId, type,
+                case JsonBoolean jsonBoolean -> findExistingValuesAndUpdate(dbName, collName, fieldName, entryId,
                         jsonBoolean.getValue(), Boolean.class);
                 default -> throw new IllegalStateException("Unexpected value: " + primitive);
             }
         } else if (element.isJsonObject()) {
             removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
-            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.OBJECT, JsonUtils.hashElement(element),
-                    type);
+            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.OBJECT, JsonUtils.hashElement(element));
         } else if (element.isJsonArray()) {
             removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
-            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.ARRAY, JsonUtils.hashElement(element), type);
+            addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.ARRAY, JsonUtils.hashElement(element));
         } else {
             // null or absent value (e.g. DELETE, or a field removed on update): the id must not linger
             // in any index family, and there is nothing to add.
@@ -338,10 +375,7 @@ public class IndexHelper {
     // hash entry of the target kind (creating the entry when the value is new). The id has already
     // been cleared from every hash family by internalSelectIndexType, so this only adds.
     private static void addToHashIndex(String dbName, String collName, String fieldName, String entryId, IndexKind kind,
-            String hash, EventType type) throws IOException {
-        if (type != EventType.CREATED && type != EventType.UPDATED) {
-            return;
-        }
+            String hash) throws IOException {
         final var entries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
         final var found = entries == null
                 ? null
@@ -389,7 +423,7 @@ public class IndexHelper {
     }
 
     private static <T> void findExistingValuesAndUpdate(String dbName, String collName, String fieldName,
-            String entryId, EventType type, T value, Class<T> tClass) throws IOException {
+            String entryId, T value, Class<T> tClass) throws IOException {
         FieldIndexEntry<Boolean> toRemoveBoolean = getExistingFieldIndexEntry(dbName, collName, fieldName, entryId,
                 Boolean.class);
         FieldIndexEntry<Number> toRemoveNumber = null;
@@ -415,55 +449,45 @@ public class IndexHelper {
             }
         }
         if (value instanceof JsonCustom<?> jsonCustom) {
-            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, jsonCustom, type, toRemoveBoolean,
-                    toRemoveNumber, toRemoveString, toRemoveJsonCustom);
+            internalUpdateCustomIndex(dbName, collName, fieldName, entryId, jsonCustom, toRemoveBoolean, toRemoveNumber,
+                    toRemoveString, toRemoveJsonCustom);
         } else {
-            internalUpdateIndex(dbName, collName, fieldName, entryId, value, type, tClass, toRemoveBoolean,
-                    toRemoveNumber, toRemoveString, toRemoveJsonCustom);
+            internalUpdateIndex(dbName, collName, fieldName, entryId, value, tClass, toRemoveBoolean, toRemoveNumber,
+                    toRemoveString, toRemoveJsonCustom);
         }
     }
 
     private static void internalUpdateCustomIndex(String dbName, String collName, String fieldName, String entryId,
-            JsonCustom<?> value, EventType type, FieldIndexEntry<Boolean> toRemoveBoolean,
-            FieldIndexEntry<Number> toRemoveNumber, FieldIndexEntry<String> toRemoveString,
-            FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom) throws IOException {
-        if (type == EventType.CREATED || type == EventType.UPDATED) {
-            FieldIndexEntry<?> found = findMatchingEntryFromCustomJson(dbName, collName, fieldName, value);
-            if (found != null) {
-                final var ids = found.getIds();
-                ids.add(entryId);
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                        toRemoveJsonCustom, found);
-            } else {
-                FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                        toRemoveJsonCustom, indexEntry);
-            }
-        } else {
+            JsonCustom<?> value, FieldIndexEntry<Boolean> toRemoveBoolean, FieldIndexEntry<Number> toRemoveNumber,
+            FieldIndexEntry<String> toRemoveString, FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom)
+            throws IOException {
+        FieldIndexEntry<?> found = findMatchingEntryFromCustomJson(dbName, collName, fieldName, value);
+        if (found != null) {
+            final var ids = found.getIds();
+            ids.add(entryId);
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                    toRemoveJsonCustom, null);
+                    toRemoveJsonCustom, found);
+        } else {
+            FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
+            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
+                    toRemoveJsonCustom, indexEntry);
         }
     }
 
     private static <T> void internalUpdateIndex(String dbName, String collName, String fieldName, String entryId,
-            T value, EventType type, Class<T> tClass, FieldIndexEntry<Boolean> toRemoveBoolean,
-            FieldIndexEntry<Number> toRemoveNumber, FieldIndexEntry<String> toRemoveString,
-            FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom) throws IOException {
-        if (type == EventType.CREATED || type == EventType.UPDATED) {
-            FieldIndexEntry<T> found = findMatchingEntry(dbName, collName, fieldName, value, tClass);
-            if (found != null) {
-                final var ids = found.getIds();
-                ids.add(entryId);
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                        toRemoveJsonCustom, found);
-            } else {
-                FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
-                updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                        toRemoveJsonCustom, indexEntry);
-            }
-        } else {
+            T value, Class<T> tClass, FieldIndexEntry<Boolean> toRemoveBoolean, FieldIndexEntry<Number> toRemoveNumber,
+            FieldIndexEntry<String> toRemoveString, FieldIndexEntry<JsonCustom<?>> toRemoveJsonCustom)
+            throws IOException {
+        FieldIndexEntry<T> found = findMatchingEntry(dbName, collName, fieldName, value, tClass);
+        if (found != null) {
+            final var ids = found.getIds();
+            ids.add(entryId);
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
-                    toRemoveJsonCustom, null);
+                    toRemoveJsonCustom, found);
+        } else {
+            FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
+            updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
+                    toRemoveJsonCustom, indexEntry);
         }
     }
 
