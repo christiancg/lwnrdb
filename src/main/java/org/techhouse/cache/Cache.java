@@ -121,6 +121,10 @@ public class Cache {
         userCache.evictCollection(dbName, collName);
     }
 
+    public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        userCache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+    }
+
     public List<CacheableResource> listCacheableResources() {
         return userCache.listCacheableResources();
     }

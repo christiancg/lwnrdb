@@ -1,0 +1,348 @@
+package org.techhouse.unit.ops;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.EventProcessorHelper;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
+import org.techhouse.cache.UserCache;
+import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.FilterOperatorHelper;
+import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.step.CountAggregationStep;
+import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
+import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
+import org.techhouse.utils.ReflectionUtils;
+
+// Covers the index read/write consistency layer: the PendingIndexWrites overlay (no false positives
+// or negatives across FILTER/COUNT/GROUP_BY/SORT/DISTINCT/JOIN), evict-on-write convergence, and the
+// UserCache snapshot/eviction helpers.
+public class IndexConsistencyTest {
+    private Cache cache;
+    private PendingIndexWrites pending;
+
+    @BeforeEach
+    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
+        TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
+        TestUtils.createTestJoinCollection();
+        cache = IocContainer.get(Cache.class);
+        pending = IocContainer.get(PendingIndexWrites.class);
+    }
+
+    @AfterEach
+    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.standardTearDown();
+    }
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    private void addDoc(String coll, String id, String field, JsonBaseElement value) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(field, value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, coll, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, coll, entry);
+    }
+
+    private void enableIndex(String coll, String field) {
+        IndexHelper.createIndex(TestGlobals.DB, coll, field);
+        cache.getAdminCollectionEntry(TestGlobals.DB, coll).setIndexes(Set.of(field));
+    }
+
+    // Simulates a committed-but-not-yet-indexed write: in cache + marked pending, but not in the index
+    // (because it is added after enableIndex).
+    private void addPendingDoc(String coll, String id, String field, JsonBaseElement value) {
+        addDoc(coll, id, field, value);
+        pending.mark(TestGlobals.DB, coll, id);
+    }
+
+    private Set<String> filterIds(JsonBaseElement value) throws IOException {
+        final var operator = new FieldOperator(FieldOperatorType.EQUALS, "status", value);
+        return FilterOperatorHelper.processOperator(operator, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).collect(Collectors.toSet());
+    }
+
+    private long countWith(FilterAggregationStep filter) throws IOException {
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(filter, new CountAggregationStep()));
+        final var result = AggregationOperationHelper.processAggregation(req);
+        return result.getFirst().get("count").asJsonNumber().getValue().longValue();
+    }
+
+    // ── FILTER ───────────────────────────────────────────────────────────────
+
+    // A matching document committed but not yet indexed is returned (no false negative).
+    @Test
+    public void test_filter_includes_pending_not_yet_indexed_match() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
+        enableIndex(TestGlobals.COLL, "status");
+        addPendingDoc(TestGlobals.COLL, "2", "status", new JsonString("active"));
+
+        assertEquals(Set.of("1", "2"), filterIds(new JsonString("active")));
+    }
+
+    // A document whose indexed value changed (stale index entry) is not wrongly returned under its old
+    // value (no false positive) and is found under its new value (no false negative).
+    @Test
+    public void test_filter_reconciles_stale_updated_value() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
+        enableIndex(TestGlobals.COLL, "status");
+        // Update doc 1 to inactive in the document cache, but leave the index stale (still active->{1}).
+        addPendingDoc(TestGlobals.COLL, "1", "status", new JsonString("inactive"));
+
+        assertTrue(filterIds(new JsonString("active")).isEmpty());
+        assertEquals(Set.of("1"), filterIds(new JsonString("inactive")));
+    }
+
+    // ── COUNT ──────────────────────────────────────────────────────────────--
+
+    // Index-only COUNT with a filter reflects the current documents, not the stale index.
+    @Test
+    public void test_count_with_filter_is_consistent() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
+        enableIndex(TestGlobals.COLL, "status");
+        addPendingDoc(TestGlobals.COLL, "2", "status", new JsonString("active"));
+        addPendingDoc(TestGlobals.COLL, "3", "status", new JsonString("inactive"));
+
+        final var filter = new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")));
+        assertEquals(2L, countWith(filter));
+    }
+
+    // Whole-collection COUNT comes from the synchronously-maintained PK index, so it is exact even
+    // before the background has processed the saves.
+    @Test
+    public void test_whole_collection_count_uses_pk_index() throws IOException {
+        final var processor = new OperationProcessor();
+        for (var id : List.of("1", "2", "3")) {
+            final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            final var obj = new JsonObject();
+            obj.add(Globals.PK_FIELD, new JsonString(id));
+            obj.addProperty("status", "active");
+            save.setObject(obj);
+            processor.processMessage(save);
+        }
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new CountAggregationStep()));
+        final var result = AggregationOperationHelper.processAggregation(req);
+        assertEquals(3L, result.getFirst().get("count").asJsonNumber().getValue().longValue());
+    }
+
+    // ── DISTINCT ─────────────────────────────────────────────────────────────
+
+    // A pending document with a brand-new value contributes its value to the distinct set.
+    @Test
+    public void test_distinct_includes_pending_new_value() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "color", new JsonString("red"));
+        addDoc(TestGlobals.COLL, "2", "color", new JsonString("blue"));
+        enableIndex(TestGlobals.COLL, "color");
+        addPendingDoc(TestGlobals.COLL, "3", "color", new JsonString("green"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));
+        final var values = AggregationOperationHelper.processAggregation(req).stream()
+                .map(o -> o.get("color").asJsonString().getValue()).collect(Collectors.toSet());
+        assertEquals(Set.of("red", "blue", "green"), values);
+    }
+
+    // When a pending update empties an index value, that value no longer surfaces as distinct.
+    @Test
+    public void test_distinct_drops_emptied_value_after_pending_update() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "color", new JsonString("red"));
+        enableIndex(TestGlobals.COLL, "color");
+        // Doc 1 (the only "red") is updated to "blue" but not yet indexed.
+        addPendingDoc(TestGlobals.COLL, "1", "color", new JsonString("blue"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("color")));
+        final var values = AggregationOperationHelper.processAggregation(req).stream()
+                .map(o -> o.get("color").asJsonString().getValue()).collect(Collectors.toSet());
+        assertEquals(Set.of("blue"), values);
+    }
+
+    // ── GROUP_BY ───────────────────────────────────────────────────────────--
+
+    // Pending documents are grouped under their current value (merged into existing groups and added
+    // as new groups).
+    @Test
+    public void test_group_by_includes_pending_docs() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "type", new JsonString("A"));
+        enableIndex(TestGlobals.COLL, "type");
+        addPendingDoc(TestGlobals.COLL, "2", "type", new JsonString("A"));
+        addPendingDoc(TestGlobals.COLL, "3", "type", new JsonString("B"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("type")));
+        final var groups = AggregationOperationHelper.processAggregation(req);
+        final var sizesByType = groups.stream().collect(Collectors.toMap(o -> o.get("type").asJsonString().getValue(),
+                o -> o.get("group").asJsonArray().size()));
+        assertEquals(2, sizesByType.get("A"));
+        assertEquals(1, sizesByType.get("B"));
+    }
+
+    // A pending document whose value is non-scalar (object) forces a full-scan fallback, which still
+    // produces consistent groups.
+    @Test
+    public void test_group_by_falls_back_to_scan_for_non_scalar_pending() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "type", new JsonString("A"));
+        enableIndex(TestGlobals.COLL, "type");
+        final var objValue = new JsonObject();
+        objValue.addProperty("nested", 1);
+        addPendingDoc(TestGlobals.COLL, "2", "type", objValue);
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("type")));
+        final var groups = AggregationOperationHelper.processAggregation(req);
+        // Both the scalar "A" group and the object-valued group are present (scan fallback sees all).
+        assertEquals(2, groups.size());
+    }
+
+    // ── SORT ───────────────────────────────────────────────────────────────--
+
+    // Pending documents are ordered by their current value alongside indexed documents.
+    @Test
+    public void test_sort_orders_pending_docs_by_current_value() throws IOException {
+        addDoc(TestGlobals.COLL, "mid", "num", new JsonNumber(2));
+        enableIndex(TestGlobals.COLL, "num");
+        addPendingDoc(TestGlobals.COLL, "low", "num", new JsonNumber(1));
+        addPendingDoc(TestGlobals.COLL, "high", "num", new JsonNumber(3));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("num", true)));
+        final var ordered = AggregationOperationHelper.processAggregation(req).stream()
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).toList();
+        assertEquals(List.of("low", "mid", "high"), ordered);
+    }
+
+    // ── JOIN ───────────────────────────────────────────────────────────────--
+
+    // A pending (not-yet-indexed) remote document is still matched by an index-backed JOIN.
+    @Test
+    public void test_join_includes_pending_remote_doc() throws IOException {
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 42);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+
+        addDoc(TestGlobals.JOIN_COLL, "j0", "refKey", new JsonNumber(7));
+        enableIndex(TestGlobals.JOIN_COLL, "refKey");
+        // Remote doc with refKey 42 committed but not yet indexed.
+        addPendingDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(42));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+        assertEquals(1, result.size());
+        assertEquals(1, result.getFirst().get("joined").asJsonArray().size());
+    }
+
+    // ── evict-on-write convergence (Problem 3) ─────────────────────────────--
+
+    // After the background entity event runs, the index is rewritten + cache evicted and the pending
+    // mark cleared, so the document is found via the index alone (no longer via the overlay).
+    @Test
+    public void test_background_indexing_converges_and_clears_pending() throws IOException, InterruptedException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
+        enableIndex(TestGlobals.COLL, "status");
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("2"));
+        obj.addProperty("status", "active");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id("2");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        pending.mark(TestGlobals.DB, TestGlobals.COLL, "2");
+
+        runEntityEvent(entry);
+
+        assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+        assertEquals(Set.of("1", "2"), filterIds(new JsonString("active")));
+    }
+
+    private void runEntityEvent(DbEntry entry) throws IOException, InterruptedException {
+        EventProcessorHelper.processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry));
+    }
+
+    // ── UserCache helpers ────────────────────────────────────────────────────
+
+    // evictFieldIndexAllTypes drops every per-type list for a field while leaving other fields cached.
+    @Test
+    public void test_evict_field_index_all_types_removes_only_the_field() throws Exception {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var token = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(userCache, "fieldIndexMap", token);
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        final Map<String, List<FieldIndexEntry<?>>> inner = new ConcurrentHashMap<>();
+        inner.put("mixed" + Globals.COLL_IDENTIFIER_SEPARATOR + "Double", new ArrayList<>());
+        inner.put("mixed" + Globals.COLL_IDENTIFIER_SEPARATOR + "String", new ArrayList<>());
+        inner.put("other" + Globals.COLL_IDENTIFIER_SEPARATOR + "Double", new ArrayList<>());
+        fieldIndexMap.put(collId, inner);
+
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, "mixed");
+
+        assertEquals(Set.of("other" + Globals.COLL_IDENTIFIER_SEPARATOR + "Double"), inner.keySet());
+    }
+
+    // When the last field is evicted, the collection's index map entry is removed entirely.
+    @Test
+    public void test_evict_field_index_all_types_removes_empty_collection_entry() throws Exception {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var token = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(userCache, "fieldIndexMap", token);
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        final Map<String, List<FieldIndexEntry<?>>> inner = new ConcurrentHashMap<>();
+        inner.put("only" + Globals.COLL_IDENTIFIER_SEPARATOR + "Double", new ArrayList<>());
+        fieldIndexMap.put(collId, inner);
+
+        cache.evictFieldIndexAllTypes(TestGlobals.DB, TestGlobals.COLL, "only");
+
+        assertFalse(fieldIndexMap.containsKey(collId));
+    }
+
+    // getIdsFromIndex returns a detached snapshot that does not alias cached state.
+    @Test
+    public void test_get_ids_from_index_returns_detached_snapshot() throws IOException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
+        enableIndex(TestGlobals.COLL, "status");
+        final var operator = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));
+        final var first = cache.getIdsFromIndex(TestGlobals.DB, TestGlobals.COLL, "status", operator, "active");
+        first.add("injected");
+        final var second = cache.getIdsFromIndex(TestGlobals.DB, TestGlobals.COLL, "status", operator, "active");
+        assertEquals(Set.of("1"), second);
+    }
+}
