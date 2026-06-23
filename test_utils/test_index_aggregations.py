@@ -422,6 +422,30 @@ def probe_join(s, f):
                detail=f"{bad}/{CONS_REPEATS} join results were stale")
 
 
+def probe_delete_consistency(s, f):
+    # Deleting the only doc with a unique value must remove it from index-only COUNT and DISTINCT
+    # immediately (not just from FILTER), even before the async index removal runs.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"del_{i}"
+        doc_id = f"del_doc_{i}"
+        save_doc(s, f, CONS, {"_id": doc_id, "status": value})
+        send(s, f, {"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
+        # Immediately: the value must be gone from FILTER, COUNT and DISTINCT.
+        if filter_status(s, f, value):
+            bad += 1
+        r = agg(s, f, CONS, [{"type": "FILTER",
+                              "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": value}},
+                             {"type": "COUNT"}])
+        if (r.get("results") or [{}])[0].get("count") != 0:
+            bad += 1
+        d = agg(s, f, CONS, DISTINCT_STATUS_STEPS)
+        if value in {row.get("status") for row in (d.get("results") or [])}:
+            bad += 1
+    check_true("DELETE removes a doc from FILTER, COUNT and DISTINCT immediately", bad == 0,
+               detail=f"{bad} inconsistent immediate queries after delete")
+
+
 def probe_convergence(s, f):
     # After the background settles, the document is found via the (now-updated, re-evicted) index.
     save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
@@ -447,6 +471,7 @@ def consistency_suite(s, f):
     probe_group_by(s, f)
     probe_sort(s, f)
     probe_join(s, f)
+    probe_delete_consistency(s, f)
     probe_convergence(s, f)
 
 

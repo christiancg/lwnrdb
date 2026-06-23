@@ -31,6 +31,7 @@ import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -294,6 +295,54 @@ public class IndexConsistencyTest {
 
     private void runEntityEvent(DbEntry entry) throws IOException, InterruptedException {
         EventProcessorHelper.processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry));
+    }
+
+    // ── DELETE (Finding 1) ─────────────────────────────────────────────────--
+
+    private void saveViaProcessor(OperationProcessor processor, String id, String value) {
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.addProperty("status", value);
+        save.setObject(obj);
+        processor.processMessage(save);
+    }
+
+    // A deleted document must be immediately absent from the index-only paths that do not re-fetch
+    // documents (COUNT, DISTINCT), not just from FILTER — because the delete marks it pending until the
+    // async index removal completes.
+    @Test
+    public void test_delete_is_consistent_for_count_and_distinct() throws IOException {
+        final var processor = new OperationProcessor();
+        saveViaProcessor(processor, "gone", "gone");
+        saveViaProcessor(processor, "stay", "stay");
+        enableIndex(TestGlobals.COLL, "status");
+        // Simulate the saves' background indexing having completed, to isolate the delete's effect.
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, "gone");
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, "stay");
+
+        final var del = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        del.set_id("gone");
+        processor.processMessage(del);
+
+        // The delete marked the id pending (its async index removal has not run in this test).
+        assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("gone"));
+        // FILTER already excluded it; COUNT and DISTINCT must too.
+        assertTrue(filterIds(new JsonString("gone")).isEmpty());
+
+        final var countReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        countReq.setAggregationSteps(List.of(
+                new FilterAggregationStep(
+                        new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("gone"))),
+                new CountAggregationStep()));
+        assertEquals(0L, AggregationOperationHelper.processAggregation(countReq).getFirst().get("count").asJsonNumber()
+                .getValue().longValue());
+
+        final var distinctReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        distinctReq.setAggregationSteps(List.of(new DistinctAggregationStep("status")));
+        final var values = AggregationOperationHelper.processAggregation(distinctReq).stream()
+                .map(o -> o.get("status").asJsonString().getValue()).collect(Collectors.toSet());
+        assertEquals(Set.of("stay"), values);
     }
 
     // ── UserCache helpers ────────────────────────────────────────────────────
