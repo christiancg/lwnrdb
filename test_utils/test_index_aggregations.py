@@ -446,6 +446,44 @@ def probe_delete_consistency(s, f):
                detail=f"{bad} inconsistent immediate queries after delete")
 
 
+def probe_same_id_rapid_updates_converge(s, f):
+    # Hammer one _id with alternating values so the worker pool processes its events concurrently
+    # (and possibly out of order). After the background settles, the index must reflect the LAST
+    # committed value — not a reordered stale one.
+    iterations = max(CONS_REPEATS, 20)
+    last_value = None
+    for i in range(iterations):
+        last_value = f"hammer_{i}"
+        save_doc(s, f, CONS, {"_id": "hammer", "status": last_value})
+    wait_for_background()
+    bad = 0
+    if filter_status(s, f, last_value) != ["hammer"]:
+        bad += 1
+    if filter_status(s, f, "hammer_0"):  # an earlier value must no longer resolve to the doc
+        bad += 1
+    r = agg(s, f, CONS, [{"type": "FILTER",
+                          "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": last_value}},
+                         {"type": "COUNT"}])
+    if (r.get("results") or [{}])[0].get("count") != 1:
+        bad += 1
+    check_true("same-id rapid updates converge to the last value after the background settles", bad == 0,
+               detail=f"{bad} stale results after hammering one id with {iterations} updates")
+
+
+def probe_save_delete_converges(s, f):
+    # Flood save+delete pairs for distinct ids; after the background settles none of the values may
+    # remain in the index (catches a save event applied after its delete event).
+    for i in range(CONS_REPEATS):
+        value = f"sd_{i}"
+        doc_id = f"sd_doc_{i}"
+        save_doc(s, f, CONS, {"_id": doc_id, "status": value})
+        send(s, f, {"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
+    wait_for_background()
+    bad = sum(1 for i in range(CONS_REPEATS) if filter_status(s, f, f"sd_{i}"))
+    check_true("save+delete of the same id converges to absent after the background settles", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} deleted values still present after settling")
+
+
 def probe_convergence(s, f):
     # After the background settles, the document is found via the (now-updated, re-evicted) index.
     save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
@@ -472,6 +510,8 @@ def consistency_suite(s, f):
     probe_sort(s, f)
     probe_join(s, f)
     probe_delete_consistency(s, f)
+    probe_same_id_rapid_updates_converge(s, f)
+    probe_save_delete_converges(s, f)
     probe_convergence(s, f)
 
 

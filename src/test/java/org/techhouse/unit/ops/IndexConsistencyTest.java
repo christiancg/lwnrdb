@@ -345,6 +345,64 @@ public class IndexConsistencyTest {
         assertEquals(Set.of("stay"), values);
     }
 
+    // ── order-independent re-read (Finding 2) ──────────────────────────────--
+
+    // Index maintenance indexes the CURRENT committed document, not a (possibly stale) event snapshot.
+    @Test
+    public void test_update_indexes_uses_current_doc_not_snapshot() throws IOException, InterruptedException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("B"));
+        enableIndex(TestGlobals.COLL, "status");
+        // The document's current value moves to C; maintenance must index C, not the old B.
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("C"));
+
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
+
+        assertEquals(Set.of("1"), filterIds(new JsonString("C")));
+        assertTrue(filterIds(new JsonString("B")).isEmpty());
+    }
+
+    // When the document no longer exists (deleted), maintenance removes it from the index.
+    @Test
+    public void test_update_indexes_removes_when_doc_absent() throws IOException, InterruptedException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
+        enableIndex(TestGlobals.COLL, "status");
+        // Simulate a committed delete: gone from cache (and never in the PK index in this test).
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "1");
+
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
+
+        assertTrue(filterIds(new JsonString("active")).isEmpty());
+    }
+
+    // Re-applying maintenance for the same id (simulating an older event running last) converges to the
+    // current value rather than regressing to a stale one.
+    @Test
+    public void test_update_indexes_is_idempotent_across_reorder() throws IOException, InterruptedException {
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("old"));
+        enableIndex(TestGlobals.COLL, "status");
+        addDoc(TestGlobals.COLL, "1", "status", new JsonString("new"));
+
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
+
+        assertEquals(Set.of("1"), filterIds(new JsonString("new")));
+        assertTrue(filterIds(new JsonString("old")).isEmpty());
+    }
+
+    // bulkUpdateIndexes upserts present ids and removes absent (deleted) ids in one pass.
+    @Test
+    public void test_bulk_update_indexes_mixed_present_and_absent() throws IOException, InterruptedException {
+        addDoc(TestGlobals.COLL, "p", "status", new JsonString("present"));
+        addDoc(TestGlobals.COLL, "g", "status", new JsonString("gone"));
+        enableIndex(TestGlobals.COLL, "status");
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "g");
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("p", "g"));
+
+        assertEquals(Set.of("p"), filterIds(new JsonString("present")));
+        assertTrue(filterIds(new JsonString("gone")).isEmpty());
+    }
+
     // ── UserCache helpers ────────────────────────────────────────────────────
 
     // evictFieldIndexAllTypes drops every per-type list for a field while leaving other fields cached.

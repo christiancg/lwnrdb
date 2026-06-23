@@ -8,7 +8,6 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -181,7 +180,7 @@ public class IndexHelperTest {
         final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
         collEntry.setIndexes(Set.of(fieldName));
 
-        IndexHelper.bulkUpdateIndexes(dbName, collName, List.of(dbEntry2), List.of(dbEntry1));
+        IndexHelper.bulkUpdateIndexes(dbName, collName, List.of(dbEntry2.get_id(), dbEntry1.get_id()));
 
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
         assertNotNull(index);
@@ -225,8 +224,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("s2", "tag", new JsonString("beta"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        assertDoesNotThrow(
-                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
 
     // updateIndexes indexes a Boolean-valued field for a CREATED event
@@ -242,8 +240,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("b2", "active", new JsonBoolean(false));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        assertDoesNotThrow(
-                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
 
     // updateIndexes indexes a custom type (JsonTime) field for a CREATED event
@@ -259,7 +256,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("ct2", "startTime", new JsonTime("#time(09:00:00)"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id());
 
         final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime",
                 JsonTime.class);
@@ -278,7 +275,10 @@ public class IndexHelperTest {
         final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         adminColl.setIndexes(Set.of("score"));
 
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
+        // Simulate a committed delete: the document is gone from the cache/PK index, so the
+        // order-independent re-read sees it as absent and removes it from the index.
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "del1");
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "del1");
 
         final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "score",
                 Double.class);
@@ -372,7 +372,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("o2", "data", objectValue(2));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id());
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertNotNull(objIndex);
@@ -392,7 +392,7 @@ public class IndexHelperTest {
 
         DbEntry changed = entryWith("m1", "data", arrayValue("x"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, changed);
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, changed, EventType.UPDATED);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, changed.get_id());
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("m1")));
@@ -410,7 +410,9 @@ public class IndexHelperTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
+        // Simulate a committed delete: the document is gone, so the re-read removes it from the index.
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "d1");
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "d1");
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("d1")));
