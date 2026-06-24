@@ -73,6 +73,12 @@ public final class AdminOperationHelper {
         }
         lockAdminPageCollection(dbName, collName);
         try {
+            // Re-check after acquiring the lock: a concurrent drop may have removed the collection
+            // between the caller's early guard and here, which would otherwise cause insertAdminPages
+            // to re-create orphan pages_* metadata for the deleted collection.
+            if (!Globals.ADMIN_DB_NAME.equals(dbName) && cache.getAdminCollectionEntry(dbName, collName) == null) {
+                return;
+            }
             final var pagesPerCollectionName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
             fs.createCollectionFile(Globals.ADMIN_DB_NAME, pagesPerCollectionName);
             final var grouped = insertedOrDeleted.stream().collect(Collectors.groupingBy(DbEntry::getPage));

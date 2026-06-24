@@ -534,22 +534,25 @@ public class OperationProcessor {
     private DropCollectionResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
+        boolean dropSucceeded = false;
         try {
             locks.lock(dbName, collName);
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
                 taskManager.submitBackgroundTask(new CollectionEvent(EventType.DELETED, dbName, collName));
+                dropSucceeded = true;
                 return new DropCollectionResponse(OperationStatus.OK, "Collection dropped successfully");
             }
-            locks.release(dbName, collName);
-            locks.removeLock(dbName, collName);
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection");
         } catch (Exception e) {
             return new DropCollectionResponse(OperationStatus.ERROR,
                     "Error while dropping collection: " + e.getMessage());
         } finally {
             locks.release(dbName, collName);
+            if (dropSucceeded) {
+                locks.removeLock(dbName, collName);
+            }
         }
     }
 

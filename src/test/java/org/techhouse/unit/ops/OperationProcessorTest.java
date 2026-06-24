@@ -331,6 +331,23 @@ public class OperationProcessorTest {
         assertEquals(OperationStatus.OK, dropResponse.getStatus());
     }
 
+    @Test
+    public void test_drop_collection_removes_lock_from_registry() throws Exception {
+        final var collName = "lockCleanupColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+        processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+
+        // After a successful drop the lock entry must be removed from the registry so
+        // it does not accumulate stale locks for deleted collections.
+        final var locksField = ResourceLocking.class.getDeclaredField("locks");
+        locksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        final var lockMap = (java.util.Map<String, ?>) locksField.get(null);
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(TestGlobals.DB, collName)),
+                "Lock entry must be removed from registry after a successful drop");
+    }
+
     // After a save, the entry's PkIndexEntry carries the page assigned by selectPageForInsert
     @Test
     public void test_save_operation_assigns_page() throws Exception {
