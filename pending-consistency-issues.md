@@ -12,39 +12,6 @@ editing.
 > object/array hash-candidate re-test in FILTER + index-only COUNT disqualification. The issues below
 > are what remains.
 
----
-
-## 🔴 HIGH — GROUP_BY / SORT / DISTINCT silently drop object/array-valued docs on a mixed-type indexed field
-
-**Where:** `src/main/java/org/techhouse/ops/IndexHelper.java` — `getIndexEntriesForField` (~`:130-165`),
-which calls `addEntriesOfType` only for `Number`/`Boolean`/`String`/custom (`:143-148`), never for the
-`IndexKind.OBJECT` / `IndexKind.ARRAY` hash indexes.
-
-**Consumers:** `AggregationOperationHelper` GROUP_BY (~`:107-109`), DISTINCT (~`:221-230`), SORT (~`:270-273`).
-
-**Root cause:** a schemaless field can hold scalar values on some documents and object/array values on
-others; `createIndex`/`updateIndexes` populate both the scalar `.idx` and the `-Object.idx`/`-Array.idx`
-files. `getIndexEntriesForField` reads only the scalar families, and because the scalar docs make
-`combined` non-empty it returns that **partial** list (`:164`) instead of `null`, so the caller takes
-the index path and omits every object/array-valued document. `reconcilePending` (`:202-204`) forces a
-scan fallback only for a *pending* non-scalar doc — an already-indexed object/array doc is never
-reconciled, so the gap is permanent (not a transient lag).
-
-**Verified:** a *pure* object/array field returns `combined` empty → `null` → scan (correct). Only the
-**mixed** scalar+object/array field is wrong.
-
-**Observable:** `GROUP_BY f` / `DISTINCT f` / `SORT f` (no upstream stream) return results missing the
-object/array-valued docs — silent wrong query results.
-
-**Recommended fix:** in `getIndexEntriesForField`, return `null` (force the document-reading scan, which
-is exact) whenever `readWholeHashIndexFile(OBJECT)` or `readWholeHashIndexFile(ARRAY)` is non-empty for
-the field. This is the reconstructing-step analogue of the FILTER re-test already added in
-`internalBaseFiltering`. JOIN's `buildJoinLookup` (~`:178-214`) is value-keyed and shares the same
-scalar-only limitation (object/array remote keys simply won't match); confirm whether it needs the same
-guard.
-
----
-
 ## 🟠 MED — DROP_DATABASE leaks (and can resurrect) admin page metadata
 
 **Where:** `src/main/java/org/techhouse/ops/AdminOperationHelper.java` — `deleteDatabaseEntry`
