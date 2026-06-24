@@ -481,6 +481,30 @@ public class IndexConsistencyTest {
         assertEquals("beta2", readStatus(processor, "b"));
     }
 
+    // A BULK_SAVE that updates the lexicographically-smallest existing _id (PK-index slot 0) must be
+    // recognised as an update, not inserted as a duplicate (regression for the binarySearch > 0 bug).
+    @Test
+    public void test_bulk_save_updates_smallest_id_without_duplicate() throws Exception {
+        final var processor = new OperationProcessor();
+        saveViaProcessor(processor, "a", "alpha");
+        saveViaProcessor(processor, "b", "beta");
+        saveViaProcessor(processor, "c", "gamma");
+
+        final var bulk = new org.techhouse.ops.req.BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("a"));
+        obj.addProperty("status", "alpha2");
+        bulk.setObjects(List.of(obj));
+        final var resp = (org.techhouse.ops.resp.BulkSaveResponse) processor.processMessage(bulk);
+
+        assertEquals(OperationStatus.OK, resp.getStatus());
+        assertEquals(List.of("a"), resp.getUpdated(), "smallest id must be treated as an update");
+        assertTrue(resp.getInserted().isEmpty(), "must not insert a duplicate");
+        // No duplicate PK entry: exactly three ids remain.
+        assertEquals(3, cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).size());
+        assertEquals("alpha2", readStatus(processor, "a"));
+    }
+
     private String readStatus(OperationProcessor processor, String id) {
         final var req = new org.techhouse.ops.req.FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         req.set_id(id);
