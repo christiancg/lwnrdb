@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -873,6 +874,78 @@ public class OperationProcessorTest {
             TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
             processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
         }
+    }
+
+    // After a grow-relocation, the document's id must remain in the pending overlay even after the
+    // DELETED event's worker clears its mark, so the CREATED event's worker can still clear it and
+    // index-backed queries never see a false negative in the window between the two events.
+    @Test
+    public void test_relocate_keeps_id_pending_until_both_events_processed() throws Exception {
+        final var config = org.techhouse.config.Configuration.getInstance();
+        final var originalMaxPage = config.getMaxPageSize();
+        final var originalMaxEntry = config.getMaxEntrySize();
+        final var collName = "pendingRelocateColl";
+        TestUtils.setPrivateField(config, "maxPageSize", 2000L);
+        TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        try {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+            final var keepSave = new SaveRequest(TestGlobals.DB, collName);
+            final var keepObj = new JsonObject();
+            keepObj.add(Globals.PK_FIELD, new JsonString("keep"));
+            keepObj.add("v", new JsonString("k".repeat(280)));
+            keepSave.setObject(keepObj);
+            keepSave.set_id("keep");
+            processor.processMessage(keepSave);
+
+            final var aSave = new SaveRequest(TestGlobals.DB, collName);
+            final var aObj = new JsonObject();
+            aObj.add(Globals.PK_FIELD, new JsonString("a"));
+            aObj.add("v", new JsonString("small"));
+            aSave.setObject(aObj);
+            aSave.set_id("a");
+            processor.processMessage(aSave);
+
+            final var pending = IocContainer.get(PendingIndexWrites.class);
+
+            // Trigger a relocation: grow "a" so page 0 overflows.
+            final var growSave = new SaveRequest(TestGlobals.DB, collName);
+            final var grown = new JsonObject();
+            grown.add(Globals.PK_FIELD, new JsonString("a"));
+            grown.add("v", new JsonString("x".repeat(1780)));
+            growSave.setObject(grown);
+            growSave.set_id("a");
+            processor.processMessage(growSave);
+
+            // Immediately after processMessage returns, "a" must be pending with count >= 2
+            // (one mark for DELETED, one for CREATED) so that the DELETED worker's clear()
+            // cannot drop the key before CREATED is processed.
+            assertTrue(pending.idsFor(TestGlobals.DB, collName).contains("a"),
+                    "id must remain pending after relocation so both events are covered");
+        } finally {
+            TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
+            TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    @Test
+    public void test_drop_database_removes_locks_for_all_collections() throws Exception {
+        final var db = "lockCleanupDb";
+        processor.processMessage(new CreateDatabaseRequest(db));
+        processor.processMessage(new CreateCollectionRequest(db, "collA"));
+        processor.processMessage(new CreateCollectionRequest(db, "collB"));
+
+        processor.processMessage(new DropDatabaseRequest(db));
+
+        final var locksField = ResourceLocking.class.getDeclaredField("locks");
+        locksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        final var lockMap = (java.util.Map<String, ?>) locksField.get(null);
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(db, "collA")),
+                "Lock for collA must be removed after database drop");
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(db, "collB")),
+                "Lock for collB must be removed after database drop");
     }
 
     // When no admin page metadata is available, the overflow check can't assess the page, so the SAVE

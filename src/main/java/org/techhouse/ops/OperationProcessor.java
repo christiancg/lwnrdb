@@ -355,6 +355,7 @@ public class OperationProcessor {
         }
         primaryKeyIndex.add(insertAt, relocatedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
+        pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
         recordCollectionAccess(dbName, collName);
         return new SaveResponse(OperationStatus.OK, "Successfully saved", relocatedPkIndexEntry.getValue());
@@ -492,6 +493,9 @@ public class OperationProcessor {
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
+                for (final var collName : lockedColls) {
+                    locks.removeLock(dbName, collName);
+                }
                 taskManager.submitBackgroundTask(new DatabaseEvent(EventType.DELETED, dbName));
                 return new DropDatabaseResponse(OperationStatus.OK, "Database dropped successfully");
             }
