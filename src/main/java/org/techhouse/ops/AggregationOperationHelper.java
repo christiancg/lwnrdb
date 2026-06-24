@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
@@ -15,6 +16,8 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
@@ -71,7 +74,11 @@ public final class AggregationOperationHelper {
                 case SORT -> processSortStep(step, resultStream, dbName, collName);
             };
         }
-        return resultStream != null ? resultStream.toList() : new ArrayList<>();
+        try {
+            return resultStream != null ? resultStream.toList() : new ArrayList<>();
+        } catch (java.io.UncheckedIOException e) {
+            throw e.getCause();
+        }
     }
 
     private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName,
@@ -172,13 +179,19 @@ public final class AggregationOperationHelper {
     }
 
     // Builds the remote-side lookup (remote field value -> matching remote documents) for a JOIN.
-    // When the remote field is indexed, only the remote documents whose value matches a local value
-    // actually present on the left side are fetched (positioned reads); otherwise the whole remote
-    // collection is grouped in memory (previous behavior).
+    // When the remote field is indexed, getMatchingIdsForJoin does one binary-search-backed lookup
+    // per distinct local value instead of deep-copying every index entry and doing a linear scan.
+    // Falls back to the whole-collection group when no index exists on the remote field.
     private static Map<JsonBaseElement, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,
             String remoteField, List<JsonObject> leftEntries, String localField) throws IOException {
-        final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, joinCollectionName, remoteField);
-        if (indexEntries == null) {
+        final var localValues = new HashSet<JsonBaseElement>();
+        for (var left : leftEntries) {
+            if (JsonUtils.hasInPath(left, localField)) {
+                localValues.add(JsonUtils.getFromPath(left, localField));
+            }
+        }
+        final var matchingIds = IndexHelper.getMatchingIdsForJoin(dbName, joinCollectionName, remoteField, localValues);
+        if (matchingIds == null) {
             final var joinCollectionMap = cache.getWholeCollection(dbName, joinCollectionName);
             return joinCollectionMap.values().stream().map(DbEntry::getData)
                     .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
@@ -188,18 +201,6 @@ public final class AggregationOperationHelper {
                                 jsonObjects.forEach(jsonArray::add);
                                 return jsonArray;
                             })));
-        }
-        final var localValues = new HashSet<JsonBaseElement>();
-        for (var left : leftEntries) {
-            if (JsonUtils.hasInPath(left, localField)) {
-                localValues.add(JsonUtils.getFromPath(left, localField));
-            }
-        }
-        final var matchingIds = new HashSet<String>();
-        for (var indexEntry : indexEntries) {
-            if (localValues.contains(IndexHelper.indexValueToElement(indexEntry.getValue()))) {
-                matchingIds.addAll(indexEntry.getIds());
-            }
         }
         final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, matchingIds);
         final var lookup = new HashMap<JsonBaseElement, JsonArray>();
@@ -269,7 +270,7 @@ public final class AggregationOperationHelper {
         if (resultStream == null) {
             final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName);
             if (indexEntries != null) {
-                return sortViaIndex(indexEntries, dbName, collName, fieldName, ascending);
+                return sortViaIndex(indexEntries, dbName, collName, ascending);
             }
         }
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
@@ -280,30 +281,67 @@ public final class AggregationOperationHelper {
         }
     }
 
-    // Index-backed SORT: the field index entries are ordered with the same comparator used by the
-    // scan path (applied to a single-field wrapper object), then documents are fetched and emitted
-    // in that order. Tie order within a value is arbitrary, matching the unindexed stream order.
+    // Index-backed SORT: index entries are sorted with an allocation-free comparator (no JsonObject
+    // wrapper per comparison), then documents are fetched lazily one-by-one so a downstream LIMIT
+    // only triggers as many reads as it needs (e.g. SORT+LIMIT 10 fetches only 10 docs).
     private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
-            String collName, String fieldName, boolean ascending) throws IOException {
+            String collName, boolean ascending) {
         final var sortedEntries = new ArrayList<>(indexEntries);
-        sortedEntries.sort((a, b) -> {
-            final var o1 = new JsonObject();
-            o1.add(fieldName, IndexHelper.indexValueToElement(a.getValue()));
-            final var o2 = new JsonObject();
-            o2.add(fieldName, IndexHelper.indexValueToElement(b.getValue()));
-            return ascending
-                    ? JsonUtils.sortFunctionAscending(o1, o2, fieldName)
-                    : JsonUtils.sortFunctionDescending(o1, o2, fieldName);
-        });
+        sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
         final var orderedIds = new ArrayList<String>();
         for (var entry : sortedEntries) {
             orderedIds.addAll(entry.getIds());
         }
-        final var docs = cache.getEntriesByIds(dbName, collName, new HashSet<>(orderedIds));
-        final var byId = new HashMap<String, JsonObject>();
-        for (var doc : docs) {
-            byId.put(doc.get_id(), doc.getData());
+        return orderedIds.stream().map(id -> {
+            try {
+                final var docs = cache.getEntriesByIds(dbName, collName, Set.of(id));
+                return docs.isEmpty() ? null : docs.getFirst().getData();
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }).filter(Objects::nonNull);
+    }
+
+    // Allocation-free comparator for raw FieldIndexEntry values. Handles all stored value kinds
+    // (Number, Boolean, String, JsonCustom, JsonNull, JsonBaseElement) without creating a JsonObject
+    // wrapper per comparison, matching the sort semantics of sortFunctionAscending/Descending.
+    private static int compareIndexValues(Object a, Object b, boolean ascending) {
+        if (!ascending) {
+            return compareIndexValues(b, a, true);
         }
-        return orderedIds.stream().map(byId::get).filter(Objects::nonNull);
+        final var aIsNull = (a == null || a instanceof JsonNull);
+        final var bIsNull = (b == null || b instanceof JsonNull);
+        if (aIsNull && bIsNull) {
+            return 0;
+        }
+        if (aIsNull) {
+            return 1; // nulls sort last
+        }
+        if (bIsNull) {
+            return -1;
+        }
+        switch (a) {
+            case Number na when b instanceof Number nb -> {
+                return Double.compare(na.doubleValue(), nb.doubleValue());
+            }
+            case String sa when b instanceof String sb -> {
+                return sa.compareTo(sb);
+            }
+            case Boolean ba -> {
+                return ba ? -1 : 1;
+            }
+            case JsonCustom<?> ca when b instanceof JsonCustom<?> cb
+                    && ca.getClass().isAssignableFrom(cb.getClass()) -> {
+                return ca.getValue().compareTo(cb.getValue());
+            }
+            default -> {
+            }
+        }
+        final var elemA = IndexHelper.indexValueToElement(a);
+        final var elemB = IndexHelper.indexValueToElement(b);
+        if (elemA.isJsonPrimitive() && !elemB.isJsonPrimitive()) {
+            return 1;
+        }
+        return -1;
     }
 }
