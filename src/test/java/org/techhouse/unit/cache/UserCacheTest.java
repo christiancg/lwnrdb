@@ -22,6 +22,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonArray;
@@ -200,6 +201,76 @@ public class UserCacheTest {
 
         // Assert
         assertNull(result);
+    }
+
+    // A cached key for field "ba" (ba|String) must not prevent loading field "a" (a|String)
+    @Test
+    public void test_getFieldIndex_suffix_collision_loads_from_disk()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        Field fsField = UserCache.class.getDeclaredField("fs");
+        fsField.setAccessible(true);
+        fsField.set(cache, fsMock);
+
+        String dbName = "testDB";
+        String collName = "testCollection";
+        String collId = Cache.getCollectionIdentifier(dbName, collName);
+
+        // Pre-populate the cache with field "ba" so its key "ba|String" is present
+        Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
+        innerMap.put(Cache.getIndexIdentifier("ba", String.class),
+                List.of(new FieldIndexEntry<>(dbName, collName, "x", Set.of("id99"))));
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(collId, innerMap);
+
+        List<FieldIndexEntry<String>> diskEntries = List
+                .of(new FieldIndexEntry<>(dbName, collName, "hello", Set.of("id1")));
+        when(fsMock.readWholeFieldIndexFiles(dbName, collName, "a", String.class)).thenReturn(diskEntries);
+
+        List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, "a",
+                String.class);
+
+        verify(fsMock).readWholeFieldIndexFiles(dbName, collName, "a", String.class);
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("hello", result.getFirst().getValue());
+    }
+
+    // A cached key for field "ba" (ba|Object) must not prevent loading field "a" (a|Object)
+    @Test
+    public void test_getHashIndex_suffix_collision_loads_from_disk()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        Field fsField = UserCache.class.getDeclaredField("fs");
+        fsField.setAccessible(true);
+        fsField.set(cache, fsMock);
+
+        String dbName = "testDB";
+        String collName = "testCollection";
+        String collId = Cache.getCollectionIdentifier(dbName, collName);
+
+        // Pre-populate the cache with field "ba" so its key "ba|Object" is present
+        Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
+        innerMap.put(Cache.getIndexIdentifier("ba", IndexKind.OBJECT.label()),
+                List.of(new FieldIndexEntry<>(dbName, collName, "deadbeef", Set.of("id99"))));
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(collId, innerMap);
+
+        List<FieldIndexEntry<String>> diskEntries = List
+                .of(new FieldIndexEntry<>(dbName, collName, "cafebabe", Set.of("id1")));
+        when(fsMock.readWholeHashIndexFile(dbName, collName, "a", IndexKind.OBJECT)).thenReturn(diskEntries);
+
+        List<FieldIndexEntry<String>> result = cache.getHashIndexAndLoadIfNecessary(dbName, collName, "a",
+                IndexKind.OBJECT);
+
+        verify(fsMock).readWholeHashIndexFile(dbName, collName, "a", IndexKind.OBJECT);
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("cafebabe", result.getFirst().getValue());
     }
 
     // Retrieves IDs for Double values using the appropriate index

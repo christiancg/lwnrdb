@@ -129,7 +129,7 @@ public class UserCache {
         final var indexIdentifier = Cache.getIndexIdentifier(fieldName, indexType);
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<T>> indexEntries = null;
-        if (index == null || index.keySet().stream().noneMatch(string -> string.contains(indexIdentifier))) {
+        if (index == null || !index.containsKey(indexIdentifier)) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
                 return null;
@@ -164,7 +164,7 @@ public class UserCache {
         final var indexIdentifier = Cache.getIndexIdentifier(fieldName, kind.label());
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<String>> indexEntries = null;
-        if (index == null || index.keySet().stream().noneMatch(string -> string.contains(indexIdentifier))) {
+        if (index == null || !index.containsKey(indexIdentifier)) {
             indexEntries = fs.readWholeHashIndexFile(dbName, collName, fieldName, kind);
             if (indexEntries == null) {
                 return null;
