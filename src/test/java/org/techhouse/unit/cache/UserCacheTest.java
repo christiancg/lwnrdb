@@ -652,6 +652,64 @@ public class UserCacheTest {
         assertFalse(collectionMap.containsKey(collIdentifier));
     }
 
+    @Test
+    public void test_evict_collection_also_clears_fieldIndexMap() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        String dbName = "testDb";
+        String collName = "testColl";
+        String collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        String indexIdentifier = Cache.getIndexIdentifier("myField", String.class);
+
+        Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
+        innerMap.put(indexIdentifier, List.of(new FieldIndexEntry<>(dbName, collName, "val", Set.of("id1"))));
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(collIdentifier, innerMap);
+
+        cache.evictCollection(dbName, collName);
+
+        assertFalse(TestUtils.getPrivateField(cache, "fieldIndexMap", type).containsKey(collIdentifier),
+                "evictCollection must remove the collection's field index entries");
+    }
+
+    @Test
+    public void test_evict_database_also_clears_fieldIndexMap() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        String dbName = "testDb";
+        String siblingDb = "testDbSibling";
+        String collId1 = Cache.getCollectionIdentifier(dbName, "coll1");
+        String collId2 = Cache.getCollectionIdentifier(dbName, "coll2");
+        String siblingId = Cache.getCollectionIdentifier(siblingDb, "coll3");
+        String indexId = Cache.getIndexIdentifier("f", String.class);
+
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        Map<String, List<FieldIndexEntry<?>>> inner1 = new ConcurrentHashMap<>();
+        inner1.put(indexId, List.of(new FieldIndexEntry<>(dbName, "coll1", "v", Set.of("id1"))));
+        Map<String, List<FieldIndexEntry<?>>> inner2 = new ConcurrentHashMap<>();
+        inner2.put(indexId, List.of(new FieldIndexEntry<>(dbName, "coll2", "v", Set.of("id2"))));
+        Map<String, List<FieldIndexEntry<?>>> inner3 = new ConcurrentHashMap<>();
+        inner3.put(indexId, List.of(new FieldIndexEntry<>(siblingDb, "coll3", "v", Set.of("id3"))));
+        fieldIndexMap.put(collId1, inner1);
+        fieldIndexMap.put(collId2, inner2);
+        fieldIndexMap.put(siblingId, inner3);
+
+        // Also populate collectionMap so evictDatabase can build its toRemove list.
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        collectionMap.put(collId1, new ConcurrentHashMap<>());
+        collectionMap.put(collId2, new ConcurrentHashMap<>());
+
+        cache.evictDatabase(dbName);
+
+        final var remaining = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        assertFalse(remaining.containsKey(collId1), "coll1 field index must be evicted");
+        assertFalse(remaining.containsKey(collId2), "coll2 field index must be evicted");
+        assertTrue(remaining.containsKey(siblingId), "sibling db field index must be untouched");
+    }
+
     // Returns true when the field index is present in the fieldIndexMap
     @Test
     public void test_returns_true_when_field_index_present() throws NoSuchFieldException, IllegalAccessException {
