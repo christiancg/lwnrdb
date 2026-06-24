@@ -51,7 +51,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Integration tests for all possible API commands, including aggregations
 - [ ] Admin operation to rebuild indexes
 - [ ] Join operation doesn't seem to be faster with indexes
-- [ ] Remove all possible consistency issues with cache and fs
+- [ ] Remove pending consistency issues with cache, fs and index usage
+- [x] Remove the most impactful consistency issues with cache, fs and index usage
 - [x] Issue when concurrently writing to a field index and trying to read from it (might get wrong values because index is not updated)
 - [x] Index usage for object and array fields (element-match via hashed object/array indexes; `FILTER` `EQUALS`/`NOT_EQUALS`/`IN`/`NOT_IN` only)
 - [x] Separated caches for admin entries and user entries (the `Cache` facade composes an `AdminCache` for admin metadata and a `UserCache` for memory-managed user documents/indexes)
