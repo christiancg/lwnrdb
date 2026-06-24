@@ -209,9 +209,13 @@ public class FilterOperatorHelper {
         }
         final var matchingValues = indexMatchingIds(operator, dbName, collName);
         if (matchingValues != null) {
-            // Index hit: indexMatchingIds already reconciles not-yet-indexed documents, so the id set
-            // is exact. Fetch only those entries via positioned reads.
-            return cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData);
+            // Index hits are candidates. Scalar/custom index entries store the exact value, but an
+            // object/array element-match index stores only a SHA-256 fingerprint, so a hit must be
+            // confirmed against the document (it can be stale after a background-processing failure, or
+            // — vanishingly — a hash collision). The candidate documents are fetched here regardless, so
+            // re-testing them against the operator is free and makes the result exact for every index kind.
+            return cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData)
+                    .filter(data -> test.test(data, fieldName));
         }
         // No index: scan the collection page-by-page (memory-aware) rather than materializing it all.
         return cache.streamCollection(dbName, collName).map(DbEntry::getData)
@@ -226,9 +230,40 @@ public class FilterOperatorHelper {
     public static Set<String> resolveIdsViaIndex(BaseOperator operator, String dbName, String collName)
             throws IOException {
         return switch (operator.getType()) {
-            case FIELD -> indexMatchingIds((FieldOperator) operator, dbName, collName);
+            case FIELD -> {
+                final var fieldOperator = (FieldOperator) operator;
+                // A hash (object/array) index hit is only a candidate; the index-only COUNT path counts
+                // ids without reading documents, so it cannot confirm the hit. Disqualify hash-resolved
+                // operators here so the caller falls back to the document-reading COUNT, which re-tests
+                // each candidate in internalBaseFiltering and is therefore exact.
+                if (usesHashIndex(fieldOperator)) {
+                    yield null;
+                }
+                yield indexMatchingIds(fieldOperator, dbName, collName);
+            }
             case CONJUNCTION -> resolveConjunctionIds((ConjunctionOperator) operator, dbName, collName);
         };
+    }
+
+    // True when this field operator resolves through an object/array element-match (hash) index, whose
+    // hits are unconfirmed candidates. Mirrors the dispatch in UserCache.doGetIdsFromIndex /
+    // getIdsFromInList: an object operand (EQUALS/NOT_EQUALS) and an array operand (EQUALS/NOT_EQUALS, or
+    // IN/NOT_IN over object/array elements) are hash-resolved; scalar/custom operands are not.
+    private static boolean usesHashIndex(FieldOperator operator) {
+        final var value = operator.getValue();
+        final var opType = operator.getFieldOperatorType();
+        if (value.isJsonObject()) {
+            return opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS;
+        }
+        if (value.isJsonArray()) {
+            final var arr = value.asJsonArray();
+            return switch (opType) {
+                case EQUALS, NOT_EQUALS -> true;
+                case IN, NOT_IN -> !arr.isEmpty() && (arr.get(0).isJsonObject() || arr.get(0).isJsonArray());
+                default -> false;
+            };
+        }
+        return false;
     }
 
     // Resolves the ids matching a single field operator via the index, then reconciles documents that
