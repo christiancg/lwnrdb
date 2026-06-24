@@ -197,7 +197,7 @@ public class OperationProcessor {
                     final var id = data.get(Globals.PK_FIELD).asJsonString().getValue();
                     i.set_id(id);
                     final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
-                    if (foundIndexEntry > 0) {
+                    if (foundIndexEntry >= 0) {
                         final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
                         final var indexedDbEntry = new IndexedDbEntry();
                         indexedDbEntry.setIndex(foundIndex);
@@ -211,7 +211,11 @@ public class OperationProcessor {
             }
             final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
             if (!indexedDbEntriesToUpdate.isEmpty()) {
-                updatedIndexEntries.addAll(fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate));
+                final var bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
+                updatedIndexEntries.addAll(bulkResult.updated());
+                // Fix the in-memory positions of non-updated survivors shifted by the batch, then
+                // replace the updated entries with their new (relocated) index entries.
+                bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
                 primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
                         .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
             }
@@ -423,8 +427,19 @@ public class OperationProcessor {
     }
 
     private DropDatabaseResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
+        final var dbName = dropDatabaseRequest.getDatabaseName();
+        // Lock every collection of the database (in a stable order to avoid deadlock with other
+        // multi-collection acquisitions) so a concurrent save/delete/read or a background index update
+        // on any of them cannot race the file deletion and cache eviction below.
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
+        Collections.sort(collNames);
+        final var lockedColls = new ArrayList<String>();
         try {
-            final var dbName = dropDatabaseRequest.getDatabaseName();
+            for (final var collName : collNames) {
+                locks.lock(dbName, collName);
+                lockedColls.add(collName);
+            }
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
@@ -434,6 +449,10 @@ public class OperationProcessor {
             return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
         } catch (Exception exception) {
             return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
+        } finally {
+            for (final var collName : lockedColls) {
+                locks.release(dbName, collName);
+            }
         }
     }
 

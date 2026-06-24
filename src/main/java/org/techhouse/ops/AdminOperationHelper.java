@@ -192,8 +192,11 @@ public final class AdminOperationHelper {
             indexedEntriesToUpdate.add(indexedEntry);
         }
         if (!indexedEntriesToUpdate.isEmpty()) {
-            final var updated = fs.bulkUpdateFromCollection(Globals.ADMIN_DB_NAME, pagesPerCollectionName,
+            final var bulkResult = fs.bulkUpdateFromCollection(Globals.ADMIN_DB_NAME, pagesPerCollectionName,
                     indexedEntriesToUpdate);
+            final var updated = bulkResult.updated();
+            // Fix the in-memory positions of non-updated admin-page survivors shifted by the batch.
+            bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
             for (var ie : updated) {
                 pkIdxList.removeIf(pk -> pk.getValue().equals(ie.get_id()));
                 pkIdxList.add(ie.getIndex());

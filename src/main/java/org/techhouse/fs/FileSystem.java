@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -332,6 +331,12 @@ public class FileSystem {
                 pkIndexEntry.getPage(), pkIndexEntry.getPosition(), pkIndexEntry.getLength());
     }
 
+    private static void shiftIfAfter(PkIndexEntry entry, PkCompaction compaction) {
+        if (entry.getPage() == compaction.page() && entry.getPosition() > compaction.removedPosition()) {
+            entry.setPosition(entry.getPosition() - compaction.removedLength());
+        }
+    }
+
     private void deleteIndexValue(PkIndexEntry pkIndexEntry) throws IOException {
         internalUpdatePKIndex(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getValue(),
                 null);
@@ -358,51 +363,56 @@ public class FileSystem {
         return true;
     }
 
-    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
+    /**
+     * Updates many entries by delegating to the single-entry {@link #updateFromCollection}, which keeps
+     * the page file and PK index file correct for each row. Earlier updates shift the file positions of
+     * later same-page entries, so this drives each {@code updateFromCollection} with a private,
+     * progressively-adjusted copy of the target's index entry (never mutating the caller's cached
+     * {@link PkIndexEntry} objects). The returned {@link BulkUpdateResult} carries the new entries plus
+     * the ordered compactions the caller must apply to fix the in-memory positions of the surviving
+     * (non-updated) entries.
+     */
+    public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
-        final var result = new ArrayList<IndexedDbEntry>();
-        final var entrySet = entries.stream()
-                .collect(Collectors.groupingBy(indexedDbEntry -> indexedDbEntry.getIndex().getPage())).entrySet();
-        for (var groupedEntry : entrySet) {
-            final var page = groupedEntry.getKey();
-            final var pageEntries = groupedEntry.getValue();
-            final var file = getCollectionFile(dbName, collName, page);
-            long totalFileLength = file.length();
-            final var newPkEntries = new ArrayList<PkIndexEntry>();
-            final var oldLengths = new LinkedHashMap<String, Long>();
-            final var lock = fileLock(file).writeLock();
-            lock.lock();
-            try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-                for (var entry : pageEntries) {
-                    shiftOtherEntriesToStart(writer, entry.getIndex(), totalFileLength);
-                    writer.seek(totalFileLength - entry.getIndex().getLength());
-                    final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-                    final var length = bytes.length;
-                    writer.write(bytes, 0, length);
-                    final var newLength = totalFileLength - entry.getIndex().getLength() + length;
-                    writer.setLength(newLength);
-                    final var newPosition = totalFileLength - entry.getIndex().getLength();
-                    final var newPkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), newPosition, length,
-                            page);
-                    newPkEntries.add(newPkEntry);
-                    oldLengths.put(entry.get_id(), entry.getIndex().getLength());
-                    final var updatedIndexEntry = new IndexedDbEntry();
-                    updatedIndexEntry.setIndex(newPkEntry);
-                    updatedIndexEntry.set_id(entry.get_id());
-                    updatedIndexEntry.setCollectionName(collName);
-                    updatedIndexEntry.setDatabaseName(dbName);
-                    updatedIndexEntry.setData(entry.getData());
-                    updatedIndexEntry.setPreviousByteSize(entry.getIndex().getLength());
-                    result.add(updatedIndexEntry);
-                    totalFileLength = newLength;
-                }
-            } finally {
-                lock.unlock();
-            }
-            bulkUpdateIndexValues(dbName, collName, newPkEntries, oldLengths);
+        final var updated = new ArrayList<IndexedDbEntry>();
+        final var compactions = new ArrayList<PkCompaction>();
+        // Private copies of the target index entries; their positions are adjusted as earlier updates
+        // compact the page, so each delegated update sees the current on-disk position.
+        final var working = new ArrayList<PkIndexEntry>(entries.size());
+        for (final var entry : entries) {
+            final var idx = entry.getIndex();
+            working.add(new PkIndexEntry(idx.getDatabaseName(), idx.getCollectionName(), idx.getValue(),
+                    idx.getPosition(), idx.getLength(), idx.getPage()));
         }
-        return result;
+        for (int i = 0; i < entries.size(); i++) {
+            final var entry = entries.get(i);
+            final var target = working.get(i);
+            final var result = updateFromCollection(entry.toDbEntry(), target);
+            final var updatedIndexEntry = new IndexedDbEntry();
+            updatedIndexEntry.setIndex(result.indexEntry());
+            updatedIndexEntry.set_id(entry.get_id());
+            updatedIndexEntry.setCollectionName(collName);
+            updatedIndexEntry.setDatabaseName(dbName);
+            updatedIndexEntry.setData(entry.getData());
+            updatedIndexEntry.setPreviousByteSize(target.getLength());
+            updated.add(updatedIndexEntry);
+            final var compaction = result.compaction();
+            if (compaction != null) {
+                compactions.add(compaction);
+                // This update relocated the row to the end and shifted later same-page entries toward
+                // the start. Apply the same shift to the still-to-be-processed working copies (so the
+                // next update sees the current on-disk position) and to the already-relocated entries
+                // from earlier iterations (so their reported new positions stay correct), but not to
+                // the row we just relocated.
+                for (int j = i + 1; j < working.size(); j++) {
+                    shiftIfAfter(working.get(j), compaction);
+                }
+                for (int k = 0; k < i; k++) {
+                    shiftIfAfter(updated.get(k).getIndex(), compaction);
+                }
+            }
+        }
+        return new BulkUpdateResult(updated, compactions);
     }
 
     /**
@@ -440,41 +450,6 @@ public class FileSystem {
         final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page);
         internalUpdatePKIndex(dbName, collectionName, value, newIndexEntry);
         return newIndexEntry;
-    }
-
-    private void bulkUpdateIndexValues(String dbName, String collName, List<PkIndexEntry> newEntries,
-            LinkedHashMap<String, Long> oldLengths) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
-        final var newEntriesMap = newEntries.stream().collect(Collectors.toMap(PkIndexEntry::getValue, e -> e));
-        final var lock = fileLock(indexFile).writeLock();
-        lock.lock();
-        try (var raf = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final int fileLength = (int) raf.length();
-            byte[] buffer = new byte[fileLength];
-            raf.readFully(buffer, 0, fileLength);
-            final var lines = new String(buffer).split(Globals.NEWLINE_REGEX);
-            long cumulativeShift = 0;
-            final var updatedLines = new ArrayList<String>();
-            for (final var line : lines) {
-                if (line.isBlank())
-                    continue;
-                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collName, line);
-                if (newEntriesMap.containsKey(entry.getValue())) {
-                    updatedLines.add(newEntriesMap.get(entry.getValue()).toFileEntry());
-                    cumulativeShift += oldLengths.get(entry.getValue());
-                } else {
-                    entry.setPosition(entry.getPosition() - cumulativeShift);
-                    updatedLines.add(entry.toFileEntry());
-                }
-            }
-            final var newContent = String.join(Globals.NEWLINE, updatedLines) + Globals.NEWLINE;
-            final var newContentBytes = newContent.getBytes(StandardCharsets.UTF_8);
-            raf.seek(0);
-            raf.write(newContentBytes);
-            raf.setLength(newContentBytes.length);
-        } finally {
-            lock.unlock();
-        }
     }
 
     private void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)

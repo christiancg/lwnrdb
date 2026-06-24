@@ -567,6 +567,27 @@ def probe_drop_burst_no_background_errors(s, f):
                detail=f"survivor count={count} (expected 5)")
 
 
+def probe_bulk_update_same_page_no_corruption(s, f):
+    # Bulk-insert several docs (they pack onto one page), then BULK_SAVE updating all of them to
+    # different, longer values. Each must read back intact afterwards — regression for the
+    # multi-same-page bulk-update page-corruption bug.
+    coll = "idxagg_bulk_upd"
+    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    ids = [f"bu_{i}" for i in range(6)]
+    send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                "objects": [{"_id": i, "v": "short"} for i in ids]})
+    send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                "objects": [{"_id": i, "v": f"updated-longer-value-for-{i}"} for i in ids]})
+    bad = 0
+    for i in ids:
+        r = send(s, f, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": i})
+        if (r.get("object") or {}).get("v") != f"updated-longer-value-for-{i}":
+            bad += 1
+    send(s, f, {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+    check_true("bulk update of multiple same-page docs reads back intact (no page corruption)", bad == 0,
+               detail=f"{bad}/{len(ids)} docs corrupted/stale after bulk update")
+
+
 def probe_convergence(s, f):
     # After the background settles, the document is found via the (now-updated, re-evicted) index.
     save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
@@ -597,6 +618,7 @@ def consistency_suite(s, f):
     probe_save_delete_converges(s, f)
     probe_concurrent_save_during_create_index(s, f)
     probe_drop_burst_no_background_errors(s, f)
+    probe_bulk_update_same_page_no_corruption(s, f)
     probe_convergence(s, f)
 
 

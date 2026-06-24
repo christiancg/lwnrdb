@@ -194,6 +194,33 @@ public class OperationProcessorTest {
         assertInstanceOf(DropDatabaseResponse.class, response2);
     }
 
+    // Dropping a database that has collections locks each collection during deletion and releases them
+    // afterwards (regression for the unlocked DROP_DATABASE path).
+    @Test
+    public void test_drop_database_with_collections_locks_and_releases() throws Exception {
+        final var db = "dropLockDb";
+        final var coll = "lockColl";
+        org.techhouse.ops.AdminOperationHelper.saveDatabaseEntry(new org.techhouse.data.admin.AdminDbEntry(db));
+        org.techhouse.ops.AdminOperationHelper
+                .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry(db, coll));
+        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
+        fs.createDatabaseFolder(db);
+        fs.createCollectionFile(db, coll);
+        // The admin db entry lists the collection, so the drop must lock it.
+        assertTrue(
+                IocContainer.get(org.techhouse.cache.Cache.class).getAdminDbEntry(db).getCollections().contains(coll));
+
+        final var resp = (DropDatabaseResponse) processor.processMessage(new DropDatabaseRequest(db));
+
+        assertEquals(OperationStatus.OK, resp.getStatus());
+        // The per-collection lock was released, so it can be re-acquired.
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertDoesNotThrow(() -> {
+            locks.lock(db, coll);
+            locks.release(db, coll);
+        });
+    }
+
     // Create and drop indexes with proper validation
     @Test
     public void test_create_and_drop_index() {

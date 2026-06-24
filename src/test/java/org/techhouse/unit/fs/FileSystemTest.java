@@ -398,7 +398,7 @@ public class FileSystemTest {
         final var second = entries.get(1);
         second.getData().get("field").asJsonString().setValue("changed");
 
-        List<IndexedDbEntry> result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries).updated();
 
         assertNotNull(result);
         assertEquals(2, result.size());
@@ -415,10 +415,41 @@ public class FileSystemTest {
 
         List<IndexedDbEntry> entries = new ArrayList<>();
 
-        List<IndexedDbEntry> result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
 
         assertNotNull(result);
-        assertTrue(result.isEmpty());
+        assertTrue(result.updated().isEmpty());
+        assertTrue(result.compactions().isEmpty());
+    }
+
+    // Updating multiple entries that share a page in one batch must NOT corrupt the page: each
+    // document still reads back with its updated content and correct position afterwards.
+    @Test
+    public void test_bulk_update_multiple_same_page_entries_no_corruption() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var toInsert = new ArrayList<DbEntry>();
+        for (var id : List.of("1", "2", "3")) {
+            final var data = new JsonObject();
+            data.addProperty("_id", id);
+            data.addProperty("field", "orig-" + id);
+            toInsert.add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data));
+        }
+        final var inserted = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, toInsert);
+        // All three live on page 0; change each value to a DIFFERENT-length string to force shifts.
+        for (var ie : inserted) {
+            ie.getData().get("field").asJsonString().setValue("updated-value-for-" + ie.get_id() + "-longer");
+        }
+
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, inserted);
+
+        // Every updated entry must read back from disk with its new content at its reported position.
+        for (var ie : result.updated()) {
+            final var read = fileSystem.getById(ie.getIndex());
+            assertEquals("updated-value-for-" + ie.get_id() + "-longer",
+                    read.getData().get("field").asJsonString().getValue(),
+                    "doc " + ie.get_id() + " must read back intact after a multi-same-page bulk update");
+        }
     }
 
     // Correctly updates file length after modification
