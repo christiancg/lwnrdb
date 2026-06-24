@@ -113,6 +113,37 @@ public class UserCacheTest {
         assertEquals(expectedPkIndex, actualPkIndex);
     }
 
+    // shiftPkPositionsAfterCompaction decrements only same-page entries with a greater position, by
+    // the removed length, in place; other pages and earlier entries are untouched.
+    @Test
+    public void test_shift_pk_positions_after_compaction() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        String dbName = "testDb";
+        String collName = "testColl";
+        final var before = new PkIndexEntry(dbName, collName, "a", 0, 10, 0);
+        final var removed = new PkIndexEntry(dbName, collName, "b", 10, 10, 0);
+        final var after = new PkIndexEntry(dbName, collName, "c", 20, 10, 0);
+        final var otherPage = new PkIndexEntry(dbName, collName, "d", 20, 10, 1);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        TestUtils.getPrivateField(cache, "pkIndexMap", type).put(Cache.getCollectionIdentifier(dbName, collName),
+                new ArrayList<>(List.of(before, removed, after, otherPage)));
+
+        cache.shiftPkPositionsAfterCompaction(dbName, collName, 0, removed.getPosition(), removed.getLength());
+
+        assertEquals(0, before.getPosition(), "entry before the removed position is untouched");
+        assertEquals(10, removed.getPosition(), "the entry at the removed position itself is untouched");
+        assertEquals(10, after.getPosition(), "entry after the removed position shifts left by removed length");
+        assertEquals(20, otherPage.getPosition(), "entry on a different page is untouched");
+    }
+
+    // No-op when the collection's PK index is not cached (does not throw).
+    @Test
+    public void test_shift_pk_positions_after_compaction_uncached_is_noop() {
+        UserCache cache = new UserCache();
+        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction("noDb", "noColl", 0, 0, 10));
+    }
+
     // Returns list of FieldIndexEntry when index is already loaded
     @Test
     public void test_returns_list_when_index_loaded() throws IOException, NoSuchFieldException, IllegalAccessException {

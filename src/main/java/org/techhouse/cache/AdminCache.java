@@ -220,6 +220,32 @@ public class AdminCache {
         return pagesPkIndexes.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
     }
 
+    /**
+     * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
+     * the given admin collection, dispatching to the matching PK structure (databases, collections,
+     * users, collection_usage, or a {@code pages_*} collection). Every cached entry on {@code page}
+     * whose position is greater than {@code removedPosition} shifted toward the start of the file by
+     * {@code removedLength}; entries are mutated in place.
+     */
+    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
+        final Collection<PkIndexEntry> entries;
+        switch (collName) {
+            case Globals.ADMIN_DATABASES_COLLECTION_NAME -> entries = databasesPkIndex.values();
+            case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> entries = collectionsPkIndex.values();
+            case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
+            case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
+            case null, default -> {
+                final var list = pagesPkIndexes.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, collName));
+                entries = list != null ? list : List.of();
+            }
+        }
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
     public void removeAdminPageEntries(String dbName, String collName) {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         pages.remove(collId);

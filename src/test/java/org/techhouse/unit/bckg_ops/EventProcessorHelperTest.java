@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
@@ -135,6 +136,23 @@ public class EventProcessorHelperTest {
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry
                 .buildId(org.techhouse.config.Globals.ADMIN_DB_NAME, "databases", "");
         Assertions.assertNull(cache.getPkIndexCollectionUsage(id));
+    }
+
+    @Test
+    public void processEntityEventSkipsVanishedCollection() {
+        // The collection was dropped while this event was queued (no admin collection entry exists).
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        final var entry = new DbEntry();
+        entry.set_id("ghost");
+        pending.mark(TestGlobals.DB, TestGlobals.COLL, "ghost");
+        final var entityEvent = new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry);
+
+        Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(entityEvent));
+
+        // The event is skipped: pending is cleared and no admin page metadata is created for it.
+        Assertions.assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("ghost"));
+        final var cache = IocContainer.get(Cache.class);
+        Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL));
     }
 
 }

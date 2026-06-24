@@ -308,6 +308,9 @@ public class IndexConsistencyTest {
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.addProperty("status", value);
         save.setObject(obj);
+        // Mirror RequestParser, which derives the request _id from the object's PK so an existing id
+        // is recognised as an update (without it, every save degrades to an insert).
+        save.set_id(id);
         processor.processMessage(save);
     }
 
@@ -453,6 +456,36 @@ public class IndexConsistencyTest {
 
         assertEquals(OperationStatus.OK, resp.getStatus());
         assertFalse(indexesOf().contains("status"));
+    }
+
+    // End-to-end: a delete and an update on a collection keep the in-memory PK index positions
+    // consistent (OperationProcessor applies the compaction returned by the FileSystem), so survivors
+    // still read back correctly from disk (positioned reads) after their documents are evicted.
+    @Test
+    public void test_delete_and_update_keep_positions_consistent() {
+        final var processor = new OperationProcessor();
+        saveViaProcessor(processor, "a", "alpha");
+        saveViaProcessor(processor, "b", "beta");
+        saveViaProcessor(processor, "c", "gamma");
+
+        final var del = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        del.set_id("a");
+        processor.processMessage(del);
+        saveViaProcessor(processor, "b", "beta2"); // update -> compacts the page, shifts "c"
+
+        // Force positioned reads from disk for the survivors.
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "b");
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "c");
+
+        assertEquals("gamma", readStatus(processor, "c"));
+        assertEquals("beta2", readStatus(processor, "b"));
+    }
+
+    private String readStatus(OperationProcessor processor, String id) {
+        final var req = new org.techhouse.ops.req.FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.set_id(id);
+        final var resp = (org.techhouse.ops.resp.FindByIdResponse) processor.processMessage(req);
+        return resp.getObject().get("status").asJsonString().getValue();
     }
 
     // ── UserCache helpers ────────────────────────────────────────────────────

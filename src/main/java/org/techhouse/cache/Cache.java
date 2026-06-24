@@ -20,6 +20,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
@@ -72,6 +73,24 @@ public class Cache {
 
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         return userCache.getPkIndexAndLoadIfNecessary(dbName, collName);
+    }
+
+    /**
+     * Applies the in-memory PK position fix described by a {@link PkCompaction} returned from a
+     * delete/update, routing to the admin or user cache by database. Null-safe: a {@code null}
+     * compaction (no survivor moved) is a no-op.
+     */
+    public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
+        if (compaction == null) {
+            return;
+        }
+        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())) {
+            adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
+                    compaction.removedPosition(), compaction.removedLength());
+        } else {
+            userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
+                    compaction.removedPosition(), compaction.removedLength());
+        }
     }
 
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,

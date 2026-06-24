@@ -68,6 +68,13 @@ public class EventProcessorHelper {
     private static void processBulkEntityEvent(BulkEntityEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
+        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+            // The collection was dropped while this event was queued; there is nothing to maintain.
+            // Clear the pending overlay and skip so we never touch the removed collection's files.
+            clearPending(dbName, collName, event.getInsertedEntries());
+            clearPending(dbName, collName, event.getUpdatedEntries());
+            return;
+        }
         try {
             IndexHelper.bulkUpdateIndexes(dbName, collName,
                     idsOf(event.getInsertedEntries(), event.getUpdatedEntries()));
@@ -103,6 +110,12 @@ public class EventProcessorHelper {
         final var collName = event.getCollName();
         final var dbEntry = event.getDbEntry();
         final var type = event.getType();
+        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+            // The collection was dropped while this event was queued; there is nothing to maintain.
+            // Clear the pending overlay and skip so we never touch the removed collection's files.
+            pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
+            return;
+        }
         try {
             // Index maintenance re-reads the current document by id (order-independent); the event
             // type/snapshot is still authoritative for the admin entry-count delta.

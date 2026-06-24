@@ -276,6 +276,51 @@ public class AdminCacheTest {
         assertFalse(cache.hasIndex(dbName, collName, "missing"));
     }
 
+    // shiftPkPositionsAfterCompaction dispatches to the collections PK map and shifts only same-page
+    // entries after the removed position, in place.
+    @Test
+    public void test_shift_pk_positions_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
+        AdminCache cache = new AdminCache();
+        final var before = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c1", 0,
+                10, 0);
+        final var after = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c2", 10,
+                10, 0);
+        final var type = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
+        final var map = TestUtils.getPrivateField(cache, "collectionsPkIndex", type);
+        map.put("c1", before);
+        map.put("c2", after);
+
+        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, 0, 0, 10);
+
+        assertEquals(0, before.getPosition());
+        assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
+    }
+
+    // shiftPkPositionsAfterCompaction dispatches to the per-collection pages PK list for a pages_* name.
+    @Test
+    public void test_shift_pk_positions_for_pages_collection() throws NoSuchFieldException, IllegalAccessException {
+        AdminCache cache = new AdminCache();
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "db", "coll");
+        final var entry = new PkIndexEntry(Globals.ADMIN_DB_NAME, pagesCollName, "p1", 30, 10, 0);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        TestUtils.getPrivateField(cache, "pagesPkIndexes", type).put(
+                Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, pagesCollName), new ArrayList<>(List.of(entry)));
+
+        cache.shiftPkPositionsAfterCompaction(pagesCollName, 0, 0, 10);
+
+        assertEquals(20, entry.getPosition());
+    }
+
+    // An unknown pages_* collection that is not cached is a no-op (does not throw).
+    @Test
+    public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
+        AdminCache cache = new AdminCache();
+        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction(
+                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "no", "coll"), 0, 0, 10));
+    }
+
     // Successfully adds AdminDbEntry and PkIndexEntry to respective maps
     @Test
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {

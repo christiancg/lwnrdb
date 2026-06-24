@@ -277,7 +277,9 @@ public class OperationProcessor {
             if (foundIndexEntry >= 0) {
                 final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
                 entry.setPage(idxEntry.getPage());
-                savedPkIndexEntry = fs.updateFromCollection(entry, idxEntry);
+                final var updateResult = fs.updateFromCollection(entry, idxEntry);
+                savedPkIndexEntry = updateResult.indexEntry();
+                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
                 primaryKeyIndex.remove(idxEntry);
                 eventType = EventType.UPDATED;
             } else {
@@ -360,7 +362,8 @@ public class OperationProcessor {
             if (foundIndexEntry.isPresent()) {
                 final var idxEntry = foundIndexEntry.get();
                 final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
-                fs.deleteFromCollection(idxEntry);
+                final var compaction = fs.deleteFromCollection(idxEntry);
+                cache.shiftPkPositionsAfterCompaction(compaction);
                 primaryKeyIndex.remove(idxEntry);
                 primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
                 cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
