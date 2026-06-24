@@ -223,10 +223,10 @@ public class FileSystem {
             final var page = groupedEntry.getKey();
             final var pageEntries = groupedEntry.getValue();
             final var file = getCollectionFile(dbName, collName, page);
-            var currentOffset = file.length();
             final var lock = fileLock(file).writeLock();
             lock.lock();
             try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+                var currentOffset = file.length();
                 for (var entry : pageEntries) {
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
                     final var bytes = strData.getBytes(StandardCharsets.UTF_8);
@@ -311,10 +311,10 @@ public class FileSystem {
         final var collName = pkIndexEntry.getCollectionName();
         final var page = pkIndexEntry.getPage();
         final var file = getCollectionFile(dbName, collName, page);
-        final long totalFileLength = file.length();
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            final long totalFileLength = file.length();
             final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
             deleteIndexValue(pkIndexEntry);
@@ -425,10 +425,10 @@ public class FileSystem {
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
         final var file = getCollectionFile(dbName, collName, page);
-        final long totalFileLength = file.length();
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            final long totalFileLength = file.length();
             final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
