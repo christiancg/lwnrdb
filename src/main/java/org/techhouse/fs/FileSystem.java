@@ -302,7 +302,12 @@ public class FileSystem {
         }
     }
 
-    public void deleteFromCollection(PkIndexEntry pkIndexEntry) {
+    /**
+     * Deletes the entry from its page, compacting the survivors. Returns the {@link PkCompaction}
+     * describing the shift (so the caller can fix the in-memory PK positions via
+     * {@code Cache.shiftPkPositionsAfterCompaction}), or {@code null} when no survivor moved.
+     */
+    public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
         final var dbName = pkIndexEntry.getDatabaseName();
         final var collName = pkIndexEntry.getCollectionName();
         final var page = pkIndexEntry.getPage();
@@ -311,9 +316,10 @@ public class FileSystem {
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+            final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
             deleteIndexValue(pkIndexEntry);
+            return compacted ? compactionFor(pkIndexEntry) : null;
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -321,19 +327,35 @@ public class FileSystem {
         }
     }
 
+    private static PkCompaction compactionFor(PkIndexEntry pkIndexEntry) {
+        return new PkCompaction(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
+                pkIndexEntry.getPage(), pkIndexEntry.getPosition(), pkIndexEntry.getLength());
+    }
+
     private void deleteIndexValue(PkIndexEntry pkIndexEntry) throws IOException {
         internalUpdatePKIndex(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getValue(),
                 null);
     }
 
-    private void shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
+    /**
+     * Shifts the entries after {@code pkIndexEntry} toward the start of the page, overwriting its
+     * slot. Returns {@code true} when entries were actually moved (so the caller must fix the
+     * in-memory PK positions of the survivors), {@code false} when there was nothing to shift — the
+     * removed entry was the last one, or its position is already past the end of the file (a stale
+     * position from a concurrent compaction/drop), in which case allocating the buffer is skipped.
+     */
+    private boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
             throws IOException {
-        writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
         final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
+        if (otherEntriesLength <= 0) {
+            return false;
+        }
+        writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
         byte[] buffer = new byte[otherEntriesLength];
         writer.readFully(buffer, 0, otherEntriesLength);
         writer.seek(pkIndexEntry.getPosition());
         writer.write(buffer, 0, otherEntriesLength);
+        return true;
     }
 
     public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
@@ -383,7 +405,12 @@ public class FileSystem {
         return result;
     }
 
-    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
+    /**
+     * Updates the entry in place, relocating it to the end of its page and compacting the survivors.
+     * Returns the new {@link PkIndexEntry} together with the {@link PkCompaction} the caller must
+     * apply to the in-memory PK positions (or a null compaction when no survivor moved).
+     */
+    public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
@@ -392,7 +419,7 @@ public class FileSystem {
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+            final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var bytes = strData.getBytes(StandardCharsets.UTF_8);
@@ -400,8 +427,9 @@ public class FileSystem {
             writer.write(bytes, 0, length);
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
             entry.setPreviousByteSize(pkIndexEntry.getLength());
-            return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(),
+            final var updated = updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(),
                     totalFileLength, length, page);
+            return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
         } finally {
             lock.unlock();
         }

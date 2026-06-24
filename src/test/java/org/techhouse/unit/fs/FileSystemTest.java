@@ -1257,4 +1257,125 @@ public class FileSystemTest {
         assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT));
         assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.ARRAY));
     }
+
+    // deleteFromCollection returns the compaction (removed row's coordinates) when a survivor moves.
+    @Test
+    public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry1.set_id("1");
+        final var entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry2.set_id("2");
+        final var pk1 = fileSystem.insertIntoCollection(entry1);
+        fileSystem.insertIntoCollection(entry2);
+
+        final var compaction = fileSystem.deleteFromCollection(pk1);
+
+        assertNotNull(compaction);
+        assertEquals(TestGlobals.DB, compaction.dbName());
+        assertEquals(TestGlobals.COLL, compaction.collName());
+        assertEquals(pk1.getPage(), compaction.page());
+        assertEquals(pk1.getPosition(), compaction.removedPosition());
+        assertEquals(pk1.getLength(), compaction.removedLength());
+    }
+
+    // Deleting the last entry on a page moves no survivor, so the returned compaction is null.
+    @Test
+    public void test_delete_last_entry_returns_null_compaction()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("1");
+        final var pk = fileSystem.insertIntoCollection(entry);
+
+        assertNull(fileSystem.deleteFromCollection(pk));
+    }
+
+    // updateFromCollection returns the new index entry plus the compaction for the old slot.
+    @Test
+    public void test_update_returns_index_entry_and_compaction()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry1.set_id("1");
+        final var entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry2.set_id("2");
+        final var pk1 = fileSystem.insertIntoCollection(entry1);
+        fileSystem.insertIntoCollection(entry2);
+        data.get("name").asJsonString().setValue("updated");
+        final var updatedEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        updatedEntry.set_id("1");
+
+        // Updating entry "1" (not the last one) relocates it to the end, so a survivor moves.
+        final var result = fileSystem.updateFromCollection(updatedEntry, pk1);
+
+        assertNotNull(result.indexEntry());
+        assertEquals("1", result.indexEntry().getValue());
+        assertNotNull(result.compaction());
+        assertEquals(pk1.getPosition(), result.compaction().removedPosition());
+        assertEquals(pk1.getLength(), result.compaction().removedLength());
+    }
+
+    // Two sequential deletes on the same page do not crash when the caller applies the returned
+    // compaction to keep the surviving entries' positions consistent (the stale-position fix).
+    @Test
+    public void test_sequential_deletes_applying_compaction_no_crash() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var pks = new ArrayList<PkIndexEntry>();
+        for (var id : List.of("1", "2", "3")) {
+            final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+            e.set_id(id);
+            pks.add(fileSystem.insertIntoCollection(e));
+        }
+
+        applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(0)));
+        // Without applying the position fix, this second delete would use a stale position and throw.
+        assertDoesNotThrow(() -> applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(1))));
+
+        final var survivor = fileSystem.getById(pks.get(2));
+        assertEquals("test", survivor.getData().get("name").asJsonString().getValue());
+    }
+
+    // Mirrors Cache.shiftPkPositionsAfterCompaction for the in-test PkIndexEntry list.
+    private static void applyCompaction(List<PkIndexEntry> pks, org.techhouse.fs.PkCompaction compaction) {
+        if (compaction == null) {
+            return;
+        }
+        for (final var pk : pks) {
+            if (pk.getPage() == compaction.page() && pk.getPosition() > compaction.removedPosition()) {
+                pk.setPosition(pk.getPosition() - compaction.removedLength());
+            }
+        }
+    }
+
+    // A stale position past the end of file no longer throws NegativeArraySizeException (over-EOF guard).
+    @Test
+    public void test_delete_with_over_eof_position_does_not_throw()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("1");
+        final var pk = fileSystem.insertIntoCollection(entry);
+        // Same id as the inserted row (so the PK-index removal succeeds) but a position past EOF,
+        // simulating a stale cached position; the over-EOF guard must avoid the negative-array crash.
+        final var stale = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", pk.getPosition() + 1000,
+                pk.getLength(), pk.getPage());
+
+        assertDoesNotThrow(() -> fileSystem.deleteFromCollection(stale));
+    }
 }

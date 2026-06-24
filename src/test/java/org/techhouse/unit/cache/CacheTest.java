@@ -365,4 +365,25 @@ public class CacheTest {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
+
+    // shiftPkPositionsAfterCompaction routes to the admin cache for the admin database and to the user
+    // cache otherwise.
+    @Test
+    public void test_shift_pk_positions_routes_admin_vs_user() throws NoSuchFieldException, IllegalAccessException {
+        Cache cache = new Cache();
+        final var adminMock = mock(org.techhouse.cache.AdminCache.class);
+        final var userMock = mock(org.techhouse.cache.UserCache.class);
+        TestUtils.setPrivateField(cache, "adminCache", adminMock);
+        TestUtils.setPrivateField(cache, "userCache", userMock);
+
+        cache.shiftPkPositionsAfterCompaction(
+                new org.techhouse.fs.PkCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5));
+        cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
+        // A null compaction (no survivor moved) is a no-op.
+        cache.shiftPkPositionsAfterCompaction(null);
+
+        verify(adminMock).shiftPkPositionsAfterCompaction("collections", 0, 10, 5);
+        verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
+        verifyNoMoreInteractions(adminMock, userMock);
+    }
 }

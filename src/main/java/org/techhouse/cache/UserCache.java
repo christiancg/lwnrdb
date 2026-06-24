@@ -85,6 +85,26 @@ public class UserCache {
         return primaryKeyIndex;
     }
 
+    /**
+     * Keeps the cached PK index positions consistent after a single-entry page compaction: every
+     * cached entry on {@code page} whose position is greater than {@code removedPosition} shifted
+     * toward the start of the file by {@code removedLength}. Mutates the cached entries in place so
+     * any in-flight operation holding a reference observes the corrected position. No-op when the
+     * collection's PK index is not cached.
+     */
+    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
+            long removedLength) {
+        final var primaryKeyIndex = pkIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
+        if (primaryKeyIndex == null) {
+            return;
+        }
+        for (final var entry : primaryKeyIndex) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
     public boolean isCachingDisabled(String dbName) {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
             return false;

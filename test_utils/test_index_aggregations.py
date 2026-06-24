@@ -538,6 +538,35 @@ def probe_concurrent_save_during_create_index(s, f):
                detail=f"{len(missing)} of {len(expected)} concurrently-saved docs missing from the index")
 
 
+def probe_drop_burst_no_background_errors(s, f):
+    # Create, populate and drop many collections (plus the database) in a burst while background
+    # events for those collections are still in flight. This stresses the shared admin-collection
+    # files (collections/databases) with repeated compaction; with the PK-position fix the survivors
+    # stay readable and no NegativeArraySizeException / null-collection error is raised.
+    burst_db = "idxagg_drop_burst"
+    send(s, f, {"type": "CREATE_DATABASE", "databaseName": burst_db})
+    n = max(CONS_REPEATS, 12)
+    for i in range(n):
+        coll = f"burst_{i}"
+        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": coll})
+        for j in range(5):
+            send(s, f, {"type": "SAVE", "databaseName": burst_db, "collectionName": coll,
+                        "object": {"_id": f"d{j}", "k": f"v{j}"}})
+        send(s, f, {"type": "DROP_COLLECTION", "databaseName": burst_db, "collectionName": coll})
+    # A survivor collection that is NOT dropped must remain fully readable afterwards.
+    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": "keep"})
+    for j in range(5):
+        send(s, f, {"type": "SAVE", "databaseName": burst_db, "collectionName": "keep",
+                    "object": {"_id": f"k{j}", "k": f"v{j}"}})
+    wait_for_background()
+    r = send(s, f, {"type": "AGGREGATE", "databaseName": burst_db, "collectionName": "keep",
+                    "aggregationSteps": [{"type": "COUNT"}]})
+    count = (r.get("results") or [{}])[0].get("count")
+    send(s, f, {"type": "DROP_DATABASE", "databaseName": burst_db})
+    check_true("drop burst keeps survivors intact (no stale-position corruption)", count == 5,
+               detail=f"survivor count={count} (expected 5)")
+
+
 def probe_convergence(s, f):
     # After the background settles, the document is found via the (now-updated, re-evicted) index.
     save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
@@ -567,6 +596,7 @@ def consistency_suite(s, f):
     probe_same_id_rapid_updates_converge(s, f)
     probe_save_delete_converges(s, f)
     probe_concurrent_save_during_create_index(s, f)
+    probe_drop_burst_no_background_errors(s, f)
     probe_convergence(s, f)
 
 
