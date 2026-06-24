@@ -117,6 +117,8 @@ public class EventProcessorHelperTest {
 
     @Test
     public void processCollectionUsageEventUpsertsUsageEntry() throws IOException, InterruptedException {
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
         final var event = new CollectionUsageEvent(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
