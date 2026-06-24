@@ -770,4 +770,124 @@ public class OperationProcessorTest {
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
         locks.releaseWrite(TestGlobals.DB, TestGlobals.JOIN_COLL);
     }
+
+    // A SAVE that grows an existing document past maxPageSize relocates it to another page instead of
+    // overflowing its current page; the document still reads back intact and no page exceeds the cap.
+    @Test
+    public void test_save_grow_update_relocates_to_avoid_page_overflow() throws Exception {
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var config = org.techhouse.config.Configuration.getInstance();
+        final var originalMaxPage = config.getMaxPageSize();
+        final var originalMaxEntry = config.getMaxEntrySize();
+        final var collName = "overflowColl";
+        TestUtils.setPrivateField(config, "maxPageSize", 2000L);
+        TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        try {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+            // "keep" (~300 B) plus a small "a", co-located on page 0. Sized so that growing "a" to ~1.8 KB
+            // makes page 0 overflow maxPageSize (keepBytes + newBytes > 2000) yet the grown "a" still fits
+            // on a fresh page (newBytes < 2000), forcing a relocation rather than an in-place rewrite.
+            final var keepSave = new SaveRequest(TestGlobals.DB, collName);
+            final var keepObj = new JsonObject();
+            keepObj.add(Globals.PK_FIELD, new JsonString("keep"));
+            keepObj.add("v", new JsonString("k".repeat(280)));
+            keepSave.setObject(keepObj);
+            keepSave.set_id("keep");
+            assertEquals(OperationStatus.OK, processor.processMessage(keepSave).getStatus());
+
+            final var aSave = new SaveRequest(TestGlobals.DB, collName);
+            final var aObj = new JsonObject();
+            aObj.add(Globals.PK_FIELD, new JsonString("a"));
+            aObj.add("v", new JsonString("small"));
+            aSave.setObject(aObj);
+            aSave.set_id("a");
+            assertEquals(OperationStatus.OK, processor.processMessage(aSave).getStatus());
+
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
+            final var keepPageBefore = pkIndex.stream().filter(p -> p.getValue().equals("keep")).findFirst()
+                    .orElseThrow().getPage();
+            final var aPageBefore = pkIndex.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
+                    .getPage();
+            assertEquals(0L, keepPageBefore);
+            assertEquals(0L, aPageBefore, "both docs must start co-located on page 0");
+
+            // Grow "a" past what fits on page 0 alongside "keep" -> must relocate.
+            final var bigValue = "x".repeat(1780);
+            final var growSave = new SaveRequest(TestGlobals.DB, collName);
+            final var grown = new JsonObject();
+            grown.add(Globals.PK_FIELD, new JsonString("a"));
+            grown.add("v", new JsonString(bigValue));
+            growSave.setObject(grown);
+            growSave.set_id("a");
+            assertEquals(OperationStatus.OK, processor.processMessage(growSave).getStatus());
+
+            // "a" relocated off page 0; "keep" stayed put.
+            final var pkAfter = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
+            final var aPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
+                    .getPage();
+            final var keepPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("keep")).findFirst()
+                    .orElseThrow().getPage();
+            assertEquals(0L, keepPageAfter, "the untouched doc must stay on page 0");
+            assertTrue(aPageAfter > 0L, "the grown doc must relocate off page 0 (was " + aPageAfter + ")");
+
+            // The grown value reads back intact.
+            final var find = new FindByIdRequest(TestGlobals.DB, collName);
+            find.set_id("a");
+            final var found = (FindByIdResponse) processor.processMessage(find);
+            assertEquals(OperationStatus.OK, found.getStatus());
+            assertEquals(bigValue, found.getObject().get("v").asJsonString().getValue());
+
+            // No on-disk page file exceeds maxPageSize.
+            final var collFolder = new java.io.File(
+                    TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + collName);
+            final var datFiles = collFolder.listFiles((_, n) -> n.endsWith(Globals.DB_FILE_EXTENSION));
+            assertNotNull(datFiles);
+            for (final var dat : datFiles) {
+                assertTrue(dat.length() <= 2000L,
+                        "page file " + dat.getName() + " (" + dat.length() + " bytes) must not exceed maxPageSize");
+            }
+        } finally {
+            TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
+            TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    // When no admin page metadata is available, the overflow check can't assess the page, so the SAVE
+    // falls back to an in-place update (no relocation) and the document still updates correctly.
+    @Test
+    public void test_save_grow_update_without_page_metadata_updates_in_place() {
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var collName = "noPageMetaColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+        try {
+            final var save = new SaveRequest(TestGlobals.DB, collName);
+            final var o = new JsonObject();
+            o.add(Globals.PK_FIELD, new JsonString("x"));
+            o.add("v", new JsonString("one"));
+            save.setObject(o);
+            save.set_id("x");
+            assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+            // Drop the in-memory page metadata so wouldOverflowPage hits its null fallback.
+            cache.removeAdminPageEntries(TestGlobals.DB, collName);
+
+            final var upd = new SaveRequest(TestGlobals.DB, collName);
+            final var o2 = new JsonObject();
+            o2.add(Globals.PK_FIELD, new JsonString("x"));
+            o2.add("v", new JsonString("two"));
+            upd.setObject(o2);
+            upd.set_id("x");
+            assertEquals(OperationStatus.OK, processor.processMessage(upd).getStatus());
+
+            final var find = new FindByIdRequest(TestGlobals.DB, collName);
+            find.set_id("x");
+            final var found = (FindByIdResponse) processor.processMessage(find);
+            assertEquals(OperationStatus.OK, found.getStatus());
+            assertEquals("two", found.getObject().get("v").asJsonString().getValue());
+        } finally {
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
 }
