@@ -157,4 +157,46 @@ public class EventProcessorHelperTest {
         Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL));
     }
 
+    @Test
+    public void processEntityEvent_no_orphan_pages_when_collection_dropped_mid_flight()
+            throws IOException, InterruptedException {
+        // Register the collection so the early guard in processEntityEvent passes...
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
+        // ...then simulate the concurrent drop completing before baseUpdateEntryCount runs.
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        AdminOperationHelper.deletePageCollections(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entry = new DbEntry();
+        entry.set_id("mid-flight-entity");
+        final var entityEvent = new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry);
+        Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(entityEvent));
+
+        // The re-check inside baseUpdateEntryCount must prevent orphan page metadata from being created.
+        final var cache = IocContainer.get(Cache.class);
+        Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL),
+                "No orphan page metadata must be created for a dropped collection");
+    }
+
+    @Test
+    public void processBulkEntityEvent_no_orphan_pages_when_collection_dropped_mid_flight()
+            throws IOException, InterruptedException {
+        // Register the collection so the early guard in processBulkEntityEvent passes...
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
+        // ...then simulate the concurrent drop completing before baseUpdateEntryCount runs.
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        AdminOperationHelper.deletePageCollections(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entry = new DbEntry();
+        entry.set_id("mid-flight-bulk");
+        final var bulkEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, new ArrayList<>(List.of(entry)),
+                new ArrayList<>());
+        Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(bulkEvent));
+
+        final var cache = IocContainer.get(Cache.class);
+        Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL),
+                "No orphan page metadata must be created for a dropped collection");
+    }
+
 }
