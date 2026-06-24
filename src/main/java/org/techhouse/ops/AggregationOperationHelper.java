@@ -301,16 +301,14 @@ public final class AggregationOperationHelper {
             String collName, boolean ascending) {
         final var sortedEntries = new ArrayList<>(indexEntries);
         sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
-        return sortedEntries.stream()
-                .flatMap(entry -> entry.getIds().stream())
-                .map(id -> {
-                    try {
-                        final var docs = cache.getEntriesByIds(dbName, collName, Set.of(id));
-                        return docs.isEmpty() ? null : docs.getFirst().getData();
-                    } catch (IOException e) {
-                        throw new java.io.UncheckedIOException(e);
-                    }
-                }).filter(Objects::nonNull);
+        return sortedEntries.stream().flatMap(entry -> entry.getIds().stream()).map(id -> {
+            try {
+                final var docs = cache.getEntriesByIds(dbName, collName, Set.of(id));
+                return docs.isEmpty() ? null : docs.getFirst().getData();
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }).filter(Objects::nonNull);
     }
 
     // Allocation-free comparator for raw FieldIndexEntry values. Handles all stored value kinds
