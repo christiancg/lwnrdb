@@ -10,13 +10,17 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -889,5 +893,78 @@ public class OperationProcessorTest {
         } finally {
             processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
         }
+    }
+
+    // A single-document insert calls updatePageSizeInMemory synchronously; the subsequent background
+    // CREATED event must only persist — entryCount and pageSize must both remain at 1x, not 2x.
+    @Test
+    public void test_single_save_insert_page_entry_count_single_counted() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("singleSaveId1"));
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        save.setObject(obj);
+        save.set_id("singleSaveId1");
+
+        assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+        // Capture the page state set by the synchronous updatePageSizeInMemory call.
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0Before.isPresent());
+        final long countBefore = page0Before.get().getEntryCount();
+        final long sizeBefore = page0Before.get().getPageSize();
+
+        // Simulate the background EntityEvent(CREATED) arriving.
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id("singleSaveId1");
+        entry.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry));
+
+        final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0After.isPresent());
+        assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
+        assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
+    }
+
+    // Bulk-save inserts also call updatePageSizeInMemory synchronously per inserted entry;
+    // the subsequent background BulkEntityEvent must not double-count any of them.
+    @Test
+    public void test_bulk_save_insert_page_entry_count_single_counted() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        final var obj1 = new JsonObject();
+        obj1.add(Globals.PK_FIELD, new JsonString("bulkSaveId1"));
+        final var obj2 = new JsonObject();
+        obj2.add(Globals.PK_FIELD, new JsonString("bulkSaveId2"));
+
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(obj1, obj2));
+        assertEquals(OperationStatus.OK, processor.processMessage(bulk).getStatus());
+
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0Before.isPresent());
+        final long countBefore = page0Before.get().getEntryCount();
+        final long sizeBefore = page0Before.get().getPageSize();
+
+        // Simulate the background BulkEntityEvent(CREATED) arriving.
+        final var e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
+        e1.set_id("bulkSaveId1");
+        e1.setPage(0L);
+        final var e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
+        e2.set_id("bulkSaveId2");
+        e2.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2));
+
+        final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0After.isPresent());
+        assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
+        assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
     }
 }
