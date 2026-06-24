@@ -57,16 +57,17 @@ public final class AdminOperationHelper {
 
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted)
             throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, inserted);
+        baseUpdateEntryCount(dbName, collName, type, inserted, type == EventType.CREATED);
     }
 
     public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry)
             throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, List.of(dbEntry));
+        baseUpdateEntryCount(dbName, collName, type, List.of(dbEntry), type == EventType.CREATED);
     }
 
     private static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
-            final List<DbEntry> insertedOrDeleted) throws InterruptedException, IOException {
+            final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated)
+            throws InterruptedException, IOException {
         if (insertedOrDeleted.isEmpty()) {
             return;
         }
@@ -98,8 +99,10 @@ public final class AdminOperationHelper {
                 final var existing = workingPageEntries.stream().filter(p -> p.getPage() == page).findFirst();
                 if (existing.isPresent()) {
                     final var pageEntry = existing.get();
-                    pageEntry.setEntryCount(pageEntry.getEntryCount() + deltaCount);
-                    pageEntry.setPageSize(pageEntry.getPageSize() + deltaBytes);
+                    if (type != EventType.CREATED || !skipMemoryDeltaForCreated) {
+                        pageEntry.setEntryCount(pageEntry.getEntryCount() + deltaCount);
+                        pageEntry.setPageSize(pageEntry.getPageSize() + deltaBytes);
+                    }
                     touchedPages.add(pageEntry);
                 } else if (type == EventType.CREATED) {
                     final var newEntry = new AdminPageEntry(dbName, collName, page);
@@ -220,7 +223,7 @@ public final class AdminOperationHelper {
                         Globals.ADMIN_DATABASES_COLLECTION_NAME, dbEntry.byteSize()));
                 adminDbEntry = fs.insertIntoCollection(dbEntry);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.CREATED,
-                        List.of(dbEntry));
+                        List.of(dbEntry), false);
             }
             cache.putAdminDbEntry(dbEntry, adminDbEntry);
         } finally {
@@ -239,6 +242,7 @@ public final class AdminOperationHelper {
                 final var collections = new ArrayList<>(adminDbEntry.getCollections());
                 for (var collection : collections) {
                     deleteCollectionEntry(dbName, collection);
+                    deletePageCollections(dbName, collection);
                 }
                 // we need to reload this variable as the removal of collections
                 //      will change the database entry
@@ -248,7 +252,7 @@ public final class AdminOperationHelper {
                 cache.shiftPkPositionsAfterCompaction(compaction);
                 cache.removeAdminDbEntry(dbName);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.DELETED,
-                        List.of(adminDbEntry));
+                        List.of(adminDbEntry), false);
             } finally {
                 releaseAdminDatabaseCollection();
             }
@@ -300,7 +304,7 @@ public final class AdminOperationHelper {
                         Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, dbEntry.byteSize()));
                 pkIndexEntry = fs.insertIntoCollection(dbEntry);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                        EventType.CREATED, List.of(dbEntry));
+                        EventType.CREATED, List.of(dbEntry), false);
             }
             cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
             final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
@@ -315,7 +319,7 @@ public final class AdminOperationHelper {
             cache.shiftPkPositionsAfterCompaction(dbUpdateResult.compaction());
             cache.putPkIndexAdminDbEntry(adminDbPkIndexEntry);
             baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.UPDATED,
-                    List.of(adminDbEntry));
+                    List.of(adminDbEntry), false);
         } finally {
             releaseAdminCollectionsCollection();
             releaseAdminDatabaseCollection();
@@ -338,7 +342,7 @@ public final class AdminOperationHelper {
                 cache.shiftPkPositionsAfterCompaction(compaction);
                 cache.removeAdminCollEntry(collIdentifier);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                        EventType.DELETED, List.of(adminCollEntry));
+                        EventType.DELETED, List.of(adminCollEntry), false);
                 final var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
                 final var adminDbEntry = cache.getAdminDbEntry(dbName);
                 final var otherCollections = adminDbEntry.getCollections();
@@ -349,7 +353,7 @@ public final class AdminOperationHelper {
                 cache.shiftPkPositionsAfterCompaction(dbUpdateResult.compaction());
                 cache.putAdminDbEntry(adminDbEntry, dbUpdateResult.indexEntry());
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.UPDATED,
-                        List.of(adminDbEntry));
+                        List.of(adminDbEntry), false);
             } finally {
                 releaseAdminCollectionsCollection();
                 releaseAdminDatabaseCollection();
@@ -393,7 +397,7 @@ public final class AdminOperationHelper {
                 cache.putAdminCollectionEntry(adminCollEntry, adminIndexPkCollEntry);
                 cache.putPkIndexAdminCollEntry(adminIndexPkCollEntry);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                        EventType.UPDATED, List.of(adminCollEntry));
+                        EventType.UPDATED, List.of(adminCollEntry), false);
             } finally {
                 releaseAdminCollectionsCollection();
             }
@@ -423,7 +427,7 @@ public final class AdminOperationHelper {
                         userEntry.byteSize()));
                 adminUserEntry = fs.insertIntoCollection(userEntry);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME, EventType.CREATED,
-                        List.of(userEntry));
+                        List.of(userEntry), false);
             }
             cache.putAdminUserEntry(userEntry, adminUserEntry);
         } finally {
@@ -464,13 +468,13 @@ public final class AdminOperationHelper {
                 savedPk = updateResult.indexEntry();
                 cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.UPDATED,
-                        List.of(usageEntry));
+                        List.of(usageEntry), false);
             } else {
                 usageEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
                         usageEntry.byteSize()));
                 savedPk = fs.insertIntoCollection(usageEntry);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.CREATED,
-                        List.of(usageEntry));
+                        List.of(usageEntry), false);
             }
             cache.putPkIndexCollectionUsage(savedPk);
         } finally {
@@ -503,7 +507,7 @@ public final class AdminOperationHelper {
                     memoryManagement.clearCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
                             usage.getIndexKey());
                     baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.DELETED,
-                            List.of(usage));
+                            List.of(usage), false);
                 }
             }
         } finally {
@@ -522,7 +526,7 @@ public final class AdminOperationHelper {
                 cache.shiftPkPositionsAfterCompaction(compaction);
                 cache.removeAdminUserEntry(username);
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME, EventType.DELETED,
-                        List.of(adminUserEntry));
+                        List.of(adminUserEntry), false);
             } finally {
                 releaseAdminUsersCollection();
             }

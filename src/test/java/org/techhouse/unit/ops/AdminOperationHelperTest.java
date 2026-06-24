@@ -2,17 +2,22 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.test.TestGlobals;
@@ -201,6 +206,78 @@ public class AdminOperationHelperTest {
         // Cleanup with maxAge=0 — everything older than `now` removed (i.e. all entries).
         AdminOperationHelper.cleanupCollectionUsage(0L);
         assertNull(cache.getPkIndexCollectionUsage(id));
+    }
+
+    // deleteDatabaseEntry must call deletePageCollections for each collection so that
+    // admin/pages_<db>_<coll> files and their in-memory entries do not outlive the database.
+    @Test
+    public void test_delete_database_entry_clears_page_collections() throws Exception {
+        final var dbName = "pageLeakDb";
+        final var collName = "pageLeakColl";
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(dbName));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+        AdminOperationHelper.createPageCollections(dbName, collName);
+
+        // Populate the in-memory page entry so there is something to evict.
+        final var cache = IocContainer.get(Cache.class);
+        cache.updatePageSizeInMemory(dbName, collName, 0L, 64L);
+        assertNotNull(cache.getAdminPageEntries(dbName, collName), "page entries must exist before drop");
+
+        AdminOperationHelper.deleteDatabaseEntry(dbName);
+
+        assertNull(cache.getAdminPageEntries(dbName, collName), "in-memory page entries must be evicted after drop");
+
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        final var pagesDir = new File(Configuration.getInstance().getFilePath() + File.separator + Globals.ADMIN_DB_NAME
+                + File.separator + pagesCollName);
+        assertFalse(pagesDir.exists(), "admin/pages_* directory must be removed after drop");
+    }
+
+    // Background CREATED event must not re-apply the delta that updatePageSizeInMemory already applied.
+    @Test
+    public void test_base_update_entry_count_created_does_not_double_count() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        // Simulate the synchronous call made by OperationProcessor after inserting.
+        final long bytes = 64L;
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0L, bytes);
+
+        // Build a DbEntry that mimics what the background EntityEvent carries.
+        final var data = new JsonObject();
+        data.addProperty("foo", "bar");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("doubleCountId");
+        entry.setPage(0L);
+
+        // Background event arrives — must only persist, not bump again.
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                java.util.List.of(entry));
+
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0 = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0.isPresent());
+        assertEquals(1, page0.get().getEntryCount(), "entryCount must be 1, not 2");
+        assertEquals(bytes, page0.get().getPageSize(), "pageSize must equal the single insert, not double");
+    }
+
+    // Admin collections call baseUpdateEntryCount directly without a prior updatePageSizeInMemory;
+    // multiple inserts onto the same page must each apply their delta normally.
+    @Test
+    public void test_base_update_entry_count_created_admin_coll_applies_delta() throws Exception {
+        // Insert two database entries (second goes onto the same page 0 the first already occupies).
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("adminDeltaDb1"));
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("adminDeltaDb2"));
+
+        final var cache = IocContainer.get(Cache.class);
+        final var pageEntries = cache.getAdminPageEntries(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        assertNotNull(pageEntries);
+        final var page0 = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0.isPresent());
+        // There are already admin-created databases (admin itself and the two above), so entryCount >= 2.
+        assertTrue(page0.get().getEntryCount() >= 2, "both admin db entries must be counted");
+        assertTrue(page0.get().getPageSize() > 0, "pageSize must reflect both entries");
     }
 
 }
