@@ -556,4 +556,52 @@ public class IndexHelperTest {
         assertEquals(1, entries.size());
         assertEquals(Set.of("o1", "o2", "o3"), entries.getFirst().getIds());
     }
+
+    // elementToLookupValue converts each primitive element kind to the raw Java type used by
+    // getIdsFromIndex (Number, Boolean, String, JsonCustom); null/JsonNull/object/array yield null.
+    @Test
+    public void test_element_to_lookup_value_converts_primitives() {
+        final var numResult = IndexHelper.elementToLookupValue(new JsonNumber(42));
+        assertNotNull(numResult);
+        assertInstanceOf(Number.class, numResult);
+        assertEquals(42.0, ((Number) numResult).doubleValue());
+
+        final var strResult = IndexHelper.elementToLookupValue(new JsonString("hello"));
+        assertEquals("hello", strResult);
+
+        final var boolResult = IndexHelper.elementToLookupValue(new JsonBoolean(true));
+        assertEquals(Boolean.TRUE, boolResult);
+
+        assertNull(IndexHelper.elementToLookupValue(JsonNull.INSTANCE));
+        assertNull(IndexHelper.elementToLookupValue(null));
+        assertNull(IndexHelper.elementToLookupValue(new JsonObject()));
+        assertNull(IndexHelper.elementToLookupValue(new JsonArray()));
+    }
+
+    // getMatchingIdsForJoin returns null when the remote field has no index (caller falls back to scan)
+    @Test
+    public void test_get_matching_ids_for_join_returns_null_when_no_index() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(1)));
+        // No index created on "refKey"
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
+                Set.of(new JsonNumber(1)));
+        assertNull(result);
+    }
+
+    // getMatchingIdsForJoin returns only the ids whose remote field matches a local value
+    @Test
+    public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
+                entryWith("r2", "refKey", new JsonNumber(7)), entryWith("r3", "refKey", new JsonNumber(42)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("refKey"));
+
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
+                Set.of(new JsonNumber(42)));
+
+        assertNotNull(result);
+        assertEquals(Set.of("r1", "r3"), result);
+    }
 }

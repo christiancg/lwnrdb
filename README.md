@@ -50,8 +50,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Use ZGC as garbage collector in Docker image. Also recommend using that one when running locally in this file
 - [ ] Integration tests for all possible API commands, including aggregations
 - [ ] Admin operation to rebuild indexes
-- [ ] Sort operation doesn't seem to be faster with indexes
-- [ ] Join operation doesn't seem to be faster with indexes
+- [x] Sort operation doesn't seem to be faster with indexes
+- [x] Join operation doesn't seem to be faster with indexes
 - [x] Remove pending consistency issues with cache, fs and index usage
 - [x] Remove the most impactful consistency issues with cache, fs and index usage
 - [x] Issue when concurrently writing to a field index and trying to read from it (might get wrong values because index is not updated)

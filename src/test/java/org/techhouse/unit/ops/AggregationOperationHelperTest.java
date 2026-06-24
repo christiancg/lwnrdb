@@ -1195,4 +1195,97 @@ public class AggregationOperationHelperTest {
                 .collect(java.util.stream.Collectors.toSet());
         assertEquals(Set.of("s1", "s2", "o1"), ids);
     }
+
+    // Index-backed SORT followed by LIMIT returns only the first N docs in sorted order;
+    // the lazy document-fetch path must not return more than LIMIT elements.
+    @Test
+    public void test_sort_via_index_with_limit_returns_correct_first_n() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "v1", "score", new JsonNumber(50));
+        addDoc(cache, "v2", "score", new JsonNumber(10));
+        addDoc(cache, "v3", "score", new JsonNumber(30));
+        addDoc(cache, "v4", "score", new JsonNumber(20));
+        addDoc(cache, "v5", "score", new JsonNumber(40));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("score", true), new LimitAggregationStep(3)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(3, result.size());
+        assertEquals(10, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(20, result.get(1).get("score").asJsonNumber().asInteger());
+        assertEquals(30, result.get(2).get("score").asJsonNumber().asInteger());
+    }
+
+    // Index-backed SORT descending with LIMIT returns the top-N docs in correct order
+    @Test
+    public void test_sort_via_index_descending_with_limit_returns_top_n() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "w1", "score", new JsonNumber(10));
+        addDoc(cache, "w2", "score", new JsonNumber(50));
+        addDoc(cache, "w3", "score", new JsonNumber(30));
+        addDoc(cache, "w4", "score", new JsonNumber(20));
+        addDoc(cache, "w5", "score", new JsonNumber(40));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("score", false), new LimitAggregationStep(2)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+        assertEquals(50, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(40, result.get(1).get("score").asJsonNumber().asInteger());
+    }
+
+    // Index-backed JOIN where no remote doc matches any local value produces empty joined arrays
+    @Test
+    public void test_join_via_index_no_remote_match_returns_empty_joined_array() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 99);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+
+        addJoinDoc(cache, "j1", 1, "no-match");
+        addJoinDoc(cache, "j2", 2, "also-no");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.JOIN_COLL).setIndexes(Set.of("refKey"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        assertTrue(result.getFirst().has("joined"));
+        // No remote doc matched: joined field is set to null (serialized as JsonNull)
+        assertTrue(result.getFirst().get("joined").isJsonNull());
+    }
+
+    // When the remote field has no index, JOIN falls back to a full collection scan on the remote side
+    @Test
+    public void test_join_without_remote_index_falls_back_to_full_scan() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 5);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+
+        addJoinDoc(cache, "j1", 5, "match");
+        addJoinDoc(cache, "j2", 9, "no-match");
+        // No index on refKey — should fall back to full scan
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        final var joined = result.getFirst().get("joined").asJsonArray();
+        assertEquals(1, joined.size());
+        assertEquals("match", joined.get(0).asJsonObject().get("label").asJsonString().getValue());
+    }
 }

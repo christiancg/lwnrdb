@@ -27,6 +27,8 @@ import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 
 public class IndexHelper {
@@ -295,6 +297,66 @@ public class IndexHelper {
             case String string -> new JsonString(string);
             default -> throw new IllegalStateException("Unexpected index value: " + value);
         };
+    }
+
+    // Inverse of indexValueToElement: converts a JsonBaseElement (local join value) to the raw
+    // Java type used as the key in a field index, so it can be passed to cache.getIdsFromIndex.
+    // Returns null for JsonNull, JsonObject, JsonArray, or unknown types — those callers must skip
+    // the index lookup for that value (null is handled separately; objects/arrays use hash indexes
+    // which are not suitable for exact-key join lookups).
+    public static Object elementToLookupValue(JsonBaseElement element) {
+        if (element == null || element.isJsonNull()) {
+            return null;
+        }
+        if (element.isJsonPrimitive()) {
+            return switch (element.asJsonPrimitive()) {
+                case JsonCustom<?> c -> c;
+                case JsonNumber n -> n.getValue();
+                case JsonBoolean b -> b.getValue();
+                case JsonString s -> s.getValue();
+                default -> null;
+            };
+        }
+        return null;
+    }
+
+    // Targeted index lookup for a JOIN: returns the set of ids in the remote collection whose
+    // remoteField equals any value in localValues, using one binary-search-backed getIdsFromIndex
+    // call per distinct local value instead of deep-copying every index entry. Returns null when
+    // the field has no index so the caller can fall back to the full-scan path. Pending writes are
+    // reconciled by re-testing each pending document against the local value set.
+    public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
+            Set<JsonBaseElement> localValues) throws IOException {
+        if (!cache.hasIndex(dbName, collName, fieldName)) {
+            return null;
+        }
+        final var matchingIds = new HashSet<String>();
+        for (var localValue : localValues) {
+            if (localValue.isJsonNull()) {
+                continue; // null-keyed joins are not index-backed
+            }
+            final var lookupValue = elementToLookupValue(localValue);
+            if (lookupValue == null) {
+                continue; // object/array-valued local key - skip index lookup
+            }
+            final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
+            final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);
+            if (ids != null) {
+                matchingIds.addAll(ids);
+            }
+        }
+        final var pendingIds = pendingIndexWrites.idsFor(dbName, collName);
+        for (var pendingId : pendingIds) {
+            for (var doc : cache.getEntriesByIds(dbName, collName, Set.of(pendingId))) {
+                if (JsonUtils.hasInPath(doc.getData(), fieldName)) {
+                    final var val = JsonUtils.getFromPath(doc.getData(), fieldName);
+                    if (localValues.contains(val)) {
+                        matchingIds.add(pendingId);
+                    }
+                }
+            }
+        }
+        return matchingIds;
     }
 
     // Field indexes persist numbers as doubles, but documents represent integral numbers as
