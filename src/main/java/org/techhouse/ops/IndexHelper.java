@@ -240,8 +240,20 @@ public class IndexHelper {
                 continue;
             }
             final var element = JsonUtils.getFromPath(data, fieldName);
-            if (!element.isJsonPrimitive() || element.isJsonNull()) {
+            if (!element.isJsonPrimitive() && !element.isJsonNull()) {
                 return false;
+            }
+            if (element.isJsonNull()) {
+                final var nullEntry = byValue.get(JsonNull.INSTANCE);
+                if (nullEntry != null) {
+                    nullEntry.getIds().add(dbEntry.get_id());
+                } else {
+                    final var newEntry = new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE,
+                            new HashSet<>(Set.of(dbEntry.get_id())));
+                    combined.add(newEntry);
+                    byValue.put(JsonNull.INSTANCE, newEntry);
+                }
+                continue;
             }
             final var existing = byValue.get(element);
             if (existing != null) {

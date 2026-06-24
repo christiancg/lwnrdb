@@ -518,6 +518,30 @@ public class IndexHelperTest {
         assertEquals(Set.of("o1", "o2", "o3"), allIds);
     }
 
+    // reconcilePending must handle a pending document with a null field value without forcing a
+    // full-scan fallback: getIndexEntriesForField must return non-null and include the null-valued id.
+    @Test
+    public void test_reconcilePending_null_value_does_not_force_full_scan() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        // One already-indexed doc with a scalar value and one pending doc with null.
+        final var indexed = entryWith("s1", "status", new JsonString("active"));
+        final var pending = entryWith("n1", "status", JsonNull.INSTANCE);
+        setupCollection(cache, indexed, pending);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
+
+        // Mark "n1" as pending so reconcilePending is triggered.
+        final var pendingWrites = IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
+        pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "n1");
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+
+        assertNotNull(entries, "null-valued pending doc must not force a full-scan fallback (null result)");
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(allIds.contains("n1"), "id of the null-valued pending doc must appear in the reconciled result");
+    }
+
     // getIndexEntriesForField groups docs with identical object values into one entry
     @Test
     public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry() throws IOException {
