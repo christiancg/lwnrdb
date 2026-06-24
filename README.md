@@ -52,7 +52,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Admin operation to rebuild indexes
 - [ ] Sort operation doesn't seem to be faster with indexes
 - [ ] Join operation doesn't seem to be faster with indexes
-- [ ] Remove pending consistency issues with cache, fs and index usage
+- [x] Remove pending consistency issues with cache, fs and index usage
 - [x] Remove the most impactful consistency issues with cache, fs and index usage
 - [x] Issue when concurrently writing to a field index and trying to read from it (might get wrong values because index is not updated)
 - [x] Index usage for object and array fields (element-match via hashed object/array indexes; `FILTER` `EQUALS`/`NOT_EQUALS`/`IN`/`NOT_IN` only)
