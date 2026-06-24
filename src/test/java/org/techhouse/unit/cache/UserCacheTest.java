@@ -489,7 +489,8 @@ public class UserCacheTest {
     public void test_evict_database_success() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
         String dbName = "testDb";
-        String collectionName = dbName + "_collection";
+        String collectionName = "myCollection";
+        String collId = Cache.getCollectionIdentifier(dbName, collectionName);
 
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100, 0);
         DbEntry dbEntry = new DbEntry();
@@ -501,8 +502,8 @@ public class UserCacheTest {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
-        pkIndexMap.put(collectionName, List.of(pkIndexEntry));
-        collectionMap.put(collectionName, Map.of("key", dbEntry));
+        pkIndexMap.put(collId, List.of(pkIndexEntry));
+        collectionMap.put(collId, Map.of("key", dbEntry));
 
         cache.evictDatabase(dbName);
 
@@ -510,12 +511,13 @@ public class UserCacheTest {
         assertTrue(collectionMap.isEmpty());
     }
 
-    // Evicts collections when the database name is an empty string
+    // Empty db name is invalid (< 3 chars per constraints); verify it still evicts only its own entries.
     @Test
     public void test_evict_database_empty_string() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
         String dbName = "";
-        String collectionName = dbName + "_collection";
+        String collectionName = "someColl";
+        String collId = Cache.getCollectionIdentifier(dbName, collectionName);
 
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100, 0);
         DbEntry dbEntry = new DbEntry();
@@ -527,8 +529,8 @@ public class UserCacheTest {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
-        pkIndexMap.put(collectionName, List.of(pkIndexEntry));
-        collectionMap.put(collectionName, Map.of("key", dbEntry));
+        pkIndexMap.put(collId, List.of(pkIndexEntry));
+        collectionMap.put(collId, Map.of("key", dbEntry));
 
         cache.evictDatabase(dbName);
 
@@ -1244,6 +1246,74 @@ public class UserCacheTest {
         // An id absent from the PK index resolves to nothing, so no targeted read happens.
         assertTrue(result.isEmpty());
         verify(fsMock, never()).getByIndexEntries(anyList());
+    }
+
+    // evictDatabase("foo") must not touch a sibling database whose name starts with "foo".
+    @Test
+    public void test_evictDatabase_does_not_evict_sibling_database()
+            throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        final var collIdFoo = Cache.getCollectionIdentifier("foo", "coll1");
+        final var collIdFoobar = Cache.getCollectionIdentifier("foobar", "coll2");
+
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+
+        pkIndexMap.put(collIdFoo, List.of(new PkIndexEntry("foo", "coll1", "1", 0, 10, 0)));
+        pkIndexMap.put(collIdFoobar, List.of(new PkIndexEntry("foobar", "coll2", "2", 0, 10, 0)));
+        collectionMap.put(collIdFoo, new ConcurrentHashMap<>());
+        collectionMap.put(collIdFoobar, new ConcurrentHashMap<>());
+
+        cache.evictDatabase("foo");
+
+        assertFalse(pkIndexMap.containsKey(collIdFoo), "foo|coll1 should have been evicted");
+        assertFalse(collectionMap.containsKey(collIdFoo), "foo|coll1 should have been evicted");
+        assertTrue(pkIndexMap.containsKey(collIdFoobar), "foobar|coll2 must not be evicted");
+        assertTrue(collectionMap.containsKey(collIdFoobar), "foobar|coll2 must not be evicted");
+    }
+
+    // getEntriesByIds must pass a detached PkIndexEntry copy to FileSystem so a concurrent
+    // shiftPkPositionsAfterCompaction cannot move the offset between resolution and the read.
+    @Test
+    public void test_getEntriesByIds_returns_detached_pk_copy() throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var livePk = new PkIndexEntry("userDb", "c1", "id1", 100L, 50, 0);
+        injectPkIndex(cache, collId, List.of(livePk));
+
+        final var readObj = new JsonObject();
+        readObj.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
+
+        // Simulate a compaction shifting the live entry's position after getEntriesByIds resolves it.
+        final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
+
+        cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+
+        //noinspection unchecked
+        verify(fsMock).getByIndexEntries(captor.capture());
+        //noinspection unchecked
+        final List<PkIndexEntry> requested = captor.getValue();
+        assertEquals(1, requested.size());
+        // The entry passed to FileSystem must be a different object than the live cached entry.
+        assertNotSame(livePk, requested.getFirst());
+        // And it must carry the original position (100), not any post-compaction value.
+        assertEquals(100L, requested.getFirst().getPosition());
+
+        // Now simulate a compaction that moves the live entry.
+        livePk.setPosition(50L);
+        // The copy already passed to FileSystem is unaffected.
+        assertEquals(100L, requested.getFirst().getPosition());
     }
 
 }

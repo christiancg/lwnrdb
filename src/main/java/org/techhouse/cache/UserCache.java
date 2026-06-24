@@ -440,15 +440,15 @@ public class UserCache {
             return result;
         }
         final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
-        // Snapshot the resolved PkIndexEntry references. They are immutable value carriers,
-        // so reading against this snapshot is unaffected by a concurrent write that shifts
-        // offsets mid-read; read/write isolation for aggregates is a separate, pre-existing
-        // concern (the aggregate path already reads lock-free).
+        // toRead holds detached copies so a concurrent shiftPkPositionsAfterCompaction
+        // (which mutates position in place) cannot move the offset between here and the read.
         final var toRead = new ArrayList<PkIndexEntry>();
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);
             if (pos >= 0) {
-                toRead.add(pkIndex.get(pos));
+                final var e = pkIndex.get(pos);
+                toRead.add(new PkIndexEntry(e.getDatabaseName(), e.getCollectionName(), e.getValue(), e.getPosition(),
+                        e.getLength(), e.getPage()));
             }
         }
         if (toRead.isEmpty()) {
@@ -480,7 +480,9 @@ public class UserCache {
     }
 
     public void evictDatabase(String dbName) {
-        final var toRemove = collectionMap.keySet().stream().filter(s -> s.startsWith(dbName)).toList();
+        // Keys are "db|coll"; append the separator so "foo" does not match "foobar|...".
+        final var toRemove = collectionMap.keySet().stream()
+                .filter(s -> s.startsWith(dbName + Globals.COLL_IDENTIFIER_SEPARATOR)).toList();
         for (var entryKeyToRemove : toRemove) {
             pkIndexMap.remove(entryKeyToRemove);
             collectionMap.remove(entryKeyToRemove);
