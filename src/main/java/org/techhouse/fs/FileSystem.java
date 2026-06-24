@@ -765,17 +765,39 @@ public class FileSystem {
                 } finally {
                     lock.unlock();
                 }
-                return lines.stream().map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, indexType))
-                        .sorted((o1, o2) -> switch ((Object) o1.getValue()) {
-                            case Number n -> Double.compare(n.doubleValue(), ((Number) o2.getValue()).doubleValue());
-                            case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
-                            case JsonCustom<?> c -> {
-                                final var customClass = c.getClass();
-                                //noinspection unchecked
-                                yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
-                            }
-                            default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
-                        }).collect(Collectors.toList());
+                // Field index files are written non-atomically (append / in-place rewrite), so a crash
+                // mid-write can leave a torn final line. Skip-and-log malformed lines and self-heal the
+                // file, mirroring readWholePkIndexFile, instead of letting one bad line fail every read.
+                final var entries = new ArrayList<FieldIndexEntry<T>>();
+                final var keepLines = new ArrayList<String>();
+                var dropped = false;
+                for (var line : lines) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        entries.add(FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, indexType));
+                        keepLines.add(line);
+                    } catch (Exception e) {
+                        dropped = true;
+                        logger.warning("Removing malformed field index entry in " + indexFile.getName() + ": "
+                                + e.getMessage());
+                    }
+                }
+                if (dropped) {
+                    rewriteFileAtomically(indexFile.toPath(), keepLines);
+                }
+                entries.sort((o1, o2) -> switch ((Object) o1.getValue()) {
+                    case Number n -> Double.compare(n.doubleValue(), ((Number) o2.getValue()).doubleValue());
+                    case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
+                    case JsonCustom<?> c -> {
+                        final var customClass = c.getClass();
+                        //noinspection unchecked
+                        yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
+                    }
+                    default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
+                });
+                return entries;
             }
         }
         return null;
@@ -797,10 +819,29 @@ public class FileSystem {
                 } finally {
                     lock.unlock();
                 }
-                return lines.stream().filter(s -> !s.isBlank())
-                        .map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, String.class))
-                        .sorted(Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase))
-                        .collect(Collectors.toList());
+                // Hash index files are written non-atomically, so self-heal a torn line rather than
+                // failing the whole read (see readWholeFieldIndexFiles / readWholePkIndexFile).
+                final var entries = new ArrayList<FieldIndexEntry<String>>();
+                final var keepLines = new ArrayList<String>();
+                var dropped = false;
+                for (var line : lines) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        entries.add(FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, String.class));
+                        keepLines.add(line);
+                    } catch (Exception e) {
+                        dropped = true;
+                        logger.warning("Removing malformed hash index entry in " + indexFile.getName() + ": "
+                                + e.getMessage());
+                    }
+                }
+                if (dropped) {
+                    rewriteFileAtomically(indexFile.toPath(), keepLines);
+                }
+                entries.sort(Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase));
+                return entries;
             }
         }
         return null;

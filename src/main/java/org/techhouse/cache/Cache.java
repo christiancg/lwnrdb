@@ -152,16 +152,14 @@ public class Cache {
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var wholeCollection = userCache.getCachedCollection(dbName, collName);
-        final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null) {
-            if (wholeCollection != null && !wholeCollection.isEmpty()) {
-                return wholeCollection;
-            }
-        } else if (wholeCollection != null && !wholeCollection.isEmpty()) {
-            final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-            if (wholeCollection.size() >= entryCount) {
-                return wholeCollection;
-            }
+        // The completeness gate uses the synchronously-maintained PK index size as the authoritative
+        // document count, NOT the admin page entry counts: those are updated by the background worker
+        // and lag behind committed writes, so under memory pressure (when a freshly inserted document
+        // is not admitted into the cache) a stale low entry count could wrongly accept an incomplete
+        // cached map. The PK index is written synchronously on every save/delete (see CountOperatorHelper).
+        if (wholeCollection != null && !wholeCollection.isEmpty()
+                && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+            return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
@@ -171,18 +169,22 @@ public class Cache {
         }
     }
 
+    // The exact, currently-consistent document count from the synchronously-maintained PK index.
+    private int pkIndexSize(String dbName, String collName) {
+        try {
+            return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty()) {
-                final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-                if (collPages == null) {
-                    return cached.values().stream();
-                }
-                final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-                if (cached.size() >= entryCount) {
-                    return cached.values().stream();
-                }
+            // See getWholeCollection: gate on the synchronous PK index size, not the lagging admin
+            // page entry counts, so a stale count can never accept an incomplete cached collection.
+            if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
+                return cached.values().stream();
             }
         }
         return streamCollectionFromDisk(dbName, collName);

@@ -281,6 +281,11 @@ public final class AdminOperationHelper {
     }
 
     public static void saveCollectionEntry(AdminCollEntry dbEntry) throws IOException, InterruptedException {
+        // This method also mutates the parent AdminDbEntry (the database's collection list) in the
+        // admin/databases collection, so it must hold the databases lock too — otherwise it races a
+        // concurrent saveDatabaseEntry/deleteDatabaseEntry that owns only that lock. Acquire databases
+        // before collections to match deleteDatabaseEntry's lock order (reentrant, deadlock-safe).
+        lockAdminDatabaseCollection();
         lockAdminCollectionsCollection();
         try {
             var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(dbEntry.get_id());
@@ -313,6 +318,7 @@ public final class AdminOperationHelper {
                     List.of(adminDbEntry));
         } finally {
             releaseAdminCollectionsCollection();
+            releaseAdminDatabaseCollection();
         }
     }
 
@@ -320,6 +326,10 @@ public final class AdminOperationHelper {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
         if (adminIndexPkCollEntry != null) {
+            // Also mutates the parent AdminDbEntry in admin/databases; hold the databases lock too,
+            // acquired before collections to match deleteDatabaseEntry's order (reentrant when this
+            // is called from deleteDatabaseEntry, which already holds the databases lock).
+            lockAdminDatabaseCollection();
             lockAdminCollectionsCollection();
             try {
                 final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
@@ -342,6 +352,7 @@ public final class AdminOperationHelper {
                         List.of(adminDbEntry));
             } finally {
                 releaseAdminCollectionsCollection();
+                releaseAdminDatabaseCollection();
             }
         }
     }

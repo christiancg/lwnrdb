@@ -125,6 +125,36 @@ public class AdminOperationHelperTest {
         assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "tempColl"));
     }
 
+    // saveCollectionEntry also mutates the parent AdminDbEntry in admin/databases, so it now holds the
+    // databases lock too; both that lock and the admin/collections lock must be released when it returns.
+    @Test
+    public void test_save_collection_entry_releases_databases_and_collections_locks() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "lockProbeColl"));
+
+        assertTrue(locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME),
+                "admin/databases lock must be released after saveCollectionEntry");
+        locks.releaseWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        assertTrue(locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME),
+                "admin/collections lock must be released after saveCollectionEntry");
+        locks.releaseWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+    }
+
+    // deleteCollectionEntry likewise touches admin/databases under both locks and must release both.
+    @Test
+    public void test_delete_collection_entry_releases_databases_and_collections_locks() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "lockProbeColl2"));
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, "lockProbeColl2");
+
+        assertTrue(locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME),
+                "admin/databases lock must be released after deleteCollectionEntry");
+        locks.releaseWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        assertTrue(locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME),
+                "admin/collections lock must be released after deleteCollectionEntry");
+        locks.releaseWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+    }
+
     @Test
     public void test_upsert_collection_usage_creates_then_updates() throws Exception {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
