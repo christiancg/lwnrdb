@@ -72,7 +72,13 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
+                .collect(Collectors.groupingBy(jsonObject -> {
+                    final var id = jsonObject.get(Globals.PK_FIELD);
+                    if (id == null) {
+                        throw new IllegalStateException("Document missing _id in conjunction grouping");
+                    }
+                    return id;
+                })).entrySet().stream()
                 .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream()).distinct();
     }
@@ -88,9 +94,13 @@ public class FilterOperatorHelper {
             // collection, so it loads the whole collection rather than streaming.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined)
-                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
-                .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
+        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> {
+            final var id = jsonObject.get(Globals.PK_FIELD);
+            if (id == null) {
+                throw new IllegalStateException("Document missing _id in conjunction grouping");
+            }
+            return id;
+        })).entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
     }
 

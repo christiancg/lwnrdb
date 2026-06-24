@@ -184,7 +184,6 @@ public class FileSystem {
         entry.setDatabaseName(pkIndexEntry.getDatabaseName());
         entry.setCollectionName(pkIndexEntry.getCollectionName());
         entry.set_id(pkIndexEntry.getValue());
-        jsonObject.remove(Globals.PK_FIELD);
         entry.setData(jsonObject);
         return entry;
     }
