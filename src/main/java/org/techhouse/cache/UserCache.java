@@ -486,6 +486,7 @@ public class UserCache {
         for (var entryKeyToRemove : toRemove) {
             pkIndexMap.remove(entryKeyToRemove);
             collectionMap.remove(entryKeyToRemove);
+            fieldIndexMap.remove(entryKeyToRemove);
         }
     }
 
@@ -493,6 +494,7 @@ public class UserCache {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         pkIndexMap.remove(collIdentifier);
         collectionMap.remove(collIdentifier);
+        fieldIndexMap.remove(collIdentifier);
     }
 
     public void evictCollectionDocuments(String dbName, String collName) {
