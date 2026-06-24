@@ -133,19 +133,31 @@ public final class AggregationOperationHelper {
                 });
     }
 
-    // Index-backed GROUP_BY: the field index already maps each value to the set of matching ids, so
-    // we fetch each group's documents by id (positioned reads) instead of scanning and grouping the
-    // whole collection in memory.
+    // Index-backed GROUP_BY: the field index already maps each value to the set of matching ids.
+    // All group IDs are collected into a single batch fetch (one cache/IO pass) rather than one
+    // getEntriesByIds call per group, then the resulting documents are bucketed by their group.
     private static Stream<JsonObject> groupByViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
             String collName, String fieldName) throws IOException {
+        final var allIds = new HashSet<String>();
+        for (var indexEntry : indexEntries) {
+            allIds.addAll(indexEntry.getIds());
+        }
+        final var docById = new HashMap<String, JsonObject>();
+        for (var dbEntry : cache.getEntriesByIds(dbName, collName, allIds)) {
+            docById.put(dbEntry.get_id(), dbEntry.getData());
+        }
         final var grouped = new ArrayList<JsonObject>();
         for (var indexEntry : indexEntries) {
-            final var docs = cache.getEntriesByIds(dbName, collName, indexEntry.getIds());
-            if (docs.isEmpty()) {
+            final var values = new JsonArray();
+            for (var id : indexEntry.getIds()) {
+                final var doc = docById.get(id);
+                if (doc != null) {
+                    values.add(doc);
+                }
+            }
+            if (values.isEmpty()) {
                 continue;
             }
-            final var values = new JsonArray();
-            docs.forEach(dbEntry -> values.add(dbEntry.getData()));
             final var groupedEntry = new JsonObject();
             groupedEntry.add(fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
             groupedEntry.add(GROUP_FIELD_NAME, values);
@@ -282,24 +294,23 @@ public final class AggregationOperationHelper {
     }
 
     // Index-backed SORT: index entries are sorted with an allocation-free comparator (no JsonObject
-    // wrapper per comparison), then documents are fetched lazily one-by-one so a downstream LIMIT
-    // only triggers as many reads as it needs (e.g. SORT+LIMIT 10 fetches only 10 docs).
+    // wrapper per comparison), then IDs are traversed and documents fetched lazily so a downstream
+    // LIMIT only triggers as many id-iterations and reads as it needs (e.g. SORT+LIMIT 10 stops
+    // after the first 10 ids, never traversing the remaining 8000).
     private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
             String collName, boolean ascending) {
         final var sortedEntries = new ArrayList<>(indexEntries);
         sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
-        final var orderedIds = new ArrayList<String>();
-        for (var entry : sortedEntries) {
-            orderedIds.addAll(entry.getIds());
-        }
-        return orderedIds.stream().map(id -> {
-            try {
-                final var docs = cache.getEntriesByIds(dbName, collName, Set.of(id));
-                return docs.isEmpty() ? null : docs.getFirst().getData();
-            } catch (IOException e) {
-                throw new java.io.UncheckedIOException(e);
-            }
-        }).filter(Objects::nonNull);
+        return sortedEntries.stream()
+                .flatMap(entry -> entry.getIds().stream())
+                .map(id -> {
+                    try {
+                        final var docs = cache.getEntriesByIds(dbName, collName, Set.of(id));
+                        return docs.isEmpty() ? null : docs.getFirst().getData();
+                    } catch (IOException e) {
+                        throw new java.io.UncheckedIOException(e);
+                    }
+                }).filter(Objects::nonNull);
     }
 
     // Allocation-free comparator for raw FieldIndexEntry values. Handles all stored value kinds
