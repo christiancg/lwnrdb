@@ -225,6 +225,34 @@ public class FileSystemTest {
         assertEquals("test", result.getData().get("name").asJsonString().getValue());
     }
 
+    @Test
+    public void test_getById_data_contains_id_field() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createBaseDbPath();
+        fileSystem.createAdminDatabase();
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        String id = "abc123";
+        JsonObject data = new JsonObject();
+        data.addProperty("value", "hello");
+        data.addProperty(Globals.PK_FIELD, id);
+        DbEntry dbEntry = new DbEntry();
+        dbEntry.setDatabaseName(TestGlobals.DB);
+        dbEntry.setCollectionName(TestGlobals.COLL);
+        dbEntry.setData(data);
+        dbEntry.set_id(id);
+        PkIndexEntry indexEntry = fileSystem.insertIntoCollection(dbEntry);
+
+        DbEntry result = fileSystem.getById(indexEntry);
+
+        assertNotNull(result);
+        assertTrue(result.getData().has(Globals.PK_FIELD), "_id must be present in getData() for positioned reads");
+        assertEquals(id, result.getData().get(Globals.PK_FIELD).asJsonString().getValue());
+        assertEquals(id, result.get_id());
+    }
+
     // Successfully inserts multiple DbEntry objects into collection file
     @Test
     public void test_bulk_insert_multiple_entries_success()
