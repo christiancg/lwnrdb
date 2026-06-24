@@ -188,6 +188,22 @@ public class AdminOperationHelperTest {
         assertNull(cache.getPkIndexCollectionUsage(id));
     }
 
+    // A usage event for a collection that has since been dropped must not recreate a usage row.
+    @Test
+    public void test_upsert_collection_usage_skips_when_collection_dropped() throws Exception {
+        final var droppedDb = "droppedUsageDb";
+        final var droppedColl = "droppedUsageColl";
+        // Do not register the collection — getCollectionEntry returns null, simulating a dropped state.
+        final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
+        mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, droppedDb, droppedColl, null);
+        final var event = new org.techhouse.bckg_ops.events.CollectionUsageEvent(
+                org.techhouse.cache.AccessKind.COLLECTION, droppedDb, droppedColl, null, System.currentTimeMillis());
+        AdminOperationHelper.upsertCollectionUsage(event);
+        final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(droppedDb, droppedColl, "");
+        Cache cache = IocContainer.get(Cache.class);
+        assertNull(cache.getPkIndexCollectionUsage(id), "no usage row must be written for a dropped collection");
+    }
+
     @Test
     public void test_cleanup_collection_usage_removes_stale_only() throws Exception {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
