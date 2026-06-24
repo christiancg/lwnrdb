@@ -447,6 +447,9 @@ public final class AdminOperationHelper {
         if (Globals.ADMIN_DB_NAME.equals(event.getDbName())) {
             return;
         }
+        if (getCollectionEntry(event.getDbName(), event.getCollName()) == null) {
+            return;
+        }
         memoryManagement.recordAccess(event.getKind(), event.getDbName(), event.getCollName(), event.getIndexKey());
         final var counter = memoryManagement.getCounter(event.getKind(), event.getDbName(), event.getCollName(),
                 event.getIndexKey());
