@@ -747,9 +747,9 @@ public class AggregationOperationHelperTest {
     }
 
     // Option B: documents whose indexed field holds an object/array are not in the index, so an
-    // index-backed DISTINCT does not include them
+    // index-backed DISTINCT includes both scalar and object-valued docs on a mixed-type field
     @Test
-    public void test_object_valued_field_excluded_from_indexed_distinct() throws IOException {
+    public void test_object_valued_field_included_in_indexed_distinct() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "o1", "data", new JsonString("scalar"));
         final var objVal = new JsonObject();
@@ -761,8 +761,11 @@ public class AggregationOperationHelperTest {
         req.setAggregationSteps(List.of(new DistinctAggregationStep("data")));
         final var result = AggregationOperationHelper.processAggregation(req);
 
-        assertEquals(1, result.size());
-        assertEquals("scalar", result.getFirst().get("data").asJsonString().getValue());
+        assertEquals(2, result.size());
+        final var hasScalar = result.stream().anyMatch(r -> r.get("data") != null && r.get("data").isJsonString());
+        final var hasObject = result.stream().anyMatch(r -> r.get("data") != null && r.get("data").isJsonObject());
+        assertTrue(hasScalar);
+        assertTrue(hasObject);
     }
 
     // An indexed step on an empty collection returns no results
@@ -1124,5 +1127,72 @@ public class AggregationOperationHelperTest {
                 new LimitAggregationStep(1), new CountAggregationStep()));
 
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // GROUP_BY on a mixed scalar+object indexed field includes object-valued docs in the result
+    @Test
+    public void test_group_by_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "meta", new JsonString("plain"));
+        addDoc(cache, "s2", "meta", new JsonString("plain"));
+        final var obj = new JsonObject();
+        obj.addProperty("key", "val");
+        addDoc(cache, "o1", "meta", obj);
+        enableIndex(cache, "meta");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("meta")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        final var allDocIds = new java.util.HashSet<String>();
+        for (var g : result) {
+            final var group = g.get("group");
+            if (group != null && group.isJsonArray()) {
+                for (var el : group.asJsonArray()) {
+                    allDocIds.add(el.asJsonObject().get(Globals.PK_FIELD).asJsonString().getValue());
+                }
+            }
+        }
+        assertEquals(Set.of("s1", "s2", "o1"), allDocIds);
+    }
+
+    // DISTINCT on a mixed scalar+object indexed field includes the object value in the result
+    @Test
+    public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "meta", new JsonString("plain"));
+        final var obj = new JsonObject();
+        obj.addProperty("key", "val");
+        addDoc(cache, "o1", "meta", obj);
+        enableIndex(cache, "meta");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("meta")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+        final var hasObjectValue = result.stream().anyMatch(r -> r.get("meta") != null && r.get("meta").isJsonObject());
+        assertTrue(hasObjectValue);
+    }
+
+    // SORT on a mixed scalar+object indexed field includes all docs (scalar and object-valued)
+    @Test
+    public void test_sort_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "meta", new JsonString("alpha"));
+        addDoc(cache, "s2", "meta", new JsonString("beta"));
+        final var obj = new JsonObject();
+        obj.addProperty("k", 1);
+        addDoc(cache, "o1", "meta", obj);
+        enableIndex(cache, "meta");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("meta", true)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(3, result.size());
+        final var ids = result.stream().map(r -> r.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("s1", "s2", "o1"), ids);
     }
 }

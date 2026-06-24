@@ -124,15 +124,20 @@ public class IndexHelper {
     //
     // The entries are loaded under the field's index read lock and returned as deep copies (the id
     // sets are copied) so the background index writer can never mutate a set a consumer is iterating.
+    // Object/array-valued documents are also included: their IDs are collected from the OBJECT/ARRAY
+    // hash indexes (under the same lock), then their actual field values are fetched via targeted
+    // positioned reads and merged in as FieldIndexEntry<JsonBaseElement> entries. This ensures
+    // GROUP_BY / SORT / DISTINCT see all documents on a mixed scalar+object/array field.
     // Documents committed but not yet indexed are reconciled in via reconcilePending so these steps
     // are consistent with the actual documents; a pending document whose value falls outside the
-    // scalar/custom scope these steps support forces a null return (full-scan fallback).
+    // scalar/custom scope forces a null return (full-scan fallback).
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
             throws IOException {
         if (!cache.hasIndex(dbName, collName, fieldName)) {
             return null;
         }
         final List<FieldIndexEntry<?>> combined = new ArrayList<>();
+        final Set<String> hashIds = new HashSet<>();
         try {
             rl.lockIndexRead(dbName, collName, fieldName);
         } catch (InterruptedException e) {
@@ -146,8 +151,19 @@ public class IndexHelper {
             for (var customType : CustomTypeFactory.getCustomTypes().values()) {
                 addEntriesOfType(combined, dbName, collName, fieldName, customType);
             }
+            for (var kind : HASH_INDEX_KINDS) {
+                final var hashEntries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+                if (hashEntries != null) {
+                    for (var entry : hashEntries) {
+                        hashIds.addAll(entry.getIds());
+                    }
+                }
+            }
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
+        }
+        if (!hashIds.isEmpty()) {
+            addHashIndexEntries(combined, dbName, collName, fieldName, hashIds);
         }
         // Snapshot pending ids AFTER the index read so any write that committed before the read is
         // either already indexed (index accurate) or still pending (covered here).
@@ -162,6 +178,31 @@ public class IndexHelper {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
         return combined;
+    }
+
+    // Fetches the actual documents for all object/array-valued ids collected from the hash indexes,
+    // groups them by their real field value, and appends one FieldIndexEntry<JsonBaseElement> per
+    // distinct value to combined. Called after the index read lock is released, following the same
+    // lock-free getEntriesByIds pattern used by reconcilePending.
+    private static void addHashIndexEntries(List<FieldIndexEntry<?>> combined, String dbName, String collName,
+            String fieldName, Set<String> hashIds) throws IOException {
+        final var docs = cache.getEntriesByIds(dbName, collName, hashIds);
+        final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<JsonBaseElement>>();
+        for (var doc : docs) {
+            final var data = doc.getData();
+            if (!JsonUtils.hasInPath(data, fieldName)) {
+                continue;
+            }
+            final var value = JsonUtils.getFromPath(data, fieldName);
+            if (!value.isJsonObject() && !value.isJsonArray()) {
+                continue;
+            }
+            byValue.computeIfAbsent(value, v -> {
+                final var entry = new FieldIndexEntry<>(dbName, collName, v, new HashSet<>());
+                combined.add(entry);
+                return entry;
+            }).getIds().add(doc.get_id());
+        }
     }
 
     // Adds deep copies (entry + id set) of a type's cached entries to combined, so the returned list

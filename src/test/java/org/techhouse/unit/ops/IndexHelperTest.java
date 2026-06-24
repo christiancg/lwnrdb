@@ -446,4 +446,90 @@ public class IndexHelperTest {
         assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(null));
         assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(JsonNull.INSTANCE));
     }
+
+    // getIndexEntriesForField on a mixed scalar+object field returns entries for all docs
+    @Test
+    public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("s1", "data", new JsonString("hello")),
+                entryWith("s2", "data", new JsonString("world")), entryWith("o1", "data", objectValue(1)),
+                entryWith("o2", "data", objectValue(2)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("s1", "s2", "o1", "o2"), allIds);
+        // The object-valued entries carry actual JsonObject values, not hash strings
+        final var hasObjectEntry = entries.stream()
+                .anyMatch(e -> e.getValue() instanceof JsonBaseElement el && el.isJsonObject());
+        assertTrue(hasObjectEntry);
+    }
+
+    // getIndexEntriesForField on a mixed scalar+array field returns entries for all docs
+    @Test
+    public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("s1", "data", new JsonNumber(42)),
+                entryWith("a1", "data", arrayValue("x", "y")), entryWith("a2", "data", arrayValue("z")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("s1", "a1", "a2"), allIds);
+    }
+
+    // getIndexEntriesForField on a pure scalar field still returns scalar entries (regression)
+    @Test
+    public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("n1", "score", new JsonNumber(10)),
+                entryWith("n2", "score", new JsonNumber(20)), entryWith("n3", "score", new JsonNumber(10)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("score"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "score");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("n1", "n2", "n3"), allIds);
+    }
+
+    // getIndexEntriesForField on a pure object field returns actual-value entries (not null)
+    @Test
+    public void test_getIndexEntriesForField_pure_object_field_returns_entries() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(1)), entryWith("o2", "data", objectValue(1)),
+                entryWith("o3", "data", objectValue(2)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        // Two distinct object values: {n:1} (ids o1, o2) and {n:2} (id o3)
+        assertEquals(2, entries.size());
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o1", "o2", "o3"), allIds);
+    }
+
+    // getIndexEntriesForField groups docs with identical object values into one entry
+    @Test
+    public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(5)), entryWith("o2", "data", objectValue(5)),
+                entryWith("o3", "data", objectValue(5)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        assertEquals(1, entries.size());
+        assertEquals(Set.of("o1", "o2", "o3"), entries.getFirst().getIds());
+    }
 }
