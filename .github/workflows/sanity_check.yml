@@ -54,17 +54,29 @@ jobs:
         run: |
           # Index gains are only visible when reads hit disk, so this suite runs
           # against its own server with caching disabled (maxMemory=-1) in an
-          # isolated working directory, on the same port 8989. Stop the shared
-          # server first to free the port; the cache-warmup benchmark later
-          # starts its own server from the repo config (caching on), so nothing
-          # downstream depends on the shared server staying up.
+          # isolated working directory, on the same port 8989. The cache-warmup
+          # benchmark later starts its own server from the repo config (caching
+          # on), so nothing downstream depends on the shared server staying up.
+          #
+          # Stop the shared server AND wait for it to release port 8989 before
+          # starting ours: pkill is asynchronous, so connecting too early can land
+          # on the dying shared server and get reset ("Connection reset by peer").
           pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
+          for _ in $(seq 1 50); do nc -z 127.0.0.1 8989 2>/dev/null || break; sleep 0.2; done
           mkdir -p ci-nocache
           sed -e 's/^maxMemory=.*/maxMemory=-1/' \
               -e 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' \
               lwnrdb.cfg > ci-nocache/lwnrdb.cfg
           (cd ci-nocache && java -Xmx1g -jar ../target/lwnrdb-1.0-SNAPSHOT.jar > server.log 2>&1 &)
-          until nc -z 127.0.0.1 8989; do sleep 0.2; done
+          # Wait until THIS server reports it is listening (not just that the port
+          # accepts); fail loudly with its log if it never comes up.
+          for _ in $(seq 1 100); do
+            grep -q "listening on port 8989" ci-nocache/server.log 2>/dev/null && break
+            sleep 0.2
+          done
+          if ! grep -q "listening on port 8989" ci-nocache/server.log 2>/dev/null; then
+            echo "::error::caching-disabled server failed to start"; cat ci-nocache/server.log; exit 1
+          fi
           python3 test_utils/test_index_aggregations.py
           pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
       - name: Run TLS integration tests
