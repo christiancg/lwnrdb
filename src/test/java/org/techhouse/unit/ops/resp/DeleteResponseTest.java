@@ -13,7 +13,7 @@ public class DeleteResponseTest {
     @Test
     public void test_create_delete_response_with_ok_status_and_message() {
         String successMessage = "Successfully deleted";
-        DeleteResponse response = new DeleteResponse(OperationStatus.OK, successMessage);
+        DeleteResponse response = new DeleteResponse(successMessage);
 
         assertEquals(OperationType.DELETE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -23,7 +23,7 @@ public class DeleteResponseTest {
     // Create DeleteResponse with null message
     @Test
     public void test_create_delete_response_with_null_message() {
-        DeleteResponse response = new DeleteResponse(OperationStatus.OK, null);
+        DeleteResponse response = new DeleteResponse(null);
 
         assertEquals(OperationType.DELETE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());

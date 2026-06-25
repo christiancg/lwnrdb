@@ -9,6 +9,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
+import org.techhouse.ops.resp.OperationResponse;
 
 public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -16,7 +17,7 @@ public final class DatabaseStatsHelper {
     private DatabaseStatsHelper() {
     }
 
-    public static GetDatabaseStatsResponse processGetDatabaseStats() {
+    public static OperationResponse processGetDatabaseStats() {
         try {
             final var stats = new JsonObject();
             stats.add("memory", buildMemoryStats());
@@ -30,10 +31,9 @@ public final class DatabaseStatsHelper {
             stats.add("totals", buildTotals(totals, dbNames.size()));
             stats.add("databases", dbArray);
 
-            return new GetDatabaseStatsResponse(OperationStatus.OK, "Ok", stats);
+            return new GetDatabaseStatsResponse("Ok", stats);
         } catch (Exception e) {
-            return new GetDatabaseStatsResponse(OperationStatus.ERROR,
-                    "Error while gathering database stats: " + e.getMessage(), null);
+            return new OperationResponse(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS);
         }
     }
 

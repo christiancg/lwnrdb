@@ -15,7 +15,7 @@ public class SaveResponseTest {
         String id = "123abc";
         String message = "Document saved successfully";
 
-        SaveResponse response = new SaveResponse(OperationStatus.OK, message, id);
+        SaveResponse response = new SaveResponse(message, id);
 
         assertEquals(OperationType.SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -29,7 +29,7 @@ public class SaveResponseTest {
         String message = "Document saved with null ID";
         String id = null;
 
-        SaveResponse response = new SaveResponse(OperationStatus.OK, message, id);
+        SaveResponse response = new SaveResponse(message, id);
 
         assertEquals(OperationType.SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -42,7 +42,7 @@ public class SaveResponseTest {
     public void test_getters_and_setters() {
         String id = "123abc";
         String message = "Document saved successfully";
-        SaveResponse response = new SaveResponse(OperationStatus.OK, message, id);
+        SaveResponse response = new SaveResponse(message, id);
 
         // Test getters
         assertEquals(OperationType.SAVE, response.getType());

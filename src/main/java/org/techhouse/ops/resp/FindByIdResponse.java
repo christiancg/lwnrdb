@@ -7,8 +7,8 @@ import org.techhouse.ops.OperationType;
 public class FindByIdResponse extends OperationResponse {
     public JsonObject object;
 
-    public FindByIdResponse(OperationStatus status, String message, JsonObject object) {
-        super(OperationType.FIND_BY_ID, status, message);
+    public FindByIdResponse(String message, JsonObject object) {
+        super(OperationType.FIND_BY_ID, OperationStatus.OK, message);
         this.object = object;
     }
 

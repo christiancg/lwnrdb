@@ -102,11 +102,11 @@ public class OperationProcessorTest {
         FindByIdRequest request = new FindByIdRequest("nonexistentDb", "nonexistentColl");
         request.set_id("123");
 
-        FindByIdResponse response = (FindByIdResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertNotNull(response);
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertNull(response.getObject());
+        assertEquals("404-2", response.getErrorCode());
     }
 
     // Find entries by ID and return results with correct status
@@ -418,11 +418,11 @@ public class OperationProcessorTest {
     public void test_list_collections_unknown_database_returns_not_found() {
         ListCollectionsRequest request = new ListCollectionsRequest("does-not-exist");
 
-        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertNotNull(response);
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertNull(response.getCollections());
+        assertEquals("404-4", response.getErrorCode());
     }
 
     // List collections for admin database returns empty list
@@ -443,10 +443,11 @@ public class OperationProcessorTest {
     public void test_list_collections_blank_database_name_returns_error() {
         ListCollectionsRequest request = new ListCollectionsRequest("");
 
-        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertNotNull(response);
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-1", response.getErrorCode());
     }
 
     // List collections only returns collections of requested database
@@ -510,9 +511,10 @@ public class OperationProcessorTest {
         DeleteRequest request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("no-such-id");
 
-        DeleteResponse response = (DeleteResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-2", response.getErrorCode());
     }
 
     // Aggregate returns NOT_FOUND when no documents match
@@ -522,10 +524,10 @@ public class OperationProcessorTest {
         request.setAggregationSteps(List.of(new FilterAggregationStep(
                 new FieldOperator(FieldOperatorType.EQUALS, "nobody", new JsonString("nope")))));
 
-        AggregateResponse response = (AggregateResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertNull(response.getResults());
+        assertEquals("404-3", response.getErrorCode());
     }
 
     // Bulk save with some already-existing IDs performs updates for those entries
@@ -553,14 +555,15 @@ public class OperationProcessorTest {
         assertTrue(response.getInserted().contains("bulkNew"));
     }
 
-    // Drop index returns error when the collection does not exist
+    // Drop index returns not-found when the collection does not exist
     @Test
     public void test_drop_index_returns_error_for_nonexistent_collection() {
         DropIndexRequest request = new DropIndexRequest(TestGlobals.DB, "noSuchColl", "noSuchField");
 
-        DropIndexResponse response = (DropIndexResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
-        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-6", response.getErrorCode());
     }
 
     // Save an oversized entry returns an error response
@@ -573,9 +576,10 @@ public class OperationProcessorTest {
         obj.add("bigField", new JsonString("x".repeat(1_048_600)));
         request.setObject(obj);
 
-        SaveResponse response = (SaveResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-2", response.getErrorCode());
     }
 
     // Bulk save with duplicate _id values in the same request returns an error
@@ -588,9 +592,10 @@ public class OperationProcessorTest {
         obj2.add(Globals.PK_FIELD, new JsonString("dupId"));
         request.setObjects(List.of(obj1, obj2));
 
-        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-3", response.getErrorCode());
         assertTrue(response.getMessage().contains("dupId"));
     }
 
@@ -603,9 +608,10 @@ public class OperationProcessorTest {
         obj.add("bigField", new JsonString("x".repeat(1_048_600)));
         request.setObjects(List.of(obj));
 
-        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-2", response.getErrorCode());
     }
 
     @Test
@@ -1099,14 +1105,14 @@ public class OperationProcessorTest {
         }
     }
 
-    // REINDEX: returns ERROR when a specified field has no registered index
+    // REINDEX: returns NOT_FOUND when a specified field has no registered index
     @Test
     public void test_reindex_unknown_field_returns_error() {
         ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("noSuchIndex"));
-        ReindexResponse response = (ReindexResponse) processor.processMessage(request);
-        assertEquals(OperationStatus.ERROR, response.getStatus());
-        assertEquals("No index registered for field: noSuchIndex", response.getMessage());
-        assertTrue(response.getRebuiltFields().isEmpty());
+        OperationResponse response = processor.processMessage(request);
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-6", response.getErrorCode());
+        assertTrue(response.getMessage().contains("noSuchIndex"));
     }
 
     // REINDEX: returns OK with empty list when no indexes exist on the collection
