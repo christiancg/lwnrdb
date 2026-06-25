@@ -45,6 +45,7 @@ import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
@@ -64,6 +65,7 @@ import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
 
@@ -151,6 +153,7 @@ public class OperationProcessor {
             case LIST_COLLECTIONS -> processListCollectionsOperation((ListCollectionsRequest) operationRequest);
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
+            case REINDEX -> processReindex((ReindexRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
@@ -645,6 +648,43 @@ public class OperationProcessor {
             }
         } catch (Exception e) {
             return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + e.getMessage());
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
+    private ReindexResponse processReindex(ReindexRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        try {
+            // Hold the collection write lock for the entire rebuild so no concurrent save can commit
+            // between field rebuilds. Admin metadata is not changed — the indexes already exist.
+            // If createIndex throws mid-loop (e.g. disk full), the catch returns ERROR; the operator
+            // can retry once the underlying issue is resolved.
+            locks.lock(dbName, collName);
+            final var registeredIndexes = cache.getIndexesForCollection(dbName, collName);
+            final List<String> targets;
+            if (request.getFieldNames().isEmpty()) {
+                targets = new ArrayList<>(registeredIndexes);
+            } else {
+                for (var fieldName : request.getFieldNames()) {
+                    if (!registeredIndexes.contains(fieldName)) {
+                        return new ReindexResponse(OperationStatus.ERROR, "No index registered for field: " + fieldName,
+                                List.of());
+                    }
+                }
+                targets = request.getFieldNames();
+            }
+            if (targets.isEmpty()) {
+                return new ReindexResponse(OperationStatus.OK, "No indexes to rebuild", List.of());
+            }
+            for (var fieldName : targets) {
+                IndexHelper.dropIndex(dbName, collName, fieldName);
+                IndexHelper.createIndex(dbName, collName, fieldName);
+            }
+            return new ReindexResponse(OperationStatus.OK, "Rebuilt " + targets.size() + " index(es)", targets);
+        } catch (Exception e) {
+            return new ReindexResponse(OperationStatus.ERROR, "Error while reindexing: " + e.getMessage(), List.of());
         } finally {
             locks.release(dbName, collName);
         }

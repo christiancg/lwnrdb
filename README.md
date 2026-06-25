@@ -48,7 +48,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Standardized error messages with error code, following HTTP patterns: 4xx → user error, 5xx → server error, ending with a specific number per error. Ie 401-1 "need to authenticate"
 - [ ] Explain / Analyze with index and query suggestions
 - [ ] Integration tests for all possible API commands, including aggregations
-- [ ] Admin operation to rebuild indexes
+- [x] Admin operation to rebuild indexes
 - [x] Use ZGC as garbage collector in Docker image. Also recommend using that one when running locally in this file
 - [x] Sort operation doesn't seem to be faster with indexes
 - [x] Group by operation isn't meaningfully faster with indexes — it must read every grouped document either way, so an index only helps when the grouped field is sparse (see Memory management → Streaming reads). The fast-path is retained for that sparse case
