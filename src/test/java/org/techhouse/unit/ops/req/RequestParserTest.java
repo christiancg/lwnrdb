@@ -23,6 +23,7 @@ import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -363,6 +364,27 @@ public class RequestParserTest {
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(DropIndexRequest.class, result);
         assertEquals(OperationType.DROP_INDEX, result.getType());
+    }
+
+    // Parse REINDEX request with explicit fieldNames
+    @Test
+    public void test_parse_reindex_request_with_field_names() {
+        String msg = """
+                {"type":"REINDEX","databaseName":"db","collectionName":"coll","fieldNames":["email","status"]}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(ReindexRequest.class, result);
+        assertEquals(OperationType.REINDEX, result.getType());
+        assertEquals(List.of("email", "status"), ((ReindexRequest) result).getFieldNames());
+    }
+
+    // Parse REINDEX request with no fieldNames (rebuild all)
+    @Test
+    public void test_parse_reindex_request_without_field_names() {
+        String msg = """
+                {"type":"REINDEX","databaseName":"db","collectionName":"coll"}""";
+        OperationRequest result = RequestParser.parseRequest(msg);
+        assertInstanceOf(ReindexRequest.class, result);
+        assertTrue(((ReindexRequest) result).getFieldNames().isEmpty());
     }
 
     // Parse CLOSE_CONNECTION request

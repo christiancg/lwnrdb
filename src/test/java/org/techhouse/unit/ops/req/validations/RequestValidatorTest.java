@@ -19,6 +19,7 @@ import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -372,5 +373,42 @@ public class RequestValidatorTest {
     @Test
     public void validate_dropIndex_nullFieldName_returnsFail() {
         assertFalse(RequestValidator.validate(new DropIndexRequest("myDb", "myColl", null)).isValid());
+    }
+
+    // REINDEX
+    @Test
+    public void validate_reindex_noFieldNames_returnsOk() {
+        assertTrue(RequestValidator.validate(new ReindexRequest("myDb", "myColl", null)).isValid());
+    }
+
+    @Test
+    public void validate_reindex_withValidFieldNames_returnsOk() {
+        assertTrue(
+                RequestValidator.validate(new ReindexRequest("myDb", "myColl", List.of("email", "status"))).isValid());
+    }
+
+    @Test
+    public void validate_reindex_blankEntryInFieldNames_returnsFail() {
+        final var result = RequestValidator.validate(new ReindexRequest("myDb", "myColl", List.of("email", " ")));
+        assertFalse(result.isValid());
+        assertEquals("REINDEX fieldNames must not contain blank entries", result.getErrorMessage());
+    }
+
+    @Test
+    public void validate_reindex_nullEntryInFieldNames_returnsFail() {
+        final var names = new java.util.ArrayList<String>();
+        names.add("email");
+        names.add(null);
+        assertFalse(RequestValidator.validate(new ReindexRequest("myDb", "myColl", names)).isValid());
+    }
+
+    @Test
+    public void validate_reindex_nullDatabaseName_returnsFail() {
+        assertFalse(RequestValidator.validate(new ReindexRequest(null, "myColl", null)).isValid());
+    }
+
+    @Test
+    public void validate_reindex_adminDatabase_returnsFail() {
+        assertFalse(RequestValidator.validate(new ReindexRequest("admin", "myColl", null)).isValid());
     }
 }

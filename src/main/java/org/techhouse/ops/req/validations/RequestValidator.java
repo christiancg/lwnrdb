@@ -18,6 +18,7 @@ import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
@@ -44,6 +45,7 @@ public class RequestValidator {
             case LIST_COLLECTIONS -> validateDbOnly(request, false);
             case CREATE_INDEX -> validateCreateIndex((CreateIndexRequest) request);
             case DROP_INDEX -> validateDropIndex((DropIndexRequest) request);
+            case REINDEX -> validateReindex((ReindexRequest) request);
             case AUTHENTICATE -> validateAuthenticate((AuthenticateRequest) request);
             case CREATE_USER -> validateCreateUser((CreateUserRequest) request);
             case DELETE_USER -> validateDeleteUser((DeleteUserRequest) request);
@@ -173,6 +175,19 @@ public class RequestValidator {
         }
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("DROP_INDEX request requires a non-blank fieldName");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateReindex(ReindexRequest request) {
+        final var base = validateDbAndColl(request, true);
+        if (!base.isValid()) {
+            return base;
+        }
+        for (var fieldName : request.getFieldNames()) {
+            if (fieldName == null || fieldName.isBlank()) {
+                return ValidationResult.fail("REINDEX fieldNames must not contain blank entries");
+            }
         }
         return ValidationResult.ok();
     }

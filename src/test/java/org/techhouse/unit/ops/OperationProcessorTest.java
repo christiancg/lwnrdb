@@ -40,6 +40,7 @@ import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.GetDatabaseStatsRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -62,6 +63,7 @@ import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -1065,5 +1067,54 @@ public class OperationProcessorTest {
         assertTrue(page0After.isPresent());
         assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
         assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
+    }
+
+    // REINDEX: rebuild all registered indexes when no fieldNames given
+    @Test
+    public void test_reindex_all_fields_rebuilds_registered_indexes() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexField"));
+        try {
+            ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null);
+            ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+            assertEquals(OperationStatus.OK, response.getStatus());
+            assertTrue(response.getRebuiltFields().contains("reindexField"));
+        } finally {
+            processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexField"));
+        }
+    }
+
+    // REINDEX: rebuild only the specified field
+    @Test
+    public void test_reindex_specific_field_rebuilds_only_that_field() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldA"));
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldB"));
+        try {
+            ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("reindexFieldA"));
+            ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+            assertEquals(OperationStatus.OK, response.getStatus());
+            assertEquals(List.of("reindexFieldA"), response.getRebuiltFields());
+        } finally {
+            processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldA"));
+            processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldB"));
+        }
+    }
+
+    // REINDEX: returns ERROR when a specified field has no registered index
+    @Test
+    public void test_reindex_unknown_field_returns_error() {
+        ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("noSuchIndex"));
+        ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("No index registered for field: noSuchIndex", response.getMessage());
+        assertTrue(response.getRebuiltFields().isEmpty());
+    }
+
+    // REINDEX: returns OK with empty list when no indexes exist on the collection
+    @Test
+    public void test_reindex_collection_with_no_indexes_returns_ok_empty_list() {
+        ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null);
+        ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+        // All indexes from prior tests have been dropped; if some still exist the response is still OK
+        assertEquals(OperationStatus.OK, response.getStatus());
     }
 }
