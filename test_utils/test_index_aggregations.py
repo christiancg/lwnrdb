@@ -5,8 +5,10 @@ import sys
 import threading
 import time
 
-HOST = "127.0.0.1"
-PORT = 8989
+HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
+# Overridable so CI can point this suite at a dedicated caching-disabled server
+# on its own port (so index gains are visible) without disturbing the shared server.
+PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
