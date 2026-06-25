@@ -664,4 +664,32 @@ public class AdminCacheTest {
         cache.removePkIndexCollectionUsage("usage-id");
         assertNull(cache.getPkIndexCollectionUsage("usage-id"));
     }
+
+    @Test
+    public void test_select_page_for_insert_packs_into_pending_only_page() {
+        // Fresh collection: no committed page metadata yet. The first entry allocates page 0; the
+        // second must reuse that pending page 0 (it fits) instead of scattering onto page 1.
+        AdminCache cache = new AdminCache();
+        long first = cache.selectPageForInsert("myDb", "myColl", 100);
+        assertEquals(0L, first, "First insert allocates page 0");
+        long second = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 100L));
+        assertEquals(0L, second, "Second insert reuses the pending (not-yet-committed) page 0");
+    }
+
+    @Test
+    public void test_select_page_for_insert_allocates_new_when_pending_only_page_full() {
+        // The pending page 0 is nearly full, so a new entry that won't fit must go to page 1 even
+        // though page 0 exists only in the in-flight batch (not committed to pageEntries).
+        AdminCache cache = new AdminCache();
+        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 2_097_100L));
+        assertEquals(1L, target, "Full pending-only page forces a new page allocation");
+    }
+
+    @Test
+    public void test_select_page_for_insert_prefers_lowest_pending_only_page() {
+        // Two pending-only pages: page 0 is full, page 1 has room -> ascending first-fit picks page 1.
+        AdminCache cache = new AdminCache();
+        long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
+        assertEquals(1L, target, "First pending page with room is chosen in ascending order");
+    }
 }

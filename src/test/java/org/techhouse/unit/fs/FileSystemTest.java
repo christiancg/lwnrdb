@@ -1502,4 +1502,131 @@ public class FileSystemTest {
 
         assertDoesNotThrow(() -> fileSystem.deleteFromCollection(stale));
     }
+
+    // ── PK-index per-page reindex correctness (regression for bulk/multi-page update corruption) ──
+
+    private FileSystem freshFs() throws NoSuchFieldException, IllegalAccessException, IOException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+        return fs;
+    }
+
+    private PkIndexEntry insertOnPage(FileSystem fs, String id, long page) throws IOException {
+        JsonObject data = new JsonObject();
+        data.addProperty(Globals.PK_FIELD, id);
+        data.addProperty("v", "short");
+        DbEntry e = new DbEntry();
+        e.setDatabaseName(TestGlobals.DB);
+        e.setCollectionName(TestGlobals.COLL);
+        e.set_id(id);
+        e.setData(data);
+        e.setPage(page);
+        return fs.insertIntoCollection(e);
+    }
+
+    private IndexedDbEntry updateEntry(PkIndexEntry idx, String id, String newValue) {
+        JsonObject data = new JsonObject();
+        data.addProperty(Globals.PK_FIELD, id);
+        data.addProperty("v", newValue);
+        IndexedDbEntry u = new IndexedDbEntry();
+        u.setIndex(idx);
+        u.setDatabaseName(TestGlobals.DB);
+        u.setCollectionName(TestGlobals.COLL);
+        u.set_id(id);
+        u.setData(data);
+        return u;
+    }
+
+    // Reads the entry back the way a cache-disabled / post-restart read does: from the persisted PK
+    // index file, not from any in-memory copy. Also asserts the stored position is not corrupt.
+    private String readValueFromDisk(FileSystem fs, String id) throws Exception {
+        final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = disk.stream().filter(p -> p.getValue().equals(id)).findFirst().orElseThrow();
+        assertTrue(pk.getPosition() >= 0, "PK index position for '" + id + "' must not be negative");
+        return fs.getById(pk).getData().get("v").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_bulk_update_multi_page_reads_back_intact() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 1);
+        final var idxC = insertOnPage(fs, "c", 2);
+        final var updates = List.of(updateEntry(idxA, "a", "updated-longer-value-for-a"),
+                updateEntry(idxB, "b", "updated-longer-value-for-b"),
+                updateEntry(idxC, "c", "updated-longer-value-for-c"));
+
+        fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates);
+
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-b", readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-c", readValueFromDisk(fs, "c"));
+    }
+
+    @Test
+    public void test_bulk_update_same_page_reads_back_intact() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 0);
+        final var idxC = insertOnPage(fs, "c", 0);
+        final var updates = List.of(updateEntry(idxA, "a", "updated-longer-value-for-a"),
+                updateEntry(idxB, "b", "updated-longer-value-for-b"),
+                updateEntry(idxC, "c", "updated-longer-value-for-c"));
+
+        fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates);
+
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-b", readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-c", readValueFromDisk(fs, "c"));
+    }
+
+    @Test
+    public void test_single_update_multi_page_preserves_other_positions() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        insertOnPage(fs, "b", 1);
+
+        // Updating 'a' (page 0) must not disturb 'b' on page 1.
+        fs.updateFromCollection(updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
+
+        assertEquals("short", readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+    }
+
+    @Test
+    public void test_single_update_same_page_shifts_only_later_position() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 0); // positioned after 'a' on page 0
+        final long bPosBefore = idxB.getPosition();
+        assertTrue(bPosBefore > 0, "second same-page entry should start past position 0");
+
+        fs.updateFromCollection(updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
+
+        final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        final var bDisk = disk.stream().filter(p -> p.getValue().equals("b")).findFirst().orElseThrow();
+        assertEquals(bPosBefore - idxA.getLength(), bDisk.getPosition(),
+                "'b' shifts toward the start by 'a's old length after 'a' is relocated");
+        assertEquals("short", fs.getById(bDisk).getData().get("v").asJsonString().getValue());
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+    }
+
+    @Test
+    public void test_delete_same_page_preserves_survivor_positions() throws Exception {
+        FileSystem fs = freshFs();
+        insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 0);
+        insertOnPage(fs, "c", 0);
+
+        fs.deleteFromCollection(idxB); // delete the middle entry
+
+        assertEquals("short", readValueFromDisk(fs, "a"));
+        assertEquals("short", readValueFromDisk(fs, "c"));
+        final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(disk.stream().noneMatch(p -> p.getValue().equals("b")), "'b' must be removed from the index");
+    }
 }
