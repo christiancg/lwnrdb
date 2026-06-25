@@ -43,4 +43,4 @@ VOLUME /app/logs
 
 EXPOSE ${PORT}
 
-CMD ["java", "-jar", "app.jar"]
+CMD ["java", "-XX:+UseZGC", "-jar", "app.jar"]
