@@ -456,57 +456,61 @@ public class FileSystem {
         final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
         final var lock = fileLock(indexFile).writeLock();
         lock.lock();
-        try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final int oldFileLength = (int) indexFile.length();
-            byte[] buffer = new byte[oldFileLength];
-            writer.readFully(buffer, 0, oldFileLength);
-            final var wholeFile = new String(buffer);
-            final var lines = wholeFile.split(Globals.NEWLINE_REGEX);
-            var totalLengthBefore = 0;
-            var indexLine = 0;
-            var oldIndexLine = "";
-            for (int i = 0; i < lines.length; i++) {
-                if (!lines[i].isBlank()
-                        && PkIndexEntry.fromIndexFileEntry(dbName, collectionName, lines[i]).getValue().equals(value)) {
-                    indexLine = i;
-                    oldIndexLine = lines[i];
-                    break;
+        try {
+            final List<String> existingLines = indexFile.exists() ? Files.readAllLines(indexFile.toPath()) : List.of();
+            // Parse every entry, pulling out the one being updated/deleted. The remaining entries
+            // ("others") have their on-disk positions corrected per page (see reindexPks); the file is
+            // rewritten in full because the entries needing a shift are not contiguous in the
+            // id-sorted file (a same-page, later-positioned row can sort before the updated id).
+            final var others = new ArrayList<PkIndexEntry>(existingLines.size());
+            PkIndexEntry oldEntry = null;
+            for (final var line : existingLines) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
+                if (entry.getValue().equals(value)) {
+                    oldEntry = entry;
                 } else {
-                    totalLengthBefore += lines[i].length() + Globals.NEWLINE_CHAR_LENGTH;
+                    others.add(entry);
                 }
             }
-            final var reIndexedEntries = reindexPks(oldIndexLine, newPkIndexEntry,
-                    Arrays.stream(lines).skip(indexLine + 1).toList(), dbName, collectionName);
-            final var reIndexedToWrite = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry)
-                    .collect(Collectors.joining(Globals.NEWLINE));
-            writer.seek(totalLengthBefore);
-            writer.write(reIndexedToWrite.getBytes(StandardCharsets.UTF_8), 0, reIndexedToWrite.length());
-            int newFileSize;
-            if (!reIndexedEntries.isEmpty()) {
-                writer.writeBytes(Globals.NEWLINE);
-                newFileSize = totalLengthBefore + reIndexedToWrite.length() + Globals.NEWLINE_CHAR_LENGTH;
-            } else {
-                newFileSize = totalLengthBefore + reIndexedToWrite.length();
-            }
-            writer.setLength(newFileSize);
+            final var reIndexedEntries = reindexPks(oldEntry, newPkIndexEntry, others);
+            final var lines = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).toList();
+            rewriteFileAtomically(indexFile.toPath(), lines);
         } finally {
             lock.unlock();
         }
     }
 
-    private List<PkIndexEntry> reindexPks(String oldIndexEntryStr, PkIndexEntry newPkIndexEntry,
-            List<String> restOfIndexesStr, String dbName, String collectionName) {
-        final var oldIndexEntry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, oldIndexEntryStr);
-        final var restOfIndexes = restOfIndexesStr.stream()
-                .map(x -> PkIndexEntry.fromIndexFileEntry(dbName, collectionName, x)).collect(Collectors.toList());
-        for (var index : restOfIndexes) {
-            index.setPosition(index.getPosition() - oldIndexEntry.getLength());
+    /**
+     * Recomputes the on-disk PK index after the entry identified by {@code oldEntry} is relocated
+     * (update) or removed (delete). Removing/relocating that row compacts its page, so every other
+     * entry <em>on the same page</em> whose position is past the removed slot shifts toward the start
+     * of the page by the old row's length — the same per-page rule the in-memory PK index uses
+     * ({@code UserCache.shiftPkPositionsAfterCompaction}). Entries on other pages are untouched. For
+     * an update, {@code newPkIndexEntry} carries the relocated row's page-file length as its position;
+     * subtracting the old length yields the row's new start (where {@link #updateFromCollection} wrote
+     * it). {@code newPkIndexEntry} is {@code null} for a delete. {@code oldEntry} may be {@code null}
+     * if the value was not present (defensive), in which case no shift is applied.
+     */
+    private List<PkIndexEntry> reindexPks(PkIndexEntry oldEntry, PkIndexEntry newPkIndexEntry,
+            List<PkIndexEntry> others) {
+        if (oldEntry != null) {
+            for (final var entry : others) {
+                if (entry.getPage() == oldEntry.getPage() && entry.getPosition() > oldEntry.getPosition()) {
+                    entry.setPosition(entry.getPosition() - oldEntry.getLength());
+                }
+            }
         }
         if (newPkIndexEntry != null) {
-            newPkIndexEntry.setPosition(newPkIndexEntry.getPosition() - oldIndexEntry.getLength());
-            restOfIndexes.add(newPkIndexEntry);
+            if (oldEntry != null) {
+                newPkIndexEntry.setPosition(newPkIndexEntry.getPosition() - oldEntry.getLength());
+            }
+            others.add(newPkIndexEntry);
         }
-        return restOfIndexes;
+        others.sort(Comparator.comparing(PkIndexEntry::getValue));
+        return others;
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
