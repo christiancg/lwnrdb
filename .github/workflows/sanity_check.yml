@@ -44,14 +44,29 @@ jobs:
           STREAM_TEST_DOCS: "2000"
           STREAM_TEST_PAYLOAD_BYTES: "512"
         run: python3 test_utils/test_streaming_reads.py
-      - name: Run index-backed aggregation tests
+      - name: Run index-backed aggregation tests (caching disabled)
         env:
           # CI runners are slower; dial the workload down so the run stays quick
           # while still being large enough for the index fast-paths to clearly
-          # beat the full-scan paths (GROUP_BY / JOIN / SORT / DISTINCT).
+          # beat the full-scan paths (JOIN / SORT / DISTINCT).
           INDEX_TEST_DOCS: "2000"
           INDEX_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_index_aggregations.py
+        run: |
+          # Index gains are only visible when reads hit disk, so this suite runs
+          # against its own server with caching disabled (maxMemory=-1) in an
+          # isolated working directory, on the same port 8989. Stop the shared
+          # server first to free the port; the cache-warmup benchmark later
+          # starts its own server from the repo config (caching on), so nothing
+          # downstream depends on the shared server staying up.
+          pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
+          mkdir -p ci-nocache
+          sed -e 's/^maxMemory=.*/maxMemory=-1/' \
+              -e 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' \
+              lwnrdb.cfg > ci-nocache/lwnrdb.cfg
+          (cd ci-nocache && java -Xmx1g -jar ../target/lwnrdb-1.0-SNAPSHOT.jar > server.log 2>&1 &)
+          until nc -z 127.0.0.1 8989; do sleep 0.2; done
+          python3 test_utils/test_index_aggregations.py
+          pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
       - name: Run TLS integration tests
         # Self-contained: starts its own TLS-enabled server on a dedicated port
         # (9443) and working directory, then stops it — independent of the
