@@ -83,7 +83,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Wire Protocol / Message Reference
 
-All messages are line-delimited JSON sent over a TCP connection. Every request must include a `type` field. Responses always contain `type`, `status` (`OK`, `ERROR`, `NOT_FOUND`), and `message`.
+All messages are line-delimited JSON sent over a TCP connection. Every request must include a `type` field. Responses always contain `type`, `status` (`OK`, `ERROR`, `NOT_FOUND`, `UNAUTHENTICATED`, `FORBIDDEN`), and `message`. Error responses also include an `errorCode` field (absent on success) with the format `NNN-N` — a three-digit HTTP-style range prefix and a sequential number (e.g. `401-1`). The 4xx range covers client errors; 5xx covers server errors; 503 means the server is temporarily unavailable.
 
 ### Naming rules
 
@@ -381,11 +381,60 @@ Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COL
 
 ### Authentication errors
 
-| Situation | `status` | `message` |
+| Situation | `status` | `errorCode` | `message` |
+|---|---|---|---|
+| Request sent before authenticating | `UNAUTHENTICATED` | `401-1` | `Must authenticate first` |
+| Authenticated user was deleted mid-session | `UNAUTHENTICATED` | `401-2` | `User no longer exists` |
+| Wrong username or password | `ERROR` | `401-3` | `The user doesn't exist or the wrong credentials have been provided` |
+| Insufficient permissions | `FORBIDDEN` | `403-1` | `Action is forbidden, no permissions` |
+
+### Error codes
+
+Every error response includes an `errorCode` field. Codes follow the pattern `NNN-N` (HTTP-style range + sequential number). The `message` field may contain additional context (e.g. the offending id or field name) appended to the default text below.
+
+| Code | `status` | Default message |
 |---|---|---|
-| Request sent before authenticating | `UNAUTHENTICATED` | `Must authenticate first` |
-| Wrong username or password | `ERROR` | `The user doesn't exist or the wrong credentials have been provided` |
-| Insufficient permissions | `FORBIDDEN` | `action is forbidden, no permissions` |
+| `400-1` | `ERROR` | *(validation message from the request validator)* |
+| `400-2` | `ERROR` | Entry size exceeds maximum allowed size |
+| `400-3` | `ERROR` | Duplicate `_id` in bulk save request |
+| `400-4` | `ERROR` | Cannot delete the last admin user |
+| `400-5` | `ERROR` | Cannot demote the last admin user |
+| `400-6` | `ERROR` | Current password is incorrect |
+| `401-1` | `UNAUTHENTICATED` | Must authenticate first |
+| `401-2` | `UNAUTHENTICATED` | User no longer exists |
+| `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
+| `403-1` | `FORBIDDEN` | Action is forbidden, no permissions |
+| `404-1` | `NOT_FOUND` | User not found |
+| `404-2` | `NOT_FOUND` | Entry not found |
+| `404-3` | `NOT_FOUND` | No results |
+| `404-4` | `NOT_FOUND` | Database not found |
+| `404-5` | `NOT_FOUND` | No users found |
+| `404-6` | `NOT_FOUND` | No index registered for the specified field |
+| `409-1` | `ERROR` | User already exists |
+| `409-2` | `ERROR` | Database already exists |
+| `500-1` | `ERROR` | Error during authentication |
+| `500-2` | `ERROR` | Error creating user |
+| `500-3` | `ERROR` | Error deleting user |
+| `500-4` | `ERROR` | Error changing password |
+| `500-5` | `ERROR` | Error changing permissions |
+| `500-6` | `ERROR` | Error while saving entries |
+| `500-7` | `ERROR` | Error while saving entry |
+| `500-8` | `ERROR` | Error while retrieving entry |
+| `500-9` | `ERROR` | Error while processing aggregation |
+| `500-10` | `ERROR` | Error while deleting entry |
+| `500-11` | `ERROR` | Error while creating database |
+| `500-12` | `ERROR` | Error updating database owners |
+| `500-13` | `ERROR` | Error while dropping database |
+| `500-14` | `ERROR` | Error while listing databases |
+| `500-15` | `ERROR` | Error while creating collection |
+| `500-16` | `ERROR` | Error while dropping collection |
+| `500-17` | `ERROR` | Error while listing collections |
+| `500-18` | `ERROR` | Error while creating index |
+| `500-19` | `ERROR` | Error listing users |
+| `500-20` | `ERROR` | Error while dropping index |
+| `500-21` | `ERROR` | Error while reindexing |
+| `500-22` | `ERROR` | Error while gathering database stats |
+| `503-1` | `ERROR` | Max number of connections reached |
 
 ### Bootstrap
 
