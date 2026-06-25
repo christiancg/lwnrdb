@@ -225,6 +225,34 @@ public class FileSystemTest {
         assertEquals("test", result.getData().get("name").asJsonString().getValue());
     }
 
+    @Test
+    public void test_getById_data_contains_id_field() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createBaseDbPath();
+        fileSystem.createAdminDatabase();
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        String id = "abc123";
+        JsonObject data = new JsonObject();
+        data.addProperty("value", "hello");
+        data.addProperty(Globals.PK_FIELD, id);
+        DbEntry dbEntry = new DbEntry();
+        dbEntry.setDatabaseName(TestGlobals.DB);
+        dbEntry.setCollectionName(TestGlobals.COLL);
+        dbEntry.setData(data);
+        dbEntry.set_id(id);
+        PkIndexEntry indexEntry = fileSystem.insertIntoCollection(dbEntry);
+
+        DbEntry result = fileSystem.getById(indexEntry);
+
+        assertNotNull(result);
+        assertTrue(result.getData().has(Globals.PK_FIELD), "_id must be present in getData() for positioned reads");
+        assertEquals(id, result.getData().get(Globals.PK_FIELD).asJsonString().getValue());
+        assertEquals(id, result.get_id());
+    }
+
     // Successfully inserts multiple DbEntry objects into collection file
     @Test
     public void test_bulk_insert_multiple_entries_success()
@@ -398,7 +426,7 @@ public class FileSystemTest {
         final var second = entries.get(1);
         second.getData().get("field").asJsonString().setValue("changed");
 
-        List<IndexedDbEntry> result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries).updated();
 
         assertNotNull(result);
         assertEquals(2, result.size());
@@ -415,10 +443,41 @@ public class FileSystemTest {
 
         List<IndexedDbEntry> entries = new ArrayList<>();
 
-        List<IndexedDbEntry> result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, entries);
 
         assertNotNull(result);
-        assertTrue(result.isEmpty());
+        assertTrue(result.updated().isEmpty());
+        assertTrue(result.compactions().isEmpty());
+    }
+
+    // Updating multiple entries that share a page in one batch must NOT corrupt the page: each
+    // document still reads back with its updated content and correct position afterwards.
+    @Test
+    public void test_bulk_update_multiple_same_page_entries_no_corruption() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var toInsert = new ArrayList<DbEntry>();
+        for (var id : List.of("1", "2", "3")) {
+            final var data = new JsonObject();
+            data.addProperty("_id", id);
+            data.addProperty("field", "orig-" + id);
+            toInsert.add(DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data));
+        }
+        final var inserted = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, toInsert);
+        // All three live on page 0; change each value to a DIFFERENT-length string to force shifts.
+        for (var ie : inserted) {
+            ie.getData().get("field").asJsonString().setValue("updated-value-for-" + ie.get_id() + "-longer");
+        }
+
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, inserted);
+
+        // Every updated entry must read back from disk with its new content at its reported position.
+        for (var ie : result.updated()) {
+            final var read = fileSystem.getById(ie.getIndex());
+            assertEquals("updated-value-for-" + ie.get_id() + "-longer",
+                    read.getData().get("field").asJsonString().getValue(),
+                    "doc " + ie.get_id() + " must read back intact after a multi-same-page bulk update");
+        }
     }
 
     // Correctly updates file length after modification
@@ -1049,6 +1108,71 @@ public class FileSystemTest {
         assertEquals(1, secondRead.size());
     }
 
+    // A torn final line in a field (scalar) index file is skipped, logged and rewritten away on read,
+    // mirroring the PK index self-heal — one bad line must not fail every index-backed read.
+    @Test
+    public void test_readWholeFieldIndexFiles_drops_and_rewrites_malformed_lines() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        final var fieldName = "selfHeal";
+
+        final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "good", Set.of("id1"));
+        fs.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, entry, null);
+
+        final var indexFile = findIdxFile(fieldName);
+        Files.writeString(indexFile.toPath(), "\nthis is not a valid field index line", StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var firstRead = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        assertEquals(1, firstRead.size());
+        assertEquals("good", firstRead.getFirst().getValue());
+
+        final var diskLines = Files.readAllLines(indexFile.toPath());
+        assertTrue(diskLines.stream().noneMatch(l -> l.contains("not a valid")),
+                "the malformed field index line should have been removed");
+
+        final var secondRead = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, String.class);
+        assertEquals(1, secondRead.size());
+    }
+
+    // A torn final line in a hash (object/array element-match) index file self-heals the same way.
+    @Test
+    public void test_readWholeHashIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        final var fieldName = "hashSelfHeal";
+
+        final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aaaa1111",
+                new HashSet<>(Set.of("id1")));
+        fs.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, List.of(entry));
+
+        final var indexFile = findIdxFile(fieldName);
+        Files.writeString(indexFile.toPath(), "\nthis is not a valid hash index line", StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var firstRead = fs.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT);
+        assertEquals(1, firstRead.size());
+        assertEquals("aaaa1111", firstRead.getFirst().getValue());
+
+        final var diskLines = Files.readAllLines(indexFile.toPath());
+        assertTrue(diskLines.stream().noneMatch(l -> l.contains("not a valid")),
+                "the malformed hash index line should have been removed");
+
+        final var secondRead = fs.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT);
+        assertEquals(1, secondRead.size());
+    }
+
+    // Locates the single .idx file in the test collection folder whose name carries the given field.
+    private static File findIdxFile(String fieldName) throws IOException {
+        final var collFolder = Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL);
+        try (var files = Files.list(collFolder)) {
+            return files.map(Path::toFile)
+                    .filter(f -> f.getName().contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName)
+                            && f.getName().endsWith(Globals.INDEX_FILE_EXTENSION))
+                    .findFirst().orElseThrow();
+        }
+    }
+
     // getByIndexEntries returns an empty list for null or empty input
     @Test
     public void test_get_by_index_entries_empty_input()
@@ -1256,5 +1380,253 @@ public class FileSystemTest {
         assertTrue(fileSystem.dropIndex(TestGlobals.DB, TestGlobals.COLL, fieldName));
         assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT));
         assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.ARRAY));
+    }
+
+    // deleteFromCollection returns the compaction (removed row's coordinates) when a survivor moves.
+    @Test
+    public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry1.set_id("1");
+        final var entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry2.set_id("2");
+        final var pk1 = fileSystem.insertIntoCollection(entry1);
+        fileSystem.insertIntoCollection(entry2);
+
+        final var compaction = fileSystem.deleteFromCollection(pk1);
+
+        assertNotNull(compaction);
+        assertEquals(TestGlobals.DB, compaction.dbName());
+        assertEquals(TestGlobals.COLL, compaction.collName());
+        assertEquals(pk1.getPage(), compaction.page());
+        assertEquals(pk1.getPosition(), compaction.removedPosition());
+        assertEquals(pk1.getLength(), compaction.removedLength());
+    }
+
+    // Deleting the last entry on a page moves no survivor, so the returned compaction is null.
+    @Test
+    public void test_delete_last_entry_returns_null_compaction()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("1");
+        final var pk = fileSystem.insertIntoCollection(entry);
+
+        assertNull(fileSystem.deleteFromCollection(pk));
+    }
+
+    // updateFromCollection returns the new index entry plus the compaction for the old slot.
+    @Test
+    public void test_update_returns_index_entry_and_compaction()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry1.set_id("1");
+        final var entry2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry2.set_id("2");
+        final var pk1 = fileSystem.insertIntoCollection(entry1);
+        fileSystem.insertIntoCollection(entry2);
+        data.get("name").asJsonString().setValue("updated");
+        final var updatedEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        updatedEntry.set_id("1");
+
+        // Updating entry "1" (not the last one) relocates it to the end, so a survivor moves.
+        final var result = fileSystem.updateFromCollection(updatedEntry, pk1);
+
+        assertNotNull(result.indexEntry());
+        assertEquals("1", result.indexEntry().getValue());
+        assertNotNull(result.compaction());
+        assertEquals(pk1.getPosition(), result.compaction().removedPosition());
+        assertEquals(pk1.getLength(), result.compaction().removedLength());
+    }
+
+    // Two sequential deletes on the same page do not crash when the caller applies the returned
+    // compaction to keep the surviving entries' positions consistent (the stale-position fix).
+    @Test
+    public void test_sequential_deletes_applying_compaction_no_crash() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var pks = new ArrayList<PkIndexEntry>();
+        for (var id : List.of("1", "2", "3")) {
+            final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+            e.set_id(id);
+            pks.add(fileSystem.insertIntoCollection(e));
+        }
+
+        applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(0)));
+        // Without applying the position fix, this second delete would use a stale position and throw.
+        assertDoesNotThrow(() -> applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(1))));
+
+        final var survivor = fileSystem.getById(pks.get(2));
+        assertEquals("test", survivor.getData().get("name").asJsonString().getValue());
+    }
+
+    // Mirrors Cache.shiftPkPositionsAfterCompaction for the in-test PkIndexEntry list.
+    private static void applyCompaction(List<PkIndexEntry> pks, org.techhouse.fs.PkCompaction compaction) {
+        if (compaction == null) {
+            return;
+        }
+        for (final var pk : pks) {
+            if (pk.getPage() == compaction.page() && pk.getPosition() > compaction.removedPosition()) {
+                pk.setPosition(pk.getPosition() - compaction.removedLength());
+            }
+        }
+    }
+
+    // A stale position past the end of file no longer throws NegativeArraySizeException (over-EOF guard).
+    @Test
+    public void test_delete_with_over_eof_position_does_not_throw()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("1");
+        final var pk = fileSystem.insertIntoCollection(entry);
+        // Same id as the inserted row (so the PK-index removal succeeds) but a position past EOF,
+        // simulating a stale cached position; the over-EOF guard must avoid the negative-array crash.
+        final var stale = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", pk.getPosition() + 1000,
+                pk.getLength(), pk.getPage());
+
+        assertDoesNotThrow(() -> fileSystem.deleteFromCollection(stale));
+    }
+
+    // ── PK-index per-page reindex correctness (regression for bulk/multi-page update corruption) ──
+
+    private FileSystem freshFs() throws NoSuchFieldException, IllegalAccessException, IOException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.createBaseDbPath();
+        fs.createAdminDatabase();
+        fs.createDatabaseFolder(TestGlobals.DB);
+        fs.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+        return fs;
+    }
+
+    private PkIndexEntry insertOnPage(FileSystem fs, String id, long page) throws IOException {
+        JsonObject data = new JsonObject();
+        data.addProperty(Globals.PK_FIELD, id);
+        data.addProperty("v", "short");
+        DbEntry e = new DbEntry();
+        e.setDatabaseName(TestGlobals.DB);
+        e.setCollectionName(TestGlobals.COLL);
+        e.set_id(id);
+        e.setData(data);
+        e.setPage(page);
+        return fs.insertIntoCollection(e);
+    }
+
+    private IndexedDbEntry updateEntry(PkIndexEntry idx, String id, String newValue) {
+        JsonObject data = new JsonObject();
+        data.addProperty(Globals.PK_FIELD, id);
+        data.addProperty("v", newValue);
+        IndexedDbEntry u = new IndexedDbEntry();
+        u.setIndex(idx);
+        u.setDatabaseName(TestGlobals.DB);
+        u.setCollectionName(TestGlobals.COLL);
+        u.set_id(id);
+        u.setData(data);
+        return u;
+    }
+
+    // Reads the entry back the way a cache-disabled / post-restart read does: from the persisted PK
+    // index file, not from any in-memory copy. Also asserts the stored position is not corrupt.
+    private String readValueFromDisk(FileSystem fs, String id) throws Exception {
+        final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = disk.stream().filter(p -> p.getValue().equals(id)).findFirst().orElseThrow();
+        assertTrue(pk.getPosition() >= 0, "PK index position for '" + id + "' must not be negative");
+        return fs.getById(pk).getData().get("v").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_bulk_update_multi_page_reads_back_intact() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 1);
+        final var idxC = insertOnPage(fs, "c", 2);
+        final var updates = List.of(updateEntry(idxA, "a", "updated-longer-value-for-a"),
+                updateEntry(idxB, "b", "updated-longer-value-for-b"),
+                updateEntry(idxC, "c", "updated-longer-value-for-c"));
+
+        fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates);
+
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-b", readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-c", readValueFromDisk(fs, "c"));
+    }
+
+    @Test
+    public void test_bulk_update_same_page_reads_back_intact() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 0);
+        final var idxC = insertOnPage(fs, "c", 0);
+        final var updates = List.of(updateEntry(idxA, "a", "updated-longer-value-for-a"),
+                updateEntry(idxB, "b", "updated-longer-value-for-b"),
+                updateEntry(idxC, "c", "updated-longer-value-for-c"));
+
+        fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates);
+
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+        assertEquals("updated-longer-value-for-b", readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-c", readValueFromDisk(fs, "c"));
+    }
+
+    @Test
+    public void test_single_update_multi_page_preserves_other_positions() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        insertOnPage(fs, "b", 1);
+
+        // Updating 'a' (page 0) must not disturb 'b' on page 1.
+        fs.updateFromCollection(updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
+
+        assertEquals("short", readValueFromDisk(fs, "b"));
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+    }
+
+    @Test
+    public void test_single_update_same_page_shifts_only_later_position() throws Exception {
+        FileSystem fs = freshFs();
+        final var idxA = insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 0); // positioned after 'a' on page 0
+        final long bPosBefore = idxB.getPosition();
+        assertTrue(bPosBefore > 0, "second same-page entry should start past position 0");
+
+        fs.updateFromCollection(updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
+
+        final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        final var bDisk = disk.stream().filter(p -> p.getValue().equals("b")).findFirst().orElseThrow();
+        assertEquals(bPosBefore - idxA.getLength(), bDisk.getPosition(),
+                "'b' shifts toward the start by 'a's old length after 'a' is relocated");
+        assertEquals("short", fs.getById(bDisk).getData().get("v").asJsonString().getValue());
+        assertEquals("updated-longer-value-for-a", readValueFromDisk(fs, "a"));
+    }
+
+    @Test
+    public void test_delete_same_page_preserves_survivor_positions() throws Exception {
+        FileSystem fs = freshFs();
+        insertOnPage(fs, "a", 0);
+        final var idxB = insertOnPage(fs, "b", 0);
+        insertOnPage(fs, "c", 0);
+
+        fs.deleteFromCollection(idxB); // delete the middle entry
+
+        assertEquals("short", readValueFromDisk(fs, "a"));
+        assertEquals("short", readValueFromDisk(fs, "c"));
+        final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(disk.stream().noneMatch(p -> p.getValue().equals("b")), "'b' must be removed from the index");
     }
 }

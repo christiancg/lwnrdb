@@ -3,11 +3,11 @@ package org.techhouse.cache;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
@@ -220,6 +220,32 @@ public class AdminCache {
         return pagesPkIndexes.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
     }
 
+    /**
+     * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
+     * the given admin collection, dispatching to the matching PK structure (databases, collections,
+     * users, collection_usage, or a {@code pages_*} collection). Every cached entry on {@code page}
+     * whose position is greater than {@code removedPosition} shifted toward the start of the file by
+     * {@code removedLength}; entries are mutated in place.
+     */
+    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
+        final Collection<PkIndexEntry> entries;
+        switch (collName) {
+            case Globals.ADMIN_DATABASES_COLLECTION_NAME -> entries = databasesPkIndex.values();
+            case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> entries = collectionsPkIndex.values();
+            case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
+            case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
+            case null, default -> {
+                final var list = pagesPkIndexes.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, collName));
+                entries = list != null ? list : List.of();
+            }
+        }
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
     public void removeAdminPageEntries(String dbName, String collName) {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         pages.remove(collId);
@@ -256,11 +282,19 @@ public class AdminCache {
         final var maxPageBytes = configuration.getMaxPageSize();
         final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
                 _ -> new ArrayList<>());
-        final var fit = pageEntries.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).filter(
-                p -> p.getPageSize() + pendingPageBytes.getOrDefault(p.getPage(), 0L) + entryByteSize <= maxPageBytes)
-                .findFirst();
-        if (fit.isPresent()) {
-            return fit.get().getPage();
+        // First-fit must also consider pages allocated earlier in the same in-flight batch (present
+        // only in pendingPageBytes, not yet committed to pageEntries) — otherwise a single bulk insert
+        // into a fresh collection scatters every entry onto its own new page.
+        final var committedSizeByPage = pageEntries.stream()
+                .collect(Collectors.toMap(AdminPageEntry::getPage, AdminPageEntry::getPageSize));
+        final var candidatePages = new TreeSet<>(committedSizeByPage.keySet());
+        candidatePages.addAll(pendingPageBytes.keySet());
+        for (final long page : candidatePages) {
+            final var effectiveSize = committedSizeByPage.getOrDefault(page, 0L)
+                    + pendingPageBytes.getOrDefault(page, 0L);
+            if (effectiveSize + entryByteSize <= maxPageBytes) {
+                return page;
+            }
         }
         final var maxKnownPage = pageEntries.stream().mapToLong(AdminPageEntry::getPage).max().orElse(-1L);
         final var maxPendingPage = pendingPageBytes.keySet().stream().mapToLong(Long::longValue).max().orElse(-1L);
@@ -273,6 +307,12 @@ public class AdminCache {
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {
         final var collection = collections.get(Cache.getCollectionIdentifier(dbName, collName));
+        // The collection may have been dropped while a background index event for it was still
+        // queued. Treat a missing collection as "no indexes" so background maintenance becomes a
+        // clean no-op (and hasIndex returns false) instead of throwing.
+        if (collection == null) {
+            return Set.of();
+        }
         return collection.getIndexes();
     }
 

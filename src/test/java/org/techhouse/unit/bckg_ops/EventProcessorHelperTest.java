@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
@@ -17,7 +18,6 @@ import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.bckg_ops.events.IndexEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
@@ -117,6 +117,8 @@ public class EventProcessorHelperTest {
 
     @Test
     public void processCollectionUsageEventUpsertsUsageEntry() throws IOException, InterruptedException {
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
         final var event = new CollectionUsageEvent(AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
@@ -139,17 +141,62 @@ public class EventProcessorHelperTest {
     }
 
     @Test
-    public void processIndexEventDeletionTest() throws IOException, InterruptedException {
-        TestUtils.createTestDatabaseAndCollection();
-        final var createIndexEvent = new IndexEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "myField");
-        EventProcessorHelper.processEvent(createIndexEvent);
-        var collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(1, collEntry.getIndexes().size(), "Index count should be 1");
-        final var deleteIndexEvent = new IndexEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, "myField");
-        EventProcessorHelper.processEvent(deleteIndexEvent);
-        collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        Assertions.assertNotNull(collEntry);
-        Assertions.assertEquals(0, collEntry.getIndexes().size(), "Index count should be 0");
+    public void processEntityEventSkipsVanishedCollection() {
+        // The collection was dropped while this event was queued (no admin collection entry exists).
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        final var entry = new DbEntry();
+        entry.set_id("ghost");
+        pending.mark(TestGlobals.DB, TestGlobals.COLL, "ghost");
+        final var entityEvent = new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry);
+
+        Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(entityEvent));
+
+        // The event is skipped: pending is cleared and no admin page metadata is created for it.
+        Assertions.assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("ghost"));
+        final var cache = IocContainer.get(Cache.class);
+        Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL));
     }
+
+    @Test
+    public void processEntityEvent_no_orphan_pages_when_collection_dropped_mid_flight()
+            throws IOException, InterruptedException {
+        // Register the collection so the early guard in processEntityEvent passes...
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
+        // ...then simulate the concurrent drop completing before baseUpdateEntryCount runs.
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        AdminOperationHelper.deletePageCollections(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entry = new DbEntry();
+        entry.set_id("mid-flight-entity");
+        final var entityEvent = new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry);
+        Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(entityEvent));
+
+        // The re-check inside baseUpdateEntryCount must prevent orphan page metadata from being created.
+        final var cache = IocContainer.get(Cache.class);
+        Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL),
+                "No orphan page metadata must be created for a dropped collection");
+    }
+
+    @Test
+    public void processBulkEntityEvent_no_orphan_pages_when_collection_dropped_mid_flight()
+            throws IOException, InterruptedException {
+        // Register the collection so the early guard in processBulkEntityEvent passes...
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL));
+        // ...then simulate the concurrent drop completing before baseUpdateEntryCount runs.
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
+        AdminOperationHelper.deletePageCollections(TestGlobals.DB, TestGlobals.COLL);
+
+        final var entry = new DbEntry();
+        entry.set_id("mid-flight-bulk");
+        final var bulkEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, new ArrayList<>(List.of(entry)),
+                new ArrayList<>());
+        Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(bulkEvent));
+
+        final var cache = IocContainer.get(Cache.class);
+        Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL),
+                "No orphan page metadata must be created for a dropped collection");
+    }
+
 }

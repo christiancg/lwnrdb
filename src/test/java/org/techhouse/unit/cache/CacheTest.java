@@ -205,6 +205,41 @@ public class CacheTest {
         assertEquals(1, result.size());
     }
 
+    // Regression for the completeness gate: it must use the synchronous PK index size, not the
+    // background-updated (lagging) admin page entry count. A cache missing a freshly-committed
+    // document is reloaded from disk even when a stale low page count would have accepted it.
+    @Test
+    public void test_get_whole_collection_reloads_when_cache_incomplete_vs_pk_index() throws Exception {
+        final var cache = new Cache();
+        final var fs = IocContainer.get(FileSystem.class);
+        TestUtils.createTestDatabaseAndCollection();
+
+        // Two committed documents: insertIntoCollection writes the .dat pages and the synchronous PK index.
+        for (int i = 1; i <= 2; i++) {
+            final var o = new JsonObject();
+            o.addProperty(Globals.PK_FIELD, "id" + i);
+            final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, o);
+            e.setPage(0L);
+            fs.insertIntoCollection(e);
+        }
+
+        // Cache holds only one of the two docs (e.g. the second insert was not admitted under memory pressure).
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        final var cachedObj = new JsonObject();
+        cachedObj.addProperty(Globals.PK_FIELD, "id1");
+        injectCachedEntry(collId, DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, cachedObj));
+        // A lagging page count of 1 would previously have wrongly accepted the 1-entry cache as complete.
+        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry(TestGlobals.DB, TestGlobals.COLL, 0);
+        pageEntry.setEntryCount(1);
+        injectPages(collId, new ArrayList<>(List.of(pageEntry)));
+
+        final var result = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(2, result.size(), "PK index size (2) must force a reload of the incomplete cache");
+        assertTrue(result.containsKey("id1"));
+        assertTrue(result.containsKey("id2"));
+    }
+
     @Test
     public void test_initializeStreamIfNecessary_skips_cache_when_disabled() throws Exception {
         final var config = Configuration.getInstance();
@@ -364,5 +399,26 @@ public class CacheTest {
         } finally {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
+    }
+
+    // shiftPkPositionsAfterCompaction routes to the admin cache for the admin database and to the user
+    // cache otherwise.
+    @Test
+    public void test_shift_pk_positions_routes_admin_vs_user() throws NoSuchFieldException, IllegalAccessException {
+        Cache cache = new Cache();
+        final var adminMock = mock(org.techhouse.cache.AdminCache.class);
+        final var userMock = mock(org.techhouse.cache.UserCache.class);
+        TestUtils.setPrivateField(cache, "adminCache", adminMock);
+        TestUtils.setPrivateField(cache, "userCache", userMock);
+
+        cache.shiftPkPositionsAfterCompaction(
+                new org.techhouse.fs.PkCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5));
+        cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
+        // A null compaction (no survivor moved) is a no-op.
+        cache.shiftPkPositionsAfterCompaction(null);
+
+        verify(adminMock).shiftPkPositionsAfterCompaction("collections", 0, 10, 5);
+        verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
+        verifyNoMoreInteractions(adminMock, userMock);
     }
 }

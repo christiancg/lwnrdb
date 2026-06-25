@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
-import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.AggregationStepType;
@@ -111,8 +110,13 @@ public final class CountOperatorHelper {
         return intersection.size();
     }
 
+    // The PK index is maintained synchronously on save/delete (unlike the admin page entry counts,
+    // which the background updates), so its size is the exact, currently-consistent document count.
     private static int wholeCollectionCount(String dbName, String collName) {
-        final var adminPageEntries = cache.getAdminPageEntries(dbName, collName);
-        return adminPageEntries != null ? adminPageEntries.stream().mapToInt(AdminPageEntry::getEntryCount).sum() : 0;
+        try {
+            return cache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

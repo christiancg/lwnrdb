@@ -3,6 +3,7 @@ package org.techhouse.cache;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -10,6 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -43,6 +45,7 @@ public class UserCache {
     private static final long ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES = 64L;
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
@@ -82,6 +85,26 @@ public class UserCache {
         return primaryKeyIndex;
     }
 
+    /**
+     * Keeps the cached PK index positions consistent after a single-entry page compaction: every
+     * cached entry on {@code page} whose position is greater than {@code removedPosition} shifted
+     * toward the start of the file by {@code removedLength}. Mutates the cached entries in place so
+     * any in-flight operation holding a reference observes the corrected position. No-op when the
+     * collection's PK index is not cached.
+     */
+    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
+            long removedLength) {
+        final var primaryKeyIndex = pkIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
+        if (primaryKeyIndex == null) {
+            return;
+        }
+        for (final var entry : primaryKeyIndex) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
     public boolean isCachingDisabled(String dbName) {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
             return false;
@@ -96,13 +119,17 @@ public class UserCache {
         return memoryManagement().admissionCheck(estimatedBytes) == AdmissionDecision.ADMIT;
     }
 
+    // Contract: callers must hold the field's index lock (read lock for queries via
+    // ResourceLocking#lockIndexRead, write lock for the background index writer). The returned
+    // entries alias the cached id sets, so a caller that lets them escape lock scope (e.g. into a
+    // lazily-consumed stream) must take its own snapshot of the ids it needs before releasing.
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexIdentifier = Cache.getIndexIdentifier(fieldName, indexType);
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<T>> indexEntries = null;
-        if (index == null || index.keySet().stream().noneMatch(string -> string.contains(indexIdentifier))) {
+        if (index == null || !index.containsKey(indexIdentifier)) {
             indexEntries = fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
             if (indexEntries == null) {
                 return null;
@@ -129,14 +156,15 @@ public class UserCache {
 
     // Hash index counterpart of getFieldIndexAndLoadIfNecessary: loads (and caches) the element-match
     // entries (value = hex hash) for the object or array index family. Cached under the
-    // field|Object / field|Array identifier, kept apart from the scalar/custom index entries.
+    // field|Object / field|Array identifier, kept apart from the scalar/custom index entries. Same
+    // locking contract as getFieldIndexAndLoadIfNecessary: callers must hold the field's index lock.
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexIdentifier = Cache.getIndexIdentifier(fieldName, kind.label());
         var index = fieldIndexMap.get(collectionIdentifier);
         List<FieldIndexEntry<String>> indexEntries = null;
-        if (index == null || index.keySet().stream().noneMatch(string -> string.contains(indexIdentifier))) {
+        if (index == null || !index.containsKey(indexIdentifier)) {
             indexEntries = fs.readWholeHashIndexFile(dbName, collName, fieldName, kind);
             if (indexEntries == null) {
                 return null;
@@ -161,13 +189,31 @@ public class UserCache {
         return indexEntries;
     }
 
+    // Resolves the matching ids for a single field operator under the field's index read lock and
+    // returns a detached snapshot. The read lock serializes against the background index writer (the
+    // searched id sets are mutated by it), and the copy keeps the result safe once the lock is
+    // released and the ids flow into a lazily-consumed stream.
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
             T value) throws IOException {
-        final var result = doGetIdsFromIndex(dbName, collName, fieldName, operator, value);
-        if (result != null && !Globals.ADMIN_DB_NAME.equals(dbName)) {
-            recordFieldIndexAccess(dbName, collName, fieldName);
+        try {
+            rl.lockIndexRead(dbName, collName, fieldName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while acquiring index read lock", e);
         }
-        return result;
+        try {
+            final var result = doGetIdsFromIndex(dbName, collName, fieldName, operator, value);
+            if (result == null) {
+                return null;
+            }
+            final var snapshot = new HashSet<>(result);
+            if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
+                recordFieldIndexAccess(dbName, collName, fieldName);
+            }
+            return snapshot;
+        } finally {
+            rl.releaseIndexRead(dbName, collName, fieldName);
+        }
     }
 
     public void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
@@ -394,15 +440,15 @@ public class UserCache {
             return result;
         }
         final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
-        // Snapshot the resolved PkIndexEntry references. They are immutable value carriers,
-        // so reading against this snapshot is unaffected by a concurrent write that shifts
-        // offsets mid-read; read/write isolation for aggregates is a separate, pre-existing
-        // concern (the aggregate path already reads lock-free).
+        // toRead holds detached copies so a concurrent shiftPkPositionsAfterCompaction
+        // (which mutates position in place) cannot move the offset between here and the read.
         final var toRead = new ArrayList<PkIndexEntry>();
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);
             if (pos >= 0) {
-                toRead.add(pkIndex.get(pos));
+                final var e = pkIndex.get(pos);
+                toRead.add(new PkIndexEntry(e.getDatabaseName(), e.getCollectionName(), e.getValue(), e.getPosition(),
+                        e.getLength(), e.getPage()));
             }
         }
         if (toRead.isEmpty()) {
@@ -434,10 +480,13 @@ public class UserCache {
     }
 
     public void evictDatabase(String dbName) {
-        final var toRemove = collectionMap.keySet().stream().filter(s -> s.startsWith(dbName)).toList();
+        // Keys are "db|coll"; append the separator so "foo" does not match "foobar|...".
+        final var toRemove = collectionMap.keySet().stream()
+                .filter(s -> s.startsWith(dbName + Globals.COLL_IDENTIFIER_SEPARATOR)).toList();
         for (var entryKeyToRemove : toRemove) {
             pkIndexMap.remove(entryKeyToRemove);
             collectionMap.remove(entryKeyToRemove);
+            fieldIndexMap.remove(entryKeyToRemove);
         }
     }
 
@@ -445,6 +494,7 @@ public class UserCache {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         pkIndexMap.remove(collIdentifier);
         collectionMap.remove(collIdentifier);
+        fieldIndexMap.remove(collIdentifier);
     }
 
     public void evictCollectionDocuments(String dbName, String collName) {
@@ -471,6 +521,25 @@ public class UserCache {
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
             indexes.remove(indexKey);
+            if (indexes.isEmpty()) {
+                fieldIndexMap.remove(collIdentifier);
+            }
+        }
+    }
+
+    // Evicts every per-type list cached for a field (field|Number, field|String, field|Object, ...).
+    // Called by the background index writer after rewriting a field's .idx files so the next read
+    // reloads the up-to-date index from disk. Index keys are field|TypeLabel and field names cannot
+    // contain the separator, so the prefix match is unambiguous.
+    public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return;
+        }
+        final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        final var indexes = fieldIndexMap.get(collIdentifier);
+        if (indexes != null) {
+            final var prefix = fieldName + Globals.COLL_IDENTIFIER_SEPARATOR;
+            indexes.keySet().removeIf(key -> key.equals(fieldName) || key.startsWith(prefix));
             if (indexes.isEmpty()) {
                 fieldIndexMap.remove(collIdentifier);
             }

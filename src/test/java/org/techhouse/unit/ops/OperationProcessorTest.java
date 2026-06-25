@@ -10,13 +10,19 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -194,6 +200,33 @@ public class OperationProcessorTest {
         assertInstanceOf(DropDatabaseResponse.class, response2);
     }
 
+    // Dropping a database that has collections locks each collection during deletion and releases them
+    // afterwards (regression for the unlocked DROP_DATABASE path).
+    @Test
+    public void test_drop_database_with_collections_locks_and_releases() throws Exception {
+        final var db = "dropLockDb";
+        final var coll = "lockColl";
+        org.techhouse.ops.AdminOperationHelper.saveDatabaseEntry(new org.techhouse.data.admin.AdminDbEntry(db));
+        org.techhouse.ops.AdminOperationHelper
+                .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry(db, coll));
+        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
+        fs.createDatabaseFolder(db);
+        fs.createCollectionFile(db, coll);
+        // The admin db entry lists the collection, so the drop must lock it.
+        assertTrue(
+                IocContainer.get(org.techhouse.cache.Cache.class).getAdminDbEntry(db).getCollections().contains(coll));
+
+        final var resp = (DropDatabaseResponse) processor.processMessage(new DropDatabaseRequest(db));
+
+        assertEquals(OperationStatus.OK, resp.getStatus());
+        // The per-collection lock was released, so it can be re-acquired.
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertDoesNotThrow(() -> {
+            locks.lock(db, coll);
+            locks.release(db, coll);
+        });
+    }
+
     // Create and drop indexes with proper validation
     @Test
     public void test_create_and_drop_index() {
@@ -298,6 +331,23 @@ public class OperationProcessorTest {
         assertNotNull(dropResponse);
         assertInstanceOf(DropCollectionResponse.class, dropResponse);
         assertEquals(OperationStatus.OK, dropResponse.getStatus());
+    }
+
+    @Test
+    public void test_drop_collection_removes_lock_from_registry() throws Exception {
+        final var collName = "lockCleanupColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+        processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+
+        // After a successful drop the lock entry must be removed from the registry so
+        // it does not accumulate stale locks for deleted collections.
+        final var locksField = ResourceLocking.class.getDeclaredField("locks");
+        locksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        final var lockMap = (java.util.Map<String, ?>) locksField.get(null);
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(TestGlobals.DB, collName)),
+                "Lock entry must be removed from registry after a successful drop");
     }
 
     // After a save, the entry's PkIndexEntry carries the page assigned by selectPageForInsert
@@ -742,5 +792,278 @@ public class OperationProcessorTest {
                 "joined collection read lock must be released after AGGREGATE");
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
         locks.releaseWrite(TestGlobals.DB, TestGlobals.JOIN_COLL);
+    }
+
+    // A SAVE that grows an existing document past maxPageSize relocates it to another page instead of
+    // overflowing its current page; the document still reads back intact and no page exceeds the cap.
+    @Test
+    public void test_save_grow_update_relocates_to_avoid_page_overflow() throws Exception {
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var config = org.techhouse.config.Configuration.getInstance();
+        final var originalMaxPage = config.getMaxPageSize();
+        final var originalMaxEntry = config.getMaxEntrySize();
+        final var collName = "overflowColl";
+        TestUtils.setPrivateField(config, "maxPageSize", 2000L);
+        TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        try {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+            // "keep" (~300 B) plus a small "a", co-located on page 0. Sized so that growing "a" to ~1.8 KB
+            // makes page 0 overflow maxPageSize (keepBytes + newBytes > 2000) yet the grown "a" still fits
+            // on a fresh page (newBytes < 2000), forcing a relocation rather than an in-place rewrite.
+            final var keepSave = new SaveRequest(TestGlobals.DB, collName);
+            final var keepObj = new JsonObject();
+            keepObj.add(Globals.PK_FIELD, new JsonString("keep"));
+            keepObj.add("v", new JsonString("k".repeat(280)));
+            keepSave.setObject(keepObj);
+            keepSave.set_id("keep");
+            assertEquals(OperationStatus.OK, processor.processMessage(keepSave).getStatus());
+
+            final var aSave = new SaveRequest(TestGlobals.DB, collName);
+            final var aObj = new JsonObject();
+            aObj.add(Globals.PK_FIELD, new JsonString("a"));
+            aObj.add("v", new JsonString("small"));
+            aSave.setObject(aObj);
+            aSave.set_id("a");
+            assertEquals(OperationStatus.OK, processor.processMessage(aSave).getStatus());
+
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
+            final var keepPageBefore = pkIndex.stream().filter(p -> p.getValue().equals("keep")).findFirst()
+                    .orElseThrow().getPage();
+            final var aPageBefore = pkIndex.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
+                    .getPage();
+            assertEquals(0L, keepPageBefore);
+            assertEquals(0L, aPageBefore, "both docs must start co-located on page 0");
+
+            // Grow "a" past what fits on page 0 alongside "keep" -> must relocate.
+            final var bigValue = "x".repeat(1780);
+            final var growSave = new SaveRequest(TestGlobals.DB, collName);
+            final var grown = new JsonObject();
+            grown.add(Globals.PK_FIELD, new JsonString("a"));
+            grown.add("v", new JsonString(bigValue));
+            growSave.setObject(grown);
+            growSave.set_id("a");
+            assertEquals(OperationStatus.OK, processor.processMessage(growSave).getStatus());
+
+            // "a" relocated off page 0; "keep" stayed put.
+            final var pkAfter = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
+            final var aPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
+                    .getPage();
+            final var keepPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("keep")).findFirst()
+                    .orElseThrow().getPage();
+            assertEquals(0L, keepPageAfter, "the untouched doc must stay on page 0");
+            assertTrue(aPageAfter > 0L, "the grown doc must relocate off page 0 (was " + aPageAfter + ")");
+
+            // The grown value reads back intact.
+            final var find = new FindByIdRequest(TestGlobals.DB, collName);
+            find.set_id("a");
+            final var found = (FindByIdResponse) processor.processMessage(find);
+            assertEquals(OperationStatus.OK, found.getStatus());
+            assertEquals(bigValue, found.getObject().get("v").asJsonString().getValue());
+
+            // No on-disk page file exceeds maxPageSize.
+            final var collFolder = new java.io.File(
+                    TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + collName);
+            final var datFiles = collFolder.listFiles((_, n) -> n.endsWith(Globals.DB_FILE_EXTENSION));
+            assertNotNull(datFiles);
+            for (final var dat : datFiles) {
+                assertTrue(dat.length() <= 2000L,
+                        "page file " + dat.getName() + " (" + dat.length() + " bytes) must not exceed maxPageSize");
+            }
+        } finally {
+            TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
+            TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    // After a grow-relocation, the document's id must remain in the pending overlay even after the
+    // DELETED event's worker clears its mark, so the CREATED event's worker can still clear it and
+    // index-backed queries never see a false negative in the window between the two events.
+    @Test
+    public void test_relocate_keeps_id_pending_until_both_events_processed() throws Exception {
+        final var config = org.techhouse.config.Configuration.getInstance();
+        final var originalMaxPage = config.getMaxPageSize();
+        final var originalMaxEntry = config.getMaxEntrySize();
+        final var collName = "pendingRelocateColl";
+        TestUtils.setPrivateField(config, "maxPageSize", 2000L);
+        TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        // Swap in a fresh BackgroundTaskManager whose workers are never started so the relocation's
+        // DELETED/CREATED events sit unprocessed in its queue. Otherwise, if another test class
+        // (e.g. MainTest) has already started the shared IoC manager's workers, they would drain the
+        // events and clear the pending marks before this assertion runs, making the test flaky.
+        final var originalTaskManager = TestUtils.getPrivateField(processor, "taskManager",
+                BackgroundTaskManager.class);
+        TestUtils.setPrivateField(processor, "taskManager", new BackgroundTaskManager());
+        try {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+            final var keepSave = new SaveRequest(TestGlobals.DB, collName);
+            final var keepObj = new JsonObject();
+            keepObj.add(Globals.PK_FIELD, new JsonString("keep"));
+            keepObj.add("v", new JsonString("k".repeat(280)));
+            keepSave.setObject(keepObj);
+            keepSave.set_id("keep");
+            processor.processMessage(keepSave);
+
+            final var aSave = new SaveRequest(TestGlobals.DB, collName);
+            final var aObj = new JsonObject();
+            aObj.add(Globals.PK_FIELD, new JsonString("a"));
+            aObj.add("v", new JsonString("small"));
+            aSave.setObject(aObj);
+            aSave.set_id("a");
+            processor.processMessage(aSave);
+
+            final var pending = IocContainer.get(PendingIndexWrites.class);
+
+            // Trigger a relocation: grow "a" so page 0 overflows.
+            final var growSave = new SaveRequest(TestGlobals.DB, collName);
+            final var grown = new JsonObject();
+            grown.add(Globals.PK_FIELD, new JsonString("a"));
+            grown.add("v", new JsonString("x".repeat(1780)));
+            growSave.setObject(grown);
+            growSave.set_id("a");
+            processor.processMessage(growSave);
+
+            // Immediately after processMessage returns, "a" must be pending with count >= 2
+            // (one mark for DELETED, one for CREATED) so that the DELETED worker's clear()
+            // cannot drop the key before CREATED is processed.
+            assertTrue(pending.idsFor(TestGlobals.DB, collName).contains("a"),
+                    "id must remain pending after relocation so both events are covered");
+        } finally {
+            TestUtils.setPrivateField(processor, "taskManager", originalTaskManager);
+            TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
+            TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    @Test
+    public void test_drop_database_removes_locks_for_all_collections() throws Exception {
+        final var db = "lockCleanupDb";
+        processor.processMessage(new CreateDatabaseRequest(db));
+        processor.processMessage(new CreateCollectionRequest(db, "collA"));
+        processor.processMessage(new CreateCollectionRequest(db, "collB"));
+
+        processor.processMessage(new DropDatabaseRequest(db));
+
+        final var locksField = ResourceLocking.class.getDeclaredField("locks");
+        locksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        final var lockMap = (java.util.Map<String, ?>) locksField.get(null);
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(db, "collA")),
+                "Lock for collA must be removed after database drop");
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(db, "collB")),
+                "Lock for collB must be removed after database drop");
+    }
+
+    // When no admin page metadata is available, the overflow check can't assess the page, so the SAVE
+    // falls back to an in-place update (no relocation) and the document still updates correctly.
+    @Test
+    public void test_save_grow_update_without_page_metadata_updates_in_place() {
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var collName = "noPageMetaColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+        try {
+            final var save = new SaveRequest(TestGlobals.DB, collName);
+            final var o = new JsonObject();
+            o.add(Globals.PK_FIELD, new JsonString("x"));
+            o.add("v", new JsonString("one"));
+            save.setObject(o);
+            save.set_id("x");
+            assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+            // Drop the in-memory page metadata so wouldOverflowPage hits its null fallback.
+            cache.removeAdminPageEntries(TestGlobals.DB, collName);
+
+            final var upd = new SaveRequest(TestGlobals.DB, collName);
+            final var o2 = new JsonObject();
+            o2.add(Globals.PK_FIELD, new JsonString("x"));
+            o2.add("v", new JsonString("two"));
+            upd.setObject(o2);
+            upd.set_id("x");
+            assertEquals(OperationStatus.OK, processor.processMessage(upd).getStatus());
+
+            final var find = new FindByIdRequest(TestGlobals.DB, collName);
+            find.set_id("x");
+            final var found = (FindByIdResponse) processor.processMessage(find);
+            assertEquals(OperationStatus.OK, found.getStatus());
+            assertEquals("two", found.getObject().get("v").asJsonString().getValue());
+        } finally {
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    // A single-document insert calls updatePageSizeInMemory synchronously; the subsequent background
+    // CREATED event must only persist — entryCount and pageSize must both remain at 1x, not 2x.
+    @Test
+    public void test_single_save_insert_page_entry_count_single_counted() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("singleSaveId1"));
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        save.setObject(obj);
+        save.set_id("singleSaveId1");
+
+        assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+        // Capture the page state set by the synchronous updatePageSizeInMemory call.
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0Before.isPresent());
+        final long countBefore = page0Before.get().getEntryCount();
+        final long sizeBefore = page0Before.get().getPageSize();
+
+        // Simulate the background EntityEvent(CREATED) arriving.
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id("singleSaveId1");
+        entry.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry));
+
+        final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0After.isPresent());
+        assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
+        assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
+    }
+
+    // Bulk-save inserts also call updatePageSizeInMemory synchronously per inserted entry;
+    // the subsequent background BulkEntityEvent must not double-count any of them.
+    @Test
+    public void test_bulk_save_insert_page_entry_count_single_counted() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        final var obj1 = new JsonObject();
+        obj1.add(Globals.PK_FIELD, new JsonString("bulkSaveId1"));
+        final var obj2 = new JsonObject();
+        obj2.add(Globals.PK_FIELD, new JsonString("bulkSaveId2"));
+
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(obj1, obj2));
+        assertEquals(OperationStatus.OK, processor.processMessage(bulk).getStatus());
+
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0Before.isPresent());
+        final long countBefore = page0Before.get().getEntryCount();
+        final long sizeBefore = page0Before.get().getPageSize();
+
+        // Simulate the background BulkEntityEvent(CREATED) arriving.
+        final var e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
+        e1.set_id("bulkSaveId1");
+        e1.setPage(0L);
+        final var e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
+        e2.set_id("bulkSaveId2");
+        e2.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2));
+
+        final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0After.isPresent());
+        assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
+        assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
     }
 }

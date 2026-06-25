@@ -41,5 +41,8 @@ certs/
 *.p12
 *.jks
 
+### Python ###
+.venv/
+
 # This file
 .dockerignore

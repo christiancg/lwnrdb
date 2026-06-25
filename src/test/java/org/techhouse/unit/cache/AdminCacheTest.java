@@ -241,6 +241,86 @@ public class AdminCacheTest {
         assertNull(result3);
     }
 
+    // A collection dropped while a background index event is still in flight is no longer in the
+    // cache; getIndexesForCollection must return an empty set (not throw) so background maintenance
+    // becomes a clean no-op.
+    @Test
+    public void test_get_indexes_for_missing_collection_returns_empty() {
+        AdminCache cache = new AdminCache();
+
+        Set<String> result = cache.getIndexesForCollection("goneDb", "goneColl");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+        // hasIndex builds on the same method and must report false rather than throwing.
+        assertFalse(cache.hasIndex("goneDb", "goneColl", "anyField"));
+    }
+
+    // When the collection exists, its registered indexes are returned as-is.
+    @Test
+    public void test_get_indexes_for_existing_collection_returns_indexes()
+            throws NoSuchFieldException, IllegalAccessException {
+        AdminCache cache = new AdminCache();
+        String dbName = "testDB";
+        String collName = "testCollection";
+        AdminCollEntry entry = new AdminCollEntry(dbName, collName);
+        entry.setIndexes(Set.of("status", "score"));
+
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
+        };
+        TestUtils.getPrivateField(cache, "collections", typeColl).put(Cache.getCollectionIdentifier(dbName, collName),
+                entry);
+
+        assertEquals(Set.of("status", "score"), cache.getIndexesForCollection(dbName, collName));
+        assertTrue(cache.hasIndex(dbName, collName, "status"));
+        assertFalse(cache.hasIndex(dbName, collName, "missing"));
+    }
+
+    // shiftPkPositionsAfterCompaction dispatches to the collections PK map and shifts only same-page
+    // entries after the removed position, in place.
+    @Test
+    public void test_shift_pk_positions_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
+        AdminCache cache = new AdminCache();
+        final var before = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c1", 0,
+                10, 0);
+        final var after = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c2", 10,
+                10, 0);
+        final var type = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
+        final var map = TestUtils.getPrivateField(cache, "collectionsPkIndex", type);
+        map.put("c1", before);
+        map.put("c2", after);
+
+        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, 0, 0, 10);
+
+        assertEquals(0, before.getPosition());
+        assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
+    }
+
+    // shiftPkPositionsAfterCompaction dispatches to the per-collection pages PK list for a pages_* name.
+    @Test
+    public void test_shift_pk_positions_for_pages_collection() throws NoSuchFieldException, IllegalAccessException {
+        AdminCache cache = new AdminCache();
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "db", "coll");
+        final var entry = new PkIndexEntry(Globals.ADMIN_DB_NAME, pagesCollName, "p1", 30, 10, 0);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        TestUtils.getPrivateField(cache, "pagesPkIndexes", type).put(
+                Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, pagesCollName), new ArrayList<>(List.of(entry)));
+
+        cache.shiftPkPositionsAfterCompaction(pagesCollName, 0, 0, 10);
+
+        assertEquals(20, entry.getPosition());
+    }
+
+    // An unknown pages_* collection that is not cached is a no-op (does not throw).
+    @Test
+    public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
+        AdminCache cache = new AdminCache();
+        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction(
+                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "no", "coll"), 0, 0, 10));
+    }
+
     // Successfully adds AdminDbEntry and PkIndexEntry to respective maps
     @Test
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {
@@ -583,5 +663,33 @@ public class AdminCacheTest {
         assertTrue(cache.getCollectionUsagePkIndexes().containsKey("usage-id"));
         cache.removePkIndexCollectionUsage("usage-id");
         assertNull(cache.getPkIndexCollectionUsage("usage-id"));
+    }
+
+    @Test
+    public void test_select_page_for_insert_packs_into_pending_only_page() {
+        // Fresh collection: no committed page metadata yet. The first entry allocates page 0; the
+        // second must reuse that pending page 0 (it fits) instead of scattering onto page 1.
+        AdminCache cache = new AdminCache();
+        long first = cache.selectPageForInsert("myDb", "myColl", 100);
+        assertEquals(0L, first, "First insert allocates page 0");
+        long second = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 100L));
+        assertEquals(0L, second, "Second insert reuses the pending (not-yet-committed) page 0");
+    }
+
+    @Test
+    public void test_select_page_for_insert_allocates_new_when_pending_only_page_full() {
+        // The pending page 0 is nearly full, so a new entry that won't fit must go to page 1 even
+        // though page 0 exists only in the in-flight batch (not committed to pageEntries).
+        AdminCache cache = new AdminCache();
+        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 2_097_100L));
+        assertEquals(1L, target, "Full pending-only page forces a new page allocation");
+    }
+
+    @Test
+    public void test_select_page_for_insert_prefers_lowest_pending_only_page() {
+        // Two pending-only pages: page 0 is full, page 1 has room -> ascending first-fit picks page 1.
+        AdminCache cache = new AdminCache();
+        long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
+        assertEquals(1L, target, "First pending page with room is chosen in ascending order");
     }
 }
