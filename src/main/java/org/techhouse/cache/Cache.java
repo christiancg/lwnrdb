@@ -20,6 +20,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
@@ -74,6 +75,24 @@ public class Cache {
         return userCache.getPkIndexAndLoadIfNecessary(dbName, collName);
     }
 
+    /**
+     * Applies the in-memory PK position fix described by a {@link PkCompaction} returned from a
+     * delete/update, routing to the admin or user cache by database. Null-safe: a {@code null}
+     * compaction (no survivor moved) is a no-op.
+     */
+    public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
+        if (compaction == null) {
+            return;
+        }
+        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())) {
+            adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
+                    compaction.removedPosition(), compaction.removedLength());
+        } else {
+            userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
+                    compaction.removedPosition(), compaction.removedLength());
+        }
+    }
+
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
@@ -121,28 +140,26 @@ public class Cache {
         userCache.evictCollection(dbName, collName);
     }
 
-    public List<CacheableResource> listCacheableResources() {
-        return userCache.listCacheableResources();
+    public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        userCache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
-    public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {
-        return userCache.hasLoadedIndex(dbName, collName, fieldName);
+    public List<CacheableResource> listCacheableResources() {
+        return userCache.listCacheableResources();
     }
 
     // ── Cross-cutting reads (combine user documents with admin page metadata) ──
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var wholeCollection = userCache.getCachedCollection(dbName, collName);
-        final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null) {
-            if (wholeCollection != null && !wholeCollection.isEmpty()) {
-                return wholeCollection;
-            }
-        } else if (wholeCollection != null && !wholeCollection.isEmpty()) {
-            final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-            if (wholeCollection.size() >= entryCount) {
-                return wholeCollection;
-            }
+        // The completeness gate uses the synchronously-maintained PK index size as the authoritative
+        // document count, NOT the admin page entry counts: those are updated by the background worker
+        // and lag behind committed writes, so under memory pressure (when a freshly inserted document
+        // is not admitted into the cache) a stale low entry count could wrongly accept an incomplete
+        // cached map. The PK index is written synchronously on every save/delete (see CountOperatorHelper).
+        if (wholeCollection != null && !wholeCollection.isEmpty()
+                && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+            return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
@@ -152,18 +169,22 @@ public class Cache {
         }
     }
 
+    // The exact, currently-consistent document count from the synchronously-maintained PK index.
+    private int pkIndexSize(String dbName, String collName) {
+        try {
+            return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty()) {
-                final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-                if (collPages == null) {
-                    return cached.values().stream();
-                }
-                final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-                if (cached.size() >= entryCount) {
-                    return cached.values().stream();
-                }
+            // See getWholeCollection: gate on the synchronous PK index size, not the lagging admin
+            // page entry counts, so a stale count can never accept an incomplete cached collection.
+            if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
+                return cached.values().stream();
             }
         }
         return streamCollectionFromDisk(dbName, collName);

@@ -8,13 +8,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.bckg_ops.events.IndexEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
@@ -71,6 +71,7 @@ public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
+    private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
@@ -196,7 +197,7 @@ public class OperationProcessor {
                     final var id = data.get(Globals.PK_FIELD).asJsonString().getValue();
                     i.set_id(id);
                     final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
-                    if (foundIndexEntry > 0) {
+                    if (foundIndexEntry >= 0) {
                         final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
                         final var indexedDbEntry = new IndexedDbEntry();
                         indexedDbEntry.setIndex(foundIndex);
@@ -210,7 +211,11 @@ public class OperationProcessor {
             }
             final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
             if (!indexedDbEntriesToUpdate.isEmpty()) {
-                updatedIndexEntries.addAll(fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate));
+                final var bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
+                updatedIndexEntries.addAll(bulkResult.updated());
+                // Fix the in-memory positions of non-updated survivors shifted by the batch, then
+                // replace the updated entries with their new (relocated) index entries.
+                bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
                 primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
                         .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
             }
@@ -237,11 +242,15 @@ public class OperationProcessor {
             cache.addEntriesToCache(dbName, collName, updatedDbEntries);
             final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
             cache.addEntriesToCache(dbName, collName, insertedDbEntries);
+            final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
+            final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
+            // Mark all committed ids pending before releasing the write lock, so index-backed reads
+            // reconcile them until their asynchronous field-index update completes.
+            pendingIndexWrites.mark(dbName, collName, updatedIds);
+            pendingIndexWrites.mark(dbName, collName, insertedIds);
             taskManager
                     .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
             recordCollectionAccess(dbName, collName);
-            final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
-            final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
             return new BulkSaveResponse(OperationStatus.OK, "Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
             return new BulkSaveResponse(OperationStatus.ERROR, "Error while saving entries: " + exception.getMessage(),
@@ -271,8 +280,16 @@ public class OperationProcessor {
             PkIndexEntry savedPkIndexEntry;
             if (foundIndexEntry >= 0) {
                 final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
+                if (wouldOverflowPage(dbName, collName, idxEntry, entry)) {
+                    // The grown document no longer fits on its page; relocate it instead of rewriting in
+                    // place (which would push the page past maxPageSize). Handled as a delete + insert so
+                    // page metadata and field indexes stay correct via the standard background events.
+                    return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex);
+                }
                 entry.setPage(idxEntry.getPage());
-                savedPkIndexEntry = fs.updateFromCollection(entry, idxEntry);
+                final var updateResult = fs.updateFromCollection(entry, idxEntry);
+                savedPkIndexEntry = updateResult.indexEntry();
+                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
                 primaryKeyIndex.remove(idxEntry);
                 eventType = EventType.UPDATED;
             } else {
@@ -287,6 +304,9 @@ public class OperationProcessor {
             }
             primaryKeyIndex.add(insertAt, savedPkIndexEntry);
             cache.addEntryToCache(dbName, collName, entry);
+            // Mark the id pending (committed, but its field-index update is asynchronous) before
+            // releasing the write lock, so index-backed reads reconcile it until indexing completes.
+            pendingIndexWrites.mark(dbName, collName, entry.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
             recordCollectionAccess(dbName, collName);
             return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
@@ -295,6 +315,50 @@ public class OperationProcessor {
         } finally {
             locks.release(dbName, collName);
         }
+    }
+
+    // True when rewriting the existing entry in place with the new (larger) value would push its page
+    // past maxPageSize. Uses the cached page byte size (minus the old entry, plus the new one); when no
+    // page metadata is available the check is skipped (falls back to the in-place update).
+    private boolean wouldOverflowPage(String dbName, String collName, PkIndexEntry idxEntry, DbEntry entry) {
+        final var pageEntry = cache.getAdminPageEntry(dbName, collName, idxEntry.getPage());
+        if (pageEntry == null) {
+            return false;
+        }
+        final var projectedPageSize = pageEntry.getPageSize() - idxEntry.getLength() + entry.byteSize();
+        return projectedPageSize > configuration.getMaxPageSize();
+    }
+
+    // Relocates a grown document that no longer fits on its page: removes it from the current page
+    // (compacting the survivors) and re-inserts it into a fitting page. Modeled as a DELETE of the old
+    // version followed by a CREATE of the new one so per-page metadata (the old page loses the entry,
+    // the new page gains it) and the field indexes are maintained through the same background events the
+    // standalone delete/insert paths emit. Runs while the caller already holds the collection write lock.
+    private SaveResponse relocateOnGrowUpdate(String dbName, String collName, DbEntry entry, PkIndexEntry idxEntry,
+            List<PkIndexEntry> primaryKeyIndex) throws Exception {
+        final var oldEntry = cache.getById(dbName, collName, idxEntry);
+        oldEntry.setPage(idxEntry.getPage());
+        final var compaction = fs.deleteFromCollection(idxEntry);
+        cache.shiftPkPositionsAfterCompaction(compaction);
+        primaryKeyIndex.remove(idxEntry);
+        cache.evictEntry(dbName, collName, entry.get_id());
+        pendingIndexWrites.mark(dbName, collName, entry.get_id());
+        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, oldEntry));
+
+        entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
+        final var relocatedPkIndexEntry = fs.insertIntoCollection(entry);
+        cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
+                relocatedPkIndexEntry.getLength());
+        int insertAt = Collections.binarySearch(primaryKeyIndex, relocatedPkIndexEntry.getValue());
+        if (insertAt < 0) {
+            insertAt = -(insertAt + 1);
+        }
+        primaryKeyIndex.add(insertAt, relocatedPkIndexEntry);
+        cache.addEntryToCache(dbName, collName, entry);
+        pendingIndexWrites.mark(dbName, collName, entry.get_id());
+        taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
+        recordCollectionAccess(dbName, collName);
+        return new SaveResponse(OperationStatus.OK, "Successfully saved", relocatedPkIndexEntry.getValue());
     }
 
     private FindByIdResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
@@ -352,10 +416,15 @@ public class OperationProcessor {
             if (foundIndexEntry.isPresent()) {
                 final var idxEntry = foundIndexEntry.get();
                 final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
-                fs.deleteFromCollection(idxEntry);
+                final var compaction = fs.deleteFromCollection(idxEntry);
+                cache.shiftPkPositionsAfterCompaction(compaction);
                 primaryKeyIndex.remove(idxEntry);
                 primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
                 cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
+                // Mark pending until the async index removal completes: the field index still maps the
+                // value to this id, so index-only reads that don't re-fetch the document (COUNT, DISTINCT)
+                // would otherwise count/surface the deleted doc. The DELETED event clears it.
+                pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
                 taskManager
                         .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
                 recordCollectionAccess(dbName, collName);
@@ -408,17 +477,35 @@ public class OperationProcessor {
     }
 
     private DropDatabaseResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
+        final var dbName = dropDatabaseRequest.getDatabaseName();
+        // Lock every collection of the database (in a stable order to avoid deadlock with other
+        // multi-collection acquisitions) so a concurrent save/delete/read or a background index update
+        // on any of them cannot race the file deletion and cache eviction below.
+        final var dbEntry = cache.getAdminDbEntry(dbName);
+        final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
+        Collections.sort(collNames);
+        final var lockedColls = new ArrayList<String>();
         try {
-            final var dbName = dropDatabaseRequest.getDatabaseName();
+            for (final var collName : collNames) {
+                locks.lock(dbName, collName);
+                lockedColls.add(collName);
+            }
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
+                for (final var collName : lockedColls) {
+                    locks.removeLock(dbName, collName);
+                }
                 taskManager.submitBackgroundTask(new DatabaseEvent(EventType.DELETED, dbName));
                 return new DropDatabaseResponse(OperationStatus.OK, "Database dropped successfully");
             }
             return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
         } catch (Exception exception) {
             return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
+        } finally {
+            for (final var collName : lockedColls) {
+                locks.release(dbName, collName);
+            }
         }
     }
 
@@ -451,22 +538,25 @@ public class OperationProcessor {
     private DropCollectionResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
+        boolean dropSucceeded = false;
         try {
             locks.lock(dbName, collName);
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
                 taskManager.submitBackgroundTask(new CollectionEvent(EventType.DELETED, dbName, collName));
+                dropSucceeded = true;
                 return new DropCollectionResponse(OperationStatus.OK, "Collection dropped successfully");
             }
-            locks.release(dbName, collName);
-            locks.removeLock(dbName, collName);
             return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection");
         } catch (Exception e) {
             return new DropCollectionResponse(OperationStatus.ERROR,
                     "Error while dropping collection: " + e.getMessage());
         } finally {
             locks.release(dbName, collName);
+            if (dropSucceeded) {
+                locks.removeLock(dbName, collName);
+            }
         }
     }
 
@@ -497,15 +587,23 @@ public class OperationProcessor {
     }
 
     private CreateIndexResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
+        final var dbName = createIndexRequest.getDatabaseName();
+        final var collName = createIndexRequest.getCollectionName();
+        final var fieldName = createIndexRequest.getFieldName();
         try {
-            final var dbName = createIndexRequest.getDatabaseName();
-            final var collName = createIndexRequest.getCollectionName();
-            final var fieldName = createIndexRequest.getFieldName();
+            // Hold the collection write lock so no save can commit a document between the index build
+            // and its registration. Building the index files and registering the field as a known
+            // index happen atomically here (synchronously), so any concurrent save is serialized: it
+            // either commits before (and is captured by the whole-collection read) or after (and its
+            // background index update sees the field already registered and indexes it).
+            locks.lock(dbName, collName);
             IndexHelper.createIndex(dbName, collName, fieldName);
-            taskManager.submitBackgroundTask(new IndexEvent(EventType.CREATED, dbName, collName, fieldName));
+            AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
             return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
         } catch (Exception e) {
             return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 
@@ -530,19 +628,25 @@ public class OperationProcessor {
     }
 
     private DropIndexResponse processDropIndex(DropIndexRequest dropIndexRequest) {
+        final var dbName = dropIndexRequest.getDatabaseName();
+        final var collName = dropIndexRequest.getCollectionName();
+        final var fieldName = dropIndexRequest.getFieldName();
         try {
-            final var dbName = dropIndexRequest.getDatabaseName();
-            final var collName = dropIndexRequest.getCollectionName();
-            final var fieldName = dropIndexRequest.getFieldName();
+            // Hold the collection write lock so the index files are deleted and the field is
+            // unregistered atomically with respect to saves and the background indexer. Unregister
+            // first so no read or background index update can use the field after this returns.
+            locks.lock(dbName, collName);
             final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
             if (result) {
-                taskManager.submitBackgroundTask(new IndexEvent(EventType.DELETED, dbName, collName, fieldName));
+                AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
                 return new DropIndexResponse(OperationStatus.OK, "Successfully dropped index: " + fieldName);
             } else {
                 return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + fieldName);
             }
         } catch (Exception e) {
             return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + e.getMessage());
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 }

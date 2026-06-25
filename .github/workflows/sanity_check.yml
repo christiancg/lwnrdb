@@ -44,14 +44,40 @@ jobs:
           STREAM_TEST_DOCS: "2000"
           STREAM_TEST_PAYLOAD_BYTES: "512"
         run: python3 test_utils/test_streaming_reads.py
-      - name: Run index-backed aggregation tests
+      - name: Run index-backed aggregation tests (caching disabled)
         env:
           # CI runners are slower; dial the workload down so the run stays quick
           # while still being large enough for the index fast-paths to clearly
-          # beat the full-scan paths (GROUP_BY / JOIN / SORT / DISTINCT).
+          # beat the full-scan paths (JOIN / SORT / DISTINCT).
           INDEX_TEST_DOCS: "2000"
           INDEX_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_index_aggregations.py
+          # Talk to the dedicated caching-disabled server started below (port 8990),
+          # not the shared server on 8989.
+          INDEX_TEST_PORT: "8990"
+        run: |
+          # Index gains are only visible when reads hit disk, so this suite needs a
+          # server with caching disabled (maxMemory=-1). Run it as a SECOND server
+          # on port 8990 in an isolated working directory, leaving the shared server
+          # on 8989 up for the remaining suites (the cache-warmup benchmark connects
+          # to it before restarting it itself). Only this extra server is stopped,
+          # by PID, so the shared server is untouched.
+          mkdir -p ci-nocache
+          sed -e 's/^maxMemory=.*/maxMemory=-1/' \
+              -e 's/^port=.*/port=8990/' \
+              -e 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' \
+              lwnrdb.cfg > ci-nocache/lwnrdb.cfg
+          ( cd ci-nocache && exec java -Xmx512m -jar ../target/lwnrdb-1.0-SNAPSHOT.jar > server.log 2>&1 ) &
+          NOCACHE_PID=$!
+          trap 'kill "$NOCACHE_PID" 2>/dev/null || true' EXIT
+          # Wait until THIS server reports it is listening; fail loudly with its log otherwise.
+          for _ in $(seq 1 100); do
+            grep -q "listening on port 8990" ci-nocache/server.log 2>/dev/null && break
+            sleep 0.2
+          done
+          if ! grep -q "listening on port 8990" ci-nocache/server.log 2>/dev/null; then
+            echo "::error::caching-disabled server failed to start"; cat ci-nocache/server.log; exit 1
+          fi
+          python3 test_utils/test_index_aggregations.py
       - name: Run TLS integration tests
         # Self-contained: starts its own TLS-enabled server on a dedicated port
         # (9443) and working directory, then stops it — independent of the

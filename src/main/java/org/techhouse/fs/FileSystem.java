@@ -15,7 +15,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -185,7 +184,6 @@ public class FileSystem {
         entry.setDatabaseName(pkIndexEntry.getDatabaseName());
         entry.setCollectionName(pkIndexEntry.getCollectionName());
         entry.set_id(pkIndexEntry.getValue());
-        jsonObject.remove(Globals.PK_FIELD);
         entry.setData(jsonObject);
         return entry;
     }
@@ -224,10 +222,10 @@ public class FileSystem {
             final var page = groupedEntry.getKey();
             final var pageEntries = groupedEntry.getValue();
             final var file = getCollectionFile(dbName, collName, page);
-            var currentOffset = file.length();
             final var lock = fileLock(file).writeLock();
             lock.lock();
             try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+                var currentOffset = file.length();
                 for (var entry : pageEntries) {
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
                     final var bytes = strData.getBytes(StandardCharsets.UTF_8);
@@ -302,22 +300,39 @@ public class FileSystem {
         }
     }
 
-    public void deleteFromCollection(PkIndexEntry pkIndexEntry) {
+    /**
+     * Deletes the entry from its page, compacting the survivors. Returns the {@link PkCompaction}
+     * describing the shift (so the caller can fix the in-memory PK positions via
+     * {@code Cache.shiftPkPositionsAfterCompaction}), or {@code null} when no survivor moved.
+     */
+    public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
         final var dbName = pkIndexEntry.getDatabaseName();
         final var collName = pkIndexEntry.getCollectionName();
         final var page = pkIndexEntry.getPage();
         final var file = getCollectionFile(dbName, collName, page);
-        final long totalFileLength = file.length();
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+            final long totalFileLength = file.length();
+            final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
             deleteIndexValue(pkIndexEntry);
+            return compacted ? compactionFor(pkIndexEntry) : null;
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
             lock.unlock();
+        }
+    }
+
+    private static PkCompaction compactionFor(PkIndexEntry pkIndexEntry) {
+        return new PkCompaction(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
+                pkIndexEntry.getPage(), pkIndexEntry.getPosition(), pkIndexEntry.getLength());
+    }
+
+    private static void shiftIfAfter(PkIndexEntry entry, PkCompaction compaction) {
+        if (entry.getPage() == compaction.page() && entry.getPosition() > compaction.removedPosition()) {
+            entry.setPosition(entry.getPosition() - compaction.removedLength());
         }
     }
 
@@ -326,73 +341,94 @@ public class FileSystem {
                 null);
     }
 
-    private void shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
+    /**
+     * Shifts the entries after {@code pkIndexEntry} toward the start of the page, overwriting its
+     * slot. Returns {@code true} when entries were actually moved (so the caller must fix the
+     * in-memory PK positions of the survivors), {@code false} when there was nothing to shift — the
+     * removed entry was the last one, or its position is already past the end of the file (a stale
+     * position from a concurrent compaction/drop), in which case allocating the buffer is skipped.
+     */
+    private boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
             throws IOException {
-        writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
         final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
+        if (otherEntriesLength <= 0) {
+            return false;
+        }
+        writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
         byte[] buffer = new byte[otherEntriesLength];
         writer.readFully(buffer, 0, otherEntriesLength);
         writer.seek(pkIndexEntry.getPosition());
         writer.write(buffer, 0, otherEntriesLength);
+        return true;
     }
 
-    public List<IndexedDbEntry> bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
+    /**
+     * Updates many entries by delegating to the single-entry {@link #updateFromCollection}, which keeps
+     * the page file and PK index file correct for each row. Earlier updates shift the file positions of
+     * later same-page entries, so this drives each {@code updateFromCollection} with a private,
+     * progressively-adjusted copy of the target's index entry (never mutating the caller's cached
+     * {@link PkIndexEntry} objects). The returned {@link BulkUpdateResult} carries the new entries plus
+     * the ordered compactions the caller must apply to fix the in-memory positions of the surviving
+     * (non-updated) entries.
+     */
+    public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
-        final var result = new ArrayList<IndexedDbEntry>();
-        final var entrySet = entries.stream()
-                .collect(Collectors.groupingBy(indexedDbEntry -> indexedDbEntry.getIndex().getPage())).entrySet();
-        for (var groupedEntry : entrySet) {
-            final var page = groupedEntry.getKey();
-            final var pageEntries = groupedEntry.getValue();
-            final var file = getCollectionFile(dbName, collName, page);
-            long totalFileLength = file.length();
-            final var newPkEntries = new ArrayList<PkIndexEntry>();
-            final var oldLengths = new LinkedHashMap<String, Long>();
-            final var lock = fileLock(file).writeLock();
-            lock.lock();
-            try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-                for (var entry : pageEntries) {
-                    shiftOtherEntriesToStart(writer, entry.getIndex(), totalFileLength);
-                    writer.seek(totalFileLength - entry.getIndex().getLength());
-                    final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-                    final var length = bytes.length;
-                    writer.write(bytes, 0, length);
-                    final var newLength = totalFileLength - entry.getIndex().getLength() + length;
-                    writer.setLength(newLength);
-                    final var newPosition = totalFileLength - entry.getIndex().getLength();
-                    final var newPkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), newPosition, length,
-                            page);
-                    newPkEntries.add(newPkEntry);
-                    oldLengths.put(entry.get_id(), entry.getIndex().getLength());
-                    final var updatedIndexEntry = new IndexedDbEntry();
-                    updatedIndexEntry.setIndex(newPkEntry);
-                    updatedIndexEntry.set_id(entry.get_id());
-                    updatedIndexEntry.setCollectionName(collName);
-                    updatedIndexEntry.setDatabaseName(dbName);
-                    updatedIndexEntry.setData(entry.getData());
-                    updatedIndexEntry.setPreviousByteSize(entry.getIndex().getLength());
-                    result.add(updatedIndexEntry);
-                    totalFileLength = newLength;
-                }
-            } finally {
-                lock.unlock();
-            }
-            bulkUpdateIndexValues(dbName, collName, newPkEntries, oldLengths);
+        final var updated = new ArrayList<IndexedDbEntry>();
+        final var compactions = new ArrayList<PkCompaction>();
+        // Private copies of the target index entries; their positions are adjusted as earlier updates
+        // compact the page, so each delegated update sees the current on-disk position.
+        final var working = new ArrayList<PkIndexEntry>(entries.size());
+        for (final var entry : entries) {
+            final var idx = entry.getIndex();
+            working.add(new PkIndexEntry(idx.getDatabaseName(), idx.getCollectionName(), idx.getValue(),
+                    idx.getPosition(), idx.getLength(), idx.getPage()));
         }
-        return result;
+        for (int i = 0; i < entries.size(); i++) {
+            final var entry = entries.get(i);
+            final var target = working.get(i);
+            final var result = updateFromCollection(entry.toDbEntry(), target);
+            final var updatedIndexEntry = new IndexedDbEntry();
+            updatedIndexEntry.setIndex(result.indexEntry());
+            updatedIndexEntry.set_id(entry.get_id());
+            updatedIndexEntry.setCollectionName(collName);
+            updatedIndexEntry.setDatabaseName(dbName);
+            updatedIndexEntry.setData(entry.getData());
+            updatedIndexEntry.setPreviousByteSize(target.getLength());
+            updated.add(updatedIndexEntry);
+            final var compaction = result.compaction();
+            if (compaction != null) {
+                compactions.add(compaction);
+                // This update relocated the row to the end and shifted later same-page entries toward
+                // the start. Apply the same shift to the still-to-be-processed working copies (so the
+                // next update sees the current on-disk position) and to the already-relocated entries
+                // from earlier iterations (so their reported new positions stay correct), but not to
+                // the row we just relocated.
+                for (int j = i + 1; j < working.size(); j++) {
+                    shiftIfAfter(working.get(j), compaction);
+                }
+                for (int k = 0; k < i; k++) {
+                    shiftIfAfter(updated.get(k).getIndex(), compaction);
+                }
+            }
+        }
+        return new BulkUpdateResult(updated, compactions);
     }
 
-    public PkIndexEntry updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
+    /**
+     * Updates the entry in place, relocating it to the end of its page and compacting the survivors.
+     * Returns the new {@link PkIndexEntry} together with the {@link PkCompaction} the caller must
+     * apply to the in-memory PK positions (or a null compaction when no survivor moved).
+     */
+    public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
         final var file = getCollectionFile(dbName, collName, page);
-        final long totalFileLength = file.length();
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+            final long totalFileLength = file.length();
+            final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var bytes = strData.getBytes(StandardCharsets.UTF_8);
@@ -400,8 +436,9 @@ public class FileSystem {
             writer.write(bytes, 0, length);
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
             entry.setPreviousByteSize(pkIndexEntry.getLength());
-            return updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(),
+            final var updated = updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(),
                     totalFileLength, length, page);
+            return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
         } finally {
             lock.unlock();
         }
@@ -414,97 +451,66 @@ public class FileSystem {
         return newIndexEntry;
     }
 
-    private void bulkUpdateIndexValues(String dbName, String collName, List<PkIndexEntry> newEntries,
-            LinkedHashMap<String, Long> oldLengths) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
-        final var newEntriesMap = newEntries.stream().collect(Collectors.toMap(PkIndexEntry::getValue, e -> e));
-        final var lock = fileLock(indexFile).writeLock();
-        lock.lock();
-        try (var raf = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final int fileLength = (int) raf.length();
-            byte[] buffer = new byte[fileLength];
-            raf.readFully(buffer, 0, fileLength);
-            final var lines = new String(buffer).split(Globals.NEWLINE_REGEX);
-            long cumulativeShift = 0;
-            final var updatedLines = new ArrayList<String>();
-            for (final var line : lines) {
-                if (line.isBlank())
-                    continue;
-                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collName, line);
-                if (newEntriesMap.containsKey(entry.getValue())) {
-                    updatedLines.add(newEntriesMap.get(entry.getValue()).toFileEntry());
-                    cumulativeShift += oldLengths.get(entry.getValue());
-                } else {
-                    entry.setPosition(entry.getPosition() - cumulativeShift);
-                    updatedLines.add(entry.toFileEntry());
-                }
-            }
-            final var newContent = String.join(Globals.NEWLINE, updatedLines) + Globals.NEWLINE;
-            final var newContentBytes = newContent.getBytes(StandardCharsets.UTF_8);
-            raf.seek(0);
-            raf.write(newContentBytes);
-            raf.setLength(newContentBytes.length);
-        } finally {
-            lock.unlock();
-        }
-    }
-
     private void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)
             throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
         final var lock = fileLock(indexFile).writeLock();
         lock.lock();
-        try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final int oldFileLength = (int) indexFile.length();
-            byte[] buffer = new byte[oldFileLength];
-            writer.readFully(buffer, 0, oldFileLength);
-            final var wholeFile = new String(buffer);
-            final var lines = wholeFile.split(Globals.NEWLINE_REGEX);
-            var totalLengthBefore = 0;
-            var indexLine = 0;
-            var oldIndexLine = "";
-            for (int i = 0; i < lines.length; i++) {
-                if (!lines[i].isBlank()
-                        && PkIndexEntry.fromIndexFileEntry(dbName, collectionName, lines[i]).getValue().equals(value)) {
-                    indexLine = i;
-                    oldIndexLine = lines[i];
-                    break;
+        try {
+            final List<String> existingLines = indexFile.exists() ? Files.readAllLines(indexFile.toPath()) : List.of();
+            // Parse every entry, pulling out the one being updated/deleted. The remaining entries
+            // ("others") have their on-disk positions corrected per page (see reindexPks); the file is
+            // rewritten in full because the entries needing a shift are not contiguous in the
+            // id-sorted file (a same-page, later-positioned row can sort before the updated id).
+            final var others = new ArrayList<PkIndexEntry>(existingLines.size());
+            PkIndexEntry oldEntry = null;
+            for (final var line : existingLines) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
+                if (entry.getValue().equals(value)) {
+                    oldEntry = entry;
                 } else {
-                    totalLengthBefore += lines[i].length() + Globals.NEWLINE_CHAR_LENGTH;
+                    others.add(entry);
                 }
             }
-            final var reIndexedEntries = reindexPks(oldIndexLine, newPkIndexEntry,
-                    Arrays.stream(lines).skip(indexLine + 1).toList(), dbName, collectionName);
-            final var reIndexedToWrite = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry)
-                    .collect(Collectors.joining(Globals.NEWLINE));
-            writer.seek(totalLengthBefore);
-            writer.write(reIndexedToWrite.getBytes(StandardCharsets.UTF_8), 0, reIndexedToWrite.length());
-            int newFileSize;
-            if (!reIndexedEntries.isEmpty()) {
-                writer.writeBytes(Globals.NEWLINE);
-                newFileSize = totalLengthBefore + reIndexedToWrite.length() + Globals.NEWLINE_CHAR_LENGTH;
-            } else {
-                newFileSize = totalLengthBefore + reIndexedToWrite.length();
-            }
-            writer.setLength(newFileSize);
+            final var reIndexedEntries = reindexPks(oldEntry, newPkIndexEntry, others);
+            final var lines = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).toList();
+            rewriteFileAtomically(indexFile.toPath(), lines);
         } finally {
             lock.unlock();
         }
     }
 
-    private List<PkIndexEntry> reindexPks(String oldIndexEntryStr, PkIndexEntry newPkIndexEntry,
-            List<String> restOfIndexesStr, String dbName, String collectionName) {
-        final var oldIndexEntry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, oldIndexEntryStr);
-        final var restOfIndexes = restOfIndexesStr.stream()
-                .map(x -> PkIndexEntry.fromIndexFileEntry(dbName, collectionName, x)).collect(Collectors.toList());
-        for (var index : restOfIndexes) {
-            index.setPosition(index.getPosition() - oldIndexEntry.getLength());
+    /**
+     * Recomputes the on-disk PK index after the entry identified by {@code oldEntry} is relocated
+     * (update) or removed (delete). Removing/relocating that row compacts its page, so every other
+     * entry <em>on the same page</em> whose position is past the removed slot shifts toward the start
+     * of the page by the old row's length — the same per-page rule the in-memory PK index uses
+     * ({@code UserCache.shiftPkPositionsAfterCompaction}). Entries on other pages are untouched. For
+     * an update, {@code newPkIndexEntry} carries the relocated row's page-file length as its position;
+     * subtracting the old length yields the row's new start (where {@link #updateFromCollection} wrote
+     * it). {@code newPkIndexEntry} is {@code null} for a delete. {@code oldEntry} may be {@code null}
+     * if the value was not present (defensive), in which case no shift is applied.
+     */
+    private List<PkIndexEntry> reindexPks(PkIndexEntry oldEntry, PkIndexEntry newPkIndexEntry,
+            List<PkIndexEntry> others) {
+        if (oldEntry != null) {
+            for (final var entry : others) {
+                if (entry.getPage() == oldEntry.getPage() && entry.getPosition() > oldEntry.getPosition()) {
+                    entry.setPosition(entry.getPosition() - oldEntry.getLength());
+                }
+            }
         }
         if (newPkIndexEntry != null) {
-            newPkIndexEntry.setPosition(newPkIndexEntry.getPosition() - oldIndexEntry.getLength());
-            restOfIndexes.add(newPkIndexEntry);
+            if (oldEntry != null) {
+                newPkIndexEntry.setPosition(newPkIndexEntry.getPosition() - oldEntry.getLength());
+            }
+            others.add(newPkIndexEntry);
         }
-        return restOfIndexes;
+        others.sort(Comparator.comparing(PkIndexEntry::getValue));
+        return others;
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
@@ -762,17 +768,39 @@ public class FileSystem {
                 } finally {
                     lock.unlock();
                 }
-                return lines.stream().map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, indexType))
-                        .sorted((o1, o2) -> switch ((Object) o1.getValue()) {
-                            case Number n -> Double.compare(n.doubleValue(), ((Number) o2.getValue()).doubleValue());
-                            case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
-                            case JsonCustom<?> c -> {
-                                final var customClass = c.getClass();
-                                //noinspection unchecked
-                                yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
-                            }
-                            default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
-                        }).collect(Collectors.toList());
+                // Field index files are written non-atomically (append / in-place rewrite), so a crash
+                // mid-write can leave a torn final line. Skip-and-log malformed lines and self-heal the
+                // file, mirroring readWholePkIndexFile, instead of letting one bad line fail every read.
+                final var entries = new ArrayList<FieldIndexEntry<T>>();
+                final var keepLines = new ArrayList<String>();
+                var dropped = false;
+                for (var line : lines) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        entries.add(FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, indexType));
+                        keepLines.add(line);
+                    } catch (Exception e) {
+                        dropped = true;
+                        logger.warning("Removing malformed field index entry in " + indexFile.getName() + ": "
+                                + e.getMessage());
+                    }
+                }
+                if (dropped) {
+                    rewriteFileAtomically(indexFile.toPath(), keepLines);
+                }
+                entries.sort((o1, o2) -> switch ((Object) o1.getValue()) {
+                    case Number n -> Double.compare(n.doubleValue(), ((Number) o2.getValue()).doubleValue());
+                    case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
+                    case JsonCustom<?> c -> {
+                        final var customClass = c.getClass();
+                        //noinspection unchecked
+                        yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
+                    }
+                    default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
+                });
+                return entries;
             }
         }
         return null;
@@ -794,10 +822,29 @@ public class FileSystem {
                 } finally {
                     lock.unlock();
                 }
-                return lines.stream().filter(s -> !s.isBlank())
-                        .map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, String.class))
-                        .sorted(Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase))
-                        .collect(Collectors.toList());
+                // Hash index files are written non-atomically, so self-heal a torn line rather than
+                // failing the whole read (see readWholeFieldIndexFiles / readWholePkIndexFile).
+                final var entries = new ArrayList<FieldIndexEntry<String>>();
+                final var keepLines = new ArrayList<String>();
+                var dropped = false;
+                for (var line : lines) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    try {
+                        entries.add(FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, String.class));
+                        keepLines.add(line);
+                    } catch (Exception e) {
+                        dropped = true;
+                        logger.warning("Removing malformed hash index entry in " + indexFile.getName() + ": "
+                                + e.getMessage());
+                    }
+                }
+                if (dropped) {
+                    rewriteFileAtomically(indexFile.toPath(), keepLines);
+                }
+                entries.sort(Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase));
+                return entries;
             }
         }
         return null;

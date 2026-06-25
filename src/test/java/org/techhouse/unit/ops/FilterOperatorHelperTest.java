@@ -1040,9 +1040,10 @@ public class FilterOperatorHelperTest {
         assertTrue(FilterOperatorHelper.getTester(arrInOp, FieldOperatorType.IN).test(arrDoc, "data"));
     }
 
-    // resolveIdsViaIndex: an object EQUALS filter is answered from the Object hash index
+    // resolveIdsViaIndex disqualifies an object operand (hash hits are unconfirmed candidates), so the
+    // index-only COUNT falls back; the document FILTER path still resolves it via the Object hash index.
     @Test
-    public void test_resolve_ids_via_index_object_equals() throws IOException {
+    public void test_resolve_ids_via_index_object_equals_disqualified_but_filter_resolves() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
@@ -1053,13 +1054,18 @@ public class FilterOperatorHelperTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));
-        final Set<String> ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL);
-        assertEquals(Set.of("o1", "o2"), ids);
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL),
+                "object operands are disqualified from the index-only COUNT (hash hits are candidates)");
+
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o1", "o2"), matched);
     }
 
-    // resolveIdsViaIndex: an array EQUALS filter is answered from the Array hash index
+    // Same as above for an array operand / Array hash index.
     @Test
-    public void test_resolve_ids_via_index_array_equals() throws IOException {
+    public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a1", 0, 100, 0);
@@ -1070,8 +1076,37 @@ public class FilterOperatorHelperTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", arrField("x", "y"));
-        final Set<String> ids = FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL);
-        assertEquals(Set.of("a1", "a2"), ids);
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL),
+                "array operands are disqualified from the index-only COUNT (hash hits are candidates)");
+
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("a1", "a2"), matched);
+    }
+
+    // Path 1: a stale Object hash-index hit (the document's value changed but the index was not updated,
+    // as after a background-processing failure) is re-tested against the document and dropped, so the
+    // FILTER never returns a false positive.
+    @Test
+    public void test_filter_rejects_stale_object_hash_hit() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
+        cache.putAdminCollectionEntry(adminCollEntry, pk);
+        addObjEntry(cache, "o1", 1);
+        addObjEntry(cache, "o2", 1);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+
+        // Simulate a background-processing failure: o1's value changes to {n:99} in the document store,
+        // but the Object hash index still maps hash({n:1}) -> o1 (a stale entry, and o1 is not pending).
+        addObjEntry(cache, "o1", 99);
+
+        FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o2"), matched, "the stale hash hit o1 must be dropped after re-testing the document");
     }
 
     private void addObjEntry(Cache cache, String id, int n) {

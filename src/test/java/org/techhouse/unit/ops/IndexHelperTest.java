@@ -8,7 +8,6 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -181,7 +180,7 @@ public class IndexHelperTest {
         final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
         collEntry.setIndexes(Set.of(fieldName));
 
-        IndexHelper.bulkUpdateIndexes(dbName, collName, List.of(dbEntry2), List.of(dbEntry1));
+        IndexHelper.bulkUpdateIndexes(dbName, collName, List.of(dbEntry2.get_id(), dbEntry1.get_id()));
 
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
         assertNotNull(index);
@@ -225,8 +224,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("s2", "tag", new JsonString("beta"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        assertDoesNotThrow(
-                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
 
     // updateIndexes indexes a Boolean-valued field for a CREATED event
@@ -242,8 +240,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("b2", "active", new JsonBoolean(false));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        assertDoesNotThrow(
-                () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED));
+        assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
 
     // updateIndexes indexes a custom type (JsonTime) field for a CREATED event
@@ -259,7 +256,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("ct2", "startTime", new JsonTime("#time(09:00:00)"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id());
 
         final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime",
                 JsonTime.class);
@@ -278,7 +275,10 @@ public class IndexHelperTest {
         final var adminColl = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         adminColl.setIndexes(Set.of("score"));
 
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
+        // Simulate a committed delete: the document is gone from the cache/PK index, so the
+        // order-independent re-read sees it as absent and removes it from the index.
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "del1");
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "del1");
 
         final var index = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "score",
                 Double.class);
@@ -372,7 +372,7 @@ public class IndexHelperTest {
 
         DbEntry newEntry = entryWith("o2", "data", objectValue(2));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, newEntry);
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry, EventType.CREATED);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id());
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertNotNull(objIndex);
@@ -392,7 +392,7 @@ public class IndexHelperTest {
 
         DbEntry changed = entryWith("m1", "data", arrayValue("x"));
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, changed);
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, changed, EventType.UPDATED);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, changed.get_id());
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("m1")));
@@ -410,7 +410,9 @@ public class IndexHelperTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, entry, EventType.DELETED);
+        // Simulate a committed delete: the document is gone, so the re-read removes it from the index.
+        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "d1");
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "d1");
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("d1")));
@@ -443,5 +445,163 @@ public class IndexHelperTest {
 
         assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(null));
         assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(JsonNull.INSTANCE));
+    }
+
+    // getIndexEntriesForField on a mixed scalar+object field returns entries for all docs
+    @Test
+    public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("s1", "data", new JsonString("hello")),
+                entryWith("s2", "data", new JsonString("world")), entryWith("o1", "data", objectValue(1)),
+                entryWith("o2", "data", objectValue(2)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("s1", "s2", "o1", "o2"), allIds);
+        // The object-valued entries carry actual JsonObject values, not hash strings
+        final var hasObjectEntry = entries.stream()
+                .anyMatch(e -> e.getValue() instanceof JsonBaseElement el && el.isJsonObject());
+        assertTrue(hasObjectEntry);
+    }
+
+    // getIndexEntriesForField on a mixed scalar+array field returns entries for all docs
+    @Test
+    public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("s1", "data", new JsonNumber(42)),
+                entryWith("a1", "data", arrayValue("x", "y")), entryWith("a2", "data", arrayValue("z")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("s1", "a1", "a2"), allIds);
+    }
+
+    // getIndexEntriesForField on a pure scalar field still returns scalar entries (regression)
+    @Test
+    public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("n1", "score", new JsonNumber(10)),
+                entryWith("n2", "score", new JsonNumber(20)), entryWith("n3", "score", new JsonNumber(10)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("score"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "score");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("n1", "n2", "n3"), allIds);
+    }
+
+    // getIndexEntriesForField on a pure object field returns actual-value entries (not null)
+    @Test
+    public void test_getIndexEntriesForField_pure_object_field_returns_entries() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(1)), entryWith("o2", "data", objectValue(1)),
+                entryWith("o3", "data", objectValue(2)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        // Two distinct object values: {n:1} (ids o1, o2) and {n:2} (id o3)
+        assertEquals(2, entries.size());
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o1", "o2", "o3"), allIds);
+    }
+
+    // reconcilePending must handle a pending document with a null field value without forcing a
+    // full-scan fallback: getIndexEntriesForField must return non-null and include the null-valued id.
+    @Test
+    public void test_reconcilePending_null_value_does_not_force_full_scan() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        // One already-indexed doc with a scalar value and one pending doc with null.
+        final var indexed = entryWith("s1", "status", new JsonString("active"));
+        final var pending = entryWith("n1", "status", JsonNull.INSTANCE);
+        setupCollection(cache, indexed, pending);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
+
+        // Mark "n1" as pending so reconcilePending is triggered.
+        final var pendingWrites = IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
+        pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "n1");
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+
+        assertNotNull(entries, "null-valued pending doc must not force a full-scan fallback (null result)");
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(allIds.contains("n1"), "id of the null-valued pending doc must appear in the reconciled result");
+    }
+
+    // getIndexEntriesForField groups docs with identical object values into one entry
+    @Test
+    public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(5)), entryWith("o2", "data", objectValue(5)),
+                entryWith("o3", "data", objectValue(5)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        assertEquals(1, entries.size());
+        assertEquals(Set.of("o1", "o2", "o3"), entries.getFirst().getIds());
+    }
+
+    // elementToLookupValue converts each primitive element kind to the raw Java type used by
+    // getIdsFromIndex (Number, Boolean, String, JsonCustom); null/JsonNull/object/array yield null.
+    @Test
+    public void test_element_to_lookup_value_converts_primitives() {
+        final var numResult = IndexHelper.elementToLookupValue(new JsonNumber(42));
+        assertNotNull(numResult);
+        assertInstanceOf(Number.class, numResult);
+        assertEquals(42.0, ((Number) numResult).doubleValue());
+
+        final var strResult = IndexHelper.elementToLookupValue(new JsonString("hello"));
+        assertEquals("hello", strResult);
+
+        final var boolResult = IndexHelper.elementToLookupValue(new JsonBoolean(true));
+        assertEquals(Boolean.TRUE, boolResult);
+
+        assertNull(IndexHelper.elementToLookupValue(JsonNull.INSTANCE));
+        assertNull(IndexHelper.elementToLookupValue(null));
+        assertNull(IndexHelper.elementToLookupValue(new JsonObject()));
+        assertNull(IndexHelper.elementToLookupValue(new JsonArray()));
+    }
+
+    // getMatchingIdsForJoin returns null when the remote field has no index (caller falls back to scan)
+    @Test
+    public void test_get_matching_ids_for_join_returns_null_when_no_index() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(1)));
+        // No index created on "refKey"
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
+                Set.of(new JsonNumber(1)));
+        assertNull(result);
+    }
+
+    // getMatchingIdsForJoin returns only the ids whose remote field matches a local value
+    @Test
+    public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
+                entryWith("r2", "refKey", new JsonNumber(7)), entryWith("r3", "refKey", new JsonNumber(42)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("refKey"));
+
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
+                Set.of(new JsonNumber(42)));
+
+        assertNotNull(result);
+        assertEquals(Set.of("r1", "r3"), result);
     }
 }

@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -30,6 +31,7 @@ import org.techhouse.utils.JsonUtils;
 
 public class FilterOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
@@ -70,7 +72,13 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
+                .collect(Collectors.groupingBy(jsonObject -> {
+                    final var id = jsonObject.get(Globals.PK_FIELD);
+                    if (id == null) {
+                        throw new IllegalStateException("Document missing _id in conjunction grouping");
+                    }
+                    return id;
+                })).entrySet().stream()
                 .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream()).distinct();
     }
@@ -86,9 +94,13 @@ public class FilterOperatorHelper {
             // collection, so it loads the whole collection rather than streaming.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined)
-                .collect(Collectors.groupingBy(jsonObject -> jsonObject.get(Globals.PK_FIELD))).entrySet().stream()
-                .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
+        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> {
+            final var id = jsonObject.get(Globals.PK_FIELD);
+            if (id == null) {
+                throw new IllegalStateException("Document missing _id in conjunction grouping");
+            }
+            return id;
+        })).entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
                 .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
     }
 
@@ -200,34 +212,24 @@ public class FilterOperatorHelper {
             FieldOperator operator, Stream<JsonObject> resultStream, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
+        if (resultStream != null) {
+            // An upstream stream already exists, so the index saves no scan: apply the predicate to
+            // the actual documents directly (which also avoids trusting a possibly-stale index).
+            return resultStream.filter(data -> test.test(data, fieldName));
+        }
         final var matchingValues = indexMatchingIds(operator, dbName, collName);
         if (matchingValues != null) {
-            if (resultStream == null) {
-                // Index hit with no upstream stream: fetch only the matched entries via
-                // positioned reads instead of loading the whole collection into memory.
-                resultStream = cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData);
-            } else {
-                // matchingValues already is the set of matching ids; filter the incoming
-                // stream against it directly, without loading the whole collection.
-                resultStream = resultStream.filter(jsonObject -> {
-                    if (jsonObject.has(Globals.PK_FIELD)) {
-                        final var id = jsonObject.get(Globals.PK_FIELD).asJsonString().getValue();
-                        return matchingValues.contains(id);
-                    }
-                    return false;
-                });
-            }
-        } else {
-            if (resultStream == null) {
-                // No index: scan the collection page-by-page (memory-aware) rather than
-                // materializing it all up front.
-                resultStream = cache.streamCollection(dbName, collName).map(DbEntry::getData)
-                        .filter(data -> test.test(data, fieldName));
-            } else {
-                resultStream = resultStream.filter(data -> test.test(data, fieldName));
-            }
+            // Index hits are candidates. Scalar/custom index entries store the exact value, but an
+            // object/array element-match index stores only a SHA-256 fingerprint, so a hit must be
+            // confirmed against the document (it can be stale after a background-processing failure, or
+            // — vanishingly — a hash collision). The candidate documents are fetched here regardless, so
+            // re-testing them against the operator is free and makes the result exact for every index kind.
+            return cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData)
+                    .filter(data -> test.test(data, fieldName));
         }
-        return resultStream;
+        // No index: scan the collection page-by-page (memory-aware) rather than materializing it all.
+        return cache.streamCollection(dbName, collName).map(DbEntry::getData)
+                .filter(data -> test.test(data, fieldName));
     }
 
     // Resolves the matching document ids for a filter operator using ONLY indexes (and, for
@@ -238,12 +240,73 @@ public class FilterOperatorHelper {
     public static Set<String> resolveIdsViaIndex(BaseOperator operator, String dbName, String collName)
             throws IOException {
         return switch (operator.getType()) {
-            case FIELD -> indexMatchingIds((FieldOperator) operator, dbName, collName);
+            case FIELD -> {
+                final var fieldOperator = (FieldOperator) operator;
+                // A hash (object/array) index hit is only a candidate; the index-only COUNT path counts
+                // ids without reading documents, so it cannot confirm the hit. Disqualify hash-resolved
+                // operators here so the caller falls back to the document-reading COUNT, which re-tests
+                // each candidate in internalBaseFiltering and is therefore exact.
+                if (usesHashIndex(fieldOperator)) {
+                    yield null;
+                }
+                yield indexMatchingIds(fieldOperator, dbName, collName);
+            }
             case CONJUNCTION -> resolveConjunctionIds((ConjunctionOperator) operator, dbName, collName);
         };
     }
 
+    // True when this field operator resolves through an object/array element-match (hash) index, whose
+    // hits are unconfirmed candidates. Mirrors the dispatch in UserCache.doGetIdsFromIndex /
+    // getIdsFromInList: an object operand (EQUALS/NOT_EQUALS) and an array operand (EQUALS/NOT_EQUALS, or
+    // IN/NOT_IN over object/array elements) are hash-resolved; scalar/custom operands are not.
+    private static boolean usesHashIndex(FieldOperator operator) {
+        final var value = operator.getValue();
+        final var opType = operator.getFieldOperatorType();
+        if (value.isJsonObject()) {
+            return opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS;
+        }
+        if (value.isJsonArray()) {
+            final var arr = value.asJsonArray();
+            return switch (opType) {
+                case EQUALS, NOT_EQUALS -> true;
+                case IN, NOT_IN -> !arr.isEmpty() && (arr.get(0).isJsonObject() || arr.get(0).isJsonArray());
+                default -> false;
+            };
+        }
+        return false;
+    }
+
+    // Resolves the ids matching a single field operator via the index, then reconciles documents that
+    // are committed but not yet indexed (the PendingIndexWrites overlay): their index membership is
+    // untrustworthy, so they are dropped and re-added by re-testing the operator against the current
+    // document. The result is therefore exact (no stale false positives, no missing not-yet-indexed
+    // matches). Returns null when the operator is not index-resolvable, so the caller falls back to a
+    // scan. Empty when there are no recent writes, so this is a no-op on the steady-state read path.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
+            throws IOException {
+        final var raw = rawIndexMatchingIds(operator, dbName, collName);
+        if (raw == null) {
+            return null;
+        }
+        // Snapshot pending ids AFTER the index lookup so a write that committed before the lookup is
+        // either already indexed (index accurate) or still pending (reconciled here).
+        final var pendingIds = pendingIndexWrites.idsFor(dbName, collName);
+        if (pendingIds.isEmpty()) {
+            return raw;
+        }
+        final var fieldName = operator.getField();
+        final var corrected = new HashSet<>(raw);
+        corrected.removeAll(pendingIds);
+        final var tester = getTester(operator, operator.getFieldOperatorType());
+        for (var dbEntry : cache.getEntriesByIds(dbName, collName, pendingIds)) {
+            if (tester.test(dbEntry.getData(), fieldName)) {
+                corrected.add(dbEntry.get_id());
+            }
+        }
+        return corrected;
+    }
+
+    private static Set<String> rawIndexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
         final var value = operator.getValue();

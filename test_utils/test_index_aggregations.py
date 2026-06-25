@@ -2,10 +2,13 @@ import os
 import socket
 import json
 import sys
+import threading
 import time
 
-HOST = "127.0.0.1"
-PORT = 8989
+HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
+# Overridable so CI can point this suite at a dedicated caching-disabled server
+# on its own port (so index gains are visible) without disturbing the shared server.
+PORT = int(os.environ.get("INDEX_TEST_PORT", "8989"))
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
@@ -23,12 +26,28 @@ LEFT_DOCS = int(os.environ.get("INDEX_TEST_LEFT_DOCS", "100"))
 PAYLOAD_BYTES = int(os.environ.get("INDEX_TEST_PAYLOAD_BYTES", "256"))
 BULK_BATCH_SIZE = int(os.environ.get("INDEX_TEST_BATCH_SIZE", "500"))
 REPEATS = int(os.environ.get("INDEX_TEST_REPEATS", "5"))
-# GROUP_BY/SORT read the same documents either way, so their win is CPU/structure rather than IO;
+# SORT reads the same documents either way, so its win is CPU/structure rather than IO;
 # allow a small tolerance there. DISTINCT/JOIN have a clear algorithmic win and must be faster.
+# GROUP_BY is intentionally not in the perf suite: it must read every grouped document regardless
+# of the index, so on a dense field there is no win to assert (only sparse fields benefit). Its
+# correctness under async index maintenance is still covered by probe_group_by in the consistency suite.
 SPEED_TOLERANCE = float(os.environ.get("INDEX_TEST_SPEED_TOLERANCE", "1.25"))
 
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
+
+# Consistency suite (separate from the perf suite): index maintenance is asynchronous, so right after
+# a write the field index may not yet reflect it. These probes write then *immediately* query the
+# index-backed path (no sleep) and assert the answer is correct, repeating to land inside the
+# committed-but-not-yet-indexed window. Each iteration must be correct whether or not the background
+# has caught up, so a single stale/missing/duplicate result fails the probe.
+CONS = "idxagg_cons"            # status-indexed: FILTER, COUNT-with-filter, DISTINCT, GROUP_BY
+CONS_SORT = "idxagg_cons_sort"  # score-indexed: SORT
+CONS_COUNT = "idxagg_cons_count"  # no index: whole-collection COUNT (from PK index size)
+CONS_JOIN = "idxagg_cons_join"  # joinKey-indexed remote side
+CONS_LEFT = "idxagg_cons_left"  # left side of the JOIN (one shared-key row)
+CONS_CREATE = "idxagg_cons_create"  # built mid-flight: CREATE_INDEX racing concurrent saves
+CONS_REPEATS = int(os.environ.get("INDEX_TEST_CONSISTENCY_REPEATS", "30"))
 
 failures = 0
 
@@ -201,7 +220,6 @@ def teardown_fixtures(s, f):
 # ── step definitions (each step is the pipeline source, so the index fast-path applies) ──
 
 DISTINCT_STEPS = [{"type": "DISTINCT", "fieldName": "category"}]
-GROUP_BY_STEPS = [{"type": "GROUP_BY", "fieldName": "category"}]
 SORT_STEPS = [{"type": "SORT", "fieldName": "score", "ascending": True}, {"type": "LIMIT", "limit": 10}]
 JOIN_STEPS = [{"type": "JOIN", "joinCollection": JOIN_BIG, "localField": "joinKey",
                "remoteField": "joinKey", "asField": "joined"}]
@@ -222,10 +240,6 @@ FILTER_OBJECT_IN_STEPS = [{"type": "FILTER", "operator": {
 
 def distinct_signature(r):
     return sorted({d.get("category") for d in (r.get("results") or [])})
-
-
-def group_by_signature(r):
-    return {d.get("category"): d.get("group") and len(d["group"]) for d in (r.get("results") or [])}
 
 
 def sort_signature(r):
@@ -270,6 +284,345 @@ def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, s
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Consistency under asynchronous index maintenance
+# ══════════════════════════════════════════════════════════════════════════
+
+def save_doc(s, f, coll, obj) -> dict:
+    return send(s, f, {"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": obj})
+
+
+def setup_consistency(s, f):
+    for coll in (CONS, CONS_SORT, CONS_COUNT, CONS_JOIN, CONS_LEFT, CONS_CREATE):
+        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    # JOIN left side: a single row that shares the key every remote row will be saved with.
+    save_doc(s, f, CONS_LEFT, {"_id": "left_shared", "joinKey": "shared"})
+    # Build the indexes on the (empty) collections, so every subsequent write exercises the
+    # committed-but-not-yet-indexed path.
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS, "fieldName": "status"})
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_SORT, "fieldName": "score"})
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_JOIN, "fieldName": "joinKey"})
+    wait_for_indexes(s, f, [(CONS, "status"), (CONS_SORT, "score"), (CONS_JOIN, "joinKey")])
+
+
+def filter_status(s, f, value):
+    r = agg(s, f, CONS, [{"type": "FILTER",
+                          "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": value}}])
+    return sorted(d.get("_id") for d in (r.get("results") or []))
+
+
+def probe_filter_no_false_negative(s, f):
+    # A just-saved matching document must be returned immediately, even before it is indexed.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"fn_val_{i}"
+        save_doc(s, f, CONS, {"_id": f"fn_{i}", "status": value})
+        if filter_status(s, f, value) != [f"fn_{i}"]:
+            bad += 1
+    check_true("FILTER never misses a just-written match (no false negative)", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} immediate queries were stale")
+
+
+def probe_filter_no_false_positive_on_update(s, f):
+    # Re-pointing a document's indexed value must not leave it visible under the old value, and it
+    # must be visible under the new value — immediately.
+    save_doc(s, f, CONS, {"_id": "upd", "status": "upd_v0"})
+    prev = "upd_v0"
+    bad = 0
+    for i in range(1, CONS_REPEATS + 1):
+        cur = f"upd_v{i}"
+        save_doc(s, f, CONS, {"_id": "upd", "status": cur})
+        if "upd" in filter_status(s, f, prev):
+            bad += 1  # stale false positive under the old value
+        if filter_status(s, f, cur) != ["upd"]:
+            bad += 1  # missing under the new value
+        prev = cur
+    check_true("FILTER reflects updates immediately (no stale false positive / no false negative)",
+               bad == 0, detail=f"{bad} inconsistent immediate queries")
+
+
+def probe_count_with_filter(s, f):
+    # An index-only COUNT with a filter must reflect every committed matching document.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS, {"_id": f"cf_{i}", "status": "countme"})
+        r = agg(s, f, CONS, [{"type": "FILTER",
+                              "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "countme"}},
+                             {"type": "COUNT"}])
+        got = (r.get("results") or [{}])[0].get("count")
+        if got != i + 1:
+            bad += 1
+    check_true("index-only COUNT (with filter) counts committed docs immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} counts were stale")
+
+
+def probe_whole_collection_count(s, f):
+    # The no-filter COUNT comes from the synchronously-maintained PK index, so it is exact at once.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS_COUNT, {"_id": f"wc_{i}", "n": i})
+        r = agg(s, f, CONS_COUNT, [{"type": "COUNT"}])
+        got = (r.get("results") or [{}])[0].get("count")
+        if got != i + 1:
+            bad += 1
+    check_true("whole-collection COUNT is exact immediately after each save", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} counts were stale")
+
+
+def probe_distinct_new_value(s, f):
+    # A brand-new indexed value must appear in DISTINCT immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"dv_{i}"
+        save_doc(s, f, CONS, {"_id": f"di_{i}", "status": value})
+        r = agg(s, f, CONS, DISTINCT_STATUS_STEPS)
+        values = {d.get("status") for d in (r.get("results") or [])}
+        if value not in values:
+            bad += 1
+    check_true("DISTINCT includes a just-written new value immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} distinct results were missing the new value")
+
+
+def probe_group_by(s, f):
+    # A just-written document must land in its group immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"gv_{i}"
+        save_doc(s, f, CONS, {"_id": f"gi_{i}", "status": value})
+        r = agg(s, f, CONS, [{"type": "GROUP_BY", "fieldName": "status"}])
+        sizes = {d.get("status"): len(d.get("group") or []) for d in (r.get("results") or [])}
+        if sizes.get(value) != 1:
+            bad += 1
+    check_true("GROUP_BY places a just-written doc in its group immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} group-by results were stale")
+
+
+def probe_sort(s, f):
+    # SORT must include and correctly order a just-written value immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS_SORT, {"_id": f"s_{i}", "score": i})
+        r = agg(s, f, CONS_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+        scores = [d.get("score") for d in (r.get("results") or [])]
+        if scores != sorted(scores) or i not in scores or len(scores) != i + 1:
+            bad += 1
+    check_true("SORT includes and orders a just-written value immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} sort results were stale or misordered")
+
+
+def probe_join(s, f):
+    # A just-written remote document must be matched by an index-backed JOIN immediately.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        save_doc(s, f, CONS_JOIN, {"_id": f"r_{i}", "joinKey": "shared", "label": f"lbl_{i}"})
+        r = agg(s, f, CONS_LEFT, [{"type": "JOIN", "joinCollection": CONS_JOIN, "localField": "joinKey",
+                                   "remoteField": "joinKey", "asField": "joined"}])
+        rows = r.get("results") or []
+        joined = rows[0].get("joined") if rows else None
+        if joined is None or len(joined) != i + 1:
+            bad += 1
+    check_true("index-backed JOIN matches a just-written remote doc immediately", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} join results were stale")
+
+
+def probe_delete_consistency(s, f):
+    # Deleting the only doc with a unique value must remove it from index-only COUNT and DISTINCT
+    # immediately (not just from FILTER), even before the async index removal runs.
+    bad = 0
+    for i in range(CONS_REPEATS):
+        value = f"del_{i}"
+        doc_id = f"del_doc_{i}"
+        save_doc(s, f, CONS, {"_id": doc_id, "status": value})
+        send(s, f, {"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
+        # Immediately: the value must be gone from FILTER, COUNT and DISTINCT.
+        if filter_status(s, f, value):
+            bad += 1
+        r = agg(s, f, CONS, [{"type": "FILTER",
+                              "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": value}},
+                             {"type": "COUNT"}])
+        if (r.get("results") or [{}])[0].get("count") != 0:
+            bad += 1
+        d = agg(s, f, CONS, DISTINCT_STATUS_STEPS)
+        if value in {row.get("status") for row in (d.get("results") or [])}:
+            bad += 1
+    check_true("DELETE removes a doc from FILTER, COUNT and DISTINCT immediately", bad == 0,
+               detail=f"{bad} inconsistent immediate queries after delete")
+
+
+def probe_same_id_rapid_updates_converge(s, f):
+    # Hammer one _id with alternating values so the worker pool processes its events concurrently
+    # (and possibly out of order). After the background settles, the index must reflect the LAST
+    # committed value — not a reordered stale one.
+    iterations = max(CONS_REPEATS, 20)
+    last_value = None
+    for i in range(iterations):
+        last_value = f"hammer_{i}"
+        save_doc(s, f, CONS, {"_id": "hammer", "status": last_value})
+    wait_for_background()
+    bad = 0
+    if filter_status(s, f, last_value) != ["hammer"]:
+        bad += 1
+    if filter_status(s, f, "hammer_0"):  # an earlier value must no longer resolve to the doc
+        bad += 1
+    r = agg(s, f, CONS, [{"type": "FILTER",
+                          "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": last_value}},
+                         {"type": "COUNT"}])
+    if (r.get("results") or [{}])[0].get("count") != 1:
+        bad += 1
+    check_true("same-id rapid updates converge to the last value after the background settles", bad == 0,
+               detail=f"{bad} stale results after hammering one id with {iterations} updates")
+
+
+def probe_save_delete_converges(s, f):
+    # Flood save+delete pairs for distinct ids; after the background settles none of the values may
+    # remain in the index (catches a save event applied after its delete event).
+    for i in range(CONS_REPEATS):
+        value = f"sd_{i}"
+        doc_id = f"sd_doc_{i}"
+        save_doc(s, f, CONS, {"_id": doc_id, "status": value})
+        send(s, f, {"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
+    wait_for_background()
+    bad = sum(1 for i in range(CONS_REPEATS) if filter_status(s, f, f"sd_{i}"))
+    check_true("save+delete of the same id converges to absent after the background settles", bad == 0,
+               detail=f"{bad}/{CONS_REPEATS} deleted values still present after settling")
+
+
+def probe_concurrent_save_during_create_index(s, f):
+    # A document saved concurrently with CREATE_INDEX must not be lost from the new index. The build
+    # holds the collection write lock and registers the field synchronously, so each concurrent save is
+    # serialized: it is either captured by the build's whole-collection read or indexed afterwards
+    # because the field is already a known index. Without the fix, saves landing in the build window
+    # were silently missing from the index forever.
+    seed = 40
+    for i in range(seed):
+        save_doc(s, f, CONS_CREATE, {"_id": f"seed_{i}", "tag": f"t{i % 5}"})
+
+    saved_ids = []
+    saved_lock = threading.Lock()
+    stop = threading.Event()
+
+    def writer():
+        with new_conn() as (ws, wf):
+            authenticate(ws, wf, ADMIN_USERNAME, ADMIN_PASSWORD)
+            i = 0
+            while not stop.is_set():
+                doc_id = f"conc_{i}"
+                r = save_doc(ws, wf, CONS_CREATE, {"_id": doc_id, "tag": "concurrent"})
+                if r.get("status") == "OK":
+                    with saved_lock:
+                        saved_ids.append(doc_id)
+                i += 1
+
+    t = threading.Thread(target=writer)
+    t.start()
+    try:
+        # Let several concurrent writes land, then build the index mid-flight, then let a few more
+        # land after the build — exercising both sides of the build's write-locked section.
+        time.sleep(0.05)
+        send(s, f, {"type": "CREATE_INDEX", "databaseName": DB,
+                    "collectionName": CONS_CREATE, "fieldName": "tag"})
+        time.sleep(0.05)
+    finally:
+        stop.set()
+        t.join()
+    wait_for_background()
+
+    r = agg(s, f, CONS_CREATE, [{"type": "FILTER",
+                                 "operator": {"fieldOperatorType": "EQUALS", "field": "tag",
+                                              "value": "concurrent"}}])
+    found = {row.get("_id") for row in (r.get("results") or [])}
+    with saved_lock:
+        expected = list(saved_ids)
+    missing = [i for i in expected if i not in found]
+    check_true("no document saved concurrently with CREATE_INDEX is missing from the index",
+               not missing,
+               detail=f"{len(missing)} of {len(expected)} concurrently-saved docs missing from the index")
+
+
+def probe_drop_burst_no_background_errors(s, f):
+    # Create, populate and drop many collections (plus the database) in a burst while background
+    # events for those collections are still in flight. This stresses the shared admin-collection
+    # files (collections/databases) with repeated compaction; with the PK-position fix the survivors
+    # stay readable and no NegativeArraySizeException / null-collection error is raised.
+    burst_db = "idxagg_drop_burst"
+    send(s, f, {"type": "CREATE_DATABASE", "databaseName": burst_db})
+    n = max(CONS_REPEATS, 12)
+    for i in range(n):
+        coll = f"burst_{i}"
+        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": coll})
+        for j in range(5):
+            send(s, f, {"type": "SAVE", "databaseName": burst_db, "collectionName": coll,
+                        "object": {"_id": f"d{j}", "k": f"v{j}"}})
+        send(s, f, {"type": "DROP_COLLECTION", "databaseName": burst_db, "collectionName": coll})
+    # A survivor collection that is NOT dropped must remain fully readable afterwards.
+    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": "keep"})
+    for j in range(5):
+        send(s, f, {"type": "SAVE", "databaseName": burst_db, "collectionName": "keep",
+                    "object": {"_id": f"k{j}", "k": f"v{j}"}})
+    wait_for_background()
+    r = send(s, f, {"type": "AGGREGATE", "databaseName": burst_db, "collectionName": "keep",
+                    "aggregationSteps": [{"type": "COUNT"}]})
+    count = (r.get("results") or [{}])[0].get("count")
+    send(s, f, {"type": "DROP_DATABASE", "databaseName": burst_db})
+    check_true("drop burst keeps survivors intact (no stale-position corruption)", count == 5,
+               detail=f"survivor count={count} (expected 5)")
+
+
+def probe_bulk_update_same_page_no_corruption(s, f):
+    # Bulk-insert several docs (they pack onto one page), then BULK_SAVE updating all of them to
+    # different, longer values. Each must read back intact afterwards — regression for the
+    # multi-same-page bulk-update page-corruption bug.
+    coll = "idxagg_bulk_upd"
+    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    ids = [f"bu_{i}" for i in range(6)]
+    send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                "objects": [{"_id": i, "v": "short"} for i in ids]})
+    send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                "objects": [{"_id": i, "v": f"updated-longer-value-for-{i}"} for i in ids]})
+    bad = 0
+    for i in ids:
+        r = send(s, f, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": i})
+        if (r.get("object") or {}).get("v") != f"updated-longer-value-for-{i}":
+            bad += 1
+    send(s, f, {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+    check_true("bulk update of multiple same-page docs reads back intact (no page corruption)", bad == 0,
+               detail=f"{bad}/{len(ids)} docs corrupted/stale after bulk update")
+
+
+def probe_convergence(s, f):
+    # After the background settles, the document is found via the (now-updated, re-evicted) index.
+    save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
+    wait_for_background()
+    check_true("index converges after the background settles", filter_status(s, f, "converged") == ["converge"])
+
+
+def wait_for_background():
+    time.sleep(2)
+
+
+DISTINCT_STATUS_STEPS = [{"type": "DISTINCT", "fieldName": "status"}]
+
+
+def consistency_suite(s, f):
+    section("Consistency under asynchronous index maintenance (pending-write window)")
+    setup_consistency(s, f)
+    probe_filter_no_false_negative(s, f)
+    probe_filter_no_false_positive_on_update(s, f)
+    probe_count_with_filter(s, f)
+    probe_whole_collection_count(s, f)
+    probe_distinct_new_value(s, f)
+    probe_group_by(s, f)
+    probe_sort(s, f)
+    probe_join(s, f)
+    probe_delete_consistency(s, f)
+    probe_same_id_rapid_updates_converge(s, f)
+    probe_save_delete_converges(s, f)
+    probe_concurrent_save_during_create_index(s, f)
+    probe_drop_burst_no_background_errors(s, f)
+    probe_bulk_update_same_page_no_corruption(s, f)
+    probe_convergence(s, f)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -280,7 +633,7 @@ def main():
     print(f"  Connecting to {HOST}:{PORT}")
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
           f"meta + array tags), {LEFT_DOCS} left + {NUM_DOCS} right docs for JOIN.")
-    print(f"        Measure GROUP_BY/JOIN/SORT/DISTINCT and object/array element-match FILTER unindexed, "
+    print(f"        Measure JOIN/SORT/DISTINCT and object/array element-match FILTER unindexed, "
           f"then create indexes and re-measure.")
 
     with new_conn() as (s, f):
@@ -294,7 +647,6 @@ def main():
 
     cases = [
         ("DISTINCT on category", COLL, DISTINCT_STEPS, distinct_signature, True),
-        ("GROUP_BY on category", COLL, GROUP_BY_STEPS, group_by_signature, False),
         ("SORT on score (+LIMIT 10)", COLL, SORT_STEPS, sort_signature, False),
         ("JOIN against a large remote collection", JOIN_LEFT, JOIN_STEPS, join_signature, True),
         ("FILTER element-match on object field", COLL, FILTER_OBJECT_STEPS, filter_signature, True),
@@ -329,6 +681,11 @@ def main():
         u_time, u_resp = unindexed[name]
         i_time, i_resp = indexed[name]
         compare(name, u_time, u_resp, i_time, i_resp, sig, strict)
+
+    # Phase 3 — correctness under asynchronous index maintenance (the consistency fixes).
+    with new_conn() as (s, f):
+        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+        consistency_suite(s, f)
 
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
