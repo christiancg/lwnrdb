@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
@@ -887,6 +888,13 @@ public class OperationProcessorTest {
         final var collName = "pendingRelocateColl";
         TestUtils.setPrivateField(config, "maxPageSize", 2000L);
         TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        // Swap in a fresh BackgroundTaskManager whose workers are never started so the relocation's
+        // DELETED/CREATED events sit unprocessed in its queue. Otherwise, if another test class
+        // (e.g. MainTest) has already started the shared IoC manager's workers, they would drain the
+        // events and clear the pending marks before this assertion runs, making the test flaky.
+        final var originalTaskManager = TestUtils.getPrivateField(processor, "taskManager",
+                BackgroundTaskManager.class);
+        TestUtils.setPrivateField(processor, "taskManager", new BackgroundTaskManager());
         try {
             processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
 
@@ -923,6 +931,7 @@ public class OperationProcessorTest {
             assertTrue(pending.idsFor(TestGlobals.DB, collName).contains("a"),
                     "id must remain pending after relocation so both events are covered");
         } finally {
+            TestUtils.setPrivateField(processor, "taskManager", originalTaskManager);
             TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
             TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
             processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
