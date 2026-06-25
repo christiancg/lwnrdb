@@ -22,7 +22,7 @@ public class AggregateResponseTest {
         results.add(obj1);
         results.add(obj2);
 
-        AggregateResponse response = new AggregateResponse(OperationStatus.OK, "Success", results);
+        AggregateResponse response = new AggregateResponse("Success", results);
 
         assertEquals(OperationType.AGGREGATE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -34,10 +34,10 @@ public class AggregateResponseTest {
     // Create AggregateResponse with null results list
     @Test
     public void test_create_aggregate_response_with_null_results() {
-        AggregateResponse response = new AggregateResponse(OperationStatus.ERROR, "No results found", null);
+        AggregateResponse response = new AggregateResponse("No results found", null);
 
         assertEquals(OperationType.AGGREGATE, response.getType());
-        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals("No results found", response.getMessage());
         assertNull(response.getResults());
     }
@@ -46,7 +46,7 @@ public class AggregateResponseTest {
     @Test
     public void test_create_with_empty_results_and_ok_status() {
         List<JsonObject> emptyResults = new ArrayList<>();
-        AggregateResponse response = new AggregateResponse(OperationStatus.OK, "Success", emptyResults);
+        AggregateResponse response = new AggregateResponse("Success", emptyResults);
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals("Success", response.getMessage());
         assertTrue(response.getResults().isEmpty());
@@ -56,7 +56,7 @@ public class AggregateResponseTest {
     @Test
     public void test_operation_type_is_aggregate() {
         List<JsonObject> results = new ArrayList<>();
-        AggregateResponse response = new AggregateResponse(OperationStatus.OK, "Success", results);
+        AggregateResponse response = new AggregateResponse("Success", results);
         assertEquals(OperationType.AGGREGATE, response.getType());
     }
 
@@ -71,7 +71,7 @@ public class AggregateResponseTest {
         results.add(obj1);
         results.add(obj2);
 
-        AggregateResponse response = new AggregateResponse(OperationStatus.OK, "Success", results);
+        AggregateResponse response = new AggregateResponse("Success", results);
 
         // Test getters
         assertEquals(OperationType.AGGREGATE, response.getType());

@@ -14,7 +14,7 @@ public class ListDatabasesResponseTest {
     @Test
     public void test_response_with_ok_status_and_database_list() {
         List<String> databases = List.of("db1", "db2");
-        ListDatabasesResponse response = new ListDatabasesResponse(OperationStatus.OK, "Ok", databases);
+        ListDatabasesResponse response = new ListDatabasesResponse("Ok", databases);
 
         assertEquals(OperationType.LIST_DATABASES, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -25,10 +25,10 @@ public class ListDatabasesResponseTest {
     // Response with ERROR status and null list
     @Test
     public void test_response_with_error_status_null_list() {
-        ListDatabasesResponse response = new ListDatabasesResponse(OperationStatus.ERROR, "Error occurred", null);
+        ListDatabasesResponse response = new ListDatabasesResponse("Error occurred", null);
 
         assertEquals(OperationType.LIST_DATABASES, response.getType());
-        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals("Error occurred", response.getMessage());
         assertNull(response.getDatabases());
     }
@@ -37,7 +37,7 @@ public class ListDatabasesResponseTest {
     @Test
     public void test_response_with_ok_status_and_empty_list() {
         List<String> emptyList = List.of();
-        ListDatabasesResponse response = new ListDatabasesResponse(OperationStatus.OK, "Ok", emptyList);
+        ListDatabasesResponse response = new ListDatabasesResponse("Ok", emptyList);
 
         assertEquals(OperationType.LIST_DATABASES, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());

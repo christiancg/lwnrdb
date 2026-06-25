@@ -13,7 +13,7 @@ public class DropCollectionResponseTest {
     public void test_create_drop_collection_response_with_ok_status() {
         String successMessage = "Collection dropped successfully";
 
-        DropCollectionResponse response = new DropCollectionResponse(OperationStatus.OK, successMessage);
+        DropCollectionResponse response = new DropCollectionResponse(successMessage);
 
         assertEquals(OperationType.DROP_COLLECTION, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());

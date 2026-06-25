@@ -16,7 +16,7 @@ public class FindByIdResponseTest {
         jsonObject.addProperty("id", 1);
         jsonObject.addProperty("name", "test");
 
-        FindByIdResponse response = new FindByIdResponse(OperationStatus.OK, "Found", jsonObject);
+        FindByIdResponse response = new FindByIdResponse("Found", jsonObject);
 
         assertEquals(OperationType.FIND_BY_ID, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -29,10 +29,10 @@ public class FindByIdResponseTest {
     // Create FindByIdResponse with null JsonObject
     @Test
     public void test_create_find_by_id_response_with_null_object() {
-        FindByIdResponse response = new FindByIdResponse(OperationStatus.NOT_FOUND, "Not found", null);
+        FindByIdResponse response = new FindByIdResponse("Not found", null);
 
         assertEquals(OperationType.FIND_BY_ID, response.getType());
-        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals("Not found", response.getMessage());
         assertNull(response.getObject());
     }
@@ -44,7 +44,7 @@ public class FindByIdResponseTest {
         jsonObject.addProperty("id", 1);
         jsonObject.addProperty("name", "test");
 
-        FindByIdResponse response = new FindByIdResponse(OperationStatus.OK, "Found", jsonObject);
+        FindByIdResponse response = new FindByIdResponse("Found", jsonObject);
 
         // Test getters
         assertEquals(OperationType.FIND_BY_ID, response.getType());

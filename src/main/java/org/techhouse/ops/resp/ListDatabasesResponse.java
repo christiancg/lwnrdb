@@ -7,8 +7,8 @@ import org.techhouse.ops.OperationType;
 public class ListDatabasesResponse extends OperationResponse {
     private final List<String> databases;
 
-    public ListDatabasesResponse(OperationStatus status, String message, List<String> databases) {
-        super(OperationType.LIST_DATABASES, status, message);
+    public ListDatabasesResponse(String message, List<String> databases) {
+        super(OperationType.LIST_DATABASES, OperationStatus.OK, message);
         this.databases = databases;
     }
 

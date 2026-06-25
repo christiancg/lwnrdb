@@ -124,8 +124,9 @@ public class ListUsersTest {
                 + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"_id\",\"value\":\"nobody\"}}"
                 + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
-        final var resp = (ListUsersResponse) processor.processMessage(req);
+        final var resp = processor.processMessage(req);
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
+        assertEquals("404-5", resp.getErrorCode());
     }
 
     @Test
