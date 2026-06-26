@@ -448,6 +448,12 @@ public class OperationProcessor {
             UUID clientId) {
         try {
             final var dbName = createDatabaseRequest.getDatabaseName();
+            // Guard against re-creating an existing database: createDatabaseFolder returns true for an
+            // already-present folder, so without this check a duplicate CREATE_DATABASE would overwrite
+            // the existing admin entry (wiping its collection list and owners) and wrongly report success.
+            if (cache.getAdminDbEntry(dbName) != null) {
+                return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+            }
             final var result = fs.createDatabaseFolder(dbName);
             if (result) {
                 final var username = clientTracker.getAuthenticatedUsername(clientId);
