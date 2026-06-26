@@ -10,9 +10,7 @@ import java.util.UUID;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
-import org.techhouse.bckg_ops.events.CollectionEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
-import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.AccessKind;
@@ -25,6 +23,7 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -461,7 +460,6 @@ public class OperationProcessor {
                 final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
                         new java.util.ArrayList<>(owners));
                 AdminOperationHelper.saveDatabaseEntry(newEntry);
-                taskManager.submitBackgroundTask(new DatabaseEvent(EventType.CREATED, dbName));
                 return new CreateDatabaseResponse("Database created successfully");
             }
             return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
@@ -504,7 +502,12 @@ public class OperationProcessor {
                 for (final var collName : lockedColls) {
                     locks.removeLock(dbName, collName);
                 }
-                taskManager.submitBackgroundTask(new DatabaseEvent(EventType.DELETED, dbName));
+                // Remove the database's admin metadata synchronously (mirroring synchronous creation and
+                // collection drop). Doing this in the background previously left the admin entry briefly
+                // present after the drop returned OK, so an immediate CREATE_DATABASE of the same name hit
+                // the duplicate guard and wrongly returned DATABASE_ALREADY_EXISTS (or was unregistered
+                // when the queued delete event later ran).
+                AdminOperationHelper.deleteDatabaseEntry(dbName);
                 return new DropDatabaseResponse("Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
@@ -532,7 +535,17 @@ public class OperationProcessor {
             final var collName = createCollectionRequest.getCollectionName();
             final var result = fs.createCollectionFile(dbName, collName);
             if (result) {
-                taskManager.submitBackgroundTask(new CollectionEvent(EventType.CREATED, dbName, collName));
+                // Register the collection's admin metadata (page collections + admin entry with its PK
+                // index entry) synchronously, so a subsequent CREATE_INDEX/SAVE observes it immediately.
+                // Doing it here rather than in a background task closes a race where the registration
+                // lagged, letting CREATE_INDEX run first, find no admin PK entry
+                // (getPkIndexAdminCollEntry == null) and silently skip registering the index while still
+                // returning OK, leaving the index built but unregistered. Collection creation and
+                // deletion are both fully synchronous.
+                if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+                    AdminOperationHelper.createPageCollections(dbName, collName);
+                    AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                }
                 return new CreateCollectionResponse("Collection created successfully");
             }
             return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
@@ -550,7 +563,12 @@ public class OperationProcessor {
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
-                taskManager.submitBackgroundTask(new CollectionEvent(EventType.DELETED, dbName, collName));
+                // Remove the collection's admin metadata synchronously (mirroring synchronous creation).
+                // Doing this in the background previously left the admin entry briefly present after the
+                // drop returned OK, so an immediate CREATE_COLLECTION of the same name saw the stale entry,
+                // skipped registration, and was then unregistered when the queued delete event ran.
+                AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+                AdminOperationHelper.deletePageCollections(dbName, collName);
                 dropSucceeded = true;
                 return new DropCollectionResponse("Collection dropped successfully");
             }
