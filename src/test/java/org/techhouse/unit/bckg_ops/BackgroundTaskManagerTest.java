@@ -8,10 +8,11 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
-import org.techhouse.bckg_ops.events.CollectionEvent;
+import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.DbEntry;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -26,7 +27,7 @@ public class BackgroundTaskManagerTest {
     void testSubmitBackgroundTask() throws NoSuchFieldException, IllegalAccessException {
         // setup
         var manager = new BackgroundTaskManager();
-        var event = new CollectionEvent(EventType.CREATED, "test", "test");
+        var event = new EntityEvent(EventType.CREATED, "test", "test", new DbEntry());
 
         // when
         manager.submitBackgroundTask(event);
@@ -94,7 +95,7 @@ public class BackgroundTaskManagerTest {
     @Test
     void testStopBackgroundWorkersDrainsQueueAndAllowsRestart() throws Exception {
         var manager = new BackgroundTaskManager();
-        manager.submitBackgroundTask(new CollectionEvent(EventType.CREATED, "test", "test"));
+        manager.submitBackgroundTask(new EntityEvent(EventType.CREATED, "test", "test", new DbEntry()));
 
         final var oldPool = TestUtils.getPrivateField(manager, "pool", java.util.concurrent.ExecutorService.class);
 

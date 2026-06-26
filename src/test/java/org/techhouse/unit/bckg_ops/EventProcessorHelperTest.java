@@ -1,7 +1,5 @@
 package org.techhouse.unit.bckg_ops;
 
-import static org.mockito.Mockito.*;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -12,9 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.EventProcessorHelper;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
-import org.techhouse.bckg_ops.events.CollectionEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
-import org.techhouse.bckg_ops.events.DatabaseEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
@@ -41,37 +37,6 @@ public class EventProcessorHelperTest {
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
-    }
-
-    @Test
-    public void processDatabaseEventDeletionTest() throws IOException, InterruptedException {
-        final var databaseEventCreate = new DatabaseEvent(EventType.CREATED, TestGlobals.DB);
-        EventProcessorHelper.processEvent(databaseEventCreate);
-        final var databaseEventDelete = new DatabaseEvent(EventType.DELETED, TestGlobals.DB);
-        EventProcessorHelper.processEvent(databaseEventDelete);
-        final var dbEntry = AdminOperationHelper.getDatabaseEntry(TestGlobals.DB);
-        Assertions.assertNull(dbEntry);
-    }
-
-    @Test
-    public void processCollectionEventCreationTest() throws IOException, InterruptedException {
-        final var adminEvent = new DatabaseEvent(EventType.CREATED, TestGlobals.DB);
-        EventProcessorHelper.processEvent(adminEvent);
-        final var collectionEvent = new CollectionEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL);
-        EventProcessorHelper.processEvent(collectionEvent);
-        final var collEntry = AdminOperationHelper.getCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
-        Assertions.assertNotNull(collEntry);
-    }
-
-    @Test
-    public void processCollectionEventDeletionTest() throws IOException, InterruptedException {
-        var collectionEvent = mock(CollectionEvent.class);
-        when(collectionEvent.getDbName()).thenReturn(TestGlobals.DB);
-        when(collectionEvent.getCollName()).thenReturn(TestGlobals.COLL);
-        when(collectionEvent.getType()).thenReturn(EventType.DELETED);
-        EventProcessorHelper.processEvent(collectionEvent);
-        Assertions
-                .assertDoesNotThrow(() -> AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
     }
 
     @Test
