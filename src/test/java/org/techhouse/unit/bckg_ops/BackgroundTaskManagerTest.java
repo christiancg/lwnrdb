@@ -86,4 +86,27 @@ public class BackgroundTaskManagerTest {
 
         verify(pool, never()).execute(any(Runnable.class));
     }
+
+    /**
+     * stopBackgroundWorkers must shut down the running pool, drop any pending events and leave the manager
+     * reusable (a fresh pool so startBackgroundWorkers can run again).
+     */
+    @Test
+    void testStopBackgroundWorkersDrainsQueueAndAllowsRestart() throws Exception {
+        var manager = new BackgroundTaskManager();
+        manager.submitBackgroundTask(new CollectionEvent(EventType.CREATED, "test", "test"));
+
+        final var oldPool = TestUtils.getPrivateField(manager, "pool", java.util.concurrent.ExecutorService.class);
+
+        manager.stopBackgroundWorkers();
+
+        final var type = new ReflectionUtils.TypeToken<LinkedBlockingQueue<Event>>() {
+        };
+        LinkedBlockingQueue<Event> queue = TestUtils.getPrivateField(manager, "queue", type);
+        assertTrue(queue.isEmpty(), "pending events should be dropped on stop");
+        assertTrue(oldPool.isShutdown(), "the previous pool should be shut down");
+
+        final var newPool = TestUtils.getPrivateField(manager, "pool", java.util.concurrent.ExecutorService.class);
+        assertTrue(newPool != oldPool && !newPool.isShutdown(), "a fresh, usable pool should replace the old one");
+    }
 }

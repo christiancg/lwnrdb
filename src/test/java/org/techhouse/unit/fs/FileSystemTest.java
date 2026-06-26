@@ -1108,6 +1108,42 @@ public class FileSystemTest {
         assertEquals(1, secondRead.size());
     }
 
+    // A non-atomic write interrupted mid-rewrite can leave two lines for the same id. The loader must keep
+    // the last occurrence (freshest position) and rewrite the survivors away, never failing the whole read.
+    @Test
+    public void test_readWholePkIndexFile_dedups_duplicate_keys_keeping_last() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+
+        final var entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.set_id("dup");
+        entry.setData(new JsonObject());
+        entry.setPage(0L);
+        fs.insertIntoCollection(entry);
+
+        final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
+                + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
+        // Append a second line for the same id with a different (later) position.
+        Files.writeString(indexFile.toPath(), "\ndup|172|172|0", StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, firstRead.size(), "duplicate id must collapse to a single entry");
+        assertEquals("dup", firstRead.getFirst().getValue());
+        assertEquals(172L, firstRead.getFirst().getPosition(), "the last occurrence (freshest) must win");
+
+        final var diskLines = Files.readAllLines(indexFile.toPath());
+        assertEquals(1, diskLines.stream().filter(l -> !l.isEmpty()).count(),
+                "the duplicate line should have been rewritten away");
+
+        final var secondRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, secondRead.size());
+    }
+
     // A torn final line in a field (scalar) index file is skipped, logged and rewritten away on read,
     // mirroring the PK index self-heal — one bad line must not fail every index-backed read.
     @Test
