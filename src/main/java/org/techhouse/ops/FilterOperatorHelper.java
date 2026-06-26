@@ -175,6 +175,10 @@ public class FilterOperatorHelper {
                         } else {
                             return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
                         }
+                    } else if (operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()) {
+                        // CONTAINS on an array field: does the array contain the primitive query value?
+                        // (e.g. ownedDatabases CONTAINS "mydb"). Uses element equality, like IN.
+                        return toTestElement.asJsonArray().contains(operatorElement);
                     }
                 } else if (operatorElement.isJsonArray()) {
                     if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
