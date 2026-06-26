@@ -3,9 +3,15 @@ on:
   pull_request:
     branches:
       - main
+
 jobs:
-  verify:
-    name: Verify
+  # ---------------------------------------------------------------------------
+  # Build once: compile, unit tests, coverage + all quality gates, then publish
+  # the shaded jar as an artifact so the integration jobs don't have to rebuild.
+  # This is the long pole; everything below runs in parallel against the jar.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build & Verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -14,84 +20,115 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           architecture: x64
+          cache: maven
       - name: Run Maven Verify
         run: mvn verify
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwnrdb-jar
+          path: target/lwnrdb-1.0-SNAPSHOT.jar
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Integration suites, fanned out across independent runners. Each leg gets its
+  # own runner VM, so every leg can reuse port 8989 / the default db folder
+  # without colliding, and the pgrep-based scripts (memory-extensive, bench) are
+  # each the sole jar on their runner. The index suite needs caching disabled
+  # (maxMemory=-1); tls and bench manage their own server lifecycle.
+  # fail-fast: false so one failing suite doesn't cancel the others.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: ${{ matrix.name }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Lightweight functional suites — share one default-config server.
+          - name: auth-api-memory
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              python3 test_utils/test_auth.py
+              python3 test_utils/test_api_commands.py
+              python3 test_utils/test_memory_limits.py
+
+          # Streaming / paged read paths.
+          - name: streaming
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              STREAM_TEST_DOCS=2000 \
+              STREAM_TEST_PAYLOAD_BYTES=512 \
+              python3 test_utils/test_streaming_reads.py
+
+          # Heavy mixed workload that measures RSS via pgrep -> must be sole jar.
+          - name: memory-extensive
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              MEM_TEST_COLLECTIONS=4 \
+              MEM_TEST_DOCS=2000 \
+              MEM_TEST_PAYLOAD_BYTES=512 \
+              python3 test_utils/test_memory_extensive.py
+
+          # Index fast-paths are only visible when reads hit disk -> caching off.
+          - name: index-aggregations
+            start_server: true
+            max_memory: "-1"
+            xmx: 512m
+            run: |
+              INDEX_TEST_DOCS=2000 \
+              INDEX_TEST_PAYLOAD_BYTES=512 \
+              python3 test_utils/test_index_aggregations.py
+
+          # Self-contained: starts/stops its own TLS server on 9443.
+          - name: tls
+            start_server: false
+            run: |
+              python3 test_utils/test_tls.py
+
+          # Restarts the server itself to measure cold-cache latency (pgrep).
+          - name: cache-warmup-bench
+            start_server: false
+            run: |
+              BENCH_DOCS=5000 \
+              BENCH_WARM_RUNS=10 \
+              python3 test_utils/bench_cache_warmup.py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          architecture: x64
+      - name: Download jar
+        uses: actions/download-artifact@v4
+        with:
+          name: lwnrdb-jar
+          path: target
       - name: Set admin credentials for integration tests
         run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
       - name: Start server
+        if: ${{ matrix.start_server }}
         run: |
-          java -Xmx1g -jar target/lwnrdb-1.0-SNAPSHOT.jar &
+          sed -i "s/^maxMemory=.*/maxMemory=${{ matrix.max_memory }}/" lwnrdb.cfg
+          java -Xmx${{ matrix.xmx }} -jar target/lwnrdb-1.0-SNAPSHOT.jar > server.log 2>&1 &
           echo $! > server.pid
-          until nc -z 127.0.0.1 8989; do sleep 0.2; done
-      - name: Run auth integration tests
-        run: python3 test_utils/test_auth.py
-      - name: Run API command integration tests
-        run: python3 test_utils/test_api_commands.py
-      - name: Run memory limits tests
-        run: python3 test_utils/test_memory_limits.py
-      - name: Run extensive memory tests
-        env:
-          # CI runners are slower than dev hardware; dial the workload down
-          # so the run finishes in a couple of minutes. The script still
-          # exercises every code path (inserts, indexes, mixed reads, eviction).
-          MEM_TEST_COLLECTIONS: "4"
-          MEM_TEST_DOCS: "2000"
-          MEM_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_memory_extensive.py
-      - name: Run streaming read path tests
-        env:
-          # CI runners are slower; dial the workload down so the run stays quick
-          # while still spanning multiple pages to exercise the streaming and
-          # targeted-fetch read paths.
-          STREAM_TEST_DOCS: "2000"
-          STREAM_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_streaming_reads.py
-      - name: Run index-backed aggregation tests (caching disabled)
-        env:
-          # CI runners are slower; dial the workload down so the run stays quick
-          # while still being large enough for the index fast-paths to clearly
-          # beat the full-scan paths (JOIN / SORT / DISTINCT).
-          INDEX_TEST_DOCS: "2000"
-          INDEX_TEST_PAYLOAD_BYTES: "512"
-          # Talk to the dedicated caching-disabled server started below (port 8990),
-          # not the shared server on 8989.
-          INDEX_TEST_PORT: "8990"
-        run: |
-          # Index gains are only visible when reads hit disk, so this suite needs a
-          # server with caching disabled (maxMemory=-1). Run it as a SECOND server
-          # on port 8990 in an isolated working directory, leaving the shared server
-          # on 8989 up for the remaining suites (the cache-warmup benchmark connects
-          # to it before restarting it itself). Only this extra server is stopped,
-          # by PID, so the shared server is untouched.
-          mkdir -p ci-nocache
-          sed -e 's/^maxMemory=.*/maxMemory=-1/' \
-              -e 's/^port=.*/port=8990/' \
-              -e 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' \
-              lwnrdb.cfg > ci-nocache/lwnrdb.cfg
-          ( cd ci-nocache && exec java -Xmx512m -jar ../target/lwnrdb-1.0-SNAPSHOT.jar > server.log 2>&1 ) &
-          NOCACHE_PID=$!
-          trap 'kill "$NOCACHE_PID" 2>/dev/null || true' EXIT
-          # Wait until THIS server reports it is listening; fail loudly with its log otherwise.
-          for _ in $(seq 1 100); do
-            grep -q "listening on port 8990" ci-nocache/server.log 2>/dev/null && break
+          for _ in $(seq 1 150); do
+            nc -z 127.0.0.1 8989 && break
             sleep 0.2
           done
-          if ! grep -q "listening on port 8990" ci-nocache/server.log 2>/dev/null; then
-            echo "::error::caching-disabled server failed to start"; cat ci-nocache/server.log; exit 1
+          if ! nc -z 127.0.0.1 8989; then
+            echo "::error::server failed to start"; cat server.log; exit 1
           fi
-          python3 test_utils/test_index_aggregations.py
-      - name: Run TLS integration tests
-        # Self-contained: starts its own TLS-enabled server on a dedicated port
-        # (9443) and working directory, then stops it — independent of the
-        # plaintext server on 8989 used by the other suites.
-        run: python3 test_utils/test_tls.py
-      - name: Run cache warmup benchmark
-        # The benchmark restarts the server itself to measure cold-cache latency,
-        # so any tracked server.pid is stale after this step.
-        env:
-          BENCH_DOCS: "5000"
-          BENCH_WARM_RUNS: "10"
-        run: python3 test_utils/bench_cache_warmup.py
+      - name: Run ${{ matrix.name }} tests
+        run: ${{ matrix.run }}
       - name: Stop server
-        if: always()
+        if: ${{ always() && matrix.start_server }}
         run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
