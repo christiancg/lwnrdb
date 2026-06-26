@@ -75,7 +75,15 @@ public final class AggregationOperationHelper {
             };
         }
         try {
-            return resultStream != null ? resultStream.toList() : new ArrayList<>();
+            if (resultStream == null) {
+                // No step produced a stream (empty aggregationSteps): return the whole collection,
+                // as documented. A null collName means a step-on-stream call with no source to load.
+                if (collName == null || collName.isEmpty()) {
+                    return new ArrayList<>();
+                }
+                resultStream = cache.initializeStreamIfNecessary(null, dbName, collName);
+            }
+            return resultStream.toList();
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }
