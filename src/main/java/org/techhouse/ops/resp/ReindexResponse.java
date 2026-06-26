@@ -7,8 +7,8 @@ import org.techhouse.ops.OperationType;
 public class ReindexResponse extends OperationResponse {
     public List<String> rebuiltFields;
 
-    public ReindexResponse(OperationStatus status, String message, List<String> rebuiltFields) {
-        super(OperationType.REINDEX, status, message);
+    public ReindexResponse(String message, List<String> rebuiltFields) {
+        super(OperationType.REINDEX, OperationStatus.OK, message);
         this.rebuiltFields = rebuiltFields;
     }
 

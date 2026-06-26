@@ -18,7 +18,7 @@ public class BulkSaveResponseTest {
         List<String> updated = Arrays.asList("doc3", "doc4");
         String message = "Successfully saved documents";
 
-        BulkSaveResponse response = new BulkSaveResponse(OperationStatus.OK, message, inserted, updated);
+        BulkSaveResponse response = new BulkSaveResponse(message, inserted, updated);
 
         assertEquals(OperationType.BULK_SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -33,7 +33,7 @@ public class BulkSaveResponseTest {
         List<String> updated = List.of("doc1");
         String message = "Partially saved documents";
 
-        BulkSaveResponse response = new BulkSaveResponse(OperationStatus.OK, message, null, updated);
+        BulkSaveResponse response = new BulkSaveResponse(message, null, updated);
 
         assertEquals(OperationType.BULK_SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
@@ -49,7 +49,7 @@ public class BulkSaveResponseTest {
         List<String> updated = Arrays.asList("item3", "item4");
         String message = "Operation completed";
 
-        BulkSaveResponse response = new BulkSaveResponse(OperationStatus.OK, message, inserted, updated);
+        BulkSaveResponse response = new BulkSaveResponse(message, inserted, updated);
 
         assertEquals(OperationType.BULK_SAVE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
