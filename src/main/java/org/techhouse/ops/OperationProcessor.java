@@ -169,7 +169,7 @@ public class OperationProcessor {
         };
     }
 
-    private BulkSaveResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest) {
+    private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest) {
         final var dbName = bulkSaveRequest.getDatabaseName();
         final var collName = bulkSaveRequest.getCollectionName();
         final var entries = new ArrayList<DbEntry>();
@@ -179,15 +179,17 @@ public class OperationProcessor {
         final var maxEntrySize = configuration.getMaxEntrySize();
         for (var entry : entries) {
             if (entry.byteSize() > maxEntrySize) {
-                return new BulkSaveResponse(OperationStatus.ERROR, "Entry size of " + entry.byteSize()
-                        + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null, null);
+                return new OperationResponse(
+                        OperationType.BULK_SAVE, "Entry size of " + entry.byteSize()
+                                + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
+                        ErrorCode.ENTRY_TOO_LARGE);
             }
         }
         final var seenIds = new HashSet<String>();
         for (var entry : entries) {
             if (!seenIds.add(entry.get_id())) {
-                return new BulkSaveResponse(OperationStatus.ERROR,
-                        "Duplicate _id in bulk save request: " + entry.get_id(), null, null);
+                return new OperationResponse(OperationType.BULK_SAVE,
+                        "Duplicate _id in bulk save request: " + entry.get_id(), ErrorCode.DUPLICATE_ID);
             }
         }
         try {
@@ -254,23 +256,24 @@ public class OperationProcessor {
             taskManager
                     .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
             recordCollectionAccess(dbName, collName);
-            return new BulkSaveResponse(OperationStatus.OK, "Successfully saved entries", insertedIds, updatedIds);
+            return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
-            return new BulkSaveResponse(OperationStatus.ERROR, "Error while saving entries: " + exception.getMessage(),
-                    null, null);
+            return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
         } finally {
             locks.release(dbName, collName);
         }
     }
 
-    private SaveResponse processSaveOperation(SaveRequest saveRequest) {
+    private OperationResponse processSaveOperation(SaveRequest saveRequest) {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         final var maxEntrySize = configuration.getMaxEntrySize();
         if (entry.byteSize() > maxEntrySize) {
-            return new SaveResponse(OperationStatus.ERROR, "Entry size of " + entry.byteSize()
-                    + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes", null);
+            return new OperationResponse(
+                    OperationType.SAVE, "Entry size of " + entry.byteSize()
+                            + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
+                    ErrorCode.ENTRY_TOO_LARGE);
         }
         try {
             locks.lock(dbName, collName);
@@ -312,9 +315,9 @@ public class OperationProcessor {
             pendingIndexWrites.mark(dbName, collName, entry.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
             recordCollectionAccess(dbName, collName);
-            return new SaveResponse(OperationStatus.OK, "Successfully saved", savedPkIndexEntry.getValue());
+            return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
-            return new SaveResponse(OperationStatus.ERROR, "Error while saving entry: " + exception.getMessage(), null);
+            return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
         } finally {
             locks.release(dbName, collName);
         }
@@ -361,10 +364,10 @@ public class OperationProcessor {
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
         recordCollectionAccess(dbName, collName);
-        return new SaveResponse(OperationStatus.OK, "Successfully saved", relocatedPkIndexEntry.getValue());
+        return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
     }
 
-    private FindByIdResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
+    private OperationResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
         final var dbName = findbyIdRequest.getDatabaseName();
         final var collName = findbyIdRequest.getCollectionName();
         final var id = findbyIdRequest.get_id();
@@ -379,36 +382,34 @@ public class OperationProcessor {
                 final var entry = cache.getById(dbName, collName, primaryKeyIndexEntry);
                 recordPkIndexAccess(dbName, collName);
                 recordCollectionAccess(dbName, collName);
-                return new FindByIdResponse(OperationStatus.OK, "Ok", entry.getData());
+                return new FindByIdResponse("Ok", entry.getData());
             } else {
-                return new FindByIdResponse(OperationStatus.NOT_FOUND, "Not found", null);
+                return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
             }
         } catch (Exception exception) {
-            return new FindByIdResponse(OperationStatus.ERROR,
-                    "Error while retrieving entry: " + exception.getMessage(), null);
+            return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ERROR_RETRIEVING);
         } finally {
             releaseReadLocks(readLocks);
         }
     }
 
-    private AggregateResponse processAggregateOperation(AggregateRequest aggregateRequest) {
+    private OperationResponse processAggregateOperation(AggregateRequest aggregateRequest) {
         List<String> readLocks = List.of();
         try {
             readLocks = acquireReadLocks(aggregateRequest.isDirtyRead(), aggregateLockSet(aggregateRequest));
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
             recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
             return results.isEmpty()
-                    ? new AggregateResponse(OperationStatus.NOT_FOUND, "No results", null)
-                    : new AggregateResponse(OperationStatus.OK, "Ok", results);
+                    ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
+                    : new AggregateResponse("Ok", results);
         } catch (Exception e) {
-            return new AggregateResponse(OperationStatus.ERROR,
-                    "An error occurred while processing the aggregation: " + e.getMessage(), null);
+            return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
             releaseReadLocks(readLocks);
         }
     }
 
-    private DeleteResponse processDeleteOperation(DeleteRequest deleteRequest) {
+    private OperationResponse processDeleteOperation(DeleteRequest deleteRequest) {
         final var dbName = deleteRequest.getDatabaseName();
         final var collName = deleteRequest.getCollectionName();
         try {
@@ -431,21 +432,19 @@ public class OperationProcessor {
                 taskManager
                         .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
                 recordCollectionAccess(dbName, collName);
-                return new DeleteResponse(OperationStatus.OK,
-                        "Entry with id " + deleteRequest.get_id() + " deleted successfully");
+                return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
-                return new DeleteResponse(OperationStatus.NOT_FOUND,
-                        "Entry with id " + deleteRequest.get_id() + " not found");
+                return new OperationResponse(OperationType.DELETE,
+                        "Entry with id " + deleteRequest.get_id() + " not found", ErrorCode.ENTRY_NOT_FOUND);
             }
         } catch (Exception exception) {
-            return new DeleteResponse(OperationStatus.ERROR, "Error while deleting entry with id: "
-                    + deleteRequest.get_id() + ". Error message: " + exception.getMessage());
+            return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         } finally {
             locks.release(dbName, collName);
         }
     }
 
-    private CreateDatabaseResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest,
+    private OperationResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest,
             UUID clientId) {
         try {
             final var dbName = createDatabaseRequest.getDatabaseName();
@@ -457,29 +456,29 @@ public class OperationProcessor {
                         new java.util.ArrayList<>(owners));
                 AdminOperationHelper.saveDatabaseEntry(newEntry);
                 taskManager.submitBackgroundTask(new DatabaseEvent(EventType.CREATED, dbName));
-                return new CreateDatabaseResponse(OperationStatus.OK, "Database created successfully");
+                return new CreateDatabaseResponse("Database created successfully");
             }
-            return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
         } catch (Exception exception) {
-            return new CreateDatabaseResponse(OperationStatus.ERROR, "Error while creating database");
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE);
         }
     }
 
-    private SetDatabaseOwnersResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
+    private OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
         try {
             final var dbName = request.getDatabaseName();
             if (cache.getAdminDbEntry(dbName) == null) {
-                return new SetDatabaseOwnersResponse(OperationStatus.NOT_FOUND, "Database '" + dbName + "' not found");
+                return new OperationResponse(OperationType.SET_DATABASE_OWNERS, "Database '" + dbName + "' not found",
+                        ErrorCode.DATABASE_NOT_FOUND);
             }
             AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
-            return new SetDatabaseOwnersResponse(OperationStatus.OK, "Database owners updated successfully");
+            return new SetDatabaseOwnersResponse("Database owners updated successfully");
         } catch (Exception e) {
-            return new SetDatabaseOwnersResponse(OperationStatus.ERROR,
-                    "Error updating database owners: " + e.getMessage());
+            return new OperationResponse(OperationType.SET_DATABASE_OWNERS, ErrorCode.ERROR_UPDATING_DATABASE_OWNERS);
         }
     }
 
-    private DropDatabaseResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
+    private OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
         // Lock every collection of the database (in a stable order to avoid deadlock with other
         // multi-collection acquisitions) so a concurrent save/delete/read or a background index update
@@ -500,11 +499,11 @@ public class OperationProcessor {
                     locks.removeLock(dbName, collName);
                 }
                 taskManager.submitBackgroundTask(new DatabaseEvent(EventType.DELETED, dbName));
-                return new DropDatabaseResponse(OperationStatus.OK, "Database dropped successfully");
+                return new DropDatabaseResponse("Database dropped successfully");
             }
-            return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
+            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         } catch (Exception exception) {
-            return new DropDatabaseResponse(OperationStatus.ERROR, "Error while dropping database");
+            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);
@@ -512,33 +511,31 @@ public class OperationProcessor {
         }
     }
 
-    private ListDatabasesResponse processListDatabasesOperation() {
+    private OperationResponse processListDatabasesOperation() {
         try {
             final var names = cache.getUserDatabaseNames();
-            return new ListDatabasesResponse(OperationStatus.OK, "Ok", names);
+            return new ListDatabasesResponse("Ok", names);
         } catch (Exception e) {
-            return new ListDatabasesResponse(OperationStatus.ERROR, "Error while listing databases: " + e.getMessage(),
-                    null);
+            return new OperationResponse(OperationType.LIST_DATABASES, ErrorCode.ERROR_LISTING_DATABASES);
         }
     }
 
-    private CreateCollectionResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
+    private OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
         try {
             final var dbName = createCollectionRequest.getDatabaseName();
             final var collName = createCollectionRequest.getCollectionName();
             final var result = fs.createCollectionFile(dbName, collName);
             if (result) {
                 taskManager.submitBackgroundTask(new CollectionEvent(EventType.CREATED, dbName, collName));
-                return new CreateCollectionResponse(OperationStatus.OK, "Collection created successfully");
+                return new CreateCollectionResponse("Collection created successfully");
             }
-            return new CreateCollectionResponse(OperationStatus.ERROR, "Error while creating collection");
+            return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
         } catch (Exception e) {
-            return new CreateCollectionResponse(OperationStatus.ERROR,
-                    "Error while creating collection: " + e.getMessage());
+            return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
         }
     }
 
-    private DropCollectionResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
+    private OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
         boolean dropSucceeded = false;
@@ -549,12 +546,11 @@ public class OperationProcessor {
                 cache.evictCollection(dbName, collName);
                 taskManager.submitBackgroundTask(new CollectionEvent(EventType.DELETED, dbName, collName));
                 dropSucceeded = true;
-                return new DropCollectionResponse(OperationStatus.OK, "Collection dropped successfully");
+                return new DropCollectionResponse("Collection dropped successfully");
             }
-            return new DropCollectionResponse(OperationStatus.ERROR, "Error while dropping collection");
+            return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
         } catch (Exception e) {
-            return new DropCollectionResponse(OperationStatus.ERROR,
-                    "Error while dropping collection: " + e.getMessage());
+            return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
         } finally {
             locks.release(dbName, collName);
             if (dropSucceeded) {
@@ -563,33 +559,33 @@ public class OperationProcessor {
         }
     }
 
-    private ListCollectionsResponse processListCollectionsOperation(ListCollectionsRequest request) {
+    private OperationResponse processListCollectionsOperation(ListCollectionsRequest request) {
         List<String> readLocks = List.of();
         try {
             final var dbName = request.getDatabaseName();
             if (dbName == null || dbName.isBlank()) {
-                return new ListCollectionsResponse(OperationStatus.ERROR, "Database name is required", null);
+                return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database name is required",
+                        ErrorCode.VALIDATION_ERROR);
             }
             if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-                return new ListCollectionsResponse(OperationStatus.OK, "Ok", List.of());
+                return new ListCollectionsResponse("Ok", List.of());
             }
             readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
                     Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME)));
             if (cache.getAdminDbEntry(dbName) == null) {
-                return new ListCollectionsResponse(OperationStatus.NOT_FOUND, "Database " + dbName + " not found",
-                        null);
+                return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database " + dbName + " not found",
+                        ErrorCode.DATABASE_NOT_FOUND);
             }
             final var names = cache.getCollectionNamesForDatabase(dbName);
-            return new ListCollectionsResponse(OperationStatus.OK, "Ok", names);
+            return new ListCollectionsResponse("Ok", names);
         } catch (Exception e) {
-            return new ListCollectionsResponse(OperationStatus.ERROR,
-                    "Error while listing collections: " + e.getMessage(), null);
+            return new OperationResponse(OperationType.LIST_COLLECTIONS, ErrorCode.ERROR_LISTING_COLLECTIONS);
         } finally {
             releaseReadLocks(readLocks);
         }
     }
 
-    private CreateIndexResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
+    private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
         final var dbName = createIndexRequest.getDatabaseName();
         final var collName = createIndexRequest.getCollectionName();
         final var fieldName = createIndexRequest.getFieldName();
@@ -602,15 +598,15 @@ public class OperationProcessor {
             locks.lock(dbName, collName);
             IndexHelper.createIndex(dbName, collName, fieldName);
             AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
-            return new CreateIndexResponse(OperationStatus.OK, "Created index for field: " + fieldName);
+            return new CreateIndexResponse("Created index for field: " + fieldName);
         } catch (Exception e) {
-            return new CreateIndexResponse(OperationStatus.ERROR, "Error while creating index: " + e.getMessage());
+            return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.ERROR_CREATING_INDEX);
         } finally {
             locks.release(dbName, collName);
         }
     }
 
-    private ListUsersResponse processListUsers(ListUsersRequest request) {
+    private OperationResponse processListUsers(ListUsersRequest request) {
         List<String> readLocks = List.of();
         try {
             readLocks = acquireReadLocks(request.isDirtyRead(),
@@ -621,16 +617,16 @@ public class OperationProcessor {
             final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
                     userStream);
             return results.isEmpty()
-                    ? new ListUsersResponse(OperationStatus.NOT_FOUND, "No users found", null)
-                    : new ListUsersResponse(OperationStatus.OK, "Ok", results);
+                    ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
+                    : new ListUsersResponse("Ok", results);
         } catch (Exception e) {
-            return new ListUsersResponse(OperationStatus.ERROR, "Error listing users: " + e.getMessage(), null);
+            return new OperationResponse(OperationType.LIST_USERS, ErrorCode.ERROR_LISTING_USERS);
         } finally {
             releaseReadLocks(readLocks);
         }
     }
 
-    private DropIndexResponse processDropIndex(DropIndexRequest dropIndexRequest) {
+    private OperationResponse processDropIndex(DropIndexRequest dropIndexRequest) {
         final var dbName = dropIndexRequest.getDatabaseName();
         final var collName = dropIndexRequest.getCollectionName();
         final var fieldName = dropIndexRequest.getFieldName();
@@ -642,18 +638,18 @@ public class OperationProcessor {
             final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
             if (result) {
                 AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
-                return new DropIndexResponse(OperationStatus.OK, "Successfully dropped index: " + fieldName);
+                return new DropIndexResponse("Successfully dropped index: " + fieldName);
             } else {
-                return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + fieldName);
+                return new OperationResponse(OperationType.DROP_INDEX, ErrorCode.INDEX_NOT_FOUND, fieldName);
             }
         } catch (Exception e) {
-            return new DropIndexResponse(OperationStatus.ERROR, "Error while dropping index: " + e.getMessage());
+            return new OperationResponse(OperationType.DROP_INDEX, ErrorCode.ERROR_DROPPING_INDEX);
         } finally {
             locks.release(dbName, collName);
         }
     }
 
-    private ReindexResponse processReindex(ReindexRequest request) {
+    private OperationResponse processReindex(ReindexRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         try {
@@ -669,22 +665,21 @@ public class OperationProcessor {
             } else {
                 for (var fieldName : request.getFieldNames()) {
                     if (!registeredIndexes.contains(fieldName)) {
-                        return new ReindexResponse(OperationStatus.ERROR, "No index registered for field: " + fieldName,
-                                List.of());
+                        return new OperationResponse(OperationType.REINDEX, ErrorCode.INDEX_NOT_FOUND, fieldName);
                     }
                 }
                 targets = request.getFieldNames();
             }
             if (targets.isEmpty()) {
-                return new ReindexResponse(OperationStatus.OK, "No indexes to rebuild", List.of());
+                return new ReindexResponse("No indexes to rebuild", List.of());
             }
             for (var fieldName : targets) {
                 IndexHelper.dropIndex(dbName, collName, fieldName);
                 IndexHelper.createIndex(dbName, collName, fieldName);
             }
-            return new ReindexResponse(OperationStatus.OK, "Rebuilt " + targets.size() + " index(es)", targets);
+            return new ReindexResponse("Rebuilt " + targets.size() + " index(es)", targets);
         } catch (Exception e) {
-            return new ReindexResponse(OperationStatus.ERROR, "Error while reindexing: " + e.getMessage(), List.of());
+            return new OperationResponse(OperationType.REINDEX, ErrorCode.ERROR_REINDEXING);
         } finally {
             locks.release(dbName, collName);
         }

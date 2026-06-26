@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -855,8 +856,12 @@ public class FileSystem {
         if (!indexFile.exists()) {
             return new ArrayList<>();
         }
-        final var entries = new ArrayList<PkIndexEntry>();
-        final var keepLines = new ArrayList<String>();
+        // Keyed by PK value, preserving first-seen order. A non-atomic write interrupted mid-rewrite can leave
+        // a torn line (handled by skip-and-log) or a duplicate line for the same id (handled by keeping the
+        // last occurrence — the freshest position). Either way we self-heal by rewriting the survivors, so a
+        // single bad/duplicate line never fails every PK-index-backed read.
+        final var byValue = new LinkedHashMap<String, PkIndexEntry>();
+        final var lineByValue = new LinkedHashMap<String, String>();
         boolean dropped = false;
         final var lock = fileLock(indexFile).readLock();
         lock.lock();
@@ -870,16 +875,22 @@ public class FileSystem {
             if (line.isEmpty())
                 continue;
             try {
-                entries.add(PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line));
-                keepLines.add(line);
+                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
+                if (byValue.put(entry.getValue(), entry) != null) {
+                    dropped = true;
+                    logger.warning("Removing duplicate PK index entry for '" + entry.getValue() + "' in "
+                            + indexFile.getName() + ", keeping the last occurrence");
+                }
+                lineByValue.put(entry.getValue(), line);
             } catch (Exception e) {
                 dropped = true;
                 logger.warning("Removing malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
             }
         }
         if (dropped) {
-            rewriteFileAtomically(indexFile.toPath(), keepLines);
+            rewriteFileAtomically(indexFile.toPath(), new ArrayList<>(lineByValue.values()));
         }
+        final var entries = new ArrayList<>(byValue.values());
         entries.sort(Comparator.comparing(PkIndexEntry::getValue));
         return entries;
     }

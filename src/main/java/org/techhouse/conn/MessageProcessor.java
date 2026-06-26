@@ -13,8 +13,8 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
-import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.RequestParser;
@@ -55,7 +55,7 @@ public class MessageProcessor implements Runnable {
                             final var validationResult = RequestValidator.validate(parsedMessage);
                             if (!validationResult.isValid()) {
                                 response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
-                                        OperationStatus.ERROR, validationResult.getErrorMessage()));
+                                        validationResult.getErrorMessage(), ErrorCode.VALIDATION_ERROR));
                             } else {
                                 final var type = parsedMessage.getType();
                                 final var isPublicOperation = type == OperationType.AUTHENTICATE
@@ -72,18 +72,18 @@ public class MessageProcessor implements Runnable {
                                 } else {
                                     final var username = clientTracker.getAuthenticatedUsername(clientId);
                                     if (username == null) {
-                                        response = eJson.toJson(new OperationResponse(type,
-                                                OperationStatus.UNAUTHENTICATED, "Must authenticate first"));
+                                        response = eJson
+                                                .toJson(new OperationResponse(type, ErrorCode.MUST_AUTHENTICATE_FIRST));
                                     } else {
                                         final var user = cache.getAdminUserEntry(username);
                                         if (user == null) {
-                                            response = eJson.toJson(new OperationResponse(type,
-                                                    OperationStatus.UNAUTHENTICATED, "User no longer exists"));
+                                            response = eJson.toJson(
+                                                    new OperationResponse(type, ErrorCode.USER_NO_LONGER_EXISTS));
                                         } else {
                                             final var authResult = AuthorizationChecker.check(parsedMessage, user);
                                             if (!authResult.isAllowed()) {
-                                                response = eJson.toJson(new OperationResponse(type,
-                                                        OperationStatus.FORBIDDEN, authResult.getReason()));
+                                                response = eJson
+                                                        .toJson(new OperationResponse(type, ErrorCode.NO_PERMISSIONS));
                                             } else {
                                                 final var responseObj = operationProcessor.processMessage(parsedMessage,
                                                         clientId);
@@ -107,8 +107,8 @@ public class MessageProcessor implements Runnable {
                     }
                 }
             } else {
-                final var responseObj = new OperationResponse(OperationType.CLOSE_CONNECTION, OperationStatus.ERROR,
-                        "Max number of connections reached");
+                final var responseObj = new OperationResponse(OperationType.CLOSE_CONNECTION,
+                        ErrorCode.MAX_CONNECTIONS_REACHED);
                 writer.write(eJson.toJson(responseObj));
                 writer.newLine();
                 writer.flush();

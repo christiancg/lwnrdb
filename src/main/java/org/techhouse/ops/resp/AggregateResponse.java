@@ -8,8 +8,8 @@ import org.techhouse.ops.OperationType;
 public class AggregateResponse extends OperationResponse {
     public List<JsonObject> results;
 
-    public AggregateResponse(OperationStatus status, String message, List<JsonObject> results) {
-        super(OperationType.AGGREGATE, status, message);
+    public AggregateResponse(String message, List<JsonObject> results) {
+        super(OperationType.AGGREGATE, OperationStatus.OK, message);
         this.results = results;
     }
 

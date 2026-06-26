@@ -7,8 +7,8 @@ import org.techhouse.ops.OperationType;
 public class GetDatabaseStatsResponse extends OperationResponse {
     private final JsonObject stats;
 
-    public GetDatabaseStatsResponse(OperationStatus status, String message, JsonObject stats) {
-        super(OperationType.GET_DATABASE_STATS, status, message);
+    public GetDatabaseStatsResponse(String message, JsonObject stats) {
+        super(OperationType.GET_DATABASE_STATS, OperationStatus.OK, message);
         this.stats = stats;
     }
 

@@ -7,8 +7,8 @@ import org.techhouse.ops.OperationType;
 public class ListCollectionsResponse extends OperationResponse {
     private final List<String> collections;
 
-    public ListCollectionsResponse(OperationStatus status, String message, List<String> collections) {
-        super(OperationType.LIST_COLLECTIONS, status, message);
+    public ListCollectionsResponse(String message, List<String> collections) {
+        super(OperationType.LIST_COLLECTIONS, OperationStatus.OK, message);
         this.collections = collections;
     }
 
