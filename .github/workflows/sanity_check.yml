@@ -135,3 +135,25 @@ jobs:
       - name: Stop server
         if: ${{ always() && matrix.start_server }}
         run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
+
+  # ---------------------------------------------------------------------------
+  # Single aggregate gate. This is the check required by branch protection
+  # (named "Verify" to match the existing rule): it succeeds only when the build
+  # and every integration leg succeeded, so the split pipeline still reports one
+  # green/red status to the PR. Runs even if a dependency fails (if: always())
+  # so it reports failure instead of being skipped and leaving the check pending.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify
+    needs: [build, integration]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }}"
+          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ]; then
+            echo "::error::one or more jobs failed"
+            exit 1
+          fi
+          echo "All jobs succeeded."
