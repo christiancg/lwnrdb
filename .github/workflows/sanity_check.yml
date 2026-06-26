@@ -93,9 +93,12 @@ jobs:
             run: |
               python3 test_utils/test_tls.py
 
-          # Restarts the server itself to measure cold-cache latency (pgrep).
+          # Needs a server already up (it connects + loads data, then restarts
+          # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench
-            start_server: false
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
             run: |
               BENCH_DOCS=5000 \
               BENCH_WARM_RUNS=10 \
