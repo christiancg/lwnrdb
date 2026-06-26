@@ -25,6 +25,8 @@ jobs:
           until nc -z 127.0.0.1 8989; do sleep 0.2; done
       - name: Run auth integration tests
         run: python3 test_utils/test_auth.py
+      - name: Run API command integration tests
+        run: python3 test_utils/test_api_commands.py
       - name: Run memory limits tests
         run: python3 test_utils/test_memory_limits.py
       - name: Run extensive memory tests
