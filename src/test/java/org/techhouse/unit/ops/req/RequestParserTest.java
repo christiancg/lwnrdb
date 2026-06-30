@@ -145,6 +145,24 @@ public class RequestParserTest {
         assertEquals(30, value);
     }
 
+    // Parse aggregation request with analyze flag set to true
+    @Test
+    public void test_parse_aggregate_with_analyze_true() {
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"analyze\": true, \"aggregationSteps\": [] }";
+        OperationRequest request = RequestParser.parseRequest(message);
+        assertInstanceOf(AggregateRequest.class, request);
+        assertTrue(((AggregateRequest) request).isAnalyze());
+    }
+
+    // The analyze flag defaults to false when omitted
+    @Test
+    public void test_parse_aggregate_analyze_defaults_false() {
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [] }";
+        OperationRequest request = RequestParser.parseRequest(message);
+        assertInstanceOf(AggregateRequest.class, request);
+        assertFalse(((AggregateRequest) request).isAnalyze());
+    }
+
     // Parse map operations with add field and remove field operators
     @Test
     public void test_parse_map_operations_with_add_and_remove_field_operators() {

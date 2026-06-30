@@ -48,6 +48,8 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
@@ -264,6 +266,181 @@ public class OperationProcessorTest {
         assertEquals("Ok", aggregateResponse.getMessage());
         assertNotNull(aggregateResponse.getResults());
         assertEquals(1, aggregateResponse.getResults().size());
+    }
+
+    // Without analyze, the response is a plain AggregateResponse (no analyzeResult).
+    @Test
+    public void test_aggregation_without_analyze_has_no_analyzeResult() {
+        final var coll = "analyzeOffColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = processor.processMessage(aggregateRequest);
+
+        // Exactly AggregateResponse — not the analyze subclass — so no analyzeResult is serialized.
+        assertEquals(AggregateResponse.class, response.getClass());
+    }
+
+    // With analyze, the response carries an analyzeResult with scan + lock metrics.
+    @Test
+    public void test_aggregation_with_analyze_returns_analyzeResult() {
+        final var coll = "analyzeOnColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(1, response.getResults().size());
+        final var analyzeResult = response.getAnalyzeResult();
+        assertNotNull(analyzeResult);
+        assertTrue(analyzeResult.getDocumentsScanned() > 0);
+        assertTrue(analyzeResult.getLocksAcquired().contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
+    }
+
+    // An index-backed filter reports the index as used.
+    @Test
+    public void test_aggregation_with_analyze_reports_index_used() {
+        final var coll = "analyzeIndexColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+        // Index creation is synchronous, so the index is available to the next aggregation.
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, coll, "status"));
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        final var analyzeResult = response.getAnalyzeResult();
+        assertTrue(analyzeResult.isIndexUsed());
+        assertTrue(analyzeResult.getIndexesUsed().contains("status"));
+        assertTrue(analyzeResult.getLocksAcquired()
+                .contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll) + "|status"));
+    }
+
+    // No index on the filtered field → suggestion recommends creating one.
+    @Test
+    public void test_aggregation_with_analyze_no_index_suggests_creation() {
+        final var coll = "analyzeNoIndexColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("notIndexed", new JsonString("v"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "notIndexed", new JsonString("v")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        final var analyzeResult = response.getAnalyzeResult();
+        assertFalse(analyzeResult.isIndexUsed());
+        assertTrue(analyzeResult.getSuggestions().stream()
+                .anyMatch(s -> s.startsWith("No index was used") && s.contains("notIndexed")));
+    }
+
+    // FILTER as a non-first step → suggestion recommends moving it to the top.
+    @Test
+    public void test_aggregation_with_analyze_suggests_moving_filter() {
+        final var coll = "analyzeMoveFilterColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new SortAggregationStep("status", true), new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        assertTrue(response.getAnalyzeResult().getSuggestions().stream()
+                .anyMatch(s -> s.startsWith("FILTER step") && s.contains("step 2")));
+    }
+
+    // Analyze mode returns the diagnostic even when there are no results (no NO_RESULTS error).
+    @Test
+    public void test_aggregation_with_analyze_empty_results_still_has_analyzeResult() {
+        final var coll = "analyzeEmptyColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("nope")))));
+
+        final var response = processor.processMessage(aggregateRequest);
+
+        assertInstanceOf(AggregateAnalyzeResponse.class, response);
+        final var analyzeResponse = (AggregateAnalyzeResponse) response;
+        assertEquals(OperationStatus.OK, analyzeResponse.getStatus());
+        assertTrue(analyzeResponse.getResults().isEmpty());
+        assertNotNull(analyzeResponse.getAnalyzeResult());
+    }
+
+    // A dirty read takes no collection lock, so it is absent from locksAcquired.
+    @Test
+    public void test_aggregation_with_analyze_dirtyRead_reports_no_collection_lock() {
+        final var coll = "analyzeDirtyColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setDirtyRead(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        assertFalse(response.getAnalyzeResult().getLocksAcquired()
+                .contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
     }
 
     // End-to-end: save docs with object/array fields, index them, then filter by element-match

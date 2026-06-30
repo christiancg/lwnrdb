@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -135,7 +136,7 @@ public class IndexHelper {
     // scalar/custom scope forces a null return (full-scan fallback).
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
             throws IOException {
-        if (!cache.hasIndex(dbName, collName, fieldName)) {
+        if (cache.hasNoIndex(dbName, collName, fieldName)) {
             return null;
         }
         final List<FieldIndexEntry<?>> combined = new ArrayList<>();
@@ -179,7 +180,18 @@ public class IndexHelper {
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
+        recordAnalyzeIndexUse(dbName, collName, fieldName);
         return combined;
+    }
+
+    // Records that this field index was used (and its read lock taken) for analyze mode. A no-op
+    // when analyze is off (no active context).
+    private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName) {
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext != null) {
+            analyzeContext.addIndexUsed(fieldName);
+            analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, fieldName));
+        }
     }
 
     // Fetches the actual documents for all object/array-valued ids collected from the hash indexes,
@@ -327,9 +339,10 @@ public class IndexHelper {
     // reconciled by re-testing each pending document against the local value set.
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
             Set<JsonBaseElement> localValues) throws IOException {
-        if (!cache.hasIndex(dbName, collName, fieldName)) {
+        if (cache.hasNoIndex(dbName, collName, fieldName)) {
             return null;
         }
+        recordAnalyzeIndexUse(dbName, collName, fieldName);
         final var matchingIds = new HashSet<String>();
         for (var localValue : localValues) {
             if (localValue.isJsonNull()) {
