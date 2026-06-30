@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
@@ -49,6 +50,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
@@ -394,10 +396,23 @@ public class OperationProcessor {
 
     private OperationResponse processAggregateOperation(AggregateRequest aggregateRequest) {
         List<String> readLocks = List.of();
+        final var analyzeContext = aggregateRequest.isAnalyze() ? new AnalyzeContext() : null;
+        if (analyzeContext != null) {
+            AnalyzeContext.set(analyzeContext);
+        }
         try {
             readLocks = acquireReadLocks(aggregateRequest.isDirtyRead(), aggregateLockSet(aggregateRequest));
+            if (analyzeContext != null) {
+                readLocks.forEach(analyzeContext::addLock);
+            }
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
             recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
+            if (analyzeContext != null) {
+                // In analyze mode the diagnostic is always returned (even with no results), so the empty
+                // result returns an AggregateAnalyzeResponse instead of the NO_RESULTS error response.
+                return new AggregateAnalyzeResponse("Ok", results,
+                        AnalyzeHelper.build(aggregateRequest, analyzeContext));
+            }
             return results.isEmpty()
                     ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
                     : new AggregateResponse("Ok", results);
@@ -405,6 +420,9 @@ public class OperationProcessor {
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
             releaseReadLocks(readLocks);
+            if (analyzeContext != null) {
+                AnalyzeContext.clear();
+            }
         }
     }
 

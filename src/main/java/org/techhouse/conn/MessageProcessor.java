@@ -17,8 +17,10 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.auth.AuthorizationChecker;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.validations.RequestValidator;
+import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class MessageProcessor implements Runnable {
@@ -85,8 +87,23 @@ public class MessageProcessor implements Runnable {
                                                 response = eJson
                                                         .toJson(new OperationResponse(type, ErrorCode.NO_PERMISSIONS));
                                             } else {
+                                                // The query timer brackets only processing: it starts after
+                                                // parsing/validation/authorization and stops right after the
+                                                // operation returns. Only AGGREGATE with analyze=true is timed.
+                                                final var analyze = parsedMessage instanceof AggregateRequest aggReq
+                                                        && aggReq.isAnalyze();
+                                                final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;
                                                 final var responseObj = operationProcessor.processMessage(parsedMessage,
                                                         clientId);
+                                                if (analyze
+                                                        && responseObj instanceof AggregateAnalyzeResponse analyzeResp
+                                                        && analyzeResp.getAnalyzeResult() != null) {
+                                                    final var analyzeEnd = System.currentTimeMillis();
+                                                    final var analyzeResult = analyzeResp.getAnalyzeResult();
+                                                    analyzeResult.setStartTime(analyzeStart);
+                                                    analyzeResult.setEndTime(analyzeEnd);
+                                                    analyzeResult.setDurationMillis(analyzeEnd - analyzeStart);
+                                                }
                                                 if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                                     close = true;
                                                     clientTracker.removeById(clientId);

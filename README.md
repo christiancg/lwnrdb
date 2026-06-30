@@ -45,7 +45,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Stored procedures
 - [ ] Jobs
 - [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
-- [ ] Explain / Analyze with index and query suggestions
+- [x] Explain / Analyze with index and query suggestions
 - [x] Integration tests for all possible API commands, including aggregations
 - [x] Standardized error messages with error code, following HTTP patterns: 4xx → user error, 5xx → server error, ending with a specific number per error. Ie 401-1 "need to authenticate"
 - [x] Admin operation to rebuild indexes
@@ -153,6 +153,7 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 
 #### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
+Also accepts an optional top-level `"analyze": true` (default `false`); see [Explain / Analyze](#explain--analyze).
 
 ```json
 {
@@ -187,6 +188,52 @@ Object- and array-valued fields are instead indexed for **element-match** (whole
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### Explain / Analyze
+
+Send `"analyze": true` on an `AGGREGATE` request (default `false`) to get back diagnostics about how the query ran, alongside the normal `results`. The diagnostics arrive in an `analyzeResult` object that is present **only** when `analyze` is `true`.
+No extra permissions are required — the regular `READ` access for `AGGREGATE` is enough. Analyze applies only to `AGGREGATE`.
+
+```json
+{"type":"AGGREGATE","databaseName":"my_db","collectionName":"my_coll","analyze":true,
+ "aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"status","value":"active"}}]}
+```
+
+Response (the `analyzeResult` object):
+
+```json
+{
+  "type": "AGGREGATE",
+  "status": "OK",
+  "results": [ ... ],
+  "analyzeResult": {
+    "startTime": 1750000000000,
+    "endTime": 1750000000012,
+    "durationMillis": 12,
+    "indexUsed": true,
+    "indexesUsed": ["status"],
+    "documentsScanned": 42,
+    "locksAcquired": ["my_db|my_coll", "my_db|my_coll|status"],
+    "suggestions": []
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `startTime` / `endTime` | Epoch milliseconds bracketing processing — measured after parsing/validation/authorization and stopped right after the operation returns |
+| `durationMillis` | `endTime − startTime` |
+| `indexUsed` / `indexesUsed` | Whether any field index was used, and the names of the fields whose indexes were used |
+| `documentsScanned` | Number of documents read/examined while running the pipeline |
+| `locksAcquired` | The locks taken: collection-level (`db\|coll`) and field-index (`db\|coll\|field`). Empty of collection locks for a dirty read |
+| `suggestions` | Query advice (see below) |
+
+Two kinds of suggestions are produced:
+
+- **No index used** — when no field index was used, it states so and recommends creating an index on the fields referenced by the pipeline's index-capable steps (`FILTER`, `SORT`, `GROUP_BY`, `JOIN` remote field, `DISTINCT`).
+- **`FILTER` not first** — when a `FILTER` step is not the first step, it recommends moving it to the top of the pipeline so it can use an index and reduce the number of documents scanned.
+
+Returned even when there are no results: in analyze mode an empty result set still returns an `OK` response carrying `analyzeResult` (rather than the usual `404-3` *No results*).
 
 #### `CREATE_INDEX`
 ```json
