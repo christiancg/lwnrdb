@@ -186,6 +186,11 @@ def aggregate(s, f, coll, steps, db=DB) -> dict:
                        "aggregationSteps": steps})
 
 
+def analyze(s, f, coll, steps, db=DB) -> dict:
+    return send(s, f, {"type": "AGGREGATE", "databaseName": db, "collectionName": coll,
+                       "aggregationSteps": steps, "analyze": True})
+
+
 def create_index(s, f, coll, field, db=DB) -> dict:
     return send(s, f, {"type": "CREATE_INDEX", "databaseName": db, "collectionName": coll, "fieldName": field})
 
@@ -547,6 +552,69 @@ def test_aggregation_steps(s, f):
     check_field("FILTER->SORT->LIMIT yields the youngest active user", r, "results.0._id", "a1")
 
 
+def test_analyze(s, f):
+    section("Explain / Analyze (AGGREGATE analyze=true)")
+
+    coll = "analyze_coll"
+    create_coll(s, f, coll)
+    bulk_save(s, f, coll, [
+        {"_id": "z1", "name": "alice", "age": 30},
+        {"_id": "z2", "name": "bob", "age": 25},
+        {"_id": "z3", "name": "carol", "age": 40},
+    ])
+
+    # Scan path (no index yet): the diagnostic reports indexUsed=false, names the field as an
+    # index candidate, and still returns the matching results alongside the analyzeResult.
+    r = analyze(s, f, coll, [filter_step("name", "EQUALS", "alice")])
+    check("AGGREGATE analyze=true returns OK", r, "OK")
+    check_true("analyzeResult object is present", isinstance(r.get("analyzeResult"), dict))
+    check_field("Scan path reports no index used", r, "analyzeResult.indexUsed", False)
+    check_true("Scan path scanned at least one document",
+               (_dig(r, "analyzeResult.documentsScanned") or 0) >= 1,
+               detail=f"documentsScanned={_dig(r, 'analyzeResult.documentsScanned')}")
+    check_true("Scan path suggests indexing the filtered field",
+               any("name" in sug for sug in (_dig(r, "analyzeResult.suggestions") or [])),
+               detail=f"suggestions={_dig(r, 'analyzeResult.suggestions')}")
+    check_true("Timing durationMillis is present (non-negative)",
+               (_dig(r, "analyzeResult.durationMillis") or -1) >= 0,
+               detail=f"durationMillis={_dig(r, 'analyzeResult.durationMillis')}")
+    check_true("analyze still returns the matching results", ids_of(r) == ["z1"])
+
+    # Index path: once the index exists the diagnostic reports indexUsed=true, names the index,
+    # and records the field-index read lock.
+    create_index(s, f, coll, "name")
+    wait_for_index(s, f, coll, "name")
+    r = analyze(s, f, coll, [filter_step("name", "EQUALS", "alice")])
+    check_field("Index path reports an index used", r, "analyzeResult.indexUsed", True)
+    check_true("indexesUsed names the 'name' field",
+               "name" in (_dig(r, "analyzeResult.indexesUsed") or []),
+               detail=f"indexesUsed={_dig(r, 'analyzeResult.indexesUsed')}")
+    check_true("locksAcquired includes the field-index lock for 'name'",
+               any(lock.endswith("|name") for lock in (_dig(r, "analyzeResult.locksAcquired") or [])),
+               detail=f"locksAcquired={_dig(r, 'analyzeResult.locksAcquired')}")
+
+    # Empty result in analyze mode returns OK (not the NO_RESULTS error) with the diagnostic.
+    r = analyze(s, f, coll, [filter_step("name", "EQUALS", "nobody")])
+    check("analyze on a no-match query returns OK (not NO_RESULTS)", r, "OK")
+    check_true("analyzeResult present even with no results",
+               isinstance(r.get("analyzeResult"), dict))
+    check_true("no-match analyze returns an empty results list",
+               (r.get("results") or []) == [], detail=f"results={r.get('results')}")
+
+    # A FILTER that is not the first step yields a "move it to the top" suggestion.
+    r = analyze(s, f, coll, [{"type": "SORT", "fieldName": "age", "ascending": True},
+                             filter_step("name", "EQUALS", "alice")])
+    check_true("suggests moving a non-leading FILTER to the top of the pipeline",
+               any("move it to the top" in sug for sug in (_dig(r, "analyzeResult.suggestions") or [])),
+               detail=f"suggestions={_dig(r, 'analyzeResult.suggestions')}")
+
+    # analyze=false (the default) leaves the response untouched: no analyzeResult field.
+    r = aggregate(s, f, coll, [filter_step("name", "EQUALS", "alice")])
+    check_true("plain AGGREGATE carries no analyzeResult", r.get("analyzeResult") is None)
+
+    drop_coll(s, f, coll)
+
+
 def test_empty_collection_aggregate(s, f):
     section("Aggregate on an empty collection")
     create_coll(s, f, "empty_coll")
@@ -686,6 +754,7 @@ def main():
         test_filter_with_indexes,
         test_conjunctions,
         test_aggregation_steps,
+        test_analyze,
         test_empty_collection_aggregate,
         test_index_ops,
         test_flows,
