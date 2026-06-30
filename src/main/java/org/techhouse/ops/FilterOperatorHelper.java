@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -291,6 +292,13 @@ public class FilterOperatorHelper {
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
             return null;
+        }
+        // The field index was consulted (and its read lock taken in getIdsFromIndex) to resolve this
+        // operator. Record it for analyze mode; covers both FILTER and the index-only COUNT fast path.
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext != null) {
+            analyzeContext.addIndexUsed(operator.getField());
+            analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, operator.getField()));
         }
         // Snapshot pending ids AFTER the index lookup so a write that committed before the lookup is
         // either already indexed (index accurate) or still pending (reconciled here).
