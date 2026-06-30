@@ -98,8 +98,7 @@ public class AnalyzeHelperTest {
     public void test_build_handles_conjunction_filter_leaf_fields() {
         final var leaf1 = new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonString("x"));
         final var leaf2 = new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonString("y"));
-        final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.AND,
-                List.of(leaf1, leaf2));
+        final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(leaf1, leaf2));
         final var result = AnalyzeHelper.build(request(new FilterAggregationStep(conjunction)), new AnalyzeContext());
 
         final var suggestion = result.getSuggestions().getFirst();
