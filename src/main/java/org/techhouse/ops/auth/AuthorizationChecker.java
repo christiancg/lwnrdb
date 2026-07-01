@@ -8,6 +8,7 @@ import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
@@ -16,6 +17,8 @@ public final class AuthorizationChecker {
     private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(OperationType.CREATE_USER,
             OperationType.DELETE_USER, OperationType.CHANGE_PERMISSIONS, OperationType.SET_DATABASE_OWNERS,
             OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS);
+    private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
+            OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
 
     private AuthorizationChecker() {
     }
@@ -39,8 +42,7 @@ public final class AuthorizationChecker {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        if (type == OperationType.LIST_DATABASES || type == OperationType.CLOSE_CONNECTION
-                || type == OperationType.SET_PASSWORD) {
+        if (ALWAYS_ALLOWED_OPERATIONS.contains(type)) {
             return AuthorizationResult.allow();
         }
 
@@ -77,14 +79,20 @@ public final class AuthorizationChecker {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        // Aggregations may read additional collections through JOIN steps (within the same
-        // database). The user must have READ access to every joined collection as well.
+        // Aggregations and LISTEN may read additional collections through JOIN steps (within the
+        // same database). The user must have READ access to every joined collection as well.
+        final java.util.List<org.techhouse.ops.req.agg.BaseAggregationStep> stepsToCheck;
         if (req instanceof AggregateRequest aggReq && aggReq.getAggregationSteps() != null) {
-            for (final var step : aggReq.getAggregationSteps()) {
-                if (step instanceof JoinAggregationStep joinStep
-                        && lacksCollectionAccess(user, dbName, joinStep.getJoinCollection(), PermissionLevel.READ)) {
-                    return AuthorizationResult.deny("action is forbidden, no permissions");
-                }
+            stepsToCheck = aggReq.getAggregationSteps();
+        } else if (req instanceof ListenRequest listenReq && listenReq.getAggregationSteps() != null) {
+            stepsToCheck = listenReq.getAggregationSteps();
+        } else {
+            stepsToCheck = java.util.List.of();
+        }
+        for (final var step : stepsToCheck) {
+            if (step instanceof JoinAggregationStep joinStep
+                    && lacksCollectionAccess(user, dbName, joinStep.getJoinCollection(), PermissionLevel.READ)) {
+                return AuthorizationResult.deny("action is forbidden, no permissions");
             }
         }
 
@@ -105,7 +113,7 @@ public final class AuthorizationChecker {
 
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
-            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS -> PermissionLevel.READ;
+            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN -> PermissionLevel.READ;
             default -> PermissionLevel.READ_WRITE;
         };
     }

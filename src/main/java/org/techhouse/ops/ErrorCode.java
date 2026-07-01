@@ -24,7 +24,9 @@ public enum ErrorCode {
                     OperationStatus.NOT_FOUND), DATABASE_NOT_FOUND("404-4", "Database not found",
                             OperationStatus.NOT_FOUND), NO_USERS_FOUND("404-5", "No users found",
                                     OperationStatus.NOT_FOUND), INDEX_NOT_FOUND("404-6",
-                                            "No index registered for the specified field", OperationStatus.NOT_FOUND),
+                                            "No index registered for the specified field",
+                                            OperationStatus.NOT_FOUND), LISTEN_NOT_FOUND("404-7",
+                                                    "Listen registration not found", OperationStatus.NOT_FOUND),
 
     // ── 409 Conflict ──────────────────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",
@@ -79,7 +81,10 @@ public enum ErrorCode {
                                                                                                                                                                     OperationStatus.ERROR), ERROR_GATHERING_STATS(
                                                                                                                                                                             "500-22",
                                                                                                                                                                             "Error while gathering database stats",
-                                                                                                                                                                            OperationStatus.ERROR),
+                                                                                                                                                                            OperationStatus.ERROR), ERROR_LISTEN(
+                                                                                                                                                                                    "500-23",
+                                                                                                                                                                                    "Error while processing listen operation",
+                                                                                                                                                                                    OperationStatus.ERROR),
 
     // ── 503 Service Unavailable ───────────────────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR);
