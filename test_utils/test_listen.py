@@ -100,12 +100,14 @@ class Conn:
         return recv_nonblocking(self.f, timeout)
 
     def close(self):
+        self.f.close()
         self.s.close()
 
     def __enter__(self):
         return self
 
     def __exit__(self, *_):
+        self.f.close()
         self.s.close()
 
 
@@ -392,9 +394,7 @@ def test_disconnect_cleanup(writer: Conn):
         # tmp disconnects (socket closed by context manager __exit__)
 
     # Wait for the server to detect the disconnect and clean up the registration.
-    # Virtual-thread scheduling under CI load can add latency before readLine()
-    # returns null, so we give the server a generous window.
-    time.sleep(2.0)
+    time.sleep(0.5)
 
     # STOP_LISTEN for the now-cleaned-up ID should return NOT_FOUND
     # (we use the writer connection which is still alive)
