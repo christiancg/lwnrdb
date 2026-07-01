@@ -17,6 +17,7 @@ import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ex.InvalidPortException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
@@ -26,6 +27,8 @@ public class Main {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
+    private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -47,8 +50,8 @@ public class Main {
         cache.loadAdminData();
         bootstrapDefaultAdmin();
         final var port = getPort(args);
-        final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
         backgroundTaskManager.startBackgroundWorkers();
+        listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
         warnIfXmxExceedsMaxMemory();

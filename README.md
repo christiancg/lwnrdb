@@ -44,7 +44,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Stored procedures
 - [ ] Jobs
-- [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
+- [x] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Explain / Analyze with index and query suggestions
 - [x] Integration tests for all possible API commands, including aggregations
 - [x] Standardized error messages with error code, following HTTP patterns: 4xx → user error, 5xx → server error, ending with a specific number per error. Ie 401-1 "need to authenticate"
@@ -245,6 +245,58 @@ Returned even when there are no results: in analyze mode an empty result set sti
 {"type":"DROP_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
 ```
 
+#### `LISTEN`
+
+Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
+
+Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection.
+
+```json
+{
+  "type": "LISTEN",
+  "databaseName": "my_db",
+  "collectionName": "my_coll",
+  "aggregationSteps": [
+    {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "active"}}
+  ]
+}
+```
+
+Initial response:
+```json
+{
+  "type": "LISTEN",
+  "status": "OK",
+  "listenId": "550e8400-e29b-41d4-a716-446655440000",
+  "results": [ ... ],
+  "resultHash": "a3f5...64-hex-chars...d91e"
+}
+```
+
+Push message (sent asynchronously when results change):
+```json
+{
+  "type": "LISTEN",
+  "status": "OK",
+  "message": "Query results updated",
+  "listenId": "550e8400-e29b-41d4-a716-446655440000",
+  "results": [ ... ],
+  "resultHash": "b7c2...64-hex-chars...f308"
+}
+```
+
+The background re-run uses dirty reads (skips collection-level read lock) for timeliness. All listen registrations for a client are automatically removed when the connection closes.
+
+#### `STOP_LISTEN`
+
+Cancel a specific listen subscription by its ID.
+
+```json
+{"type": "STOP_LISTEN", "listenId": "550e8400-e29b-41d4-a716-446655440000"}
+```
+
+Returns `NOT_FOUND` (`404-7`) if the listen ID is not registered.
+
 #### `CLOSE_CONNECTION`
 ```json
 {"type":"CLOSE_CONNECTION"}
@@ -423,7 +475,7 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`. An `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.
 
 ### Authentication errors
@@ -457,6 +509,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-4` | `NOT_FOUND` | Database not found |
 | `404-5` | `NOT_FOUND` | No users found |
 | `404-6` | `NOT_FOUND` | No index registered for the specified field |
+| `404-7` | `NOT_FOUND` | Listen registration not found |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `500-1` | `ERROR` | Error during authentication |
@@ -481,6 +534,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-20` | `ERROR` | Error while dropping index |
 | `500-21` | `ERROR` | Error while reindexing |
 | `500-22` | `ERROR` | Error while gathering database stats |
+| `500-23` | `ERROR` | Error while processing listen operation |
 | `503-1` | `ERROR` | Max number of connections reached |
 
 ### Bootstrap

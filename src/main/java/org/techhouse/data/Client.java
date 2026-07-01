@@ -1,13 +1,17 @@
 package org.techhouse.data;
 
+import java.io.BufferedWriter;
 import java.time.LocalDateTime;
 import java.util.Objects;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class Client {
     private final String address;
     private final LocalDateTime connectionTime = LocalDateTime.now();
     private LocalDateTime lastCommandTime;
     private String authenticatedUsername;
+    private volatile BufferedWriter writer;
+    private final ReentrantLock writerLock = new ReentrantLock();
 
     public Client(String address) {
         this.address = address;
@@ -35,6 +39,18 @@ public class Client {
 
     public void setAuthenticatedUsername(String authenticatedUsername) {
         this.authenticatedUsername = authenticatedUsername;
+    }
+
+    public BufferedWriter getWriter() {
+        return writer;
+    }
+
+    public void setWriter(BufferedWriter writer) {
+        this.writer = writer;
+    }
+
+    public ReentrantLock getWriterLock() {
+        return writerLock;
     }
 
     @Override

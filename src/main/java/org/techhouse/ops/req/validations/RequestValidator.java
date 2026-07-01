@@ -17,11 +17,13 @@ import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListUsersRequest;
+import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 
@@ -53,6 +55,8 @@ public class RequestValidator {
             case SET_DATABASE_OWNERS -> validateSetDatabaseOwners((SetDatabaseOwnersRequest) request);
             case LIST_USERS -> validateListUsers((ListUsersRequest) request);
             case SET_PASSWORD -> validateSetPassword((SetPasswordRequest) request);
+            case LISTEN -> validateListen((ListenRequest) request);
+            case STOP_LISTEN -> validateStopListen((StopListenRequest) request);
         };
     }
 
@@ -302,6 +306,29 @@ public class RequestValidator {
             if (cache.getAdminUserEntry(owner) == null) {
                 return ValidationResult.fail("user '" + owner + "' does not exist");
             }
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateListen(ListenRequest request) {
+        final var base = validateDbAndColl(request, false);
+        if (!base.isValid()) {
+            return base;
+        }
+        if (request.getAggregationSteps() == null) {
+            return ValidationResult.fail("LISTEN request requires an aggregationSteps array");
+        }
+        return validateAggregationSteps(request.getAggregationSteps());
+    }
+
+    private static ValidationResult validateStopListen(StopListenRequest request) {
+        if (request.getListenId() == null || request.getListenId().isBlank()) {
+            return ValidationResult.fail("STOP_LISTEN request requires a listenId");
+        }
+        try {
+            java.util.UUID.fromString(request.getListenId());
+        } catch (IllegalArgumentException e) {
+            return ValidationResult.fail("STOP_LISTEN listenId must be a valid UUID");
         }
         return ValidationResult.ok();
     }

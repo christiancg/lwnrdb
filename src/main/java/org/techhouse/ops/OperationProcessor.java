@@ -28,6 +28,8 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
+import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -44,11 +46,13 @@ import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListUsersRequest;
+import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
+import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
@@ -65,10 +69,12 @@ import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
+import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
+import org.techhouse.ops.resp.StopListenResponse;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -78,6 +84,7 @@ public class OperationProcessor {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Configuration configuration = Configuration.getInstance();
 
     private void recordCollectionAccess(String dbName, String collName) {
@@ -167,6 +174,8 @@ public class OperationProcessor {
             case SET_PASSWORD ->
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
+            case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
+            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
         };
     }
 
@@ -256,6 +265,7 @@ public class OperationProcessor {
             pendingIndexWrites.mark(dbName, collName, insertedIds);
             taskManager
                     .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
+            listenManager.markDirty(dbName, collName);
             recordCollectionAccess(dbName, collName);
             return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
@@ -315,6 +325,7 @@ public class OperationProcessor {
             // releasing the write lock, so index-backed reads reconcile it until indexing completes.
             pendingIndexWrites.mark(dbName, collName, entry.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
+            listenManager.markDirty(dbName, collName);
             recordCollectionAccess(dbName, collName);
             return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
@@ -364,6 +375,7 @@ public class OperationProcessor {
         cache.addEntryToCache(dbName, collName, entry);
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
+        listenManager.markDirty(dbName, collName);
         recordCollectionAccess(dbName, collName);
         return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
     }
@@ -448,6 +460,7 @@ public class OperationProcessor {
                 pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
                 taskManager
                         .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
+                listenManager.markDirty(dbName, collName);
                 recordCollectionAccess(dbName, collName);
                 return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
@@ -526,6 +539,7 @@ public class OperationProcessor {
                 // the duplicate guard and wrongly returned DATABASE_ALREADY_EXISTS (or was unregistered
                 // when the queued delete event later ran).
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
+                listenManager.unregisterAllForDatabase(dbName);
                 return new DropDatabaseResponse("Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
@@ -587,6 +601,7 @@ public class OperationProcessor {
                 // skipped registration, and was then unregistered when the queued delete event ran.
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
+                listenManager.unregisterAllForCollection(dbName, collName);
                 dropSucceeded = true;
                 return new DropCollectionResponse("Collection dropped successfully");
             }
@@ -724,6 +739,45 @@ public class OperationProcessor {
             return new OperationResponse(OperationType.REINDEX, ErrorCode.ERROR_REINDEXING);
         } finally {
             locks.release(dbName, collName);
+        }
+    }
+
+    private OperationResponse processListenOperation(ListenRequest listenRequest, UUID clientId) {
+        List<String> readLocks = List.of();
+        try {
+            final var dbName = listenRequest.getDatabaseName();
+            final var collName = listenRequest.getCollectionName();
+            // Build an AggregateRequest so we can use the existing aggregation infrastructure.
+            final var aggReq = new AggregateRequest(dbName, collName);
+            aggReq.setAggregationSteps(listenRequest.getAggregationSteps());
+            readLocks = acquireReadLocks(false, aggregateLockSet(aggReq));
+            final var results = AggregationOperationHelper.processAggregation(aggReq);
+            final var initialHash = ResultHasher.hash(results);
+            // The re-run request uses dirty reads: timeliness matters more than strict consistency
+            // for push notifications, and per-file locks still ensure valid data.
+            final var dirtyReq = new AggregateRequest(dbName, collName);
+            dirtyReq.setAggregationSteps(listenRequest.getAggregationSteps());
+            dirtyReq.setDirtyRead(true);
+            final var listenId = listenManager.register(clientId, dirtyReq, initialHash);
+            recordCollectionAccess(dbName, collName);
+            return new ListenResponse(listenId.toString(), results, initialHash, false);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LISTEN, ErrorCode.ERROR_LISTEN);
+        } finally {
+            releaseReadLocks(readLocks);
+        }
+    }
+
+    private OperationResponse processStopListenOperation(StopListenRequest request) {
+        try {
+            final var listenId = java.util.UUID.fromString(request.getListenId());
+            final var unregistered = listenManager.unregister(listenId);
+            if (!unregistered) {
+                return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.LISTEN_NOT_FOUND);
+            }
+            return new StopListenResponse();
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.ERROR_LISTEN);
         }
     }
 }
