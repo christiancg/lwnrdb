@@ -73,6 +73,8 @@ public final class RequestParser {
                 case LIST_USERS -> parseListUsersRequest(message);
                 case SET_PASSWORD -> eJson.fromJson(message, SetPasswordRequest.class);
                 case GET_DATABASE_STATS -> eJson.fromJson(message, GetDatabaseStatsRequest.class);
+                case LISTEN -> parseListenRequest(message);
+                case STOP_LISTEN -> eJson.fromJson(message, StopListenRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -91,6 +93,23 @@ public final class RequestParser {
         }
         aggRequest.setAggregationSteps(steps);
         return aggRequest;
+    }
+
+    private static OperationRequest parseListenRequest(final String message) {
+        final var listenRequest = eJson.fromJson(message, ListenRequest.class);
+        final var roughlyParsedSteps = listenRequest.getAggregationSteps();
+        if (roughlyParsedSteps == null || roughlyParsedSteps.isEmpty()) {
+            return listenRequest;
+        }
+        final var steps = new ArrayList<BaseAggregationStep>();
+        final var crudeArrayElements = eJson.fromJson(message, JsonObject.class);
+        final var jsonArray = crudeArrayElements.get("aggregationSteps").asJsonArray();
+        for (var i = 0; i < roughlyParsedSteps.size(); i++) {
+            final var type = roughlyParsedSteps.get(i).getType();
+            steps.add(parseAggregationStep(type, jsonArray, i));
+        }
+        listenRequest.setAggregationSteps(steps);
+        return listenRequest;
     }
 
     private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray,
