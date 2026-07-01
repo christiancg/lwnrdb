@@ -1,4 +1,5 @@
 import os
+import select
 import socket
 import json
 import sys
@@ -34,19 +35,22 @@ def send(s, f, payload: dict) -> dict:
 
 
 def recv_nonblocking(f, timeout: float = 2.0) -> dict | None:
-    """Try to read one line from the buffered file with a timeout."""
-    # BufferedReader wraps a SocketIO; the actual socket is at f.raw._sock
-    underlying = f.raw._sock
-    underlying.settimeout(timeout)
+    """Try to read one line from the buffered file with a timeout.
+
+    Uses select() instead of socket timeouts so the underlying SocketIO never
+    enters its _timeout_occurred state, which would poison every subsequent
+    read on the same BufferedReader.
+    """
+    ready, _, _ = select.select([f.raw._sock], [], [], timeout)
+    if not ready:
+        return None
     try:
         raw = f.readline().decode().strip()
         if not raw:
             return None
         return json.loads(raw)
-    except (TimeoutError, socket.timeout, OSError):
+    except OSError:
         return None
-    finally:
-        underlying.settimeout(None)
 
 
 def check(label: str, response: dict, expected_status: str):
