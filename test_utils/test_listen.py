@@ -35,7 +35,9 @@ def send(s, f, payload: dict) -> dict:
 
 def recv_nonblocking(f, timeout: float = 2.0) -> dict | None:
     """Try to read one line from the buffered file with a timeout."""
-    f._sock.settimeout(timeout)
+    # BufferedReader wraps a SocketIO; the actual socket is at f.raw._sock
+    underlying = f.raw._sock
+    underlying.settimeout(timeout)
     try:
         raw = f.readline().decode().strip()
         if not raw:
@@ -44,7 +46,7 @@ def recv_nonblocking(f, timeout: float = 2.0) -> dict | None:
     except (TimeoutError, socket.timeout, OSError):
         return None
     finally:
-        f._sock.settimeout(None)
+        underlying.settimeout(None)
 
 
 def check(label: str, response: dict, expected_status: str):
@@ -161,19 +163,19 @@ def test_validation(admin: Conn):
 
     # Missing aggregationSteps
     r = admin.send({"type": "LISTEN", "databaseName": DB, "collectionName": COLL})
-    check_code("LISTEN without aggregationSteps → VALIDATION_ERROR", r, "ERROR", "400-0")
+    check_code("LISTEN without aggregationSteps → VALIDATION_ERROR", r, "ERROR", "400-1")
 
     # Missing databaseName
     r = admin.send({"type": "LISTEN", "collectionName": COLL, "aggregationSteps": []})
-    check_code("LISTEN without databaseName → VALIDATION_ERROR", r, "ERROR", "400-0")
+    check_code("LISTEN without databaseName → VALIDATION_ERROR", r, "ERROR", "400-1")
 
     # STOP_LISTEN without listenId
     r = admin.send({"type": "STOP_LISTEN"})
-    check_code("STOP_LISTEN without listenId → VALIDATION_ERROR", r, "ERROR", "400-0")
+    check_code("STOP_LISTEN without listenId → VALIDATION_ERROR", r, "ERROR", "400-1")
 
     # STOP_LISTEN with invalid UUID
     r = admin.send({"type": "STOP_LISTEN", "listenId": "not-a-uuid"})
-    check_code("STOP_LISTEN with invalid UUID → VALIDATION_ERROR", r, "ERROR", "400-0")
+    check_code("STOP_LISTEN with invalid UUID → VALIDATION_ERROR", r, "ERROR", "400-1")
 
     # STOP_LISTEN with unknown UUID
     r = admin.send({"type": "STOP_LISTEN", "listenId": "00000000-0000-0000-0000-000000000000"})
@@ -186,7 +188,7 @@ def test_initial_response(admin: Conn):
     # Seed one document
     save_doc(admin, {"_id": "init-1", "score": 10})
 
-    steps = [{"type": "FILTER", "operator": {"type": "EXISTS", "field": "score"}}]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 10}}]
     r = listen(admin, steps)
     check("LISTEN returns OK", r, "OK")
 
@@ -209,7 +211,7 @@ def test_initial_response(admin: Conn):
 def test_no_push_on_unrelated_write(admin: Conn):
     section("LISTEN: no push when unrelated collection changes")
 
-    steps = [{"type": "FILTER", "operator": {"type": "EXISTS", "field": "score"}}]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "no-push-kind"}}]
     r = listen(admin, steps)
     check("LISTEN registered for no-push test", r, "OK")
     listen_id = r.get("listenId")
@@ -379,7 +381,7 @@ def test_disconnect_cleanup(writer: Conn):
     # Open a temporary listener connection, register, then disconnect
     with Conn() as tmp:
         authenticate(tmp)
-        steps = [{"type": "FILTER", "operator": {"type": "EXISTS", "field": "score"}}]
+        steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "cleanup"}}]
         r = listen(tmp, steps)
         check("Temporary LISTEN registered", r, "OK")
         listen_id = r.get("listenId")
@@ -398,9 +400,9 @@ def test_unauthenticated_listen():
     section("LISTEN: unauthenticated client is rejected")
 
     with Conn() as c:
-        steps = [{"type": "FILTER", "operator": {"type": "EXISTS", "field": "score"}}]
+        steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "x"}}]
         r = listen(c, steps)
-        check_code("LISTEN without auth → MUST_AUTHENTICATE_FIRST", r, "ERROR", "401-0")
+        check_code("LISTEN without auth → MUST_AUTHENTICATE_FIRST", r, "UNAUTHENTICATED", "401-1")
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
