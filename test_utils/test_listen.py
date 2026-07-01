@@ -234,7 +234,7 @@ def test_no_push_on_unrelated_write(admin: Conn):
 def test_push_on_matching_insert(writer: Conn, listener: Conn):
     section("LISTEN: push received when new document matches query")
 
-    steps = [{"type": "FILTER", "operator": {"type": "EQUALS", "field": "kind", "value": "watched"}}]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "watched"}}]
     r = listen(listener, steps)
     check("LISTEN registered", r, "OK")
     listen_id = r.get("listenId")
@@ -266,7 +266,7 @@ def test_push_on_matching_insert(writer: Conn, listener: Conn):
 def test_no_push_on_non_matching_insert(writer: Conn, listener: Conn):
     section("LISTEN: no push when insert does not affect query results")
 
-    steps = [{"type": "FILTER", "operator": {"type": "EQUALS", "field": "kind", "value": "important"}}]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "important"}}]
     r = listen(listener, steps)
     check("LISTEN registered for non-match test", r, "OK")
     listen_id = r.get("listenId")
@@ -291,7 +291,7 @@ def test_push_on_delete(writer: Conn, listener: Conn):
     save_doc(writer, {"_id": "del-target", "kind": "deletable"})
     time.sleep(0.3)
 
-    steps = [{"type": "FILTER", "operator": {"type": "EQUALS", "field": "kind", "value": "deletable"}}]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "deletable"}}]
     r = listen(listener, steps)
     check("LISTEN registered for delete test", r, "OK")
     listen_id = r.get("listenId")
@@ -318,7 +318,7 @@ def test_push_on_delete(writer: Conn, listener: Conn):
 def test_stop_listen(writer: Conn, listener: Conn):
     section("LISTEN: STOP_LISTEN cancels subscription")
 
-    steps = [{"type": "FILTER", "operator": {"type": "EQUALS", "field": "kind", "value": "stoppable"}}]
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "stoppable"}}]
     r = listen(listener, steps)
     check("LISTEN registered for stop test", r, "OK")
     listen_id = r.get("listenId")
@@ -341,8 +341,8 @@ def test_stop_listen(writer: Conn, listener: Conn):
 def test_multiple_listeners(writer: Conn, listener: Conn):
     section("LISTEN: multiple listeners on same collection")
 
-    steps_a = [{"type": "FILTER", "operator": {"type": "EQUALS", "field": "tag", "value": "alpha"}}]
-    steps_b = [{"type": "FILTER", "operator": {"type": "EQUALS", "field": "tag", "value": "beta"}}]
+    steps_a = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "tag", "value": "alpha"}}]
+    steps_b = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "tag", "value": "beta"}}]
 
     r_a = listen(listener, steps_a)
     check("LISTEN A registered", r_a, "OK")
@@ -391,8 +391,10 @@ def test_disconnect_cleanup(writer: Conn):
         listen_id = r.get("listenId")
         # tmp disconnects (socket closed by context manager __exit__)
 
-    # Wait briefly for the server to process the disconnect
-    time.sleep(0.3)
+    # Wait for the server to detect the disconnect and clean up the registration.
+    # Virtual-thread scheduling under CI load can add latency before readLine()
+    # returns null, so we give the server a generous window.
+    time.sleep(2.0)
 
     # STOP_LISTEN for the now-cleaned-up ID should return NOT_FOUND
     # (we use the writer connection which is still alive)
