@@ -35,15 +35,15 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Geo type support
-  - [ ] Distance operator
-  - [ ] Within operator
 - [ ] Vector type support
   - [ ] Semantic search
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Stored procedures
 - [ ] Jobs
+- [x] Geo type support
+  - [x] Distance operator
+  - [x] Within operator
 - [x] Listenable queries (you create the query and then the DB sends events when there are changes)
 - [x] Explain / Analyze with index and query suggestions
 - [x] Integration tests for all possible API commands, including aggregations
@@ -188,6 +188,36 @@ Object- and array-valued fields are instead indexed for **element-match** (whole
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### Custom operators (type-specific)
+
+Besides the field and conjunction operators above, a `FILTER` operator may be a **custom operator** — a comparison defined by a custom data type rather than one of the generic field operators. A custom operator is recognised by a `customOperatorName` (instead of `fieldOperatorType`/`conjunctionType`) and is evaluated by the stored value's type. Custom operators can appear anywhere a field operator can, including nested inside a conjunction.
+
+The **geo type** (`#geo(lat,lng)`, latitude −90..90, longitude −180..180) provides two custom operators:
+
+- **`distance`** — compares the great-circle (haversine) distance in **metres** between the stored geo point and a target geo (`value`) against a threshold (`distance`) using a `comparator` (one of `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `EQUALS`).
+
+```json
+{"type":"FILTER","operator":{
+  "customOperatorName":"distance",
+  "field":"location",
+  "value":"#geo(40.71,-74.0)",
+  "comparator":"SMALLER_THAN",
+  "distance":1000
+}}
+```
+
+- **`within`** — point-in-polygon: matches when the stored geo point lies inside the enclosed shape formed by an array of at least three geo points (`polygon`).
+
+```json
+{"type":"FILTER","operator":{
+  "customOperatorName":"within",
+  "field":"location",
+  "polygon":["#geo(40.0,-74.2)","#geo(40.9,-74.2)","#geo(40.9,-73.7)","#geo(40.0,-73.7)"]
+}}
+```
+
+Geo values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"location":"#geo(40.71,-74.0)"`), and a geo field is indexable like any other. `EQUALS`/`NOT_EQUALS`/`IN` on a geo value resolve through the standard field index. The spatial operators use the index too: the field index is sorted by geohash, so `within` and `distance` with a `SMALLER_THAN*` comparator pre-filter candidates with a geohash **bounding box** and then re-test each fetched document exactly (so a hit is always confirmed). `distance` with a `GREATER_THAN*` comparator selects points *outside* a box, which a bounding box cannot prune, so it falls back to a full scan. A `COUNT` after a geo filter always reads the matched documents (the spatial candidates cannot be counted from ids alone).
 
 #### Explain / Analyze
 

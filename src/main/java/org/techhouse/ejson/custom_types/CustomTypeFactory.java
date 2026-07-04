@@ -26,6 +26,22 @@ public final class CustomTypeFactory {
         return _customTypes;
     }
 
+    // True when some registered custom type declares a custom filter operator with this name (e.g.
+    // the geo type declares "distance" and "within"). Used to validate CUSTOM operators in requests.
+    public static boolean isKnownCustomOperator(String operatorName) {
+        for (var aClass : _customTypes.values()) {
+            try {
+                final var instance = aClass.getConstructor().newInstance();
+                if (instance.customOperatorNames().contains(operatorName)) {
+                    return true;
+                }
+            } catch (Exception ex) {
+                throw new BadImplementationCustomTypeException(aClass.getName(), ex);
+            }
+        }
+        return false;
+    }
+
     public static JsonCustom<?> getCustomTypeInstance(JsonString strElement) {
         final var toParse = strElement.getValue();
         return getCustomTypeInstance(toParse);

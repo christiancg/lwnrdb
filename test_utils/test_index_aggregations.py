@@ -49,6 +49,17 @@ CONS_LEFT = "idxagg_cons_left"  # left side of the JOIN (one shared-key row)
 CONS_CREATE = "idxagg_cons_create"  # built mid-flight: CREATE_INDEX racing concurrent saves
 CONS_REPEATS = int(os.environ.get("INDEX_TEST_CONSISTENCY_REPEATS", "30"))
 
+# Geo suite: the main collection also carries a "location" #geo field so the geohash spatial index
+# can prune candidate reads. GEO_CLUSTER documents sit in a tight cluster around GEO_TARGET; the rest
+# are scattered far away (southern hemisphere), so a small-radius distance / small polygon selects
+# exactly the cluster — a clear win for the index over the full scan.
+GEO = "idxagg_geo"              # small, hand-placed points with a location index (exact assertions)
+GEO_SCAN = "idxagg_geo_scan"    # same points, no index (indexed == scan correctness cross-check)
+GEO_TARGET = "#geo(40.0,-74.0)"
+GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
+# A box comfortably containing the whole main-collection cluster (used by the perf within case).
+GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
+
 failures = 0
 
 
@@ -140,6 +151,25 @@ def category_for(v: int) -> str:
     return f"cat_{v % NUM_CATEGORIES}"
 
 
+def location_for(v: int) -> str:
+    """A #geo location per doc: the first GEO_CLUSTER docs form a tight cluster around GEO_TARGET
+    (40, -74); the rest are scattered across the southern hemisphere, far from the target."""
+    if v < GEO_CLUSTER:
+        return f"#geo({40.0 + (v % 10) * 0.001:.6f},{-74.0 + (v // 10) * 0.001:.6f})"
+    lat = -(((v * 37) % 700) / 10.0) - 10.0   # -10 .. -80 (never near the +40 target)
+    lng = (((v * 53) % 3600) / 10.0) - 180.0  # -180 .. 180
+    return f"#geo({lat:.6f},{lng:.6f})"
+
+
+def geo_distance_steps(comparator: str, distance: float, target: str = GEO_TARGET, field: str = "location"):
+    return [{"type": "FILTER", "operator": {"customOperatorName": "distance", "field": field,
+                                            "value": target, "comparator": comparator, "distance": distance}}]
+
+
+def geo_within_steps(polygon, field: str = "location"):
+    return [{"type": "FILTER", "operator": {"customOperatorName": "within", "field": field, "polygon": polygon}}]
+
+
 # ── fixtures ───────────────────────────────────────────────────────────────
 
 def bulk_load(s, f, coll, docs):
@@ -170,6 +200,7 @@ def setup_fixtures(s, f):
         "score": v,
         "meta": {"n": v, "category": category_for(v)},
         "tags": ["t", str(v)],
+        "location": location_for(v),
         "payload": rand_payload(PAYLOAD_BYTES),
     } for v in range(NUM_DOCS)))
 
@@ -208,9 +239,11 @@ def create_indexes(s, f):
     # Element-match indexes for object- and array-valued fields (hashed object/array indexes).
     send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "meta"})
     send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "tags"})
+    # Geohash-backed spatial index on the geo field.
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "location"})
     send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": JOIN_BIG, "fieldName": "joinKey"})
     wait_for_indexes(s, f, [(COLL, "category"), (COLL, "score"), (COLL, "meta"), (COLL, "tags"),
-                            (JOIN_BIG, "joinKey")])
+                            (COLL, "location"), (JOIN_BIG, "joinKey")])
 
 
 def teardown_fixtures(s, f):
@@ -236,6 +269,10 @@ FILTER_ARRAY_STEPS = [{"type": "FILTER",
 FILTER_OBJECT_IN_STEPS = [{"type": "FILTER", "operator": {
     "fieldOperatorType": "IN", "field": "meta",
     "value": [{"n": v, "category": category_for(v)} for v in range(3)]}}]
+# Geo: a small-radius distance and a small polygon each select only the tight cluster around
+# GEO_TARGET, so the geohash spatial index prunes candidate reads instead of scanning every document.
+FILTER_GEO_DISTANCE_STEPS = geo_distance_steps("SMALLER_THAN", 5000)
+FILTER_GEO_WITHIN_STEPS = geo_within_steps(GEO_CLUSTER_POLYGON)
 
 
 def distinct_signature(r):
@@ -623,6 +660,139 @@ def consistency_suite(s, f):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Geo type: distance & within custom operators (correctness, analyze, consistency)
+# ══════════════════════════════════════════════════════════════════════════
+
+# Hand-placed points with known separations from GEO_TARGET (40, -74):
+#   near  -> 0 m       close -> ~140 m     mid -> ~5.6 km      far -> Los Angeles (~3900 km)
+GEO_SEED = [
+    ("near", "#geo(40.0,-74.0)"),
+    ("close", "#geo(40.001,-74.001)"),
+    ("mid", "#geo(40.05,-74.0)"),
+    ("far", "#geo(34.05,-118.24)"),
+]
+# A polygon around the near/close/mid points but excluding far.
+GEO_POLY = ["#geo(39.99,-74.1)", "#geo(39.99,-73.9)", "#geo(40.1,-73.9)", "#geo(40.1,-74.1)"]
+# A tiny polygon enclosing only the mid point (used to prove OR of two custom operators).
+GEO_POLY_MID = ["#geo(40.04,-74.01)", "#geo(40.04,-73.99)", "#geo(40.06,-73.99)", "#geo(40.06,-74.01)"]
+
+
+def agg_analyze(s, f, coll, steps) -> dict:
+    return send(s, f, {"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+                       "analyze": True, "aggregationSteps": steps})
+
+
+def geo_filter(s, f, coll, steps):
+    return sorted(d.get("_id") for d in (agg(s, f, coll, steps).get("results") or []))
+
+
+def setup_geo(s, f):
+    for coll in (GEO, GEO_SCAN):
+        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        for _id, loc in GEO_SEED:
+            save_doc(s, f, coll, {"_id": _id, "location": loc})
+    # Only GEO is indexed; GEO_SCAN stays a full scan for the indexed==scan cross-check.
+    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": GEO, "fieldName": "location"})
+    wait_for_indexes(s, f, [(GEO, "location")])
+
+
+def geo_compare_case(s, f, label, steps, expected):
+    idx = geo_filter(s, f, GEO, steps)
+    scan = geo_filter(s, f, GEO_SCAN, steps)
+    check_true(label, idx == scan == expected, detail=f"indexed={idx}  scan={scan}  expected={expected}")
+
+
+def probe_geo_distance_comparators(s, f):
+    # Each comparator, cross-checked indexed vs full scan against the known-correct answer.
+    geo_compare_case(s, f, "distance SMALLER_THAN 1 km -> {close, near}",
+                     geo_distance_steps("SMALLER_THAN", 1000), ["close", "near"])
+    geo_compare_case(s, f, "distance SMALLER_THAN_EQUALS 6 km -> {close, mid, near}",
+                     geo_distance_steps("SMALLER_THAN_EQUALS", 6000), ["close", "mid", "near"])
+    geo_compare_case(s, f, "distance GREATER_THAN 1 km -> {far, mid}",
+                     geo_distance_steps("GREATER_THAN", 1000), ["far", "mid"])
+    geo_compare_case(s, f, "distance GREATER_THAN_EQUALS 6 km -> {far}",
+                     geo_distance_steps("GREATER_THAN_EQUALS", 6000), ["far"])
+    geo_compare_case(s, f, "distance EQUALS 0 m -> only the exact point {near}",
+                     geo_distance_steps("EQUALS", 0.0), ["near"])
+
+
+def probe_geo_within(s, f):
+    geo_compare_case(s, f, "within polygon -> {close, mid, near}", geo_within_steps(GEO_POLY),
+                     ["close", "mid", "near"])
+
+
+def probe_geo_conjunctions(s, f):
+    # AND of two custom operators: within(near,close,mid) ∩ distance<1km(near,close) = {near,close}.
+    and_steps = [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+        {"customOperatorName": "within", "field": "location", "polygon": GEO_POLY},
+        {"customOperatorName": "distance", "field": "location", "value": GEO_TARGET,
+         "comparator": "SMALLER_THAN", "distance": 1000}]}}]
+    check_true("AND(within, distance<1km) -> {close, near}",
+               geo_filter(s, f, GEO, and_steps) == ["close", "near"],
+               detail=f"got={geo_filter(s, f, GEO, and_steps)}")
+    # OR of two custom operators: distance<1km(near,close) ∪ within(mid) = {near,close,mid}.
+    or_steps = [{"type": "FILTER", "operator": {"conjunctionType": "OR", "operators": [
+        {"customOperatorName": "distance", "field": "location", "value": GEO_TARGET,
+         "comparator": "SMALLER_THAN", "distance": 1000},
+        {"customOperatorName": "within", "field": "location", "polygon": GEO_POLY_MID}]}}]
+    check_true("OR(distance<1km, within-mid) -> {close, mid, near}",
+               geo_filter(s, f, GEO, or_steps) == ["close", "mid", "near"],
+               detail=f"got={geo_filter(s, f, GEO, or_steps)}")
+
+
+def probe_geo_count(s, f):
+    r = agg(s, f, GEO, geo_distance_steps("SMALLER_THAN", 1000) + [{"type": "COUNT"}])
+    got = (r.get("results") or [{}])[0].get("count")
+    check_true("COUNT after a geo distance filter -> 2", got == 2, detail=f"count={got}")
+
+
+def probe_geo_analyze(s, f):
+    ar = agg_analyze(s, f, GEO, geo_distance_steps("SMALLER_THAN", 1000)).get("analyzeResult") or {}
+    check_true("analyze: distance within-radius uses the location index",
+               ar.get("indexUsed") is True and "location" in (ar.get("indexesUsed") or []),
+               detail=f"indexUsed={ar.get('indexUsed')} indexesUsed={ar.get('indexesUsed')}")
+    ar = agg_analyze(s, f, GEO, geo_within_steps(GEO_POLY)).get("analyzeResult") or {}
+    check_true("analyze: within uses the location index", ar.get("indexUsed") is True,
+               detail=f"indexUsed={ar.get('indexUsed')}")
+    ar = agg_analyze(s, f, GEO, geo_distance_steps("GREATER_THAN", 1000)).get("analyzeResult") or {}
+    check_true("analyze: distance GREATER_THAN falls back to a scan (no index)", ar.get("indexUsed") is False,
+               detail=f"indexUsed={ar.get('indexUsed')}")
+
+
+def probe_geo_pending_write(s, f):
+    # A just-saved geo point must be found by the index-backed distance filter immediately, before the
+    # background field-index update runs (the pending-write overlay adds it as a candidate).
+    bad = 0
+    for i in range(CONS_REPEATS):
+        doc_id = f"geo_pending_{i}"
+        save_doc(s, f, GEO, {"_id": doc_id, "location": "#geo(40.0,-74.0)"})
+        if doc_id not in geo_filter(s, f, GEO, geo_distance_steps("SMALLER_THAN", 1000)):
+            bad += 1
+    check_true("distance filter finds a just-written geo point immediately (pending-write overlay)",
+               bad == 0, detail=f"{bad}/{CONS_REPEATS} immediate geo queries were stale")
+
+
+def probe_geo_non_geo_field_no_match(s, f):
+    # A distance operator on a field that is not a geo value must simply not match (no error).
+    save_doc(s, f, GEO_SCAN, {"_id": "not_geo", "location": "just a string"})
+    res = geo_filter(s, f, GEO_SCAN, geo_distance_steps("SMALLER_THAN", 1000))
+    check_true("distance filter ignores a non-geo field value (no match, no error)", "not_geo" not in res,
+               detail=f"got={res}")
+
+
+def geo_suite(s, f):
+    section("Geo type: distance & within custom operators")
+    setup_geo(s, f)
+    probe_geo_distance_comparators(s, f)
+    probe_geo_within(s, f)
+    probe_geo_conjunctions(s, f)
+    probe_geo_count(s, f)
+    probe_geo_analyze(s, f)
+    probe_geo_non_geo_field_no_match(s, f)
+    probe_geo_pending_write(s, f)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -652,6 +822,10 @@ def main():
         ("FILTER element-match on object field", COLL, FILTER_OBJECT_STEPS, filter_signature, True),
         ("FILTER element-match on array field", COLL, FILTER_ARRAY_STEPS, filter_signature, True),
         ("FILTER IN over a list of objects", COLL, FILTER_OBJECT_IN_STEPS, filter_signature, True),
+        # Geo pre-filter reads the matched cluster (a few % of docs) via positioned reads; the win grows
+        # with collection size, so assert "not slower" (within tolerance) rather than strictly faster.
+        ("FILTER geo distance (within radius)", COLL, FILTER_GEO_DISTANCE_STEPS, filter_signature, False),
+        ("FILTER geo within polygon", COLL, FILTER_GEO_WITHIN_STEPS, filter_signature, False),
     ]
 
     # Phase 1 — measure every case while no index exists (full scan path).
@@ -686,6 +860,11 @@ def main():
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         consistency_suite(s, f)
+
+    # Phase 4 — geo type: distance & within custom operators (correctness, analyze, consistency).
+    with new_conn() as (s, f):
+        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+        geo_suite(s, f)
 
     with new_conn() as (s, f):
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)

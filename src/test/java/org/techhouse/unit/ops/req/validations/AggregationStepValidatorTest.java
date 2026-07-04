@@ -54,6 +54,84 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
     }
 
+    // CUSTOM operators (geo distance / within)
+    @Test
+    public void validate_customOperator_validDistance_returnsOk() {
+        new org.techhouse.ejson.EJson(); // register geo custom type
+        final var op = distanceOperator("location");
+        assertTrue(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_validWithin_returnsOk() {
+        new org.techhouse.ejson.EJson();
+        final var op = withinOperator(3);
+        assertTrue(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_blankField_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var op = distanceOperator("  ");
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_unknownOperator_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        final var op = new org.techhouse.ops.req.agg.operators.CustomOperator("nope", "location", null, args);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_distanceMissingComparator_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("value", new org.techhouse.ejson.custom_types.JsonGeo("#geo(40.0,-74.0)"));
+        args.add("distance", new org.techhouse.ejson.elements.JsonNumber(1000));
+        final var op = new org.techhouse.ops.req.agg.operators.CustomOperator("distance", "location",
+                new org.techhouse.ejson.custom_types.JsonGeo("#geo(40.0,-74.0)"), args);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_distanceNonGeoValue_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("comparator", new JsonString("SMALLER_THAN"));
+        args.add("distance", new org.techhouse.ejson.elements.JsonNumber(1000));
+        final var op = new org.techhouse.ops.req.agg.operators.CustomOperator("distance", "location",
+                new JsonString("not a geo"), args);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_withinTooFewPoints_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var op = withinOperator(2);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    private static org.techhouse.ops.req.agg.operators.CustomOperator distanceOperator(String field) {
+        final var target = new org.techhouse.ejson.custom_types.JsonGeo("#geo(40.71,-74.0)");
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("value", target);
+        args.add("comparator", new JsonString("SMALLER_THAN"));
+        args.add("distance", new org.techhouse.ejson.elements.JsonNumber((double) 1000));
+        return new org.techhouse.ops.req.agg.operators.CustomOperator("distance", field, target, args);
+    }
+
+    private static org.techhouse.ops.req.agg.operators.CustomOperator withinOperator(int points) {
+        final var polygon = new JsonArray();
+        for (var i = 0; i < points; i++) {
+            polygon.add(new org.techhouse.ejson.custom_types.JsonGeo("#geo(" + i + ",0)"));
+        }
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("polygon", polygon);
+        return new org.techhouse.ops.req.agg.operators.CustomOperator("within", "location", null, args);
+    }
+
     @Test
     public void validate_filterStep_fieldOperatorNullType_returnsFail() {
         final var op = new FieldOperator(null, "age", new JsonString("30"));

@@ -3,8 +3,11 @@ package org.techhouse.unit.utils;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.techhouse.utils.ReflectionUtils.getClassFromSimpleName;
 
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 import org.techhouse.utils.ReflectionUtils;
@@ -67,6 +70,14 @@ public class ReflectionUtilsTest {
         @Override
         public Integer compare(String another) {
             return 0;
+        }
+        @Override
+        public Set<String> customOperatorNames() {
+            return Set.of();
+        }
+        @Override
+        public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
         }
     }
 
