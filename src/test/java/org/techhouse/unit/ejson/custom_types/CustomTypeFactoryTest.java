@@ -33,6 +33,10 @@ public class CustomTypeFactoryTest {
     }
 
     public static class ValidCustomType extends JsonCustom<Locale> {
+        public ValidCustomType() {
+            super();
+        }
+
         public ValidCustomType(String value) {
             super(value);
         }
@@ -132,6 +136,14 @@ public class CustomTypeFactoryTest {
 
     // Create test custom type class
     public static class TestCustomType extends JsonCustom<Locale> {
+        public TestCustomType() {
+            super();
+        }
+
+        public TestCustomType(String value) {
+            super(value);
+        }
+
         @Override
         public String getCustomTypeName() {
             return "test";
