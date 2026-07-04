@@ -1,5 +1,10 @@
 package org.techhouse.ops.req.validations;
 
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.custom_types.GeoDistanceComparator;
+import org.techhouse.ejson.custom_types.JsonGeo;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
@@ -9,6 +14,7 @@ import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
@@ -136,6 +142,8 @@ public class AggregationStepValidator {
             if (fieldOp.getFieldOperatorType() == null) {
                 return ValidationResult.fail("Field operator requires a fieldOperatorType");
             }
+        } else if (operator.getType() == OperatorType.CUSTOM) {
+            return validateCustomOperator((CustomOperator) operator);
         } else {
             final var conjOp = (ConjunctionOperator) operator;
             if (conjOp.getConjunctionType() == null) {
@@ -152,6 +160,69 @@ public class AggregationStepValidator {
             }
         }
         return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateCustomOperator(CustomOperator operator) {
+        if (operator.getField() == null || operator.getField().isBlank()) {
+            return ValidationResult.fail("Custom operator requires a non-blank field name");
+        }
+        final var name = operator.getCustomOperatorName();
+        if (name == null || name.isBlank()) {
+            return ValidationResult.fail("Custom operator requires a customOperatorName");
+        }
+        if (!CustomTypeFactory.isKnownCustomOperator(name)) {
+            return ValidationResult.fail("Unknown custom operator: " + name);
+        }
+        final var args = operator.getArgs();
+        if (JsonGeo.OPERATOR_DISTANCE.equals(name)) {
+            return validateDistanceArgs(operator, args);
+        }
+        if (JsonGeo.OPERATOR_WITHIN.equals(name)) {
+            return validateWithinArgs(args);
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateDistanceArgs(CustomOperator operator, JsonObject args) {
+        if (isNotGeo(operator.getValue())) {
+            return ValidationResult.fail("distance operator requires a geo value");
+        }
+        final var comparator = args.get("comparator");
+        if (comparator == null || !comparator.isJsonString() || parseComparator(comparator) == null) {
+            return ValidationResult.fail("distance operator requires a valid comparator");
+        }
+        final var distance = args.get("distance");
+        if (distance == null || !distance.isJsonNumber()) {
+            return ValidationResult.fail("distance operator requires a numeric distance");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateWithinArgs(JsonObject args) {
+        final var polygon = args.get("polygon");
+        if (polygon == null || !polygon.isJsonArray() || polygon.asJsonArray().size() < 3) {
+            return ValidationResult.fail("within operator requires a polygon of at least 3 points");
+        }
+        for (var vertex : polygon.asJsonArray().asList()) {
+            if (isNotGeo(vertex)) {
+                return ValidationResult.fail("within operator requires a polygon of geo points");
+            }
+        }
+        return ValidationResult.ok();
+    }
+
+    private static boolean isNotGeo(JsonBaseElement element) {
+        return element == null || !element.isJsonCustom()
+                || !JsonGeo.CUSTOM_TYPE_NAME.equals(element.asJsonCustom().getCustomTypeName());
+    }
+
+    // Parses a comparator element to a GeoDistanceComparator, or null when it is not a valid comparator.
+    private static GeoDistanceComparator parseComparator(JsonBaseElement comparator) {
+        try {
+            return GeoDistanceComparator.valueOf(comparator.asJsonString().getValue());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     public static ValidationResult validateMidOperator(BaseMidOperator midOperator) {

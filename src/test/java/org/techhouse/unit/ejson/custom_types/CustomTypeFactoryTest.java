@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
@@ -31,14 +33,6 @@ public class CustomTypeFactoryTest {
     }
 
     public static class ValidCustomType extends JsonCustom<Locale> {
-        public ValidCustomType() {
-            super();
-        }
-
-        public ValidCustomType(Locale value) {
-            super(value);
-        }
-
         public ValidCustomType(String value) {
             super(value);
         }
@@ -56,6 +50,16 @@ public class CustomTypeFactoryTest {
         @Override
         public Integer compare(Locale another) {
             return this.customValue.hashCode() == another.hashCode() ? 0 : -1;
+        }
+
+        @Override
+        public Set<String> customOperatorNames() {
+            return Set.of();
+        }
+
+        @Override
+        public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -84,6 +88,16 @@ public class CustomTypeFactoryTest {
         @Override
         public Integer compare(Locale another) {
             return this.customValue.hashCode() == another.hashCode() ? 0 : -1;
+        }
+
+        @Override
+        public Set<String> customOperatorNames() {
+            return Set.of();
+        }
+
+        @Override
+        public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
         }
     }
 
@@ -118,18 +132,6 @@ public class CustomTypeFactoryTest {
 
     // Create test custom type class
     public static class TestCustomType extends JsonCustom<Locale> {
-        public TestCustomType() {
-            super();
-        }
-
-        public TestCustomType(String value) {
-            super(value);
-        }
-
-        public TestCustomType(Locale value) {
-            super(value);
-        }
-
         @Override
         public String getCustomTypeName() {
             return "test";
@@ -143,6 +145,16 @@ public class CustomTypeFactoryTest {
         @Override
         public Integer compare(Locale another) {
             return 0;
+        }
+
+        @Override
+        public Set<String> customOperatorNames() {
+            return Set.of();
+        }
+
+        @Override
+        public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
         }
     }
 

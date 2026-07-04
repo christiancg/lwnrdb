@@ -1,6 +1,9 @@
 package org.techhouse.ejson.custom_types;
 
 import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.Set;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
@@ -34,5 +37,15 @@ public class JsonDateTime extends JsonCustom<LocalDateTime> {
     @Override
     public Integer compare(LocalDateTime another) {
         return customValue.compareTo(another);
+    }
+
+    @Override
+    public Set<String> customOperatorNames() {
+        return Set.of();
+    }
+
+    @Override
+    public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+        throw new UnsupportedOperationException(getCustomTypeName() + " has no custom operators");
     }
 }

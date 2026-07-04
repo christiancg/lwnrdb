@@ -10,6 +10,7 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
@@ -88,6 +89,8 @@ public final class AnalyzeHelper {
     private static void collectFilterFields(BaseOperator operator, Collection<String> fields) {
         if (operator instanceof FieldOperator fieldOperator) {
             addIfPresent(fields, fieldOperator.getField());
+        } else if (operator instanceof CustomOperator customOperator) {
+            addIfPresent(fields, customOperator.getField());
         } else if (operator instanceof ConjunctionOperator conjunctionOperator
                 && conjunctionOperator.getOperators() != null) {
             for (var child : conjunctionOperator.getOperators()) {

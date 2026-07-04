@@ -17,6 +17,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -25,8 +26,8 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
-import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 
@@ -40,6 +41,7 @@ public class FilterOperatorHelper {
             case CONJUNCTION ->
                 processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
             case FIELD -> processFieldOperator((FieldOperator) operator, resultStream, dbName, collName);
+            case CUSTOM -> processCustomOperator((CustomOperator) operator, resultStream, dbName, collName);
         };
         return resultStream;
     }
@@ -48,12 +50,12 @@ public class FilterOperatorHelper {
             Stream<JsonObject> resultStream, String dbName, String collName) throws IOException {
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
-            Stream<JsonObject> partialResults;
-            if (step.getType() == OperatorType.CONJUNCTION) {
-                partialResults = processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName);
-            } else {
-                partialResults = processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
-            }
+            final var partialResults = switch (step.getType()) {
+                case CONJUNCTION ->
+                    processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName);
+                case FIELD -> processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
+                case CUSTOM -> processCustomOperator((CustomOperator) step, resultStream, dbName, collName);
+            };
             combinationResult.add(partialResults);
         }
         return switch (operator.getConjunctionType()) {
@@ -110,6 +112,53 @@ public class FilterOperatorHelper {
 
         final var tester = getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
+    }
+
+    private static Stream<JsonObject> processCustomOperator(CustomOperator operator, Stream<JsonObject> resultStream,
+            String dbName, String collName) throws IOException {
+        final var tester = getCustomTester(operator);
+        final var fieldName = operator.getField();
+        if (resultStream != null) {
+            // An upstream stream already exists, so no index scan is saved: apply the predicate to the
+            // actual documents directly.
+            return resultStream.filter(data -> tester.test(data, fieldName));
+        }
+        // Try the spatial index (geohash bounding-box pre-filter): a non-null result is a candidate id
+        // set that is fetched and re-tested exactly below (candidates are unconfirmed, like hash-index
+        // hits). Null means no usable index / not accelerable, so scan the collection page-by-page.
+        final var candidateIds = GeoSpatialIndexHelper.candidateIds(operator, dbName, collName);
+        if (candidateIds != null) {
+            return cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData)
+                    .filter(data -> tester.test(data, fieldName));
+        }
+        return cache.streamCollection(dbName, collName).map(DbEntry::getData)
+                .filter(data -> tester.test(data, fieldName));
+    }
+
+    // Builds the predicate for a custom operator: it reads the field, requires the stored value to be a
+    // custom type that declares the operator, and delegates to JsonCustom.applyCustomOperator. A
+    // document whose field is absent, non-custom, or a custom type without this operator simply does
+    // not match (no exception), so mixed-type fields are safe.
+    public static BiPredicate<JsonObject, String> getCustomTester(CustomOperator operator) {
+        final var operatorName = operator.getCustomOperatorName();
+        final var args = new HashMap<String, JsonBaseElement>();
+        for (var entry : operator.getArgs().entrySet()) {
+            args.put(entry.getKey(), entry.getValue());
+        }
+        return (JsonObject toTest, String fieldName) -> {
+            if (!JsonUtils.hasInPath(toTest, fieldName)) {
+                return false;
+            }
+            final var element = JsonUtils.getFromPath(toTest, fieldName);
+            if (element == null || !element.isJsonCustom()) {
+                return false;
+            }
+            final var custom = element.asJsonCustom();
+            if (!custom.customOperatorNames().contains(operatorName)) {
+                return false;
+            }
+            return custom.applyCustomOperator(operatorName, args);
+        };
     }
 
     @SuppressWarnings("unchecked")
@@ -257,6 +306,10 @@ public class FilterOperatorHelper {
                 yield indexMatchingIds(fieldOperator, dbName, collName);
             }
             case CONJUNCTION -> resolveConjunctionIds((ConjunctionOperator) operator, dbName, collName);
+            // A custom (spatial) operator's index hits are unconfirmed candidates that must be re-tested
+            // against fetched documents, which the index-only COUNT path cannot do; disqualify it so
+            // COUNT falls back to the document-reading path (exact).
+            case CUSTOM -> null;
         };
     }
 
