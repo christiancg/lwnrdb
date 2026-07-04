@@ -47,6 +47,22 @@ public final class AggregationOperationHelper {
         return applySteps(request.getAggregationSteps(), null, request.getDatabaseName(), request.getCollectionName());
     }
 
+    // The collection identifiers a request reads: the target collection plus every JOIN collection.
+    // Used by the caller to acquire read locks over the full set an aggregation touches.
+    public static List<String> aggregateLockSet(AggregateRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var identifiers = new ArrayList<String>();
+        identifiers.add(Cache.getCollectionIdentifier(dbName, request.getCollectionName()));
+        if (request.getAggregationSteps() != null) {
+            for (var step : request.getAggregationSteps()) {
+                if (step instanceof JoinAggregationStep joinStep) {
+                    identifiers.add(Cache.getCollectionIdentifier(dbName, joinStep.getJoinCollection()));
+                }
+            }
+        }
+        return identifiers;
+    }
+
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
             String dbName, String collName) throws IOException {
         Stream<JsonObject> resultStream = initialStream;
