@@ -50,7 +50,6 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
-import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -82,43 +81,6 @@ public class OperationProcessor {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Configuration configuration = Configuration.getInstance();
-
-    // Acquire shared read locks on the given collection identifiers in a deterministic (sorted)
-    // order so two overlapping multi-collection reads can never deadlock. Returns the identifiers
-    // actually locked (in acquisition order); a dirty read takes no collection lock and returns an
-    // empty list, relying on FileSystem's per-file locks for read validity.
-    private List<String> acquireReadLocks(boolean dirtyRead, List<String> collIdentifiers) throws InterruptedException {
-        if (dirtyRead) {
-            return List.of();
-        }
-        final var sorted = collIdentifiers.stream().distinct().sorted().toList();
-        final var acquired = new ArrayList<String>();
-        for (var identifier : sorted) {
-            locks.lockReadByName(identifier);
-            acquired.add(identifier);
-        }
-        return acquired;
-    }
-
-    private void releaseReadLocks(List<String> acquired) {
-        for (var i = acquired.size() - 1; i >= 0; i--) {
-            locks.releaseReadByName(acquired.get(i));
-        }
-    }
-
-    private List<String> aggregateLockSet(AggregateRequest request) {
-        final var dbName = request.getDatabaseName();
-        final var identifiers = new ArrayList<String>();
-        identifiers.add(Cache.getCollectionIdentifier(dbName, request.getCollectionName()));
-        if (request.getAggregationSteps() != null) {
-            for (var step : request.getAggregationSteps()) {
-                if (step instanceof JoinAggregationStep joinStep) {
-                    identifiers.add(Cache.getCollectionIdentifier(dbName, joinStep.getJoinCollection()));
-                }
-            }
-        }
-        return identifiers;
-    }
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -323,7 +285,7 @@ public class OperationProcessor {
         final var id = findbyIdRequest.get_id();
         List<String> readLocks = List.of();
         try {
-            readLocks = acquireReadLocks(findbyIdRequest.isDirtyRead(),
+            readLocks = locks.acquireReadLocks(findbyIdRequest.isDirtyRead(),
                     List.of(Cache.getCollectionIdentifier(dbName, collName)));
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
@@ -339,7 +301,7 @@ public class OperationProcessor {
         } catch (Exception exception) {
             return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ERROR_RETRIEVING);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
@@ -350,7 +312,8 @@ public class OperationProcessor {
             AnalyzeContext.set(analyzeContext);
         }
         try {
-            readLocks = acquireReadLocks(aggregateRequest.isDirtyRead(), aggregateLockSet(aggregateRequest));
+            readLocks = locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
+                    AggregationOperationHelper.aggregateLockSet(aggregateRequest));
             if (analyzeContext != null) {
                 readLocks.forEach(analyzeContext::addLock);
             }
@@ -369,7 +332,7 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
             if (analyzeContext != null) {
                 AnalyzeContext.clear();
             }
@@ -565,7 +528,7 @@ public class OperationProcessor {
             if (Globals.ADMIN_DB_NAME.equals(dbName)) {
                 return new ListCollectionsResponse("Ok", List.of());
             }
-            readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
+            readLocks = locks.acquireReadLocks(request.isDirtyRead(), List.of(
                     Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME)));
             if (cache.getAdminDbEntry(dbName) == null) {
                 return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database " + dbName + " not found",
@@ -576,7 +539,7 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new OperationResponse(OperationType.LIST_COLLECTIONS, ErrorCode.ERROR_LISTING_COLLECTIONS);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
@@ -604,7 +567,7 @@ public class OperationProcessor {
     private OperationResponse processListUsers(ListUsersRequest request) {
         List<String> readLocks = List.of();
         try {
-            readLocks = acquireReadLocks(request.isDirtyRead(),
+            readLocks = locks.acquireReadLocks(request.isDirtyRead(),
                     List.of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME)));
             final var userStream = cache.getAllAdminUserEntries().stream()
                     .map(user -> user.toResponseJson(cache.getAllAdminDbEntries().stream()
@@ -617,7 +580,7 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new OperationResponse(OperationType.LIST_USERS, ErrorCode.ERROR_LISTING_USERS);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
@@ -688,7 +651,7 @@ public class OperationProcessor {
             // Build an AggregateRequest so we can use the existing aggregation infrastructure.
             final var aggReq = new AggregateRequest(dbName, collName);
             aggReq.setAggregationSteps(listenRequest.getAggregationSteps());
-            readLocks = acquireReadLocks(false, aggregateLockSet(aggReq));
+            readLocks = locks.acquireReadLocks(false, AggregationOperationHelper.aggregateLockSet(aggReq));
             final var results = AggregationOperationHelper.processAggregation(aggReq);
             final var initialHash = ResultHasher.hash(results);
             // The re-run request uses dirty reads: timeliness matters more than strict consistency
@@ -702,7 +665,7 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new OperationResponse(OperationType.LISTEN, ErrorCode.ERROR_LISTEN);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
