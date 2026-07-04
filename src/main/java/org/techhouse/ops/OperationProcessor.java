@@ -11,12 +11,9 @@ import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
-import org.techhouse.cache.MemoryManagement;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -83,27 +80,8 @@ public class OperationProcessor {
     private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Configuration configuration = Configuration.getInstance();
-
-    private void recordCollectionAccess(String dbName, String collName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
-        memoryManagement.recordAccess(AccessKind.COLLECTION, dbName, collName, null);
-        taskManager.submitBackgroundTask(
-                new CollectionUsageEvent(AccessKind.COLLECTION, dbName, collName, null, System.currentTimeMillis()));
-    }
-
-    private void recordPkIndexAccess(String dbName, String collName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
-        memoryManagement.recordAccess(AccessKind.PK_INDEX, dbName, collName, null);
-        taskManager.submitBackgroundTask(
-                new CollectionUsageEvent(AccessKind.PK_INDEX, dbName, collName, null, System.currentTimeMillis()));
-    }
 
     // Acquire shared read locks on the given collection identifiers in a deterministic (sorted)
     // order so two overlapping multi-collection reads can never deadlock. Returns the identifiers
@@ -266,7 +244,7 @@ public class OperationProcessor {
             taskManager
                     .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
             listenManager.markDirty(dbName, collName);
-            recordCollectionAccess(dbName, collName);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
@@ -304,7 +282,7 @@ public class OperationProcessor {
                     final var relocatedPkIndexEntry = SaveOperationHelper.relocateOnGrowUpdate(dbName, collName, entry,
                             idxEntry, primaryKeyIndex);
                     listenManager.markDirty(dbName, collName);
-                    recordCollectionAccess(dbName, collName);
+                    CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                     return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
                 }
                 entry.setPage(idxEntry.getPage());
@@ -330,7 +308,7 @@ public class OperationProcessor {
             pendingIndexWrites.mark(dbName, collName, entry.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
             listenManager.markDirty(dbName, collName);
-            recordCollectionAccess(dbName, collName);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
@@ -352,8 +330,8 @@ public class OperationProcessor {
             if (foundIndexEntry >= 0) {
                 final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
                 final var entry = cache.getById(dbName, collName, primaryKeyIndexEntry);
-                recordPkIndexAccess(dbName, collName);
-                recordCollectionAccess(dbName, collName);
+                CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
+                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                 return new FindByIdResponse("Ok", entry.getData());
             } else {
                 return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
@@ -377,7 +355,8 @@ public class OperationProcessor {
                 readLocks.forEach(analyzeContext::addLock);
             }
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
-            recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
+            CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
+                    aggregateRequest.getCollectionName());
             if (analyzeContext != null) {
                 // In analyze mode the diagnostic is always returned (even with no results), so the empty
                 // result returns an AggregateAnalyzeResponse instead of the NO_RESULTS error response.
@@ -420,7 +399,7 @@ public class OperationProcessor {
                 taskManager
                         .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
                 listenManager.markDirty(dbName, collName);
-                recordCollectionAccess(dbName, collName);
+                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                 return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
                 return new OperationResponse(OperationType.DELETE,
@@ -718,7 +697,7 @@ public class OperationProcessor {
             dirtyReq.setAggregationSteps(listenRequest.getAggregationSteps());
             dirtyReq.setDirtyRead(true);
             final var listenId = listenManager.register(clientId, dirtyReq, initialHash);
-            recordCollectionAccess(dbName, collName);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new ListenResponse(listenId.toString(), results, initialHash, false);
         } catch (Exception e) {
             return new OperationResponse(OperationType.LISTEN, ErrorCode.ERROR_LISTEN);
