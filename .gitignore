@@ -54,6 +54,9 @@ certs/
 *.p12
 *.jks
 
+### Python ###
+.venv/
+
 ### Runtime artifacts ###
 # Server PID file written by the CI workflow / integration scripts when launching the server.
 server.pid

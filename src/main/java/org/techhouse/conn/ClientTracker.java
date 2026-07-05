@@ -1,10 +1,12 @@
 package org.techhouse.conn;
 
+import java.io.BufferedWriter;
 import java.net.Socket;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
 
@@ -49,5 +51,28 @@ public class ClientTracker {
             return null;
         final var client = clients.get(clientId);
         return client != null ? client.getAuthenticatedUsername() : null;
+    }
+
+    public void registerWriter(UUID clientId, BufferedWriter writer) {
+        if (clientId == null)
+            return;
+        final var client = clients.get(clientId);
+        if (client != null) {
+            client.setWriter(writer);
+        }
+    }
+
+    public BufferedWriter getWriter(UUID clientId) {
+        if (clientId == null)
+            return null;
+        final var client = clients.get(clientId);
+        return client != null ? client.getWriter() : null;
+    }
+
+    public ReentrantLock getWriterLock(UUID clientId) {
+        if (clientId == null)
+            return null;
+        final var client = clients.get(clientId);
+        return client != null ? client.getWriterLock() : null;
     }
 }

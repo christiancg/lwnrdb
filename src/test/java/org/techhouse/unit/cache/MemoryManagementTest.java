@@ -272,6 +272,9 @@ public class MemoryManagementTest {
 
     @Test
     public void test_loadProfileFromAdmin_reads_existing_records() throws Exception {
+        org.techhouse.ops.AdminOperationHelper.saveDatabaseEntry(new org.techhouse.data.admin.AdminDbEntry("userDb"));
+        org.techhouse.ops.AdminOperationHelper
+                .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry("userDb", "userColl"));
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "userColl", null);
         org.techhouse.ops.AdminOperationHelper

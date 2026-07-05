@@ -6,8 +6,8 @@ import org.techhouse.ops.OperationType;
 public class SaveResponse extends OperationResponse {
     public String _id;
 
-    public SaveResponse(OperationStatus status, String message, String _id) {
-        super(OperationType.SAVE, status, message);
+    public SaveResponse(String message, String _id) {
+        super(OperationType.SAVE, OperationStatus.OK, message);
         this._id = _id;
     }
 

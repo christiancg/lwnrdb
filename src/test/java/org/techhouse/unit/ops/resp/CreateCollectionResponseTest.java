@@ -12,7 +12,7 @@ public class CreateCollectionResponseTest {
     @Test
     public void test_constructor_creates_valid_instance() {
         String message = "Collection created successfully";
-        CreateCollectionResponse response = new CreateCollectionResponse(OperationStatus.OK, message);
+        CreateCollectionResponse response = new CreateCollectionResponse(message);
 
         assertEquals(OperationType.CREATE_COLLECTION, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.AdminCache;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.UserCache;
@@ -52,6 +53,8 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
+        PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+        TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) {

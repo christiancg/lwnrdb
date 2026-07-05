@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
@@ -26,6 +27,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.FilterOperatorHelper;
+import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -944,6 +946,182 @@ public class FilterOperatorHelperTest {
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.addProperty("status", status);
         obj.addProperty("level", level);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private static JsonObject objField(int n) {
+        final var inner = new JsonObject();
+        inner.addProperty("n", n);
+        return inner;
+    }
+
+    private static JsonArray arrField(String... items) {
+        final var arr = new JsonArray();
+        for (var item : items) {
+            arr.add(new JsonString(item));
+        }
+        return arr;
+    }
+
+    // getTester: whole-object EQUALS / NOT_EQUALS on the scan path (previously always returned false)
+    @Test
+    public void test_object_equals_not_equals_tester() {
+        FieldOperator equalsOp = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));
+        JsonObject match = new JsonObject();
+        match.add("data", objField(1));
+        JsonObject noMatch = new JsonObject();
+        noMatch.add("data", objField(2));
+        JsonObject scalar = new JsonObject();
+        scalar.addProperty("data", "x");
+
+        BiPredicate<JsonObject, String> equalsTester = FilterOperatorHelper.getTester(equalsOp,
+                FieldOperatorType.EQUALS);
+        assertTrue(equalsTester.test(match, "data"));
+        assertFalse(equalsTester.test(noMatch, "data"));
+        assertFalse(equalsTester.test(scalar, "data"));
+
+        FieldOperator notEqualsOp = new FieldOperator(FieldOperatorType.NOT_EQUALS, "data", objField(1));
+        BiPredicate<JsonObject, String> notEqualsTester = FilterOperatorHelper.getTester(notEqualsOp,
+                FieldOperatorType.NOT_EQUALS);
+        assertTrue(notEqualsTester.test(noMatch, "data"));
+        assertFalse(notEqualsTester.test(match, "data"));
+    }
+
+    // getTester: whole-array EQUALS / NOT_EQUALS on the scan path (order sensitive)
+    @Test
+    public void test_array_equals_not_equals_tester() {
+        FieldOperator equalsOp = new FieldOperator(FieldOperatorType.EQUALS, "data", arrField("x", "y"));
+        JsonObject match = new JsonObject();
+        match.add("data", arrField("x", "y"));
+        JsonObject reordered = new JsonObject();
+        reordered.add("data", arrField("y", "x"));
+
+        BiPredicate<JsonObject, String> equalsTester = FilterOperatorHelper.getTester(equalsOp,
+                FieldOperatorType.EQUALS);
+        assertTrue(equalsTester.test(match, "data"));
+        assertFalse(equalsTester.test(reordered, "data"));
+
+        FieldOperator notEqualsOp = new FieldOperator(FieldOperatorType.NOT_EQUALS, "data", arrField("x", "y"));
+        BiPredicate<JsonObject, String> notEqualsTester = FilterOperatorHelper.getTester(notEqualsOp,
+                FieldOperatorType.NOT_EQUALS);
+        assertTrue(notEqualsTester.test(reordered, "data"));
+        assertFalse(notEqualsTester.test(match, "data"));
+    }
+
+    // getTester: IN over a list of objects matches an object-valued field by element equality
+    // (scan path, no index) — must agree with the index-backed resolution
+    @Test
+    public void test_in_operator_tester_matches_object_and_array_members() {
+        JsonArray objectList = new JsonArray();
+        objectList.add(objField(1));
+        objectList.add(objField(2));
+        FieldOperator inOp = new FieldOperator(FieldOperatorType.IN, "data", objectList);
+        BiPredicate<JsonObject, String> inTester = FilterOperatorHelper.getTester(inOp, FieldOperatorType.IN);
+        JsonObject inDoc = new JsonObject();
+        inDoc.add("data", objField(1));
+        JsonObject outDoc = new JsonObject();
+        outDoc.add("data", objField(9));
+        assertTrue(inTester.test(inDoc, "data"));
+        assertFalse(inTester.test(outDoc, "data"));
+
+        FieldOperator notInOp = new FieldOperator(FieldOperatorType.NOT_IN, "data", objectList);
+        BiPredicate<JsonObject, String> notInTester = FilterOperatorHelper.getTester(notInOp, FieldOperatorType.NOT_IN);
+        assertFalse(notInTester.test(inDoc, "data"));
+        assertTrue(notInTester.test(outDoc, "data"));
+
+        // arrays as candidates work the same way
+        JsonArray arrayList = new JsonArray();
+        arrayList.add(arrField("x", "y"));
+        FieldOperator arrInOp = new FieldOperator(FieldOperatorType.IN, "data", arrayList);
+        JsonObject arrDoc = new JsonObject();
+        arrDoc.add("data", arrField("x", "y"));
+        assertTrue(FilterOperatorHelper.getTester(arrInOp, FieldOperatorType.IN).test(arrDoc, "data"));
+    }
+
+    // resolveIdsViaIndex disqualifies an object operand (hash hits are unconfirmed candidates), so the
+    // index-only COUNT falls back; the document FILTER path still resolves it via the Object hash index.
+    @Test
+    public void test_resolve_ids_via_index_object_equals_disqualified_but_filter_resolves() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
+        cache.putAdminCollectionEntry(adminCollEntry, pk);
+        addObjEntry(cache, "o1", 1);
+        addObjEntry(cache, "o2", 1);
+        addObjEntry(cache, "o3", 2);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+
+        FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL),
+                "object operands are disqualified from the index-only COUNT (hash hits are candidates)");
+
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o1", "o2"), matched);
+    }
+
+    // Same as above for an array operand / Array hash index.
+    @Test
+    public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a1", 0, 100, 0);
+        cache.putAdminCollectionEntry(adminCollEntry, pk);
+        addArrEntry(cache, "a1", "x", "y");
+        addArrEntry(cache, "a2", "x", "y");
+        addArrEntry(cache, "a3", "z");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+
+        FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", arrField("x", "y"));
+        assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL),
+                "array operands are disqualified from the index-only COUNT (hash hits are candidates)");
+
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("a1", "a2"), matched);
+    }
+
+    // Path 1: a stale Object hash-index hit (the document's value changed but the index was not updated,
+    // as after a background-processing failure) is re-tested against the document and dropped, so the
+    // FILTER never returns a false positive.
+    @Test
+    public void test_filter_rejects_stale_object_hash_hit() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
+        cache.putAdminCollectionEntry(adminCollEntry, pk);
+        addObjEntry(cache, "o1", 1);
+        addObjEntry(cache, "o2", 1);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+
+        // Simulate a background-processing failure: o1's value changes to {n:99} in the document store,
+        // but the Object hash index still maps hash({n:1}) -> o1 (a stale entry, and o1 is not pending).
+        addObjEntry(cache, "o1", 99);
+
+        FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("o2"), matched, "the stale hash hit o1 must be dropped after re-testing the document");
+    }
+
+    private void addObjEntry(Cache cache, String id, int n) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("data", objField(n));
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private void addArrEntry(Cache cache, String id, String... items) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("data", arrField(items));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);

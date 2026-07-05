@@ -13,21 +13,20 @@ public class CreateDatabaseResponseTest {
     @Test
     public void test_create_database_response_with_ok_status() {
         String successMessage = "Database created successfully";
-        CreateDatabaseResponse response = new CreateDatabaseResponse(OperationStatus.OK, successMessage);
+        CreateDatabaseResponse response = new CreateDatabaseResponse(successMessage);
 
         assertEquals(OperationType.CREATE_DATABASE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(successMessage, response.getMessage());
     }
 
-    // Create response with null status
+    // Create response with null message
     @Test
-    public void test_create_database_response_with_null_status() {
-        String message = "Test message";
-        CreateDatabaseResponse response = new CreateDatabaseResponse(null, message);
+    public void test_create_database_response_with_null_message() {
+        CreateDatabaseResponse response = new CreateDatabaseResponse(null);
 
         assertEquals(OperationType.CREATE_DATABASE, response.getType());
-        assertNull(response.getStatus());
-        assertEquals(message, response.getMessage());
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNull(response.getMessage());
     }
 }

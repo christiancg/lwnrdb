@@ -13,20 +13,20 @@ public class CreateIndexResponseTest {
     @Test
     public void test_create_index_response_with_ok_status() {
         String successMessage = "Index created successfully";
-        CreateIndexResponse response = new CreateIndexResponse(OperationStatus.OK, successMessage);
+        CreateIndexResponse response = new CreateIndexResponse(successMessage);
 
         assertEquals(OperationType.CREATE_INDEX, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(successMessage, response.getMessage());
     }
 
-    // Create response with null status
+    // Create response with null message
     @Test
-    public void test_create_index_response_with_null_status() {
-        CreateIndexResponse response = new CreateIndexResponse(null, "test message");
+    public void test_create_index_response_with_null_message() {
+        CreateIndexResponse response = new CreateIndexResponse(null);
 
         assertEquals(OperationType.CREATE_INDEX, response.getType());
-        assertNull(response.getStatus());
-        assertEquals("test message", response.getMessage());
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNull(response.getMessage());
     }
 }

@@ -8,10 +8,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -19,6 +21,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
@@ -59,6 +62,10 @@ public class Cache {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + parts[parts.length - 1];
     }
 
+    public static String getIndexIdentifier(String fieldName, String typeLabel) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
+    }
+
     public void loadAdminData() throws IOException {
         adminCache.loadAdminData();
     }
@@ -69,9 +76,32 @@ public class Cache {
         return userCache.getPkIndexAndLoadIfNecessary(dbName, collName);
     }
 
+    /**
+     * Applies the in-memory PK position fix described by a {@link PkCompaction} returned from a
+     * delete/update, routing to the admin or user cache by database. Null-safe: a {@code null}
+     * compaction (no survivor moved) is a no-op.
+     */
+    public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
+        if (compaction == null) {
+            return;
+        }
+        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())) {
+            adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
+                    compaction.removedPosition(), compaction.removedLength());
+        } else {
+            userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
+                    compaction.removedPosition(), compaction.removedLength());
+        }
+    }
+
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, indexType);
+    }
+
+    public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
+            String fieldName, IndexKind kind) throws IOException {
+        return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
     }
 
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
@@ -96,7 +126,17 @@ public class Cache {
     }
 
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
-        return userCache.getEntriesByIds(dbName, collName, ids);
+        final var entries = userCache.getEntriesByIds(dbName, collName, ids);
+        recordScanned(entries.size());
+        return entries;
+    }
+
+    // Records documents touched by a read for AGGREGATE analyze mode. A no-op when analyze is off.
+    private void recordScanned(long count) {
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext != null) {
+            analyzeContext.addScanned(count);
+        }
     }
 
     public void evictEntry(String dbName, String collName, String pk) {
@@ -111,32 +151,42 @@ public class Cache {
         userCache.evictCollection(dbName, collName);
     }
 
-    public List<CacheableResource> listCacheableResources() {
-        return userCache.listCacheableResources();
+    public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
+        userCache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
-    public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {
-        return userCache.hasLoadedIndex(dbName, collName, fieldName);
+    public List<CacheableResource> listCacheableResources() {
+        return userCache.listCacheableResources();
     }
 
     // ── Cross-cutting reads (combine user documents with admin page metadata) ──
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var wholeCollection = userCache.getCachedCollection(dbName, collName);
-        final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null) {
-            if (wholeCollection != null && !wholeCollection.isEmpty()) {
-                return wholeCollection;
-            }
-        } else if (wholeCollection != null && !wholeCollection.isEmpty()) {
-            final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-            if (wholeCollection.size() >= entryCount) {
-                return wholeCollection;
-            }
+        // The completeness gate uses the synchronously-maintained PK index size as the authoritative
+        // document count, NOT the admin page entry counts: those are updated by the background worker
+        // and lag behind committed writes, so under memory pressure (when a freshly inserted document
+        // is not admitted into the cache) a stale low entry count could wrongly accept an incomplete
+        // cached map. The PK index is written synchronously on every save/delete (see CountOperatorHelper).
+        if (wholeCollection != null && !wholeCollection.isEmpty()
+                && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+            recordScanned(wholeCollection.size());
+            return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
-            return userCache.admitWholeCollection(dbName, collName, loaded);
+            final var admitted = userCache.admitWholeCollection(dbName, collName, loaded);
+            recordScanned(admitted.size());
+            return admitted;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    // The exact, currently-consistent document count from the synchronously-maintained PK index.
+    private int pkIndexSize(String dbName, String collName) {
+        try {
+            return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -145,18 +195,24 @@ public class Cache {
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty()) {
-                final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-                if (collPages == null) {
-                    return cached.values().stream();
-                }
-                final var entryCount = collPages.stream().mapToInt(AdminPageEntry::getEntryCount).sum();
-                if (cached.size() >= entryCount) {
-                    return cached.values().stream();
-                }
+            // See getWholeCollection: gate on the synchronous PK index size, not the lagging admin
+            // page entry counts, so a stale count can never accept an incomplete cached collection.
+            if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
+                return decorateScan(cached.values().stream());
             }
         }
-        return streamCollectionFromDisk(dbName, collName);
+        return decorateScan(streamCollectionFromDisk(dbName, collName));
+    }
+
+    // Counts entries as they are consumed for AGGREGATE analyze mode (the stream is lazy, so the
+    // count reflects documents actually scanned). The context is captured on the consuming thread,
+    // which is the same virtual thread that registered it. A no-op when analyze is off.
+    private Stream<DbEntry> decorateScan(Stream<DbEntry> stream) {
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext == null) {
+            return stream;
+        }
+        return stream.peek(_ -> analyzeContext.addScanned(1));
     }
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
@@ -289,8 +345,8 @@ public class Cache {
         adminCache.removeAdminCollEntry(collIdentifier);
     }
 
-    public boolean hasIndex(String dbName, String collName, String fieldName) {
-        return adminCache.hasIndex(dbName, collName, fieldName);
+    public boolean hasNoIndex(String dbName, String collName, String fieldName) {
+        return !adminCache.hasIndex(dbName, collName, fieldName);
     }
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {

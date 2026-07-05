@@ -8,14 +8,22 @@ import java.io.IOException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.Main;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Configuration;
 import org.techhouse.ex.InvalidPortException;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class MainTest {
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
+        // Main.main starts background workers and the memory-management sweep on the shared singletons.
+        // Stop them here so they do not keep draining the queue / sweeping into later tests in the same
+        // JVM fork (a leaked worker writing admin/collection_usage was corrupting other tests' state).
+        IocContainer.get(BackgroundTaskManager.class).stopBackgroundWorkers();
+        IocContainer.get(MemoryManagement.class).stopSweepThread();
         final var dbPath = new File(TestGlobals.PATH);
         if (dbPath.exists()) {
             TestUtils.deleteFolder(dbPath);

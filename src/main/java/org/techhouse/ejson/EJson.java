@@ -4,7 +4,9 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
+import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -76,6 +78,8 @@ public class EJson {
     private void registerExtendedTypes() {
         CustomTypeFactory.registerCustomType(JsonTime.class);
         CustomTypeFactory.registerCustomType(JsonDateTime.class);
+        CustomTypeFactory.registerCustomType(JsonGeo.class);
+        CustomTypeFactory.registerCustomType(JsonVector.class);
     }
 
     public <T> T fromJson(String jsonString, Class<T> tClass) {

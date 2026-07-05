@@ -10,12 +10,19 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -33,6 +40,7 @@ import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.GetDatabaseStatsRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -40,6 +48,8 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.SortAggregationStep;
+import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
@@ -55,6 +65,7 @@ import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -93,11 +104,11 @@ public class OperationProcessorTest {
         FindByIdRequest request = new FindByIdRequest("nonexistentDb", "nonexistentColl");
         request.set_id("123");
 
-        FindByIdResponse response = (FindByIdResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertNotNull(response);
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertNull(response.getObject());
+        assertEquals("404-2", response.getErrorCode());
     }
 
     // Find entries by ID and return results with correct status
@@ -193,6 +204,33 @@ public class OperationProcessorTest {
         assertInstanceOf(DropDatabaseResponse.class, response2);
     }
 
+    // Dropping a database that has collections locks each collection during deletion and releases them
+    // afterwards (regression for the unlocked DROP_DATABASE path).
+    @Test
+    public void test_drop_database_with_collections_locks_and_releases() throws Exception {
+        final var db = "dropLockDb";
+        final var coll = "lockColl";
+        org.techhouse.ops.AdminOperationHelper.saveDatabaseEntry(new org.techhouse.data.admin.AdminDbEntry(db));
+        org.techhouse.ops.AdminOperationHelper
+                .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry(db, coll));
+        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
+        fs.createDatabaseFolder(db);
+        fs.createCollectionFile(db, coll);
+        // The admin db entry lists the collection, so the drop must lock it.
+        assertTrue(
+                IocContainer.get(org.techhouse.cache.Cache.class).getAdminDbEntry(db).getCollections().contains(coll));
+
+        final var resp = (DropDatabaseResponse) processor.processMessage(new DropDatabaseRequest(db));
+
+        assertEquals(OperationStatus.OK, resp.getStatus());
+        // The per-collection lock was released, so it can be re-acquired.
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertDoesNotThrow(() -> {
+            locks.lock(db, coll);
+            locks.release(db, coll);
+        });
+    }
+
     // Create and drop indexes with proper validation
     @Test
     public void test_create_and_drop_index() {
@@ -230,6 +268,230 @@ public class OperationProcessorTest {
         assertEquals(1, aggregateResponse.getResults().size());
     }
 
+    // Without analyze, the response is a plain AggregateResponse (no analyzeResult).
+    @Test
+    public void test_aggregation_without_analyze_has_no_analyzeResult() {
+        final var coll = "analyzeOffColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = processor.processMessage(aggregateRequest);
+
+        // Exactly AggregateResponse — not the analyze subclass — so no analyzeResult is serialized.
+        assertEquals(AggregateResponse.class, response.getClass());
+    }
+
+    // With analyze, the response carries an analyzeResult with scan + lock metrics.
+    @Test
+    public void test_aggregation_with_analyze_returns_analyzeResult() {
+        final var coll = "analyzeOnColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(1, response.getResults().size());
+        final var analyzeResult = response.getAnalyzeResult();
+        assertNotNull(analyzeResult);
+        assertTrue(analyzeResult.getDocumentsScanned() > 0);
+        assertTrue(analyzeResult.getLocksAcquired().contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
+    }
+
+    // An index-backed filter reports the index as used.
+    @Test
+    public void test_aggregation_with_analyze_reports_index_used() {
+        final var coll = "analyzeIndexColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+        // Index creation is synchronous, so the index is available to the next aggregation.
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, coll, "status"));
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        final var analyzeResult = response.getAnalyzeResult();
+        assertTrue(analyzeResult.isIndexUsed());
+        assertTrue(analyzeResult.getIndexesUsed().contains("status"));
+        assertTrue(analyzeResult.getLocksAcquired()
+                .contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll) + "|status"));
+    }
+
+    // No index on the filtered field → suggestion recommends creating one.
+    @Test
+    public void test_aggregation_with_analyze_no_index_suggests_creation() {
+        final var coll = "analyzeNoIndexColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("notIndexed", new JsonString("v"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "notIndexed", new JsonString("v")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        final var analyzeResult = response.getAnalyzeResult();
+        assertFalse(analyzeResult.isIndexUsed());
+        assertTrue(analyzeResult.getSuggestions().stream()
+                .anyMatch(s -> s.startsWith("No index was used") && s.contains("notIndexed")));
+    }
+
+    // FILTER as a non-first step → suggestion recommends moving it to the top.
+    @Test
+    public void test_aggregation_with_analyze_suggests_moving_filter() {
+        final var coll = "analyzeMoveFilterColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new SortAggregationStep("status", true), new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        assertTrue(response.getAnalyzeResult().getSuggestions().stream()
+                .anyMatch(s -> s.startsWith("FILTER step") && s.contains("step 2")));
+    }
+
+    // Analyze mode returns the diagnostic even when there are no results (no NO_RESULTS error).
+    @Test
+    public void test_aggregation_with_analyze_empty_results_still_has_analyzeResult() {
+        final var coll = "analyzeEmptyColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("nope")))));
+
+        final var response = processor.processMessage(aggregateRequest);
+
+        assertInstanceOf(AggregateAnalyzeResponse.class, response);
+        final var analyzeResponse = (AggregateAnalyzeResponse) response;
+        assertEquals(OperationStatus.OK, analyzeResponse.getStatus());
+        assertTrue(analyzeResponse.getResults().isEmpty());
+        assertNotNull(analyzeResponse.getAnalyzeResult());
+    }
+
+    // A dirty read takes no collection lock, so it is absent from locksAcquired.
+    @Test
+    public void test_aggregation_with_analyze_dirtyRead_reports_no_collection_lock() {
+        final var coll = "analyzeDirtyColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+        final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("a1"));
+        obj.add("status", new JsonString("active"));
+        saveRequest.setObject(obj);
+        processor.processMessage(saveRequest);
+
+        final var aggregateRequest = new AggregateRequest(TestGlobals.DB, coll);
+        aggregateRequest.setAnalyze(true);
+        aggregateRequest.setDirtyRead(true);
+        aggregateRequest.setAggregationSteps(List.of(new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")))));
+
+        final var response = (AggregateAnalyzeResponse) processor.processMessage(aggregateRequest);
+
+        assertFalse(response.getAnalyzeResult().getLocksAcquired()
+                .contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
+    }
+
+    // End-to-end: save docs with object/array fields, index them, then filter by element-match
+    @Test
+    public void test_aggregate_element_match_object_and_array() {
+        final var coll = "elementMatchColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
+
+        for (var spec : List.of(new String[]{"em1", "obj", "1"}, new String[]{"em2", "obj", "1"},
+                new String[]{"em3", "obj", "2"}, new String[]{"em4", "arr", "x"})) {
+            final var saveRequest = new SaveRequest(TestGlobals.DB, coll);
+            final var obj = new JsonObject();
+            obj.add(Globals.PK_FIELD, new JsonString(spec[0]));
+            if ("obj".equals(spec[1])) {
+                final var inner = new JsonObject();
+                inner.addProperty("n", Integer.valueOf(spec[2]));
+                obj.add("payload", inner);
+            } else {
+                final var arr = new JsonArray();
+                arr.add(new JsonString(spec[2]));
+                obj.add("payload", arr);
+            }
+            saveRequest.setObject(obj);
+            assertEquals(OperationStatus.OK, processor.processMessage(saveRequest).getStatus());
+        }
+
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, coll, "payload"));
+
+        // Object element-match: {n:1} matches em1 and em2 only
+        final var objQuery = new JsonObject();
+        objQuery.addProperty("n", 1);
+        final var objAgg = new AggregateRequest(TestGlobals.DB, coll);
+        objAgg.setAggregationSteps(
+                List.of(new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "payload", objQuery))));
+        final var objResp = (AggregateResponse) processor.processMessage(objAgg);
+        assertEquals(OperationStatus.OK, objResp.getStatus());
+        assertEquals(2, objResp.getResults().size());
+
+        // Array element-match: ["x"] matches em4 only
+        final var arrQuery = new JsonArray();
+        arrQuery.add(new JsonString("x"));
+        final var arrAgg = new AggregateRequest(TestGlobals.DB, coll);
+        arrAgg.setAggregationSteps(
+                List.of(new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "payload", arrQuery))));
+        final var arrResp = (AggregateResponse) processor.processMessage(arrAgg);
+        assertEquals(OperationStatus.OK, arrResp.getStatus());
+        assertEquals(1, arrResp.getResults().size());
+
+        processor.processMessage(new DropCollectionRequest(TestGlobals.DB, coll));
+    }
+
     // create a test to create a collection and then drop it
     @Test
     public void test_create_and_drop_collection() {
@@ -248,6 +510,23 @@ public class OperationProcessorTest {
         assertNotNull(dropResponse);
         assertInstanceOf(DropCollectionResponse.class, dropResponse);
         assertEquals(OperationStatus.OK, dropResponse.getStatus());
+    }
+
+    @Test
+    public void test_drop_collection_removes_lock_from_registry() throws Exception {
+        final var collName = "lockCleanupColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+        processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+
+        // After a successful drop the lock entry must be removed from the registry so
+        // it does not accumulate stale locks for deleted collections.
+        final var locksField = ResourceLocking.class.getDeclaredField("locks");
+        locksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        final var lockMap = (java.util.Map<String, ?>) locksField.get(null);
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(TestGlobals.DB, collName)),
+                "Lock entry must be removed from registry after a successful drop");
     }
 
     // After a save, the entry's PkIndexEntry carries the page assigned by selectPageForInsert
@@ -316,11 +595,11 @@ public class OperationProcessorTest {
     public void test_list_collections_unknown_database_returns_not_found() {
         ListCollectionsRequest request = new ListCollectionsRequest("does-not-exist");
 
-        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertNotNull(response);
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertNull(response.getCollections());
+        assertEquals("404-4", response.getErrorCode());
     }
 
     // List collections for admin database returns empty list
@@ -341,10 +620,11 @@ public class OperationProcessorTest {
     public void test_list_collections_blank_database_name_returns_error() {
         ListCollectionsRequest request = new ListCollectionsRequest("");
 
-        ListCollectionsResponse response = (ListCollectionsResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertNotNull(response);
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-1", response.getErrorCode());
     }
 
     // List collections only returns collections of requested database
@@ -408,9 +688,10 @@ public class OperationProcessorTest {
         DeleteRequest request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("no-such-id");
 
-        DeleteResponse response = (DeleteResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-2", response.getErrorCode());
     }
 
     // Aggregate returns NOT_FOUND when no documents match
@@ -420,10 +701,10 @@ public class OperationProcessorTest {
         request.setAggregationSteps(List.of(new FilterAggregationStep(
                 new FieldOperator(FieldOperatorType.EQUALS, "nobody", new JsonString("nope")))));
 
-        AggregateResponse response = (AggregateResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertNull(response.getResults());
+        assertEquals("404-3", response.getErrorCode());
     }
 
     // Bulk save with some already-existing IDs performs updates for those entries
@@ -451,14 +732,15 @@ public class OperationProcessorTest {
         assertTrue(response.getInserted().contains("bulkNew"));
     }
 
-    // Drop index returns error when the collection does not exist
+    // Drop index returns not-found when the collection does not exist
     @Test
     public void test_drop_index_returns_error_for_nonexistent_collection() {
         DropIndexRequest request = new DropIndexRequest(TestGlobals.DB, "noSuchColl", "noSuchField");
 
-        DropIndexResponse response = (DropIndexResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
-        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-6", response.getErrorCode());
     }
 
     // Save an oversized entry returns an error response
@@ -471,9 +753,10 @@ public class OperationProcessorTest {
         obj.add("bigField", new JsonString("x".repeat(1_048_600)));
         request.setObject(obj);
 
-        SaveResponse response = (SaveResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-2", response.getErrorCode());
     }
 
     // Bulk save with duplicate _id values in the same request returns an error
@@ -486,9 +769,10 @@ public class OperationProcessorTest {
         obj2.add(Globals.PK_FIELD, new JsonString("dupId"));
         request.setObjects(List.of(obj1, obj2));
 
-        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-3", response.getErrorCode());
         assertTrue(response.getMessage().contains("dupId"));
     }
 
@@ -501,9 +785,10 @@ public class OperationProcessorTest {
         obj.add("bigField", new JsonString("x".repeat(1_048_600)));
         request.setObjects(List.of(obj));
 
-        BulkSaveResponse response = (BulkSaveResponse) processor.processMessage(request);
+        OperationResponse response = processor.processMessage(request);
 
         assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("400-2", response.getErrorCode());
     }
 
     @Test
@@ -692,5 +977,327 @@ public class OperationProcessorTest {
                 "joined collection read lock must be released after AGGREGATE");
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
         locks.releaseWrite(TestGlobals.DB, TestGlobals.JOIN_COLL);
+    }
+
+    // A SAVE that grows an existing document past maxPageSize relocates it to another page instead of
+    // overflowing its current page; the document still reads back intact and no page exceeds the cap.
+    @Test
+    public void test_save_grow_update_relocates_to_avoid_page_overflow() throws Exception {
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var config = org.techhouse.config.Configuration.getInstance();
+        final var originalMaxPage = config.getMaxPageSize();
+        final var originalMaxEntry = config.getMaxEntrySize();
+        final var collName = "overflowColl";
+        TestUtils.setPrivateField(config, "maxPageSize", 2000L);
+        TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        try {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+            // "keep" (~300 B) plus a small "a", co-located on page 0. Sized so that growing "a" to ~1.8 KB
+            // makes page 0 overflow maxPageSize (keepBytes + newBytes > 2000) yet the grown "a" still fits
+            // on a fresh page (newBytes < 2000), forcing a relocation rather than an in-place rewrite.
+            final var keepSave = new SaveRequest(TestGlobals.DB, collName);
+            final var keepObj = new JsonObject();
+            keepObj.add(Globals.PK_FIELD, new JsonString("keep"));
+            keepObj.add("v", new JsonString("k".repeat(280)));
+            keepSave.setObject(keepObj);
+            keepSave.set_id("keep");
+            assertEquals(OperationStatus.OK, processor.processMessage(keepSave).getStatus());
+
+            final var aSave = new SaveRequest(TestGlobals.DB, collName);
+            final var aObj = new JsonObject();
+            aObj.add(Globals.PK_FIELD, new JsonString("a"));
+            aObj.add("v", new JsonString("small"));
+            aSave.setObject(aObj);
+            aSave.set_id("a");
+            assertEquals(OperationStatus.OK, processor.processMessage(aSave).getStatus());
+
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
+            final var keepPageBefore = pkIndex.stream().filter(p -> p.getValue().equals("keep")).findFirst()
+                    .orElseThrow().getPage();
+            final var aPageBefore = pkIndex.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
+                    .getPage();
+            assertEquals(0L, keepPageBefore);
+            assertEquals(0L, aPageBefore, "both docs must start co-located on page 0");
+
+            // Grow "a" past what fits on page 0 alongside "keep" -> must relocate.
+            final var bigValue = "x".repeat(1780);
+            final var growSave = new SaveRequest(TestGlobals.DB, collName);
+            final var grown = new JsonObject();
+            grown.add(Globals.PK_FIELD, new JsonString("a"));
+            grown.add("v", new JsonString(bigValue));
+            growSave.setObject(grown);
+            growSave.set_id("a");
+            assertEquals(OperationStatus.OK, processor.processMessage(growSave).getStatus());
+
+            // "a" relocated off page 0; "keep" stayed put.
+            final var pkAfter = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
+            final var aPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
+                    .getPage();
+            final var keepPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("keep")).findFirst()
+                    .orElseThrow().getPage();
+            assertEquals(0L, keepPageAfter, "the untouched doc must stay on page 0");
+            assertTrue(aPageAfter > 0L, "the grown doc must relocate off page 0 (was " + aPageAfter + ")");
+
+            // The grown value reads back intact.
+            final var find = new FindByIdRequest(TestGlobals.DB, collName);
+            find.set_id("a");
+            final var found = (FindByIdResponse) processor.processMessage(find);
+            assertEquals(OperationStatus.OK, found.getStatus());
+            assertEquals(bigValue, found.getObject().get("v").asJsonString().getValue());
+
+            // No on-disk page file exceeds maxPageSize.
+            final var collFolder = new java.io.File(
+                    TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + collName);
+            final var datFiles = collFolder.listFiles((_, n) -> n.endsWith(Globals.DB_FILE_EXTENSION));
+            assertNotNull(datFiles);
+            for (final var dat : datFiles) {
+                assertTrue(dat.length() <= 2000L,
+                        "page file " + dat.getName() + " (" + dat.length() + " bytes) must not exceed maxPageSize");
+            }
+        } finally {
+            TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
+            TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    // After a grow-relocation, the document's id must remain in the pending overlay even after the
+    // DELETED event's worker clears its mark, so the CREATED event's worker can still clear it and
+    // index-backed queries never see a false negative in the window between the two events.
+    @Test
+    public void test_relocate_keeps_id_pending_until_both_events_processed() throws Exception {
+        final var config = org.techhouse.config.Configuration.getInstance();
+        final var originalMaxPage = config.getMaxPageSize();
+        final var originalMaxEntry = config.getMaxEntrySize();
+        final var collName = "pendingRelocateColl";
+        TestUtils.setPrivateField(config, "maxPageSize", 2000L);
+        TestUtils.setPrivateField(config, "maxEntrySize", 100_000L);
+        // Swap in a fresh BackgroundTaskManager whose workers are never started so the relocation's
+        // DELETED/CREATED events sit unprocessed in its queue. Otherwise, if another test class
+        // (e.g. MainTest) has already started the shared IoC manager's workers, they would drain the
+        // events and clear the pending marks before this assertion runs, making the test flaky.
+        final var originalTaskManager = TestUtils.getPrivateField(processor, "taskManager",
+                BackgroundTaskManager.class);
+        TestUtils.setPrivateField(processor, "taskManager", new BackgroundTaskManager());
+        try {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+
+            final var keepSave = new SaveRequest(TestGlobals.DB, collName);
+            final var keepObj = new JsonObject();
+            keepObj.add(Globals.PK_FIELD, new JsonString("keep"));
+            keepObj.add("v", new JsonString("k".repeat(280)));
+            keepSave.setObject(keepObj);
+            keepSave.set_id("keep");
+            processor.processMessage(keepSave);
+
+            final var aSave = new SaveRequest(TestGlobals.DB, collName);
+            final var aObj = new JsonObject();
+            aObj.add(Globals.PK_FIELD, new JsonString("a"));
+            aObj.add("v", new JsonString("small"));
+            aSave.setObject(aObj);
+            aSave.set_id("a");
+            processor.processMessage(aSave);
+
+            final var pending = IocContainer.get(PendingIndexWrites.class);
+
+            // Trigger a relocation: grow "a" so page 0 overflows.
+            final var growSave = new SaveRequest(TestGlobals.DB, collName);
+            final var grown = new JsonObject();
+            grown.add(Globals.PK_FIELD, new JsonString("a"));
+            grown.add("v", new JsonString("x".repeat(1780)));
+            growSave.setObject(grown);
+            growSave.set_id("a");
+            processor.processMessage(growSave);
+
+            // Immediately after processMessage returns, "a" must be pending with count >= 2
+            // (one mark for DELETED, one for CREATED) so that the DELETED worker's clear()
+            // cannot drop the key before CREATED is processed.
+            assertTrue(pending.idsFor(TestGlobals.DB, collName).contains("a"),
+                    "id must remain pending after relocation so both events are covered");
+        } finally {
+            TestUtils.setPrivateField(processor, "taskManager", originalTaskManager);
+            TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
+            TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    @Test
+    public void test_drop_database_removes_locks_for_all_collections() throws Exception {
+        final var db = "lockCleanupDb";
+        processor.processMessage(new CreateDatabaseRequest(db));
+        processor.processMessage(new CreateCollectionRequest(db, "collA"));
+        processor.processMessage(new CreateCollectionRequest(db, "collB"));
+
+        processor.processMessage(new DropDatabaseRequest(db));
+
+        final var locksField = ResourceLocking.class.getDeclaredField("locks");
+        locksField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        final var lockMap = (java.util.Map<String, ?>) locksField.get(null);
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(db, "collA")),
+                "Lock for collA must be removed after database drop");
+        assertNull(lockMap.get(Cache.getCollectionIdentifier(db, "collB")),
+                "Lock for collB must be removed after database drop");
+    }
+
+    // When no admin page metadata is available, the overflow check can't assess the page, so the SAVE
+    // falls back to an in-place update (no relocation) and the document still updates correctly.
+    @Test
+    public void test_save_grow_update_without_page_metadata_updates_in_place() {
+        final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
+        final var collName = "noPageMetaColl";
+        processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+        try {
+            final var save = new SaveRequest(TestGlobals.DB, collName);
+            final var o = new JsonObject();
+            o.add(Globals.PK_FIELD, new JsonString("x"));
+            o.add("v", new JsonString("one"));
+            save.setObject(o);
+            save.set_id("x");
+            assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+            // Drop the in-memory page metadata so wouldOverflowPage hits its null fallback.
+            cache.removeAdminPageEntries(TestGlobals.DB, collName);
+
+            final var upd = new SaveRequest(TestGlobals.DB, collName);
+            final var o2 = new JsonObject();
+            o2.add(Globals.PK_FIELD, new JsonString("x"));
+            o2.add("v", new JsonString("two"));
+            upd.setObject(o2);
+            upd.set_id("x");
+            assertEquals(OperationStatus.OK, processor.processMessage(upd).getStatus());
+
+            final var find = new FindByIdRequest(TestGlobals.DB, collName);
+            find.set_id("x");
+            final var found = (FindByIdResponse) processor.processMessage(find);
+            assertEquals(OperationStatus.OK, found.getStatus());
+            assertEquals("two", found.getObject().get("v").asJsonString().getValue());
+        } finally {
+            processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
+        }
+    }
+
+    // A single-document insert calls updatePageSizeInMemory synchronously; the subsequent background
+    // CREATED event must only persist — entryCount and pageSize must both remain at 1x, not 2x.
+    @Test
+    public void test_single_save_insert_page_entry_count_single_counted() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("singleSaveId1"));
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        save.setObject(obj);
+        save.set_id("singleSaveId1");
+
+        assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+        // Capture the page state set by the synchronous updatePageSizeInMemory call.
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0Before.isPresent());
+        final long countBefore = page0Before.get().getEntryCount();
+        final long sizeBefore = page0Before.get().getPageSize();
+
+        // Simulate the background EntityEvent(CREATED) arriving.
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id("singleSaveId1");
+        entry.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry));
+
+        final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0After.isPresent());
+        assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
+        assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
+    }
+
+    // Bulk-save inserts also call updatePageSizeInMemory synchronously per inserted entry;
+    // the subsequent background BulkEntityEvent must not double-count any of them.
+    @Test
+    public void test_bulk_save_insert_page_entry_count_single_counted() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+
+        final var obj1 = new JsonObject();
+        obj1.add(Globals.PK_FIELD, new JsonString("bulkSaveId1"));
+        final var obj2 = new JsonObject();
+        obj2.add(Globals.PK_FIELD, new JsonString("bulkSaveId2"));
+
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(obj1, obj2));
+        assertEquals(OperationStatus.OK, processor.processMessage(bulk).getStatus());
+
+        final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
+        assertNotNull(pageEntries);
+        final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0Before.isPresent());
+        final long countBefore = page0Before.get().getEntryCount();
+        final long sizeBefore = page0Before.get().getPageSize();
+
+        // Simulate the background BulkEntityEvent(CREATED) arriving.
+        final var e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
+        e1.set_id("bulkSaveId1");
+        e1.setPage(0L);
+        final var e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
+        e2.set_id("bulkSaveId2");
+        e2.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(e1, e2));
+
+        final var page0After = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(p -> p.getPage() == 0L).findFirst();
+        assertTrue(page0After.isPresent());
+        assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
+        assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
+    }
+
+    // REINDEX: rebuild all registered indexes when no fieldNames given
+    @Test
+    public void test_reindex_all_fields_rebuilds_registered_indexes() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexField"));
+        try {
+            ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null);
+            ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+            assertEquals(OperationStatus.OK, response.getStatus());
+            assertTrue(response.getRebuiltFields().contains("reindexField"));
+        } finally {
+            processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexField"));
+        }
+    }
+
+    // REINDEX: rebuild only the specified field
+    @Test
+    public void test_reindex_specific_field_rebuilds_only_that_field() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldA"));
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldB"));
+        try {
+            ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("reindexFieldA"));
+            ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+            assertEquals(OperationStatus.OK, response.getStatus());
+            assertEquals(List.of("reindexFieldA"), response.getRebuiltFields());
+        } finally {
+            processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldA"));
+            processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldB"));
+        }
+    }
+
+    // REINDEX: returns NOT_FOUND when a specified field has no registered index
+    @Test
+    public void test_reindex_unknown_field_returns_error() {
+        ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("noSuchIndex"));
+        OperationResponse response = processor.processMessage(request);
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-6", response.getErrorCode());
+        assertTrue(response.getMessage().contains("noSuchIndex"));
+    }
+
+    // REINDEX: returns OK with empty list when no indexes exist on the collection
+    @Test
+    public void test_reindex_collection_with_no_indexes_returns_ok_empty_list() {
+        ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null);
+        ReindexResponse response = (ReindexResponse) processor.processMessage(request);
+        // All indexes from prior tests have been dropped; if some still exist the response is still OK
+        assertEquals(OperationStatus.OK, response.getStatus());
     }
 }

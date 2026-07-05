@@ -6,14 +6,17 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.UserCache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -39,6 +42,7 @@ import org.techhouse.ops.req.agg.step.map.MapOperationType;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.ReflectionUtils;
 
 public class AggregationOperationHelperTest {
     @BeforeEach
@@ -252,13 +256,28 @@ public class AggregationOperationHelperTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
+    // The whole-collection COUNT is derived from the (synchronously-maintained) PK index size, so
+    // register the ids there. Populated directly to be independent of cache admission decisions.
+    private void registerPkIndex(String... ids) throws NoSuchFieldException, IllegalAccessException {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var token = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        final var pkIndexMap = TestUtils.getPrivateField(userCache, "pkIndexMap", token);
+        final var list = new ArrayList<PkIndexEntry>();
+        for (var id : ids) {
+            list.add(new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, id, 0, 100, 0));
+        }
+        pkIndexMap.put(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), list);
+    }
+
     // COUNT returns the number of documents in the collection
     @Test
-    public void test_count_returns_document_count() throws IOException {
+    public void test_count_returns_document_count() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
         insertEntry(cache, "c1", "val", "a");
         insertEntry(cache, "c2", "val", "b");
         insertEntry(cache, "c3", "val", "c");
+        registerPkIndex("c1", "c2", "c3");
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(new CountAggregationStep()));
@@ -728,9 +747,9 @@ public class AggregationOperationHelperTest {
     }
 
     // Option B: documents whose indexed field holds an object/array are not in the index, so an
-    // index-backed DISTINCT does not include them
+    // index-backed DISTINCT includes both scalar and object-valued docs on a mixed-type field
     @Test
-    public void test_object_valued_field_excluded_from_indexed_distinct() throws IOException {
+    public void test_object_valued_field_included_in_indexed_distinct() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "o1", "data", new JsonString("scalar"));
         final var objVal = new JsonObject();
@@ -742,8 +761,11 @@ public class AggregationOperationHelperTest {
         req.setAggregationSteps(List.of(new DistinctAggregationStep("data")));
         final var result = AggregationOperationHelper.processAggregation(req);
 
-        assertEquals(1, result.size());
-        assertEquals("scalar", result.getFirst().get("data").asJsonString().getValue());
+        assertEquals(2, result.size());
+        final var hasScalar = result.stream().anyMatch(r -> r.get("data") != null && r.get("data").isJsonString());
+        final var hasObject = result.stream().anyMatch(r -> r.get("data") != null && r.get("data").isJsonObject());
+        assertTrue(hasScalar);
+        assertTrue(hasObject);
     }
 
     // An indexed step on an empty collection returns no results
@@ -925,10 +947,11 @@ public class AggregationOperationHelperTest {
 
     // COUNT is not the second step, so the fast path does not fire (still correct).
     @Test
-    public void test_count_only_step_is_unaffected() throws IOException {
+    public void test_count_only_step_is_unaffected() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", "status", new JsonString("active"));
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
+        registerPkIndex("c1");
         enableIndex(cache, "status");
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -1035,10 +1058,12 @@ public class AggregationOperationHelperTest {
 
     // With no FILTER, count-preserving steps before COUNT yield the whole-collection count.
     @Test
-    public void test_count_after_map_only_uses_whole_collection_count() throws IOException {
+    public void test_count_after_map_only_uses_whole_collection_count()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
         insertEntry(cache, "c1", "status", "active");
         insertEntry(cache, "c2", "status", "inactive");
+        registerPkIndex("c1", "c2");
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of(
@@ -1102,5 +1127,165 @@ public class AggregationOperationHelperTest {
                 new LimitAggregationStep(1), new CountAggregationStep()));
 
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
+    }
+
+    // GROUP_BY on a mixed scalar+object indexed field includes object-valued docs in the result
+    @Test
+    public void test_group_by_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "meta", new JsonString("plain"));
+        addDoc(cache, "s2", "meta", new JsonString("plain"));
+        final var obj = new JsonObject();
+        obj.addProperty("key", "val");
+        addDoc(cache, "o1", "meta", obj);
+        enableIndex(cache, "meta");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("meta")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        final var allDocIds = new java.util.HashSet<String>();
+        for (var g : result) {
+            final var group = g.get("group");
+            if (group != null && group.isJsonArray()) {
+                for (var el : group.asJsonArray()) {
+                    allDocIds.add(el.asJsonObject().get(Globals.PK_FIELD).asJsonString().getValue());
+                }
+            }
+        }
+        assertEquals(Set.of("s1", "s2", "o1"), allDocIds);
+    }
+
+    // DISTINCT on a mixed scalar+object indexed field includes the object value in the result
+    @Test
+    public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "meta", new JsonString("plain"));
+        final var obj = new JsonObject();
+        obj.addProperty("key", "val");
+        addDoc(cache, "o1", "meta", obj);
+        enableIndex(cache, "meta");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("meta")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+        final var hasObjectValue = result.stream().anyMatch(r -> r.get("meta") != null && r.get("meta").isJsonObject());
+        assertTrue(hasObjectValue);
+    }
+
+    // SORT on a mixed scalar+object indexed field includes all docs (scalar and object-valued)
+    @Test
+    public void test_sort_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "s1", "meta", new JsonString("alpha"));
+        addDoc(cache, "s2", "meta", new JsonString("beta"));
+        final var obj = new JsonObject();
+        obj.addProperty("k", 1);
+        addDoc(cache, "o1", "meta", obj);
+        enableIndex(cache, "meta");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("meta", true)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(3, result.size());
+        final var ids = result.stream().map(r -> r.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("s1", "s2", "o1"), ids);
+    }
+
+    // Index-backed SORT followed by LIMIT returns only the first N docs in sorted order;
+    // the lazy document-fetch path must not return more than LIMIT elements.
+    @Test
+    public void test_sort_via_index_with_limit_returns_correct_first_n() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "v1", "score", new JsonNumber(50));
+        addDoc(cache, "v2", "score", new JsonNumber(10));
+        addDoc(cache, "v3", "score", new JsonNumber(30));
+        addDoc(cache, "v4", "score", new JsonNumber(20));
+        addDoc(cache, "v5", "score", new JsonNumber(40));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("score", true), new LimitAggregationStep(3)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(3, result.size());
+        assertEquals(10, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(20, result.get(1).get("score").asJsonNumber().asInteger());
+        assertEquals(30, result.get(2).get("score").asJsonNumber().asInteger());
+    }
+
+    // Index-backed SORT descending with LIMIT returns the top-N docs in correct order
+    @Test
+    public void test_sort_via_index_descending_with_limit_returns_top_n() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "w1", "score", new JsonNumber(10));
+        addDoc(cache, "w2", "score", new JsonNumber(50));
+        addDoc(cache, "w3", "score", new JsonNumber(30));
+        addDoc(cache, "w4", "score", new JsonNumber(20));
+        addDoc(cache, "w5", "score", new JsonNumber(40));
+        enableIndex(cache, "score");
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new SortAggregationStep("score", false), new LimitAggregationStep(2)));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, result.size());
+        assertEquals(50, result.get(0).get("score").asJsonNumber().asInteger());
+        assertEquals(40, result.get(1).get("score").asJsonNumber().asInteger());
+    }
+
+    // Index-backed JOIN where no remote doc matches any local value produces empty joined arrays
+    @Test
+    public void test_join_via_index_no_remote_match_returns_empty_joined_array() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 99);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+
+        addJoinDoc(cache, "j1", 1, "no-match");
+        addJoinDoc(cache, "j2", 2, "also-no");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.JOIN_COLL).setIndexes(Set.of("refKey"));
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        assertTrue(result.getFirst().has("joined"));
+        // No remote doc matched: joined field is set to null (serialized as JsonNull)
+        assertTrue(result.getFirst().get("joined").isJsonNull());
+    }
+
+    // When the remote field has no index, JOIN falls back to a full collection scan on the remote side
+    @Test
+    public void test_join_without_remote_index_falls_back_to_full_scan() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 5);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+
+        addJoinDoc(cache, "j1", 5, "match");
+        addJoinDoc(cache, "j2", 9, "no-match");
+        // No index on refKey — should fall back to full scan
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+        final var result = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(1, result.size());
+        final var joined = result.getFirst().get("joined").asJsonArray();
+        assertEquals(1, joined.size());
+        assertEquals("match", joined.get(0).asJsonObject().get("label").asJsonString().getValue());
     }
 }

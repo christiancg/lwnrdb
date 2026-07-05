@@ -17,10 +17,12 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.UserCache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonArray;
@@ -38,6 +40,18 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
 public class UserCacheTest {
+
+    // Mockito mocks skip field initializers, so the real getIdsFromIndex (called via thenCallRealMethod)
+    // would see a null index lock. Inject a real ResourceLocking so the read lock can be acquired.
+    private static void injectRealLocking(UserCache mock) {
+        try {
+            final var rlField = UserCache.class.getDeclaredField("rl");
+            rlField.setAccessible(true);
+            rlField.set(mock, new ResourceLocking());
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -100,6 +114,37 @@ public class UserCacheTest {
         assertEquals(expectedPkIndex, actualPkIndex);
     }
 
+    // shiftPkPositionsAfterCompaction decrements only same-page entries with a greater position, by
+    // the removed length, in place; other pages and earlier entries are untouched.
+    @Test
+    public void test_shift_pk_positions_after_compaction() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        String dbName = "testDb";
+        String collName = "testColl";
+        final var before = new PkIndexEntry(dbName, collName, "a", 0, 10, 0);
+        final var removed = new PkIndexEntry(dbName, collName, "b", 10, 10, 0);
+        final var after = new PkIndexEntry(dbName, collName, "c", 20, 10, 0);
+        final var otherPage = new PkIndexEntry(dbName, collName, "d", 20, 10, 1);
+        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        TestUtils.getPrivateField(cache, "pkIndexMap", type).put(Cache.getCollectionIdentifier(dbName, collName),
+                new ArrayList<>(List.of(before, removed, after, otherPage)));
+
+        cache.shiftPkPositionsAfterCompaction(dbName, collName, 0, removed.getPosition(), removed.getLength());
+
+        assertEquals(0, before.getPosition(), "entry before the removed position is untouched");
+        assertEquals(10, removed.getPosition(), "the entry at the removed position itself is untouched");
+        assertEquals(10, after.getPosition(), "entry after the removed position shifts left by removed length");
+        assertEquals(20, otherPage.getPosition(), "entry on a different page is untouched");
+    }
+
+    // No-op when the collection's PK index is not cached (does not throw).
+    @Test
+    public void test_shift_pk_positions_after_compaction_uncached_is_noop() {
+        UserCache cache = new UserCache();
+        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction("noDb", "noColl", 0, 0, 10));
+    }
+
     // Returns list of FieldIndexEntry when index is already loaded
     @Test
     public void test_returns_list_when_index_loaded() throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -158,11 +203,82 @@ public class UserCacheTest {
         assertNull(result);
     }
 
+    // A cached key for field "ba" (ba|String) must not prevent loading field "a" (a|String)
+    @Test
+    public void test_getFieldIndex_suffix_collision_loads_from_disk()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        Field fsField = UserCache.class.getDeclaredField("fs");
+        fsField.setAccessible(true);
+        fsField.set(cache, fsMock);
+
+        String dbName = "testDB";
+        String collName = "testCollection";
+        String collId = Cache.getCollectionIdentifier(dbName, collName);
+
+        // Pre-populate the cache with field "ba" so its key "ba|String" is present
+        Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
+        innerMap.put(Cache.getIndexIdentifier("ba", String.class),
+                List.of(new FieldIndexEntry<>(dbName, collName, "x", Set.of("id99"))));
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(collId, innerMap);
+
+        List<FieldIndexEntry<String>> diskEntries = List
+                .of(new FieldIndexEntry<>(dbName, collName, "hello", Set.of("id1")));
+        when(fsMock.readWholeFieldIndexFiles(dbName, collName, "a", String.class)).thenReturn(diskEntries);
+
+        List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, "a",
+                String.class);
+
+        verify(fsMock).readWholeFieldIndexFiles(dbName, collName, "a", String.class);
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("hello", result.getFirst().getValue());
+    }
+
+    // A cached key for field "ba" (ba|Object) must not prevent loading field "a" (a|Object)
+    @Test
+    public void test_getHashIndex_suffix_collision_loads_from_disk()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        Field fsField = UserCache.class.getDeclaredField("fs");
+        fsField.setAccessible(true);
+        fsField.set(cache, fsMock);
+
+        String dbName = "testDB";
+        String collName = "testCollection";
+        String collId = Cache.getCollectionIdentifier(dbName, collName);
+
+        // Pre-populate the cache with field "ba" so its key "ba|Object" is present
+        Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
+        innerMap.put(Cache.getIndexIdentifier("ba", IndexKind.OBJECT.label()),
+                List.of(new FieldIndexEntry<>(dbName, collName, "deadbeef", Set.of("id99"))));
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(collId, innerMap);
+
+        List<FieldIndexEntry<String>> diskEntries = List
+                .of(new FieldIndexEntry<>(dbName, collName, "cafebabe", Set.of("id1")));
+        when(fsMock.readWholeHashIndexFile(dbName, collName, "a", IndexKind.OBJECT)).thenReturn(diskEntries);
+
+        List<FieldIndexEntry<String>> result = cache.getHashIndexAndLoadIfNecessary(dbName, collName, "a",
+                IndexKind.OBJECT);
+
+        verify(fsMock).readWholeHashIndexFile(dbName, collName, "a", IndexKind.OBJECT);
+        assertNotNull(result);
+        assertEquals(1, result.size());
+        assertEquals("cafebabe", result.getFirst().getValue());
+    }
+
     // Retrieves IDs for Double values using the appropriate index
     @Test
     public void test_retrieves_ids_for_double_values() throws IOException {
         // Arrange
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "testDB";
         var collName = "testCollection";
         var fieldName = "testField";
@@ -206,6 +322,7 @@ public class UserCacheTest {
     @Test
     public void test_retrieves_ids_for_boolean_values() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         // Setup
         String dbName = "testDB";
         String collName = "testCollection";
@@ -230,6 +347,7 @@ public class UserCacheTest {
     @Test
     public void test_retrieves_ids_for_string_values() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         // Setup
         String dbName = "testDB";
         String collName = "testCollection";
@@ -442,7 +560,8 @@ public class UserCacheTest {
     public void test_evict_database_success() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
         String dbName = "testDb";
-        String collectionName = dbName + "_collection";
+        String collectionName = "myCollection";
+        String collId = Cache.getCollectionIdentifier(dbName, collectionName);
 
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100, 0);
         DbEntry dbEntry = new DbEntry();
@@ -454,8 +573,8 @@ public class UserCacheTest {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
-        pkIndexMap.put(collectionName, List.of(pkIndexEntry));
-        collectionMap.put(collectionName, Map.of("key", dbEntry));
+        pkIndexMap.put(collId, List.of(pkIndexEntry));
+        collectionMap.put(collId, Map.of("key", dbEntry));
 
         cache.evictDatabase(dbName);
 
@@ -463,12 +582,13 @@ public class UserCacheTest {
         assertTrue(collectionMap.isEmpty());
     }
 
-    // Evicts collections when the database name is an empty string
+    // Empty db name is invalid (< 3 chars per constraints); verify it still evicts only its own entries.
     @Test
     public void test_evict_database_empty_string() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
         String dbName = "";
-        String collectionName = dbName + "_collection";
+        String collectionName = "someColl";
+        String collId = Cache.getCollectionIdentifier(dbName, collectionName);
 
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, "123", 0, 100, 0);
         DbEntry dbEntry = new DbEntry();
@@ -480,8 +600,8 @@ public class UserCacheTest {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
 
-        pkIndexMap.put(collectionName, List.of(pkIndexEntry));
-        collectionMap.put(collectionName, Map.of("key", dbEntry));
+        pkIndexMap.put(collId, List.of(pkIndexEntry));
+        collectionMap.put(collId, Map.of("key", dbEntry));
 
         cache.evictDatabase(dbName);
 
@@ -532,6 +652,64 @@ public class UserCacheTest {
         assertFalse(collectionMap.containsKey(collIdentifier));
     }
 
+    @Test
+    public void test_evict_collection_also_clears_fieldIndexMap() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        String dbName = "testDb";
+        String collName = "testColl";
+        String collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
+        String indexIdentifier = Cache.getIndexIdentifier("myField", String.class);
+
+        Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
+        innerMap.put(indexIdentifier, List.of(new FieldIndexEntry<>(dbName, collName, "val", Set.of("id1"))));
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        TestUtils.getPrivateField(cache, "fieldIndexMap", type).put(collIdentifier, innerMap);
+
+        cache.evictCollection(dbName, collName);
+
+        assertFalse(TestUtils.getPrivateField(cache, "fieldIndexMap", type).containsKey(collIdentifier),
+                "evictCollection must remove the collection's field index entries");
+    }
+
+    @Test
+    public void test_evict_database_also_clears_fieldIndexMap() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        String dbName = "testDb";
+        String siblingDb = "testDbSibling";
+        String collId1 = Cache.getCollectionIdentifier(dbName, "coll1");
+        String collId2 = Cache.getCollectionIdentifier(dbName, "coll2");
+        String siblingId = Cache.getCollectionIdentifier(siblingDb, "coll3");
+        String indexId = Cache.getIndexIdentifier("f", String.class);
+
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        Map<String, List<FieldIndexEntry<?>>> inner1 = new ConcurrentHashMap<>();
+        inner1.put(indexId, List.of(new FieldIndexEntry<>(dbName, "coll1", "v", Set.of("id1"))));
+        Map<String, List<FieldIndexEntry<?>>> inner2 = new ConcurrentHashMap<>();
+        inner2.put(indexId, List.of(new FieldIndexEntry<>(dbName, "coll2", "v", Set.of("id2"))));
+        Map<String, List<FieldIndexEntry<?>>> inner3 = new ConcurrentHashMap<>();
+        inner3.put(indexId, List.of(new FieldIndexEntry<>(siblingDb, "coll3", "v", Set.of("id3"))));
+        fieldIndexMap.put(collId1, inner1);
+        fieldIndexMap.put(collId2, inner2);
+        fieldIndexMap.put(siblingId, inner3);
+
+        // Also populate collectionMap so evictDatabase can build its toRemove list.
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        collectionMap.put(collId1, new ConcurrentHashMap<>());
+        collectionMap.put(collId2, new ConcurrentHashMap<>());
+
+        cache.evictDatabase(dbName);
+
+        final var remaining = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        assertFalse(remaining.containsKey(collId1), "coll1 field index must be evicted");
+        assertFalse(remaining.containsKey(collId2), "coll2 field index must be evicted");
+        assertTrue(remaining.containsKey(siblingId), "sibling db field index must be untouched");
+    }
+
     // Returns true when the field index is present in the fieldIndexMap
     @Test
     public void test_returns_true_when_field_index_present() throws NoSuchFieldException, IllegalAccessException {
@@ -572,6 +750,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_custom_type() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "time";
@@ -593,6 +772,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_json_array_of_strings() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "tag";
@@ -616,6 +796,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_json_array_of_numbers() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "score";
@@ -641,6 +822,7 @@ public class UserCacheTest {
     @Test
     public void test_get_ids_from_index_with_json_array_of_booleans() throws IOException {
         var cache = mock(UserCache.class);
+        injectRealLocking(cache);
         var dbName = "db";
         var collName = "coll";
         var fieldName = "active";
@@ -1193,6 +1375,74 @@ public class UserCacheTest {
         // An id absent from the PK index resolves to nothing, so no targeted read happens.
         assertTrue(result.isEmpty());
         verify(fsMock, never()).getByIndexEntries(anyList());
+    }
+
+    // evictDatabase("foo") must not touch a sibling database whose name starts with "foo".
+    @Test
+    public void test_evictDatabase_does_not_evict_sibling_database()
+            throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        final var collIdFoo = Cache.getCollectionIdentifier("foo", "coll1");
+        final var collIdFoobar = Cache.getCollectionIdentifier("foobar", "coll2");
+
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+
+        pkIndexMap.put(collIdFoo, List.of(new PkIndexEntry("foo", "coll1", "1", 0, 10, 0)));
+        pkIndexMap.put(collIdFoobar, List.of(new PkIndexEntry("foobar", "coll2", "2", 0, 10, 0)));
+        collectionMap.put(collIdFoo, new ConcurrentHashMap<>());
+        collectionMap.put(collIdFoobar, new ConcurrentHashMap<>());
+
+        cache.evictDatabase("foo");
+
+        assertFalse(pkIndexMap.containsKey(collIdFoo), "foo|coll1 should have been evicted");
+        assertFalse(collectionMap.containsKey(collIdFoo), "foo|coll1 should have been evicted");
+        assertTrue(pkIndexMap.containsKey(collIdFoobar), "foobar|coll2 must not be evicted");
+        assertTrue(collectionMap.containsKey(collIdFoobar), "foobar|coll2 must not be evicted");
+    }
+
+    // getEntriesByIds must pass a detached PkIndexEntry copy to FileSystem so a concurrent
+    // shiftPkPositionsAfterCompaction cannot move the offset between resolution and the read.
+    @Test
+    public void test_getEntriesByIds_returns_detached_pk_copy() throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
+        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
+        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var livePk = new PkIndexEntry("userDb", "c1", "id1", 100L, 50, 0);
+        injectPkIndex(cache, collId, List.of(livePk));
+
+        final var readObj = new JsonObject();
+        readObj.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
+
+        // Simulate a compaction shifting the live entry's position after getEntriesByIds resolves it.
+        final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
+
+        cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+
+        //noinspection unchecked
+        verify(fsMock).getByIndexEntries(captor.capture());
+        //noinspection unchecked
+        final List<PkIndexEntry> requested = captor.getValue();
+        assertEquals(1, requested.size());
+        // The entry passed to FileSystem must be a different object than the live cached entry.
+        assertNotSame(livePk, requested.getFirst());
+        // And it must carry the original position (100), not any post-compaction value.
+        assertEquals(100L, requested.getFirst().getPosition());
+
+        // Now simulate a compaction that moves the live entry.
+        livePk.setPosition(50L);
+        // The copy already passed to FileSystem is unaffected.
+        assertEquals(100L, requested.getFirst().getPosition());
     }
 
 }

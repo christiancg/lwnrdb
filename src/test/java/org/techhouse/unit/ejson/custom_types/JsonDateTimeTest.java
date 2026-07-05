@@ -117,4 +117,17 @@ public class JsonDateTimeTest {
     public void test_invalid_format_throws_wrong_format_exception() {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonDateTime("#datetime(not_a_datetime)"));
     }
+
+    // datetime declares no custom operators and rejects any evaluation.
+    @Test
+    public void test_no_custom_operators() {
+        JsonDateTime dateTime = new JsonDateTime(LocalDateTime.now());
+
+        assertTrue(dateTime.customOperatorNames().isEmpty());
+        assertThrows(UnsupportedOperationException.class,
+                () -> dateTime.applyCustomOperator("distance", java.util.Map.of()));
+        assertTrue(dateTime.customRankingOperatorNames().isEmpty());
+        assertThrows(UnsupportedOperationException.class,
+                () -> dateTime.applyCustomRankingOperator("nearest", java.util.Map.of()));
+    }
 }
