@@ -46,6 +46,15 @@ public abstract class JsonCustom<T> extends JsonString {
     // no custom operators.
     public abstract boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args);
 
+    // The ranking (top-K) operators this type supports (e.g. the vector type's "nearest"). Unlike a
+    // predicate operator, a ranking operator scores each value and the FILTER step keeps the highest K.
+    // Types without ranking operators return an empty set.
+    public abstract Set<String> customRankingOperatorNames();
+
+    // Scores this value for a ranking operator (higher is better, e.g. cosine similarity). Throws
+    // UnsupportedOperationException for a type that declares no ranking operators.
+    public abstract double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args);
+
     public static Boolean isJsonCustom(JsonString str) {
         final var value = str.get();
         return value.matches(Globals.CUSTOM_JSON_REGEX);

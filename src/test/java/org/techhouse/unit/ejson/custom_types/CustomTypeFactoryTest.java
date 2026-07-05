@@ -65,6 +65,16 @@ public class CustomTypeFactoryTest {
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
         }
+
+        @Override
+        public Set<String> customRankingOperatorNames() {
+            return Set.of();
+        }
+
+        @Override
+        public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     // Register custom type class without default constructor
@@ -101,6 +111,16 @@ public class CustomTypeFactoryTest {
 
         @Override
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Set<String> customRankingOperatorNames() {
+            return Set.of();
+        }
+
+        @Override
+        public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
         }
     }
@@ -166,6 +186,16 @@ public class CustomTypeFactoryTest {
 
         @Override
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Set<String> customRankingOperatorNames() {
+            return Set.of();
+        }
+
+        @Override
+        public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
         }
     }

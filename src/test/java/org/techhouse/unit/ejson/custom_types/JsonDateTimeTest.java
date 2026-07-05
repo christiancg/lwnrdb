@@ -126,5 +126,8 @@ public class JsonDateTimeTest {
         assertTrue(dateTime.customOperatorNames().isEmpty());
         assertThrows(UnsupportedOperationException.class,
                 () -> dateTime.applyCustomOperator("distance", java.util.Map.of()));
+        assertTrue(dateTime.customRankingOperatorNames().isEmpty());
+        assertThrows(UnsupportedOperationException.class,
+                () -> dateTime.applyCustomRankingOperator("nearest", java.util.Map.of()));
     }
 }

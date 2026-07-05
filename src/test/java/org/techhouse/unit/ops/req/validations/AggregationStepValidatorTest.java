@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -111,6 +112,59 @@ public class AggregationStepValidatorTest {
         new org.techhouse.ejson.EJson();
         final var op = withinOperator(2);
         assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_validNearest_returnsOk() {
+        new org.techhouse.ejson.EJson();
+        final var op = nearestOperator(5, null);
+        assertTrue(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_nearestNonVectorValue_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("k", new org.techhouse.ejson.elements.JsonNumber(5));
+        final var op = new org.techhouse.ops.req.agg.operators.CustomOperator("nearest", "embedding",
+                new JsonString("not a vector"), args);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_nearestNonPositiveK_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var op = nearestOperator(0, null);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_nearestMissingK_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var target = new org.techhouse.ejson.custom_types.JsonVector("#vector(1.0,0.0)");
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("value", target);
+        final var op = new org.techhouse.ops.req.agg.operators.CustomOperator("nearest", "embedding", target, args);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_nearestNonBooleanExact_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var op = nearestOperator(5, new JsonString("yes"));
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    private static org.techhouse.ops.req.agg.operators.CustomOperator nearestOperator(int k,
+                                                                                      JsonBaseElement exact) {
+        final var target = new org.techhouse.ejson.custom_types.JsonVector("#vector(1.0,0.0)");
+        final var args = new org.techhouse.ejson.elements.JsonObject();
+        args.add("value", target);
+        args.add("k", new org.techhouse.ejson.elements.JsonNumber((double) k));
+        if (exact != null) {
+            args.add("exact", exact);
+        }
+        return new org.techhouse.ops.req.agg.operators.CustomOperator("nearest", "embedding", target, args);
     }
 
     private static org.techhouse.ops.req.agg.operators.CustomOperator distanceOperator(String field) {

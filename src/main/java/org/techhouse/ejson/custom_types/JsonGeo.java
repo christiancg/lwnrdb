@@ -102,6 +102,16 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
         };
     }
 
+    @Override
+    public Set<String> customRankingOperatorNames() {
+        return Set.of();
+    }
+
+    @Override
+    public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
+        throw new UnsupportedOperationException(getCustomTypeName() + " has no ranking operators");
+    }
+
     private boolean applyDistance(Map<String, JsonBaseElement> args) {
         final var target = toGeoPoint(args.get("value"));
         final var comparator = GeoDistanceComparator.valueOf(args.get("comparator").asJsonString().getValue());

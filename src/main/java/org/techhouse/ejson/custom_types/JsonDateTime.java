@@ -48,4 +48,14 @@ public class JsonDateTime extends JsonCustom<LocalDateTime> {
     public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
         throw new UnsupportedOperationException(getCustomTypeName() + " has no custom operators");
     }
+
+    @Override
+    public Set<String> customRankingOperatorNames() {
+        return Set.of();
+    }
+
+    @Override
+    public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
+        throw new UnsupportedOperationException(getCustomTypeName() + " has no ranking operators");
+    }
 }

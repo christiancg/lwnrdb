@@ -79,6 +79,14 @@ public class ReflectionUtilsTest {
         public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
             throw new UnsupportedOperationException();
         }
+        @Override
+        public Set<String> customRankingOperatorNames() {
+            return Set.of();
+        }
+        @Override
+        public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
+            throw new UnsupportedOperationException();
+        }
     }
 
     // Returns registered custom type class when input matches registered type name
