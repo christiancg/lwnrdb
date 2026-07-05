@@ -15,11 +15,11 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
-import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
@@ -46,18 +46,22 @@ public final class MapOperatorHelper {
         return switch (condition.getType()) {
             case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap);
             case FIELD -> processFieldOperator((FieldOperator) condition, toMap);
+            case CUSTOM -> processCustomOperator((CustomOperator) condition, toMap);
         };
+    }
+
+    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap) {
+        return FilterOperatorHelper.getCustomTester(operator).test(toMap, operator.getField());
     }
 
     private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap) {
         List<Boolean> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
-            boolean partialResults;
-            if (step.getType() == OperatorType.CONJUNCTION) {
-                partialResults = processConjunctionOperator((ConjunctionOperator) step, toMap);
-            } else {
-                partialResults = processFieldOperator((FieldOperator) step, toMap);
-            }
+            final var partialResults = switch (step.getType()) {
+                case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) step, toMap);
+                case FIELD -> processFieldOperator((FieldOperator) step, toMap);
+                case CUSTOM -> processCustomOperator((CustomOperator) step, toMap);
+            };
             combinationResult.add(partialResults);
         }
         return switch (operator.getConjunctionType()) {

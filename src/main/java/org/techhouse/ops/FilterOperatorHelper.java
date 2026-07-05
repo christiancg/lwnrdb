@@ -2,20 +2,25 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -24,8 +29,8 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
-import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 
@@ -39,6 +44,7 @@ public class FilterOperatorHelper {
             case CONJUNCTION ->
                 processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
             case FIELD -> processFieldOperator((FieldOperator) operator, resultStream, dbName, collName);
+            case CUSTOM -> processCustomOperator((CustomOperator) operator, resultStream, dbName, collName);
         };
         return resultStream;
     }
@@ -47,12 +53,12 @@ public class FilterOperatorHelper {
             Stream<JsonObject> resultStream, String dbName, String collName) throws IOException {
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
-            Stream<JsonObject> partialResults;
-            if (step.getType() == OperatorType.CONJUNCTION) {
-                partialResults = processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName);
-            } else {
-                partialResults = processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
-            }
+            final var partialResults = switch (step.getType()) {
+                case CONJUNCTION ->
+                    processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName);
+                case FIELD -> processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
+                case CUSTOM -> processCustomOperator((CustomOperator) step, resultStream, dbName, collName);
+            };
             combinationResult.add(partialResults);
         }
         return switch (operator.getConjunctionType()) {
@@ -109,6 +115,126 @@ public class FilterOperatorHelper {
 
         final var tester = getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
+    }
+
+    private static Stream<JsonObject> processCustomOperator(CustomOperator operator, Stream<JsonObject> resultStream,
+            String dbName, String collName) throws IOException {
+        if (CustomTypeFactory.isRankingOperator(operator.getCustomOperatorName())) {
+            return processRankingOperator(operator, resultStream, dbName, collName);
+        }
+        final var tester = getCustomTester(operator);
+        final var fieldName = operator.getField();
+        if (resultStream != null) {
+            // An upstream stream already exists, so no index scan is saved: apply the predicate to the
+            // actual documents directly.
+            return resultStream.filter(data -> tester.test(data, fieldName));
+        }
+        // Try the spatial index (geohash bounding-box pre-filter): a non-null result is a candidate id
+        // set that is fetched and re-tested exactly below (candidates are unconfirmed, like hash-index
+        // hits). Null means no usable index / not accelerable, so scan the collection page-by-page.
+        final var candidateIds = GeoSpatialIndexHelper.candidateIds(operator, dbName, collName);
+        if (candidateIds != null) {
+            return cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData)
+                    .filter(data -> tester.test(data, fieldName));
+        }
+        return cache.streamCollection(dbName, collName).map(DbEntry::getData)
+                .filter(data -> tester.test(data, fieldName));
+    }
+
+    // Builds the predicate for a custom operator: it reads the field, requires the stored value to be a
+    // custom type that declares the operator, and delegates to JsonCustom.applyCustomOperator. A
+    // document whose field is absent, non-custom, or a custom type without this operator simply does
+    // not match (no exception), so mixed-type fields are safe.
+    public static BiPredicate<JsonObject, String> getCustomTester(CustomOperator operator) {
+        final var operatorName = operator.getCustomOperatorName();
+        final var args = new HashMap<String, JsonBaseElement>();
+        for (var entry : operator.getArgs().entrySet()) {
+            args.put(entry.getKey(), entry.getValue());
+        }
+        return (JsonObject toTest, String fieldName) -> {
+            if (!JsonUtils.hasInPath(toTest, fieldName)) {
+                return false;
+            }
+            final var element = JsonUtils.getFromPath(toTest, fieldName);
+            if (element == null || !element.isJsonCustom()) {
+                return false;
+            }
+            final var custom = element.asJsonCustom();
+            if (!custom.customOperatorNames().contains(operatorName)) {
+                return false;
+            }
+            return custom.applyCustomOperator(operatorName, args);
+        };
+    }
+
+    // A ranking (top-K) custom operator (e.g. vector "nearest"): the candidate source is an upstream
+    // stream, the similarity index, or a full scan; topK does the scoring and limiting.
+    private static Stream<JsonObject> processRankingOperator(CustomOperator operator, Stream<JsonObject> resultStream,
+            String dbName, String collName) throws IOException {
+        final var k = operator.getArgs().get("k").asJsonNumber().getValue().intValue();
+        final var fieldName = operator.getField();
+        if (resultStream != null) {
+            return topK(resultStream, operator, fieldName, k);
+        }
+        final var candidateIds = VectorSimilarityIndexHelper.candidateIds(operator, dbName, collName);
+        final Stream<JsonObject> candidates;
+        if (candidateIds != null) {
+            candidates = cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData);
+        } else {
+            candidates = cache.streamCollection(dbName, collName).map(DbEntry::getData);
+        }
+        return topK(candidates, operator, fieldName, k);
+    }
+
+    // Keeps the K highest-scoring documents via a bounded size-K min-heap (so the scan path never
+    // materializes the whole collection), emitted in descending score order.
+    private static Stream<JsonObject> topK(Stream<JsonObject> candidates, CustomOperator operator, String fieldName,
+            int k) {
+        if (k <= 0) {
+            candidates.close();
+            return Stream.empty();
+        }
+        final var operatorName = operator.getCustomOperatorName();
+        final var args = new HashMap<String, JsonBaseElement>();
+        for (var entry : operator.getArgs().entrySet()) {
+            args.put(entry.getKey(), entry.getValue());
+        }
+        final var heap = new PriorityQueue<>(Comparator.comparingDouble(ScoredDocument::score));
+        candidates.forEach(document -> {
+            final var score = scoreDocument(document, fieldName, operatorName, args);
+            if (score == null) {
+                return;
+            }
+            if (heap.size() < k) {
+                heap.offer(new ScoredDocument(document, score));
+            } else if (heap.peek().score() < score) {
+                heap.poll();
+                heap.offer(new ScoredDocument(document, score));
+            }
+        });
+        return heap.stream().sorted(Comparator.comparingDouble(ScoredDocument::score).reversed())
+                .map(ScoredDocument::document);
+    }
+
+    private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
+            Map<String, JsonBaseElement> args) {
+        if (!JsonUtils.hasInPath(document, fieldName)) {
+            return null;
+        }
+        final var element = JsonUtils.getFromPath(document, fieldName);
+        if (element == null || !element.isJsonCustom()) {
+            return null;
+        }
+        final var custom = element.asJsonCustom();
+        if (!custom.customRankingOperatorNames().contains(operatorName)) {
+            return null;
+        }
+        final var score = custom.applyCustomRankingOperator(operatorName, args);
+        // An undefined score (e.g. mismatched-dimension or zero vector) does not rank, like a missing field.
+        return Double.isNaN(score) ? null : score;
+    }
+
+    private record ScoredDocument(JsonObject document, double score) {
     }
 
     @SuppressWarnings("unchecked")
@@ -256,6 +382,10 @@ public class FilterOperatorHelper {
                 yield indexMatchingIds(fieldOperator, dbName, collName);
             }
             case CONJUNCTION -> resolveConjunctionIds((ConjunctionOperator) operator, dbName, collName);
+            // A custom (spatial) operator's index hits are unconfirmed candidates that must be re-tested
+            // against fetched documents, which the index-only COUNT path cannot do; disqualify it so
+            // COUNT falls back to the document-reading path (exact).
+            case CUSTOM -> null;
         };
     }
 
@@ -291,6 +421,13 @@ public class FilterOperatorHelper {
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
             return null;
+        }
+        // The field index was consulted (and its read lock taken in getIdsFromIndex) to resolve this
+        // operator. Record it for analyze mode; covers both FILTER and the index-only COUNT fast path.
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext != null) {
+            analyzeContext.addIndexUsed(operator.getField());
+            analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, operator.getField()));
         }
         // Snapshot pending ids AFTER the index lookup so a write that committed before the lookup is
         // either already indexed (index accurate) or still pending (reconciled here).

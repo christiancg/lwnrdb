@@ -39,10 +39,15 @@ public final class Globals {
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";
     public static final String NEWLINE = System.lineSeparator();
-    public static final String NEWLINE_REGEX = System.lineSeparator().equals("\n") ? "\\n" : "\\r\\n";
     public static final int NEWLINE_CHAR_LENGTH = System.lineSeparator().equals("\n") ? 1 : 2;
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
+    public static final double EARTH_RADIUS_METERS = 6371000.0;
+    // Geohash-backed spatial acceleration: the finest precision considered when covering a query
+    // bounding box, and the cap on how many geohash cells a covering may use before a coarser
+    // precision is chosen (fewer, larger cells) to keep the range scan bounded.
+    public static final int GEO_HASH_MAX_PRECISION = 9;
+    public static final int GEO_HASH_MAX_COVERING_CELLS = 32;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
     public static final int TLS_KEY_SIZE = 2048;

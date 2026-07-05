@@ -33,6 +33,7 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.MapAggregationStep;
@@ -143,6 +144,53 @@ public class RequestParserTest {
         assertEquals("age", fieldOperator.getField());
         final var value = fieldOperator.getValue().asJsonObject().get("$numberInt").asJsonNumber().getValue();
         assertEquals(30, value);
+    }
+
+    // Parse a FILTER step whose operator is a geo "distance" custom operator.
+    @Test
+    public void test_parse_aggregation_request_with_custom_distance_operator() {
+        new org.techhouse.ejson.EJson(); // ensure the geo custom type is registered
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"FILTER\", \"operator\": { \"customOperatorName\": \"distance\", \"field\": \"location\", \"value\": \"#geo(40.71,-74.0)\", \"comparator\": \"SMALLER_THAN\", \"distance\": 1000 } }] }";
+        OperationRequest request = RequestParser.parseRequest(message);
+        AggregateRequest aggRequest = (AggregateRequest) request;
+        FilterAggregationStep filterStep = (FilterAggregationStep) aggRequest.getAggregationSteps().getFirst();
+        assertInstanceOf(CustomOperator.class, filterStep.getOperator());
+        CustomOperator customOperator = (CustomOperator) filterStep.getOperator();
+        assertEquals("distance", customOperator.getCustomOperatorName());
+        assertEquals("location", customOperator.getField());
+        assertTrue(customOperator.getValue().isJsonCustom());
+        assertEquals("SMALLER_THAN", customOperator.getArgs().get("comparator").asJsonString().getValue());
+    }
+
+    // A custom operator nested inside a conjunction is parsed recursively.
+    @Test
+    public void test_parse_custom_operator_inside_conjunction() {
+        new org.techhouse.ejson.EJson();
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"FILTER\", \"operator\": { \"conjunctionType\": \"AND\", \"operators\": [{ \"customOperatorName\": \"within\", \"field\": \"location\", \"polygon\": [\"#geo(0,0)\", \"#geo(0,1)\", \"#geo(1,1)\"] }] } }] }";
+        OperationRequest request = RequestParser.parseRequest(message);
+        AggregateRequest aggRequest = (AggregateRequest) request;
+        FilterAggregationStep filterStep = (FilterAggregationStep) aggRequest.getAggregationSteps().getFirst();
+        ConjunctionOperator conjunction = (ConjunctionOperator) filterStep.getOperator();
+        assertInstanceOf(CustomOperator.class, conjunction.getOperators().getFirst());
+        assertEquals("within", ((CustomOperator) conjunction.getOperators().getFirst()).getCustomOperatorName());
+    }
+
+    // Parse aggregation request with analyze flag set to true
+    @Test
+    public void test_parse_aggregate_with_analyze_true() {
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"analyze\": true, \"aggregationSteps\": [] }";
+        OperationRequest request = RequestParser.parseRequest(message);
+        assertInstanceOf(AggregateRequest.class, request);
+        assertTrue(((AggregateRequest) request).isAnalyze());
+    }
+
+    // The analyze flag defaults to false when omitted
+    @Test
+    public void test_parse_aggregate_analyze_defaults_false() {
+        String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [] }";
+        OperationRequest request = RequestParser.parseRequest(message);
+        assertInstanceOf(AggregateRequest.class, request);
+        assertFalse(((AggregateRequest) request).isAnalyze());
     }
 
     // Parse map operations with add field and remove field operators

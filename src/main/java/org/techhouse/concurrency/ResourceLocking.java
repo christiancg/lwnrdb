@@ -1,5 +1,7 @@
 package org.techhouse.concurrency;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -70,6 +72,30 @@ public class ResourceLocking {
 
     public void releaseRead(String dbName, String collName) {
         releaseReadByName(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    // ---------- multi-resource read locking (shared) ----------
+    // Acquire shared read locks on the given identifiers in a deterministic (sorted) order so two
+    // overlapping multi-collection reads can never deadlock. Returns the identifiers actually locked
+    // (in acquisition order); a dirty read takes no lock and returns an empty list, relying on
+    // FileSystem's per-file locks for read validity.
+    public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers) throws InterruptedException {
+        if (dirtyRead) {
+            return List.of();
+        }
+        final var sorted = identifiers.stream().distinct().sorted().toList();
+        final var acquired = new ArrayList<String>();
+        for (var identifier : sorted) {
+            lockReadByName(identifier);
+            acquired.add(identifier);
+        }
+        return acquired;
+    }
+
+    public void releaseReadLocks(List<String> acquired) {
+        for (var i = acquired.size() - 1; i >= 0; i--) {
+            releaseReadByName(acquired.get(i));
+        }
     }
 
     // ---------- field index locking ----------

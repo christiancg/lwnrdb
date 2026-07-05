@@ -35,17 +35,19 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Geo type support
-  - [ ] Distance operator
-  - [ ] Within operator
-- [ ] Vector type support
-  - [ ] Semantic search
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
-- [ ] Stored procedures
-- [ ] Jobs
-- [ ] Listenable queries (you create the query and then the DB sends events when there are changes)
-- [ ] Explain / Analyze with index and query suggestions
+- [ ] Javascript engine to support additional features 
+  - [ ] Stored procedures
+  - [ ] Jobs
+  - [ ] Triggers
+- [x] Vector type support
+  - [x] Semantic search
+- [x] Geo type support
+  - [x] Distance operator
+  - [x] Within operator
+- [x] Listenable queries (you create the query and then the DB sends events when there are changes)
+- [x] Explain / Analyze with index and query suggestions
 - [x] Integration tests for all possible API commands, including aggregations
 - [x] Standardized error messages with error code, following HTTP patterns: 4xx → user error, 5xx → server error, ending with a specific number per error. Ie 401-1 "need to authenticate"
 - [x] Admin operation to rebuild indexes
@@ -153,6 +155,7 @@ Read operations accept an optional `"dirtyRead": true` (default `false`); see [C
 
 #### `AGGREGATE`
 Queries run through a pipeline of steps. `aggregationSteps` may be empty (returns all documents). Accepts an optional top-level `"dirtyRead": true` (default `false`); see [Concurrency & locking](#concurrency--locking).
+Also accepts an optional top-level `"analyze": true` (default `false`); see [Explain / Analyze](#explain--analyze).
 
 ```json
 {
@@ -188,6 +191,98 @@ Object- and array-valued fields are instead indexed for **element-match** (whole
 
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
 
+#### Custom operators (type-specific)
+
+Besides the field and conjunction operators above, a `FILTER` operator may be a **custom operator** — a comparison defined by a custom data type rather than one of the generic field operators. A custom operator is recognised by a `customOperatorName` (instead of `fieldOperatorType`/`conjunctionType`) and is evaluated by the stored value's type. Custom operators can appear anywhere a field operator can, including nested inside a conjunction.
+
+The **geo type** (`#geo(lat,lng)`, latitude −90..90, longitude −180..180) provides two custom operators:
+
+- **`distance`** — compares the great-circle (haversine) distance in **metres** between the stored geo point and a target geo (`value`) against a threshold (`distance`) using a `comparator` (one of `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `EQUALS`).
+
+```json
+{"type":"FILTER","operator":{
+  "customOperatorName":"distance",
+  "field":"location",
+  "value":"#geo(40.71,-74.0)",
+  "comparator":"SMALLER_THAN",
+  "distance":1000
+}}
+```
+
+- **`within`** — point-in-polygon: matches when the stored geo point lies inside the enclosed shape formed by an array of at least three geo points (`polygon`).
+
+```json
+{"type":"FILTER","operator":{
+  "customOperatorName":"within",
+  "field":"location",
+  "polygon":["#geo(40.0,-74.2)","#geo(40.9,-74.2)","#geo(40.9,-73.7)","#geo(40.0,-73.7)"]
+}}
+```
+
+Geo values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"location":"#geo(40.71,-74.0)"`), and a geo field is indexable like any other. `EQUALS`/`NOT_EQUALS`/`IN` on a geo value resolve through the standard field index. The spatial operators use the index too: the field index is sorted by geohash, so `within` and `distance` with a `SMALLER_THAN*` comparator pre-filter candidates with a geohash **bounding box** and then re-test each fetched document exactly (so a hit is always confirmed). `distance` with a `GREATER_THAN*` comparator selects points *outside* a box, which a bounding box cannot prune, so it falls back to a full scan. A `COUNT` after a geo filter always reads the matched documents (the spatial candidates cannot be counted from ids alone).
+
+The **vector type** (`#vector(v0,v1,...,vn)`, a dense vector of numbers) provides one **ranking** custom operator for semantic search:
+
+- **`nearest`** — returns the `k` documents whose stored vector is most similar to a query vector (`value`) by **cosine similarity**, ordered by descending similarity. Unlike the geo operators (which are boolean predicates), `nearest` is a ranking + limit step: it scores the candidate documents and keeps only the top `k`.
+
+```json
+{"type":"FILTER","operator":{
+  "customOperatorName":"nearest",
+  "field":"embedding",
+  "value":"#vector(0.12,0.44,0.91)",
+  "k":10,
+  "exact":false
+}}
+```
+
+Vector values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"embedding":"#vector(0.12,0.44,0.91)"`), and a vector field is indexable like any other. The vector field index is sorted by a **SimHash (locality-sensitive) signature**, so `nearest` pre-filters candidates from the neighbourhood of the query's signature in the sorted index and then re-scores each fetched document exactly. Because SimHash is locality-sensitive but not exact, this index path is **approximate (ANN)**: a query may miss matches that fall outside the scanned neighbourhood. Pass `"exact":true` to force an exact full scan instead (guaranteed top-`k`, no index). A `COUNT` after a `nearest` filter always reads the matched documents (the ranked candidates cannot be counted from ids alone), and returns `min(k, matches)`.
+
+#### Explain / Analyze
+
+Send `"analyze": true` on an `AGGREGATE` request (default `false`) to get back diagnostics about how the query ran, alongside the normal `results`. The diagnostics arrive in an `analyzeResult` object that is present **only** when `analyze` is `true`.
+No extra permissions are required — the regular `READ` access for `AGGREGATE` is enough. Analyze applies only to `AGGREGATE`.
+
+```json
+{"type":"AGGREGATE","databaseName":"my_db","collectionName":"my_coll","analyze":true,
+ "aggregationSteps":[{"type":"FILTER","operator":{"fieldOperatorType":"EQUALS","field":"status","value":"active"}}]}
+```
+
+Response (the `analyzeResult` object):
+
+```json
+{
+  "type": "AGGREGATE",
+  "status": "OK",
+  "results": [ ... ],
+  "analyzeResult": {
+    "startTime": 1750000000000,
+    "endTime": 1750000000012,
+    "durationMillis": 12,
+    "indexUsed": true,
+    "indexesUsed": ["status"],
+    "documentsScanned": 42,
+    "locksAcquired": ["my_db|my_coll", "my_db|my_coll|status"],
+    "suggestions": []
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `startTime` / `endTime` | Epoch milliseconds bracketing processing — measured after parsing/validation/authorization and stopped right after the operation returns |
+| `durationMillis` | `endTime − startTime` |
+| `indexUsed` / `indexesUsed` | Whether any field index was used, and the names of the fields whose indexes were used |
+| `documentsScanned` | Number of documents read/examined while running the pipeline |
+| `locksAcquired` | The locks taken: collection-level (`db\|coll`) and field-index (`db\|coll\|field`). Empty of collection locks for a dirty read |
+| `suggestions` | Query advice (see below) |
+
+Two kinds of suggestions are produced:
+
+- **No index used** — when no field index was used, it states so and recommends creating an index on the fields referenced by the pipeline's index-capable steps (`FILTER`, `SORT`, `GROUP_BY`, `JOIN` remote field, `DISTINCT`).
+- **`FILTER` not first** — when a `FILTER` step is not the first step, it recommends moving it to the top of the pipeline so it can use an index and reduce the number of documents scanned.
+
+Returned even when there are no results: in analyze mode an empty result set still returns an `OK` response carrying `analyzeResult` (rather than the usual `404-3` *No results*).
+
 #### `CREATE_INDEX`
 ```json
 {"type":"CREATE_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
@@ -197,6 +292,58 @@ Object- and array-valued fields are instead indexed for **element-match** (whole
 ```json
 {"type":"DROP_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
 ```
+
+#### `LISTEN`
+
+Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
+
+Accepts the same `aggregationSteps` as `AGGREGATE` (all step types, same validation rules). Requires `READ` on the base collection; `JOIN` steps additionally require `READ` on each joined collection.
+
+```json
+{
+  "type": "LISTEN",
+  "databaseName": "my_db",
+  "collectionName": "my_coll",
+  "aggregationSteps": [
+    {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "active"}}
+  ]
+}
+```
+
+Initial response:
+```json
+{
+  "type": "LISTEN",
+  "status": "OK",
+  "listenId": "550e8400-e29b-41d4-a716-446655440000",
+  "results": [ ... ],
+  "resultHash": "a3f5...64-hex-chars...d91e"
+}
+```
+
+Push message (sent asynchronously when results change):
+```json
+{
+  "type": "LISTEN",
+  "status": "OK",
+  "message": "Query results updated",
+  "listenId": "550e8400-e29b-41d4-a716-446655440000",
+  "results": [ ... ],
+  "resultHash": "b7c2...64-hex-chars...f308"
+}
+```
+
+The background re-run uses dirty reads (skips collection-level read lock) for timeliness. All listen registrations for a client are automatically removed when the connection closes.
+
+#### `STOP_LISTEN`
+
+Cancel a specific listen subscription by its ID.
+
+```json
+{"type": "STOP_LISTEN", "listenId": "550e8400-e29b-41d4-a716-446655440000"}
+```
+
+Returns `NOT_FOUND` (`404-7`) if the listen ID is not registered.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -376,7 +523,7 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`. An `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.
 
 ### Authentication errors
@@ -410,6 +557,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-4` | `NOT_FOUND` | Database not found |
 | `404-5` | `NOT_FOUND` | No users found |
 | `404-6` | `NOT_FOUND` | No index registered for the specified field |
+| `404-7` | `NOT_FOUND` | Listen registration not found |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `500-1` | `ERROR` | Error during authentication |
@@ -434,6 +582,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-20` | `ERROR` | Error while dropping index |
 | `500-21` | `ERROR` | Error while reindexing |
 | `500-22` | `ERROR` | Error while gathering database stats |
+| `500-23` | `ERROR` | Error while processing listen operation |
 | `503-1` | `ERROR` | Max number of connections reached |
 
 ### Bootstrap

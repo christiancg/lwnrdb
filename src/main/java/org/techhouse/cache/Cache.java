@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -125,7 +126,17 @@ public class Cache {
     }
 
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
-        return userCache.getEntriesByIds(dbName, collName, ids);
+        final var entries = userCache.getEntriesByIds(dbName, collName, ids);
+        recordScanned(entries.size());
+        return entries;
+    }
+
+    // Records documents touched by a read for AGGREGATE analyze mode. A no-op when analyze is off.
+    private void recordScanned(long count) {
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext != null) {
+            analyzeContext.addScanned(count);
+        }
     }
 
     public void evictEntry(String dbName, String collName, String pk) {
@@ -159,11 +170,14 @@ public class Cache {
         // cached map. The PK index is written synchronously on every save/delete (see CountOperatorHelper).
         if (wholeCollection != null && !wholeCollection.isEmpty()
                 && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+            recordScanned(wholeCollection.size());
             return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
-            return userCache.admitWholeCollection(dbName, collName, loaded);
+            final var admitted = userCache.admitWholeCollection(dbName, collName, loaded);
+            recordScanned(admitted.size());
+            return admitted;
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -184,10 +198,21 @@ public class Cache {
             // See getWholeCollection: gate on the synchronous PK index size, not the lagging admin
             // page entry counts, so a stale count can never accept an incomplete cached collection.
             if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
-                return cached.values().stream();
+                return decorateScan(cached.values().stream());
             }
         }
-        return streamCollectionFromDisk(dbName, collName);
+        return decorateScan(streamCollectionFromDisk(dbName, collName));
+    }
+
+    // Counts entries as they are consumed for AGGREGATE analyze mode (the stream is lazy, so the
+    // count reflects documents actually scanned). The context is captured on the consuming thread,
+    // which is the same virtual thread that registered it. A no-op when analyze is off.
+    private Stream<DbEntry> decorateScan(Stream<DbEntry> stream) {
+        final var analyzeContext = AnalyzeContext.current();
+        if (analyzeContext == null) {
+            return stream;
+        }
+        return stream.peek(_ -> analyzeContext.addScanned(1));
     }
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
@@ -320,8 +345,8 @@ public class Cache {
         adminCache.removeAdminCollEntry(collIdentifier);
     }
 
-    public boolean hasIndex(String dbName, String collName, String fieldName) {
-        return adminCache.hasIndex(dbName, collName, fieldName);
+    public boolean hasNoIndex(String dbName, String collName, String fieldName) {
+        return !adminCache.hasIndex(dbName, collName, fieldName);
     }
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {

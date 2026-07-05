@@ -20,6 +20,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class MessageProcessorTest {
@@ -250,6 +251,83 @@ public class MessageProcessorTest {
 
         String response = out.toString();
         assertTrue(response.contains("FORBIDDEN"), "Should return FORBIDDEN for unauthorized op");
+    }
+
+    private void createAnalyzeAdmin(String username) {
+        final var createReq = new CreateUserRequest();
+        createReq.setUsername(username);
+        createReq.setPassword("password123");
+        createReq.setAdmin(true);
+        createReq.setGlobalPermissions(new HashSet<>());
+        createReq.setDatabasePermissions(new HashMap<>());
+        createReq.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(createReq);
+    }
+
+    private String runMessages(String messages) throws Exception {
+        final var out = new ByteArrayOutputStream();
+        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        final var mp = new MessageProcessor(socket);
+        final var t = new Thread(mp);
+        t.start();
+        t.join(3000);
+        return out.toString();
+    }
+
+    // End-to-end over the wire: an AGGREGATE with analyze=true returns an analyzeResult with timing.
+    @Test
+    public void test_aggregate_analyze_returns_analyzeResult_over_wire() throws Exception {
+        createAnalyzeAdmin("analyze_admin");
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"analyze_admin\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"object\":{\"_id\":\"int1\",\"status\":\"active\"}}\n"
+                + "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"analyze\":true,\"aggregationSteps\":[{\"type\":\"FILTER\",\"operator\":"
+                + "{\"fieldOperatorType\":\"EQUALS\",\"field\":\"status\",\"value\":{\"$string\":\"active\"}}}]}\n";
+
+        final var response = runMessages(messages);
+
+        assertTrue(response.contains("analyzeResult"), "Should include analyzeResult");
+        assertTrue(response.contains("startTime"), "Should include startTime");
+        assertTrue(response.contains("endTime"), "Should include endTime");
+        assertTrue(response.contains("durationMillis"), "Should include durationMillis");
+        assertTrue(response.contains("documentsScanned"), "Should include documentsScanned");
+        assertTrue(response.contains("locksAcquired"), "Should include locksAcquired");
+    }
+
+    // Without analyze the over-the-wire response must not contain analyzeResult.
+    @Test
+    public void test_aggregate_without_analyze_omits_analyzeResult_over_wire() throws Exception {
+        createAnalyzeAdmin("analyze_admin2");
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"analyze_admin2\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"object\":{\"_id\":\"int1\",\"status\":\"active\"}}\n"
+                + "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"aggregationSteps\":[{\"type\":\"FILTER\",\"operator\":"
+                + "{\"fieldOperatorType\":\"EQUALS\",\"field\":\"status\",\"value\":{\"$string\":\"active\"}}}]}\n";
+
+        final var response = runMessages(messages);
+
+        assertFalse(response.contains("analyzeResult"), "Should NOT include analyzeResult when analyze is off");
+    }
+
+    // Over the wire: a FILTER that is not the first step yields a "move FILTER" suggestion.
+    @Test
+    public void test_aggregate_analyze_suggests_moving_filter() throws Exception {
+        createAnalyzeAdmin("analyze_admin3");
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"analyze_admin3\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"object\":{\"_id\":\"int1\",\"status\":\"active\"}}\n"
+                + "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"analyze\":true,\"aggregationSteps\":["
+                + "{\"type\":\"SORT\",\"fieldName\":\"status\",\"ascending\":true},"
+                + "{\"type\":\"FILTER\",\"operator\":{\"fieldOperatorType\":\"EQUALS\",\"field\":\"status\","
+                + "\"value\":{\"$string\":\"active\"}}}]}\n";
+
+        final var response = runMessages(messages);
+
+        assertTrue(response.contains("analyzeResult"), "Should include analyzeResult");
+        assertTrue(response.contains("FILTER step"), "Should suggest moving the FILTER step");
     }
 
     // An IOException on the output stream is handled without crashing

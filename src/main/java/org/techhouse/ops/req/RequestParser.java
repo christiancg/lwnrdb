@@ -20,6 +20,7 @@ import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
@@ -73,6 +74,8 @@ public final class RequestParser {
                 case LIST_USERS -> parseListUsersRequest(message);
                 case SET_PASSWORD -> eJson.fromJson(message, SetPasswordRequest.class);
                 case GET_DATABASE_STATS -> eJson.fromJson(message, GetDatabaseStatsRequest.class);
+                case LISTEN -> parseListenRequest(message);
+                case STOP_LISTEN -> eJson.fromJson(message, StopListenRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -91,6 +94,23 @@ public final class RequestParser {
         }
         aggRequest.setAggregationSteps(steps);
         return aggRequest;
+    }
+
+    private static OperationRequest parseListenRequest(final String message) {
+        final var listenRequest = eJson.fromJson(message, ListenRequest.class);
+        final var roughlyParsedSteps = listenRequest.getAggregationSteps();
+        if (roughlyParsedSteps == null || roughlyParsedSteps.isEmpty()) {
+            return listenRequest;
+        }
+        final var steps = new ArrayList<BaseAggregationStep>();
+        final var crudeArrayElements = eJson.fromJson(message, JsonObject.class);
+        final var jsonArray = crudeArrayElements.get("aggregationSteps").asJsonArray();
+        for (var i = 0; i < roughlyParsedSteps.size(); i++) {
+            final var type = roughlyParsedSteps.get(i).getType();
+            steps.add(parseAggregationStep(type, jsonArray, i));
+        }
+        listenRequest.setAggregationSteps(steps);
+        return listenRequest;
     }
 
     private static BaseAggregationStep parseAggregationStep(final AggregationStepType type, final JsonArray jsonArray,
@@ -166,6 +186,13 @@ public final class RequestParser {
             final var fieldValue = operator.get("value");
             final var operatorType = eJson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
             parsedOperator = new FieldOperator(operatorType, fieldName, fieldValue);
+        } else if (operator.has("customOperatorName")) {
+            final var customOperatorName = operator.get("customOperatorName").asJsonString().getValue();
+            final var fieldName = operator.get("field").asJsonString().getValue();
+            final var fieldValue = operator.get("value");
+            // The operator object itself carries the remaining operator-specific parameters
+            // (comparator, distance, polygon, ...), which the custom type interprets.
+            parsedOperator = new CustomOperator(customOperatorName, fieldName, fieldValue, operator);
         } else {
             final var conjunctionType = eJson.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);
             final var operators = operator.get("operators").asJsonArray().asList().stream().map(element -> {

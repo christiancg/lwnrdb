@@ -7,15 +7,13 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
+import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
-import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
-import org.techhouse.cache.MemoryManagement;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -27,6 +25,8 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
+import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -43,12 +43,14 @@ import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListUsersRequest;
+import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
-import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.StopListenRequest;
+import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
@@ -63,10 +65,12 @@ import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
+import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
+import org.techhouse.ops.resp.StopListenResponse;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -75,63 +79,8 @@ public class OperationProcessor {
     private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Configuration configuration = Configuration.getInstance();
-
-    private void recordCollectionAccess(String dbName, String collName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
-        memoryManagement.recordAccess(AccessKind.COLLECTION, dbName, collName, null);
-        taskManager.submitBackgroundTask(
-                new CollectionUsageEvent(AccessKind.COLLECTION, dbName, collName, null, System.currentTimeMillis()));
-    }
-
-    private void recordPkIndexAccess(String dbName, String collName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
-        memoryManagement.recordAccess(AccessKind.PK_INDEX, dbName, collName, null);
-        taskManager.submitBackgroundTask(
-                new CollectionUsageEvent(AccessKind.PK_INDEX, dbName, collName, null, System.currentTimeMillis()));
-    }
-
-    // Acquire shared read locks on the given collection identifiers in a deterministic (sorted)
-    // order so two overlapping multi-collection reads can never deadlock. Returns the identifiers
-    // actually locked (in acquisition order); a dirty read takes no collection lock and returns an
-    // empty list, relying on FileSystem's per-file locks for read validity.
-    private List<String> acquireReadLocks(boolean dirtyRead, List<String> collIdentifiers) throws InterruptedException {
-        if (dirtyRead) {
-            return List.of();
-        }
-        final var sorted = collIdentifiers.stream().distinct().sorted().toList();
-        final var acquired = new ArrayList<String>();
-        for (var identifier : sorted) {
-            locks.lockReadByName(identifier);
-            acquired.add(identifier);
-        }
-        return acquired;
-    }
-
-    private void releaseReadLocks(List<String> acquired) {
-        for (var i = acquired.size() - 1; i >= 0; i--) {
-            locks.releaseReadByName(acquired.get(i));
-        }
-    }
-
-    private List<String> aggregateLockSet(AggregateRequest request) {
-        final var dbName = request.getDatabaseName();
-        final var identifiers = new ArrayList<String>();
-        identifiers.add(Cache.getCollectionIdentifier(dbName, request.getCollectionName()));
-        if (request.getAggregationSteps() != null) {
-            for (var step : request.getAggregationSteps()) {
-                if (step instanceof JoinAggregationStep joinStep) {
-                    identifiers.add(Cache.getCollectionIdentifier(dbName, joinStep.getJoinCollection()));
-                }
-            }
-        }
-        return identifiers;
-    }
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -165,6 +114,8 @@ public class OperationProcessor {
             case SET_PASSWORD ->
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
+            case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
+            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
         };
     }
 
@@ -254,7 +205,8 @@ public class OperationProcessor {
             pendingIndexWrites.mark(dbName, collName, insertedIds);
             taskManager
                     .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
-            recordCollectionAccess(dbName, collName);
+            listenManager.markDirty(dbName, collName);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
@@ -285,11 +237,15 @@ public class OperationProcessor {
             PkIndexEntry savedPkIndexEntry;
             if (foundIndexEntry >= 0) {
                 final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
-                if (wouldOverflowPage(dbName, collName, idxEntry, entry)) {
+                if (SaveOperationHelper.wouldOverflowPage(dbName, collName, idxEntry, entry)) {
                     // The grown document no longer fits on its page; relocate it instead of rewriting in
                     // place (which would push the page past maxPageSize). Handled as a delete + insert so
                     // page metadata and field indexes stay correct via the standard background events.
-                    return relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex);
+                    final var relocatedPkIndexEntry = SaveOperationHelper.relocateOnGrowUpdate(dbName, collName, entry,
+                            idxEntry, primaryKeyIndex);
+                    listenManager.markDirty(dbName, collName);
+                    CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+                    return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
                 }
                 entry.setPage(idxEntry.getPage());
                 final var updateResult = fs.updateFromCollection(entry, idxEntry);
@@ -313,7 +269,8 @@ public class OperationProcessor {
             // releasing the write lock, so index-backed reads reconcile it until indexing completes.
             pendingIndexWrites.mark(dbName, collName, entry.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
-            recordCollectionAccess(dbName, collName);
+            listenManager.markDirty(dbName, collName);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
         } catch (Exception exception) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
@@ -322,65 +279,21 @@ public class OperationProcessor {
         }
     }
 
-    // True when rewriting the existing entry in place with the new (larger) value would push its page
-    // past maxPageSize. Uses the cached page byte size (minus the old entry, plus the new one); when no
-    // page metadata is available the check is skipped (falls back to the in-place update).
-    private boolean wouldOverflowPage(String dbName, String collName, PkIndexEntry idxEntry, DbEntry entry) {
-        final var pageEntry = cache.getAdminPageEntry(dbName, collName, idxEntry.getPage());
-        if (pageEntry == null) {
-            return false;
-        }
-        final var projectedPageSize = pageEntry.getPageSize() - idxEntry.getLength() + entry.byteSize();
-        return projectedPageSize > configuration.getMaxPageSize();
-    }
-
-    // Relocates a grown document that no longer fits on its page: removes it from the current page
-    // (compacting the survivors) and re-inserts it into a fitting page. Modeled as a DELETE of the old
-    // version followed by a CREATE of the new one so per-page metadata (the old page loses the entry,
-    // the new page gains it) and the field indexes are maintained through the same background events the
-    // standalone delete/insert paths emit. Runs while the caller already holds the collection write lock.
-    private SaveResponse relocateOnGrowUpdate(String dbName, String collName, DbEntry entry, PkIndexEntry idxEntry,
-            List<PkIndexEntry> primaryKeyIndex) throws Exception {
-        final var oldEntry = cache.getById(dbName, collName, idxEntry);
-        oldEntry.setPage(idxEntry.getPage());
-        final var compaction = fs.deleteFromCollection(idxEntry);
-        cache.shiftPkPositionsAfterCompaction(compaction);
-        primaryKeyIndex.remove(idxEntry);
-        cache.evictEntry(dbName, collName, entry.get_id());
-        pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, oldEntry));
-
-        entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
-        final var relocatedPkIndexEntry = fs.insertIntoCollection(entry);
-        cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
-                relocatedPkIndexEntry.getLength());
-        int insertAt = Collections.binarySearch(primaryKeyIndex, relocatedPkIndexEntry.getValue());
-        if (insertAt < 0) {
-            insertAt = -(insertAt + 1);
-        }
-        primaryKeyIndex.add(insertAt, relocatedPkIndexEntry);
-        cache.addEntryToCache(dbName, collName, entry);
-        pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
-        recordCollectionAccess(dbName, collName);
-        return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
-    }
-
     private OperationResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
         final var dbName = findbyIdRequest.getDatabaseName();
         final var collName = findbyIdRequest.getCollectionName();
         final var id = findbyIdRequest.get_id();
         List<String> readLocks = List.of();
         try {
-            readLocks = acquireReadLocks(findbyIdRequest.isDirtyRead(),
+            readLocks = locks.acquireReadLocks(findbyIdRequest.isDirtyRead(),
                     List.of(Cache.getCollectionIdentifier(dbName, collName)));
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
             if (foundIndexEntry >= 0) {
                 final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
                 final var entry = cache.getById(dbName, collName, primaryKeyIndexEntry);
-                recordPkIndexAccess(dbName, collName);
-                recordCollectionAccess(dbName, collName);
+                CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
+                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                 return new FindByIdResponse("Ok", entry.getData());
             } else {
                 return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
@@ -388,23 +301,41 @@ public class OperationProcessor {
         } catch (Exception exception) {
             return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ERROR_RETRIEVING);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
     private OperationResponse processAggregateOperation(AggregateRequest aggregateRequest) {
         List<String> readLocks = List.of();
+        final var analyzeContext = aggregateRequest.isAnalyze() ? new AnalyzeContext() : null;
+        if (analyzeContext != null) {
+            AnalyzeContext.set(analyzeContext);
+        }
         try {
-            readLocks = acquireReadLocks(aggregateRequest.isDirtyRead(), aggregateLockSet(aggregateRequest));
+            readLocks = locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
+                    AggregationOperationHelper.aggregateLockSet(aggregateRequest));
+            if (analyzeContext != null) {
+                readLocks.forEach(analyzeContext::addLock);
+            }
             final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
-            recordCollectionAccess(aggregateRequest.getDatabaseName(), aggregateRequest.getCollectionName());
+            CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
+                    aggregateRequest.getCollectionName());
+            if (analyzeContext != null) {
+                // In analyze mode the diagnostic is always returned (even with no results), so the empty
+                // result returns an AggregateAnalyzeResponse instead of the NO_RESULTS error response.
+                return new AggregateAnalyzeResponse("Ok", results,
+                        AnalyzeHelper.build(aggregateRequest, analyzeContext));
+            }
             return results.isEmpty()
                     ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
                     : new AggregateResponse("Ok", results);
         } catch (Exception e) {
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
+            if (analyzeContext != null) {
+                AnalyzeContext.clear();
+            }
         }
     }
 
@@ -430,7 +361,8 @@ public class OperationProcessor {
                 pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
                 taskManager
                         .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
-                recordCollectionAccess(dbName, collName);
+                listenManager.markDirty(dbName, collName);
+                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                 return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");
             } else {
                 return new OperationResponse(OperationType.DELETE,
@@ -508,6 +440,7 @@ public class OperationProcessor {
                 // the duplicate guard and wrongly returned DATABASE_ALREADY_EXISTS (or was unregistered
                 // when the queued delete event later ran).
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
+                listenManager.unregisterAllForDatabase(dbName);
                 return new DropDatabaseResponse("Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
@@ -569,6 +502,7 @@ public class OperationProcessor {
                 // skipped registration, and was then unregistered when the queued delete event ran.
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
+                listenManager.unregisterAllForCollection(dbName, collName);
                 dropSucceeded = true;
                 return new DropCollectionResponse("Collection dropped successfully");
             }
@@ -594,7 +528,7 @@ public class OperationProcessor {
             if (Globals.ADMIN_DB_NAME.equals(dbName)) {
                 return new ListCollectionsResponse("Ok", List.of());
             }
-            readLocks = acquireReadLocks(request.isDirtyRead(), List.of(
+            readLocks = locks.acquireReadLocks(request.isDirtyRead(), List.of(
                     Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME)));
             if (cache.getAdminDbEntry(dbName) == null) {
                 return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database " + dbName + " not found",
@@ -605,7 +539,7 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new OperationResponse(OperationType.LIST_COLLECTIONS, ErrorCode.ERROR_LISTING_COLLECTIONS);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
@@ -633,7 +567,7 @@ public class OperationProcessor {
     private OperationResponse processListUsers(ListUsersRequest request) {
         List<String> readLocks = List.of();
         try {
-            readLocks = acquireReadLocks(request.isDirtyRead(),
+            readLocks = locks.acquireReadLocks(request.isDirtyRead(),
                     List.of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME)));
             final var userStream = cache.getAllAdminUserEntries().stream()
                     .map(user -> user.toResponseJson(cache.getAllAdminDbEntries().stream()
@@ -646,7 +580,7 @@ public class OperationProcessor {
         } catch (Exception e) {
             return new OperationResponse(OperationType.LIST_USERS, ErrorCode.ERROR_LISTING_USERS);
         } finally {
-            releaseReadLocks(readLocks);
+            locks.releaseReadLocks(readLocks);
         }
     }
 
@@ -706,6 +640,45 @@ public class OperationProcessor {
             return new OperationResponse(OperationType.REINDEX, ErrorCode.ERROR_REINDEXING);
         } finally {
             locks.release(dbName, collName);
+        }
+    }
+
+    private OperationResponse processListenOperation(ListenRequest listenRequest, UUID clientId) {
+        List<String> readLocks = List.of();
+        try {
+            final var dbName = listenRequest.getDatabaseName();
+            final var collName = listenRequest.getCollectionName();
+            // Build an AggregateRequest so we can use the existing aggregation infrastructure.
+            final var aggReq = new AggregateRequest(dbName, collName);
+            aggReq.setAggregationSteps(listenRequest.getAggregationSteps());
+            readLocks = locks.acquireReadLocks(false, AggregationOperationHelper.aggregateLockSet(aggReq));
+            final var results = AggregationOperationHelper.processAggregation(aggReq);
+            final var initialHash = ResultHasher.hash(results);
+            // The re-run request uses dirty reads: timeliness matters more than strict consistency
+            // for push notifications, and per-file locks still ensure valid data.
+            final var dirtyReq = new AggregateRequest(dbName, collName);
+            dirtyReq.setAggregationSteps(listenRequest.getAggregationSteps());
+            dirtyReq.setDirtyRead(true);
+            final var listenId = listenManager.register(clientId, dirtyReq, initialHash);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+            return new ListenResponse(listenId.toString(), results, initialHash, false);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LISTEN, ErrorCode.ERROR_LISTEN);
+        } finally {
+            locks.releaseReadLocks(readLocks);
+        }
+    }
+
+    private OperationResponse processStopListenOperation(StopListenRequest request) {
+        try {
+            final var listenId = java.util.UUID.fromString(request.getListenId());
+            final var unregistered = listenManager.unregister(listenId);
+            if (!unregistered) {
+                return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.LISTEN_NOT_FOUND);
+            }
+            return new StopListenResponse();
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.ERROR_LISTEN);
         }
     }
 }
