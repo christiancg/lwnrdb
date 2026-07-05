@@ -294,10 +294,16 @@ def main():
     print("  LWNRDB — TLS / secure connections test suite")
     print("═" * 60)
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    if SERVER_BIN:
+        if not os.path.isfile(SERVER_BIN):
+            print(f"\n[ERROR] Server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN). "
+                  f"Build it first: mvn -Pnative package -DskipTests\n")
+            sys.exit(1)
+    else:
+        jar = os.path.join(REPO_ROOT, JAR)
+        if not os.path.isfile(jar):
+            print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+            sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-tls-")
     log_path = os.path.join(work_dir, "server.log")
