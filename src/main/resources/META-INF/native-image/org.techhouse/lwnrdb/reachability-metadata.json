@@ -360,6 +360,24 @@
       ]
     },
     {
+      "type": "org.techhouse.bckg_ops.PendingIndexWrites",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.listen.ListenManager",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ops.OperationProcessor",
       "methods": [
         {
