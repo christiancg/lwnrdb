@@ -103,5 +103,8 @@ public class JsonTimeTest {
         assertTrue(time.customOperatorNames().isEmpty());
         assertThrows(UnsupportedOperationException.class,
                 () -> time.applyCustomOperator("distance", java.util.Map.of()));
+        assertTrue(time.customRankingOperatorNames().isEmpty());
+        assertThrows(UnsupportedOperationException.class,
+                () -> time.applyCustomRankingOperator("nearest", java.util.Map.of()));
     }
 }

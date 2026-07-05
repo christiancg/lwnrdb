@@ -149,6 +149,15 @@ public class JsonGeoTest {
         assertThrows(UnsupportedOperationException.class, () -> geo.applyCustomOperator("nope", Map.of()));
     }
 
+    // geo declares no ranking operators and rejects any ranking evaluation.
+    @Test
+    public void test_no_ranking_operators() {
+        final var geo = new JsonGeo(new GeoPoint(0.0, 0.0));
+
+        assertTrue(geo.customRankingOperatorNames().isEmpty());
+        assertThrows(UnsupportedOperationException.class, () -> geo.applyCustomRankingOperator("nearest", Map.of()));
+    }
+
     private static Map<String, JsonBaseElement> distanceArgs(JsonBaseElement target, String comparator, double dist) {
         return Map.of("value", target, "comparator", new JsonString(comparator), "distance", new JsonNumber(dist));
     }

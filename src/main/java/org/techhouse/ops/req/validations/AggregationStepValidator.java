@@ -3,6 +3,7 @@ package org.techhouse.ops.req.validations;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.GeoDistanceComparator;
 import org.techhouse.ejson.custom_types.JsonGeo;
+import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -174,13 +175,32 @@ public class AggregationStepValidator {
             return ValidationResult.fail("Unknown custom operator: " + name);
         }
         final var args = operator.getArgs();
-        if (JsonGeo.OPERATOR_DISTANCE.equals(name)) {
-            return validateDistanceArgs(operator, args);
+        return switch (name) {
+            case JsonGeo.OPERATOR_DISTANCE -> validateDistanceArgs(operator, args);
+            case JsonGeo.OPERATOR_WITHIN -> validateWithinArgs(args);
+            case JsonVector.OPERATOR_NEAREST -> validateNearestArgs(operator, args);
+            default -> ValidationResult.ok();
+        };
+    }
+
+    private static ValidationResult validateNearestArgs(CustomOperator operator, JsonObject args) {
+        if (isNotVector(operator.getValue())) {
+            return ValidationResult.fail("nearest operator requires a vector value");
         }
-        if (JsonGeo.OPERATOR_WITHIN.equals(name)) {
-            return validateWithinArgs(args);
+        final var k = args.get("k");
+        if (k == null || !k.isJsonNumber() || k.asJsonNumber().getValue().intValue() <= 0) {
+            return ValidationResult.fail("nearest operator requires a positive integer k");
+        }
+        final var exact = args.get("exact");
+        if (exact != null && !exact.isJsonBoolean()) {
+            return ValidationResult.fail("nearest operator exact flag must be a boolean");
         }
         return ValidationResult.ok();
+    }
+
+    private static boolean isNotVector(JsonBaseElement element) {
+        return element == null || !element.isJsonCustom()
+                || !JsonVector.CUSTOM_TYPE_NAME.equals(element.asJsonCustom().getCustomTypeName());
     }
 
     private static ValidationResult validateDistanceArgs(CustomOperator operator, JsonObject args) {

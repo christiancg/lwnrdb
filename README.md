@@ -35,14 +35,14 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Vector type support
-  - [ ] Semantic search
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
+- [x] Vector type support
+  - [x] Semantic search
 - [x] Geo type support
   - [x] Distance operator
   - [x] Within operator
@@ -220,6 +220,22 @@ The **geo type** (`#geo(lat,lng)`, latitude −90..90, longitude −180..180) pr
 ```
 
 Geo values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"location":"#geo(40.71,-74.0)"`), and a geo field is indexable like any other. `EQUALS`/`NOT_EQUALS`/`IN` on a geo value resolve through the standard field index. The spatial operators use the index too: the field index is sorted by geohash, so `within` and `distance` with a `SMALLER_THAN*` comparator pre-filter candidates with a geohash **bounding box** and then re-test each fetched document exactly (so a hit is always confirmed). `distance` with a `GREATER_THAN*` comparator selects points *outside* a box, which a bounding box cannot prune, so it falls back to a full scan. A `COUNT` after a geo filter always reads the matched documents (the spatial candidates cannot be counted from ids alone).
+
+The **vector type** (`#vector(v0,v1,...,vn)`, a dense vector of numbers) provides one **ranking** custom operator for semantic search:
+
+- **`nearest`** — returns the `k` documents whose stored vector is most similar to a query vector (`value`) by **cosine similarity**, ordered by descending similarity. Unlike the geo operators (which are boolean predicates), `nearest` is a ranking + limit step: it scores the candidate documents and keeps only the top `k`.
+
+```json
+{"type":"FILTER","operator":{
+  "customOperatorName":"nearest",
+  "field":"embedding",
+  "value":"#vector(0.12,0.44,0.91)",
+  "k":10,
+  "exact":false
+}}
+```
+
+Vector values are stored and read through ordinary `SAVE`/`FIND_BY_ID`/`AGGREGATE` (e.g. `"embedding":"#vector(0.12,0.44,0.91)"`), and a vector field is indexable like any other. The vector field index is sorted by a **SimHash (locality-sensitive) signature**, so `nearest` pre-filters candidates from the neighbourhood of the query's signature in the sorted index and then re-scores each fetched document exactly. Because SimHash is locality-sensitive but not exact, this index path is **approximate (ANN)**: a query may miss matches that fall outside the scanned neighbourhood. Pass `"exact":true` to force an exact full scan instead (guaranteed top-`k`, no index). A `COUNT` after a `nearest` filter always reads the matched documents (the ranked candidates cannot be counted from ids alone), and returns `min(k, matches)`.
 
 #### Explain / Analyze
 

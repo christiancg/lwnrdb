@@ -21,6 +21,13 @@ GEO_NEAR = "#geo(40.001,-74.001)"
 GEO_FAR = "#geo(34.05,-118.24)"
 GEO_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
+# Vector (JsonVector) fixtures — a query vector, a very similar one, a moderately similar one, and an
+# orthogonal (cosine 0) one, used for the "nearest" top-K semantic-search operator.
+VEC_QUERY = "#vector(1.0,0.0,0.0)"
+VEC_CLOSE = "#vector(0.9,0.1,0.0)"
+VEC_MID = "#vector(0.5,0.5,0.0)"
+VEC_FAR = "#vector(0.0,0.0,1.0)"
+
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
@@ -165,6 +172,13 @@ def geo_distance_steps(comparator: str, distance: float, target: str = GEO_TARGE
 
 def geo_within_steps(polygon, field: str = "location"):
     return [{"type": "FILTER", "operator": {"customOperatorName": "within", "field": field, "polygon": polygon}}]
+
+
+def vector_nearest_steps(query: str, k: int, exact: bool = False, field: str = "embedding"):
+    operator = {"customOperatorName": "nearest", "field": field, "value": query, "k": k}
+    if exact:
+        operator["exact"] = True
+    return [{"type": "FILTER", "operator": operator}]
 
 
 # ── setup helpers ────────────────────────────────────────────────────────────
@@ -420,6 +434,81 @@ def test_push_on_geo_within_match(writer: Conn, listener: Conn):
     delete_doc(writer, "geo-out-1")
 
 
+def test_aggregate_vector_nearest(conn: Conn):
+    section("AGGREGATE: vector nearest returns top-K ordered by similarity (JsonVector)")
+
+    save_doc(conn, {"_id": "vec-a", "embedding": VEC_CLOSE})
+    save_doc(conn, {"_id": "vec-b", "embedding": VEC_MID})
+    save_doc(conn, {"_id": "vec-c", "embedding": VEC_FAR})
+
+    r = aggregate(conn, vector_nearest_steps(VEC_QUERY, 2))
+    check("AGGREGATE nearest returns OK", r, "OK")
+    ids = [d.get("_id") for d in (r.get("results") or [])]
+    check_true("nearest top-2 are the two most similar, ordered", ids == ["vec-a", "vec-b"],
+               f"got {ids!r}")
+
+    r_exact = aggregate(conn, vector_nearest_steps(VEC_QUERY, 2, exact=True))
+    ids_exact = [d.get("_id") for d in (r_exact.get("results") or [])]
+    check_true("nearest exact top-2 match the approximate result", ids_exact == ["vec-a", "vec-b"],
+               f"got {ids_exact!r}")
+
+    delete_doc(conn, "vec-a")
+    delete_doc(conn, "vec-b")
+    delete_doc(conn, "vec-c")
+
+
+def test_push_on_vector_nearest_closer(writer: Conn, listener: Conn):
+    section("LISTEN: push when a closer vector enters the top-K (JsonVector)")
+
+    # Seed a far vector so the initial top-1 is that document.
+    save_doc(writer, {"_id": "vec-seed-far", "embedding": VEC_FAR})
+    time.sleep(0.5)
+
+    r = listen(listener, vector_nearest_steps(VEC_QUERY, 1))
+    check("LISTEN registered for vector nearest", r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+
+    # Insert a much closer vector -> the top-1 changes -> push.
+    save_doc(writer, {"_id": "vec-closer", "embedding": VEC_CLOSE})
+
+    pushed = listener.recv(timeout=5.0)
+    check_true("push received after closer vector insert", pushed is not None, "no push within 5 s")
+    if pushed is not None:
+        check("vector nearest push has OK status", pushed, "OK")
+        check_true("vector nearest push resultHash differs from initial",
+                   pushed.get("resultHash") != initial_hash, f"hash unchanged: {pushed.get('resultHash')!r}")
+        check_true("vector nearest push top-1 is the closer vector",
+                   [d.get("_id") for d in (pushed.get("results") or [])] == ["vec-closer"],
+                   f"unexpected results: {pushed.get('results')!r}")
+
+    stop_listen(listener, listen_id)
+    delete_doc(writer, "vec-seed-far")
+    delete_doc(writer, "vec-closer")
+
+
+def test_no_push_on_vector_farther(writer: Conn, listener: Conn):
+    section("LISTEN: no push when a farther vector stays outside the top-K (JsonVector)")
+
+    save_doc(writer, {"_id": "vec-top", "embedding": VEC_CLOSE})
+    time.sleep(0.5)
+
+    r = listen(listener, vector_nearest_steps(VEC_QUERY, 1))
+    check("LISTEN registered for vector nearest non-match", r, "OK")
+    listen_id = r.get("listenId")
+
+    # Insert a farther vector that does not displace the current top-1 -> result set unchanged, no push.
+    save_doc(writer, {"_id": "vec-farther", "embedding": VEC_FAR})
+    time.sleep(0.5)
+
+    pushed = listener.recv(timeout=2.0)
+    check_true("no push for farther vector", pushed is None, f"unexpected push: {pushed!r}")
+
+    stop_listen(listener, listen_id)
+    delete_doc(writer, "vec-top")
+    delete_doc(writer, "vec-farther")
+
+
 def test_stop_listen(writer: Conn, listener: Conn):
     section("LISTEN: STOP_LISTEN cancels subscription")
 
@@ -527,6 +616,7 @@ def main():
             test_validation(admin_conn)
             test_initial_response(admin_conn)
             test_no_push_on_unrelated_write(admin_conn)
+            test_aggregate_vector_nearest(admin_conn)
 
             with Conn() as writer_conn, Conn() as listener_conn:
                 authenticate(writer_conn)
@@ -538,6 +628,8 @@ def main():
                 test_push_on_geo_distance_match(writer_conn, listener_conn)
                 test_no_push_on_geo_distance_non_match(writer_conn, listener_conn)
                 test_push_on_geo_within_match(writer_conn, listener_conn)
+                test_push_on_vector_nearest_closer(writer_conn, listener_conn)
+                test_no_push_on_vector_farther(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)

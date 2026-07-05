@@ -2,11 +2,13 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
@@ -16,6 +18,7 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -116,6 +119,9 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> processCustomOperator(CustomOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
+        if (CustomTypeFactory.isRankingOperator(operator.getCustomOperatorName())) {
+            return processRankingOperator(operator, resultStream, dbName, collName);
+        }
         final var tester = getCustomTester(operator);
         final var fieldName = operator.getField();
         if (resultStream != null) {
@@ -159,6 +165,76 @@ public class FilterOperatorHelper {
             }
             return custom.applyCustomOperator(operatorName, args);
         };
+    }
+
+    // A ranking (top-K) custom operator (e.g. vector "nearest"): the candidate source is an upstream
+    // stream, the similarity index, or a full scan; topK does the scoring and limiting.
+    private static Stream<JsonObject> processRankingOperator(CustomOperator operator, Stream<JsonObject> resultStream,
+            String dbName, String collName) throws IOException {
+        final var k = operator.getArgs().get("k").asJsonNumber().getValue().intValue();
+        final var fieldName = operator.getField();
+        if (resultStream != null) {
+            return topK(resultStream, operator, fieldName, k);
+        }
+        final var candidateIds = VectorSimilarityIndexHelper.candidateIds(operator, dbName, collName);
+        final Stream<JsonObject> candidates;
+        if (candidateIds != null) {
+            candidates = cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData);
+        } else {
+            candidates = cache.streamCollection(dbName, collName).map(DbEntry::getData);
+        }
+        return topK(candidates, operator, fieldName, k);
+    }
+
+    // Keeps the K highest-scoring documents via a bounded size-K min-heap (so the scan path never
+    // materializes the whole collection), emitted in descending score order.
+    private static Stream<JsonObject> topK(Stream<JsonObject> candidates, CustomOperator operator, String fieldName,
+            int k) {
+        if (k <= 0) {
+            candidates.close();
+            return Stream.empty();
+        }
+        final var operatorName = operator.getCustomOperatorName();
+        final var args = new HashMap<String, JsonBaseElement>();
+        for (var entry : operator.getArgs().entrySet()) {
+            args.put(entry.getKey(), entry.getValue());
+        }
+        final var heap = new PriorityQueue<>(Comparator.comparingDouble(ScoredDocument::score));
+        candidates.forEach(document -> {
+            final var score = scoreDocument(document, fieldName, operatorName, args);
+            if (score == null) {
+                return;
+            }
+            if (heap.size() < k) {
+                heap.offer(new ScoredDocument(document, score));
+            } else if (heap.peek().score() < score) {
+                heap.poll();
+                heap.offer(new ScoredDocument(document, score));
+            }
+        });
+        return heap.stream().sorted(Comparator.comparingDouble(ScoredDocument::score).reversed())
+                .map(ScoredDocument::document);
+    }
+
+    private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
+            Map<String, JsonBaseElement> args) {
+        if (!JsonUtils.hasInPath(document, fieldName)) {
+            return null;
+        }
+        final var element = JsonUtils.getFromPath(document, fieldName);
+        if (element == null || !element.isJsonCustom()) {
+            return null;
+        }
+        final var custom = element.asJsonCustom();
+        if (!custom.customRankingOperatorNames().contains(operatorName)) {
+            return null;
+        }
+        final var score = custom.applyCustomRankingOperator(operatorName, args);
+        // An undefined score (e.g. mismatched-dimension or zero vector) does not rank, like a missing field.
+        return Double.isNaN(score) ? null : score;
+    }
+
+    private record ScoredDocument(JsonObject document, double score) {
     }
 
     @SuppressWarnings("unchecked")

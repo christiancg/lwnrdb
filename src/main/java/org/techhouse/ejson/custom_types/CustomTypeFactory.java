@@ -26,13 +26,30 @@ public final class CustomTypeFactory {
         return _customTypes;
     }
 
-    // True when some registered custom type declares a custom filter operator with this name (e.g.
-    // the geo type declares "distance" and "within"). Used to validate CUSTOM operators in requests.
+    // True when some registered custom type declares a predicate or ranking operator with this name.
+    // Used to validate CUSTOM operators in requests.
     public static boolean isKnownCustomOperator(String operatorName) {
         for (var aClass : _customTypes.values()) {
             try {
                 final var instance = aClass.getConstructor().newInstance();
-                if (instance.customOperatorNames().contains(operatorName)) {
+                if (instance.customOperatorNames().contains(operatorName)
+                        || instance.customRankingOperatorNames().contains(operatorName)) {
+                    return true;
+                }
+            } catch (Exception ex) {
+                throw new BadImplementationCustomTypeException(aClass.getName(), ex);
+            }
+        }
+        return false;
+    }
+
+    // True when the operator name is a ranking (top-K) operator; the FILTER step routes these to its
+    // score-and-keep-top-K path instead of the predicate path.
+    public static boolean isRankingOperator(String operatorName) {
+        for (var aClass : _customTypes.values()) {
+            try {
+                final var instance = aClass.getConstructor().newInstance();
+                if (instance.customRankingOperatorNames().contains(operatorName)) {
                     return true;
                 }
             } catch (Exception ex) {
