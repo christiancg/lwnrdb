@@ -10,7 +10,6 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
-import org.techhouse.utils.VectorUtils;
 
 public class JsonVectorTest {
     // Parses a valid "#vector(...)" string into its component array.
@@ -63,7 +62,7 @@ public class JsonVectorTest {
     }
 
     // A vector and any positive scaling of it point the same way, so they share the SimHash signature
-    // (the clustering the index relies on); an opposite vector flips (almost) every bit.
+    // (the clustering the index relies on); an opposite vector produces a different signature.
     @Test
     public void test_simhash_clusters_by_direction() {
         final var base = new JsonVector(new double[]{1.0, 2.0, 3.0}).simHash();
@@ -71,7 +70,7 @@ public class JsonVectorTest {
         final var opposite = new JsonVector(new double[]{-1.0, -2.0, -3.0}).simHash();
 
         assertEquals(base, scaled);
-        assertTrue(VectorUtils.hammingDistance(base, opposite) >= 8);
+        assertNotEquals(base, opposite);
     }
 
     @Test

@@ -45,15 +45,4 @@ public final class VectorUtils {
         }
         return sb.toString();
     }
-
-    public static int hammingDistance(String a, String b) {
-        final var length = Math.min(a.length(), b.length());
-        var distance = Math.abs(a.length() - b.length());
-        for (var i = 0; i < length; i++) {
-            if (a.charAt(i) != b.charAt(i)) {
-                distance++;
-            }
-        }
-        return distance;
-    }
 }

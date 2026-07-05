@@ -155,8 +155,7 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
     }
 
-    private static org.techhouse.ops.req.agg.operators.CustomOperator nearestOperator(int k,
-                                                                                      JsonBaseElement exact) {
+    private static org.techhouse.ops.req.agg.operators.CustomOperator nearestOperator(int k, JsonBaseElement exact) {
         final var target = new org.techhouse.ejson.custom_types.JsonVector("#vector(1.0,0.0)");
         final var args = new org.techhouse.ejson.elements.JsonObject();
         args.add("value", target);

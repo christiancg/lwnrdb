@@ -49,11 +49,4 @@ public class VectorUtilsTest {
         assertEquals(VectorUtils.simHash(new double[]{1.0, 2.0, 3.0}, 16),
                 VectorUtils.simHash(new double[]{5.0, 10.0, 15.0}, 16));
     }
-
-    @Test
-    public void test_hamming_distance() {
-        assertEquals(0, VectorUtils.hammingDistance("1010", "1010"));
-        assertEquals(2, VectorUtils.hammingDistance("1010", "1111"));
-        assertEquals(3, VectorUtils.hammingDistance("10", "10101"));
-    }
 }
