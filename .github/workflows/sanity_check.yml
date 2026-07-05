@@ -3,17 +3,17 @@ on:
   pull_request:
     branches:
       - main
+
 jobs:
-  verify:
-    name: Verify
+  # ---------------------------------------------------------------------------
+  # Build once: compile, unit tests, coverage + all quality gates, then build
+  # the GraalVM native image and publish it as an artifact so the integration
+  # jobs don't have to rebuild. This is the long pole; everything below runs in
+  # parallel against the native binary.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build & Verify
     runs-on: ubuntu-latest
-    env:
-      # All integration scripts run against the GraalVM native executable. The
-      # scripts that launch/locate the server themselves (TLS, benchmark,
-      # extensive-memory) read this to use the native binary instead of the JAR;
-      # the shared server below is launched from the same path so process
-      # matching (pgrep) is consistent.
-      LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
     steps:
       - uses: actions/checkout@v4
       - uses: graalvm/setup-graalvm@v1
@@ -28,64 +28,157 @@ jobs:
         # native build never fails on a missing dependency.
         run: sudo apt-get update && sudo apt-get install -y build-essential libz-dev
       - name: Run Maven Verify
-        run: mvn verify
+        run: mvn -B --no-transfer-progress verify
       - name: Build native image
         # GraalVM is JAVA_HOME (set by setup-graalvm), so the native-maven-plugin
         # finds native-image. Tests already ran in `verify`.
         run: mvn -Pnative package -DskipTests
+      - name: Upload native binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: lwnrdb-native
+          path: target/lwnrdb
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # Integration suites, fanned out across independent runners. Each leg gets its
+  # own runner VM, so every leg can reuse port 8989 / the default db folder
+  # without colliding, and the pgrep/pkill-based scripts (memory-extensive,
+  # bench) are each the sole server on their runner. The index suite needs
+  # caching disabled (maxMemory=-1); tls and bench manage their own server
+  # lifecycle. fail-fast: false so one failing suite doesn't cancel the others.
+  #
+  # All legs run against the GraalVM native executable downloaded from `build`,
+  # which also validates the META-INF/native-image reflection metadata end to
+  # end. LWNRDB_SERVER_BIN points the scripts that launch/locate the server
+  # (TLS, benchmark, extensive-memory) at the native binary; the shared server
+  # is launched from the same path so process matching (pgrep) is consistent.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: ${{ matrix.name }}
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      LWNRDB_SERVER_BIN: ${{ github.workspace }}/target/lwnrdb
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Lightweight functional suites — share one default-config server.
+          - name: auth-api-memory
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              python3 test_utils/test_auth.py
+              python3 test_utils/test_api_commands.py
+              python3 test_utils/test_memory_limits.py
+
+          # Streaming / paged read paths.
+          - name: streaming
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              STREAM_TEST_DOCS=2000 \
+              STREAM_TEST_PAYLOAD_BYTES=512 \
+              python3 test_utils/test_streaming_reads.py
+
+          # Heavy mixed workload that measures RSS via pgrep -> must be sole server.
+          - name: memory-extensive
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              MEM_TEST_COLLECTIONS=4 \
+              MEM_TEST_DOCS=2000 \
+              MEM_TEST_PAYLOAD_BYTES=512 \
+              python3 test_utils/test_memory_extensive.py
+
+          # Index fast-paths are only visible when reads hit disk -> caching off.
+          - name: index-aggregations
+            start_server: true
+            max_memory: "-1"
+            xmx: 512m
+            run: |
+              INDEX_TEST_DOCS=2000 \
+              INDEX_TEST_PAYLOAD_BYTES=512 \
+              python3 test_utils/test_index_aggregations.py
+
+          # Listenable queries: LISTEN / STOP_LISTEN push notifications.
+          - name: listen
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              python3 test_utils/test_listen.py
+
+          # Self-contained: starts/stops its own TLS server on 9443.
+          - name: tls
+            start_server: false
+            run: |
+              python3 test_utils/test_tls.py
+
+          # Needs a server already up (it connects + loads data, then restarts
+          # the server itself to measure cold-cache latency via pgrep).
+          - name: cache-warmup-bench
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              BENCH_DOCS=5000 \
+              BENCH_WARM_RUNS=10 \
+              python3 test_utils/bench_cache_warmup.py
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download native binary
+        uses: actions/download-artifact@v4
+        with:
+          name: lwnrdb-native
+          path: target
+      - name: Restore executable bit
+        # upload/download-artifact does not preserve the exec bit.
+        run: chmod +x "$LWNRDB_SERVER_BIN"
       - name: Set admin credentials for integration tests
         run: sed -i 's/^defaultAdminPassword=.*/defaultAdminPassword=administrator/' lwnrdb.cfg
-      - name: Start native server
-        # Launches the GraalVM native executable (not the JAR). The suites below
-        # that connect to 127.0.0.1:8989 (auth, memory limits/extensive,
-        # streaming, index aggregations) therefore exercise the native binary;
-        # this also validates the META-INF/native-image reflection metadata end
-        # to end. Native images honor -Xmx as a runtime arg.
+      - name: Start server
+        if: ${{ matrix.start_server }}
+        # Native images honor -Xmx as a runtime arg.
         run: |
-          "$LWNRDB_SERVER_BIN" -Xmx1g &
+          sed -i "s/^maxMemory=.*/maxMemory=${{ matrix.max_memory }}/" lwnrdb.cfg
+          "$LWNRDB_SERVER_BIN" -Xmx${{ matrix.xmx }} > server.log 2>&1 &
           echo $! > server.pid
-          until nc -z 127.0.0.1 8989; do sleep 0.2; done
-      - name: Run auth integration tests
-        run: python3 test_utils/test_auth.py
-      - name: Run memory limits tests
-        run: python3 test_utils/test_memory_limits.py
-      - name: Run extensive memory tests
-        env:
-          # CI runners are slower than dev hardware; dial the workload down
-          # so the run finishes in a couple of minutes. The script still
-          # exercises every code path (inserts, indexes, mixed reads, eviction).
-          MEM_TEST_COLLECTIONS: "4"
-          MEM_TEST_DOCS: "2000"
-          MEM_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_memory_extensive.py
-      - name: Run streaming read path tests
-        env:
-          # CI runners are slower; dial the workload down so the run stays quick
-          # while still spanning multiple pages to exercise the streaming and
-          # targeted-fetch read paths.
-          STREAM_TEST_DOCS: "2000"
-          STREAM_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_streaming_reads.py
-      - name: Run index-backed aggregation tests
-        env:
-          # CI runners are slower; dial the workload down so the run stays quick
-          # while still being large enough for the index fast-paths to clearly
-          # beat the full-scan paths (GROUP_BY / JOIN / SORT / DISTINCT).
-          INDEX_TEST_DOCS: "2000"
-          INDEX_TEST_PAYLOAD_BYTES: "512"
-        run: python3 test_utils/test_index_aggregations.py
-      - name: Run TLS integration tests
-        # Self-contained: starts its own TLS-enabled server on a dedicated port
-        # (9443) and working directory, then stops it — independent of the
-        # plaintext server on 8989 used by the other suites.
-        run: python3 test_utils/test_tls.py
-      - name: Run cache warmup benchmark
-        # The benchmark restarts the server itself to measure cold-cache latency,
-        # so any tracked server.pid is stale after this step.
-        env:
-          BENCH_DOCS: "5000"
-          BENCH_WARM_RUNS: "10"
-        run: python3 test_utils/bench_cache_warmup.py
+          for _ in $(seq 1 150); do
+            nc -z 127.0.0.1 8989 && break
+            sleep 0.2
+          done
+          if ! nc -z 127.0.0.1 8989; then
+            echo "::error::server failed to start"; cat server.log; exit 1
+          fi
+      - name: Run ${{ matrix.name }} tests
+        run: ${{ matrix.run }}
       - name: Stop server
-        if: always()
+        if: ${{ always() && matrix.start_server }}
         run: pkill -f "$LWNRDB_SERVER_BIN" || true
+
+  # ---------------------------------------------------------------------------
+  # Single aggregate gate. This is the check required by branch protection
+  # (named "Verify" to match the existing rule): it succeeds only when the build
+  # and every integration leg succeeded, so the split pipeline still reports one
+  # green/red status to the PR. Runs even if a dependency fails (if: always())
+  # so it reports failure instead of being skipped and leaving the check pending.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify
+    needs: [build, integration]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs succeeded
+        run: |
+          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }}"
+          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ]; then
+            echo "::error::one or more jobs failed"
+            exit 1
+          fi
+          echo "All jobs succeeded."
