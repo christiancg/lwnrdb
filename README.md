@@ -39,8 +39,10 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Semantic search
 - [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
-- [ ] Stored procedures
-- [ ] Jobs
+- [ ] Javascript engine to support additional features 
+  - [ ] Stored procedures
+  - [ ] Jobs
+  - [ ] Triggers
 - [x] Geo type support
   - [x] Distance operator
   - [x] Within operator

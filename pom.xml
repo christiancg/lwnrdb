@@ -13,12 +13,11 @@
         <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <minimumCoverage>0.95</minimumCoverage>
-        <spotless.version>2.44.5</spotless.version>
-        <palantir.version>2.68.0</palantir.version>
+        <spotless.version>3.8.0</spotless.version>
         <checkstyle.plugin.version>3.6.0</checkstyle.plugin.version>
-        <checkstyle.version>10.21.4</checkstyle.version>
+        <checkstyle.version>13.7.0</checkstyle.version>
         <pmd.plugin.version>3.28.0</pmd.plugin.version>
-        <pmd.version>7.25.0</pmd.version>
+        <pmd.version>7.26.0</pmd.version>
         <spotbugs.plugin.version>4.10.2.0</spotbugs.plugin.version>
         <spotbugs.version>4.10.2</spotbugs.version>
     </properties>
@@ -27,7 +26,7 @@
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
-            <version>6.1.0</version>
+            <version>6.1.1</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -57,7 +56,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>3.5.2</version>
+                <version>3.5.6</version>
             </plugin>
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>

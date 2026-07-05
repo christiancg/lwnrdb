@@ -14,6 +14,13 @@ ADMIN_PASSWORD = "administrator"
 DB = "listen_test_db"
 COLL = "listen_coll"
 
+# Geo (JsonGeo) fixtures — a target point, a nearby point (~140 m away), a far-away
+# point (Los Angeles), and a small polygon enclosing the target/near cluster.
+GEO_TARGET = "#geo(40.0,-74.0)"
+GEO_NEAR = "#geo(40.001,-74.001)"
+GEO_FAR = "#geo(34.05,-118.24)"
+GEO_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
+
 PASS = "\033[92mPASS\033[0m"
 FAIL = "\033[91mFAIL\033[0m"
 
@@ -149,6 +156,15 @@ def aggregate(conn: Conn, steps: list) -> dict:
         "collectionName": COLL,
         "aggregationSteps": steps,
     })
+
+
+def geo_distance_steps(comparator: str, distance: float, target: str = GEO_TARGET, field: str = "location"):
+    return [{"type": "FILTER", "operator": {"customOperatorName": "distance", "field": field,
+                                            "value": target, "comparator": comparator, "distance": distance}}]
+
+
+def geo_within_steps(polygon, field: str = "location"):
+    return [{"type": "FILTER", "operator": {"customOperatorName": "within", "field": field, "polygon": polygon}}]
 
 
 # ── setup helpers ────────────────────────────────────────────────────────────
@@ -317,6 +333,93 @@ def test_push_on_delete(writer: Conn, listener: Conn):
     stop_listen(listener, listen_id)
 
 
+def test_push_on_geo_distance_match(writer: Conn, listener: Conn):
+    section("LISTEN: push received when geo distance query matches (JsonGeo)")
+
+    steps = geo_distance_steps("SMALLER_THAN", 5000, GEO_TARGET)
+    r = listen(listener, steps)
+    check("LISTEN registered for geo distance", r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+
+    # Insert a document within 5 km of the target -> should push
+    save_doc(writer, {"_id": "geo-near-1", "location": GEO_NEAR})
+
+    pushed = listener.recv(timeout=5.0)
+    check_true("push received after nearby insert", pushed is not None,
+               "no push message within 5 s")
+    if pushed is not None:
+        check("geo distance push has OK status", pushed, "OK")
+        check_true("geo distance push listenId matches", pushed.get("listenId") == listen_id,
+                   f"expected {listen_id!r}, got {pushed.get('listenId')!r}")
+        check_true("geo distance push resultHash differs from initial",
+                   pushed.get("resultHash") != initial_hash,
+                   f"hash unchanged: {pushed.get('resultHash')!r}")
+        check_true("geo distance push results contain nearby doc",
+                   any(d.get("_id") == "geo-near-1" for d in (pushed.get("results") or [])),
+                   "geo-near-1 missing from pushed results")
+
+    stop_listen(listener, listen_id)
+    delete_doc(writer, "geo-near-1")
+
+
+def test_no_push_on_geo_distance_non_match(writer: Conn, listener: Conn):
+    section("LISTEN: no push when geo distance query does not match (JsonGeo)")
+
+    steps = geo_distance_steps("SMALLER_THAN", 5000, GEO_TARGET)
+    r = listen(listener, steps)
+    check("LISTEN registered for geo distance non-match", r, "OK")
+    listen_id = r.get("listenId")
+
+    # Insert a far-away document (Los Angeles) -> outside the 5 km radius, no push
+    save_doc(writer, {"_id": "geo-far-1", "location": GEO_FAR})
+    time.sleep(0.5)
+
+    pushed = listener.recv(timeout=2.0)
+    check_true("no push for far-away insert", pushed is None,
+               f"unexpected push: {pushed!r}")
+
+    stop_listen(listener, listen_id)
+    delete_doc(writer, "geo-far-1")
+
+
+def test_push_on_geo_within_match(writer: Conn, listener: Conn):
+    section("LISTEN: push on geo within-polygon match, none for outside (JsonGeo)")
+
+    steps = geo_within_steps(GEO_POLYGON)
+    r = listen(listener, steps)
+    check("LISTEN registered for geo within", r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+
+    # Insert a document inside the polygon -> should push
+    save_doc(writer, {"_id": "geo-in-1", "location": GEO_NEAR})
+
+    pushed = listener.recv(timeout=5.0)
+    check_true("push received after in-polygon insert", pushed is not None,
+               "no push message within 5 s")
+    if pushed is not None:
+        check("geo within push has OK status", pushed, "OK")
+        check_true("geo within push resultHash differs from initial",
+                   pushed.get("resultHash") != initial_hash,
+                   f"hash unchanged: {pushed.get('resultHash')!r}")
+        check_true("geo within push results contain in-polygon doc",
+                   any(d.get("_id") == "geo-in-1" for d in (pushed.get("results") or [])),
+                   "geo-in-1 missing from pushed results")
+
+    # Insert a document outside the polygon -> result set unchanged, no push
+    save_doc(writer, {"_id": "geo-out-1", "location": GEO_FAR})
+    time.sleep(0.5)
+
+    pushed_2 = listener.recv(timeout=2.0)
+    check_true("no push for out-of-polygon insert", pushed_2 is None,
+               f"unexpected push: {pushed_2!r}")
+
+    stop_listen(listener, listen_id)
+    delete_doc(writer, "geo-in-1")
+    delete_doc(writer, "geo-out-1")
+
+
 def test_stop_listen(writer: Conn, listener: Conn):
     section("LISTEN: STOP_LISTEN cancels subscription")
 
@@ -432,6 +535,9 @@ def main():
                 test_push_on_matching_insert(writer_conn, listener_conn)
                 test_no_push_on_non_matching_insert(writer_conn, listener_conn)
                 test_push_on_delete(writer_conn, listener_conn)
+                test_push_on_geo_distance_match(writer_conn, listener_conn)
+                test_no_push_on_geo_distance_non_match(writer_conn, listener_conn)
+                test_push_on_geo_within_match(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
