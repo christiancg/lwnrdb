@@ -225,6 +225,27 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.req.ListenRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ReindexRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.StopListenRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.req.OperationRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -352,6 +373,13 @@
     },
     {
       "type": "org.techhouse.ops.req.agg.operators.ConjunctionOperator",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.agg.operators.CustomOperator",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -491,6 +519,20 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.analyze.AnalyzeResult",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.AggregateAnalyzeResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.resp.AggregateResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -618,6 +660,27 @@
     },
     {
       "type": "org.techhouse.ops.resp.ListUsersResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListenResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ReindexResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.StopListenResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,

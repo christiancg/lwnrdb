@@ -290,6 +290,36 @@
       ]
     },
     {
+      "type": "org.techhouse.ejson.custom_types.JsonGeo",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "org.techhouse.ejson.custom_types.JsonVector",
+      "methods": [
+        {
+          "name": "<init>",
+          "parameterTypes": []
+        },
+        {
+          "name": "<init>",
+          "parameterTypes": [
+            "java.lang.String"
+          ]
+        }
+      ]
+    },
+    {
       "type": "org.techhouse.ejson.elements.JsonBaseElement"
     },
     {
