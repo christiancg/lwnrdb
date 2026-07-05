@@ -32,7 +32,7 @@ jobs:
       - name: Build native image
         # GraalVM is JAVA_HOME (set by setup-graalvm), so the native-maven-plugin
         # finds native-image. Tests already ran in `verify`.
-        run: mvn -Pnative package -DskipTests
+        run: mvn -B --no-transfer-progress -Pnative package -DskipTests
       - name: Upload native binary
         uses: actions/upload-artifact@v4
         with:
