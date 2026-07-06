@@ -4,11 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -17,6 +20,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -24,9 +28,14 @@ import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.CommitTransactionRequest;
+import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.test.TestGlobals;
@@ -178,5 +187,112 @@ public class TransactionOperationHelperTest {
         final var result = TransactionOperationHelper
                 .applyOverlayToStream(transaction, "myDb|myCollection", Stream.of(doc)).toList();
         assertEquals(1, result.size());
+    }
+
+    // Removes any buffered op records left behind by a forced-failure test so they don't leak into
+    // other tests' view of admin/transactions.
+    private void deleteAllBufferedOps() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        AdminOperationHelper.deleteTransactionOps(new ArrayList<>(cache.getTransactionPkIndexes().keySet()));
+    }
+
+    @Test
+    public void test_commit_error_returns_500_24() throws Exception {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        processor.processMessage(saveRequest("txn-commit-err"), clientId);
+        try (var mocked = mockStatic(AdminOperationHelper.class)) {
+            mocked.when(() -> AdminOperationHelper.readTransactionOps(any())).thenThrow(new RuntimeException("boom"));
+            final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
+            assertEquals("500-24", response.getErrorCode());
+        }
+        // The failed commit still released locks and cleared the transaction.
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+        deleteAllBufferedOps();
+    }
+
+    @Test
+    public void test_rollback_error_returns_500_24() throws Exception {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        processor.processMessage(saveRequest("txn-rollback-err"), clientId);
+        try (var mocked = mockStatic(AdminOperationHelper.class)) {
+            mocked.when(() -> AdminOperationHelper.deleteTransactionOps(any())).thenThrow(new RuntimeException("boom"));
+            final var response = processor.processMessage(new RollbackTransactionRequest(), clientId);
+            assertEquals("500-24", response.getErrorCode());
+        }
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        deleteAllBufferedOps();
+    }
+
+    @Test
+    public void test_cleanup_on_disconnect_swallows_delete_error() throws Exception {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        processor.processMessage(saveRequest("txn-disc-err"), clientId);
+        try (var mocked = mockStatic(AdminOperationHelper.class)) {
+            mocked.when(() -> AdminOperationHelper.deleteTransactionOps(any())).thenThrow(new RuntimeException("boom"));
+            // Must not propagate the failure; still clears state and releases locks.
+            TransactionOperationHelper.cleanupOnDisconnect(clientId);
+        }
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+        deleteAllBufferedOps();
+    }
+
+    @Test
+    public void test_buffer_save_error_returns_500_24() throws Exception {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        try (var mocked = mockStatic(AdminOperationHelper.class)) {
+            mocked.when(() -> AdminOperationHelper.saveTransactionOp(any())).thenThrow(new RuntimeException("boom"));
+            final var response = processor.processMessage(saveRequest("txn-buf-err"), clientId);
+            assertEquals("500-24", response.getErrorCode());
+        }
+        // The buffer failed after acquiring the lock but without rolling back; rollback to release it.
+        processor.processMessage(new RollbackTransactionRequest(), clientId);
+        deleteAllBufferedOps();
+    }
+
+    @Test
+    public void test_buffer_bulk_save_error_returns_500_24() throws Exception {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var objects = new ArrayList<JsonObject>();
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("txn-bulk-err"));
+        objects.add(obj);
+        bulk.setObjects(objects);
+        try (var mocked = mockStatic(AdminOperationHelper.class)) {
+            mocked.when(() -> AdminOperationHelper.saveTransactionOp(any())).thenThrow(new RuntimeException("boom"));
+            final var response = processor.processMessage(bulk, clientId);
+            assertEquals("500-24", response.getErrorCode());
+        }
+        processor.processMessage(new RollbackTransactionRequest(), clientId);
+        deleteAllBufferedOps();
+    }
+
+    @Test
+    public void test_buffer_delete_error_returns_500_24() throws Exception {
+        final var clientId = newClient();
+        // Commit a document so the delete inside the transaction is visible and reaches the buffer step.
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        processor.processMessage(saveRequest("txn-deleteme"), clientId);
+        processor.processMessage(new CommitTransactionRequest(), clientId);
+
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        delete.set_id("txn-deleteme");
+        try (var mocked = mockStatic(AdminOperationHelper.class)) {
+            mocked.when(() -> AdminOperationHelper.saveTransactionOp(any())).thenThrow(new RuntimeException("boom"));
+            final var response = processor.processMessage(delete, clientId);
+            assertEquals("500-24", response.getErrorCode());
+        }
+        processor.processMessage(new RollbackTransactionRequest(), clientId);
+        deleteAllBufferedOps();
     }
 }
