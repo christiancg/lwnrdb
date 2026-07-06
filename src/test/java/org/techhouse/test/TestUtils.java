@@ -139,6 +139,14 @@ public class TestUtils {
         assertTrue(folder.delete());
     }
 
+    // Clears the shared ClientTracker's client map. Tests that register clients via addClient (which is
+    // subject to the maxConnections limit) call this before each test so leaked clients from other
+    // tests/classes in the same JVM can't fill the limit and make addClient return null.
+    public static void resetClients() throws NoSuchFieldException, IllegalAccessException {
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
+    }
+
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {
         final var locker = IocContainer.get(ResourceLocking.class);
         final var locksType = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {

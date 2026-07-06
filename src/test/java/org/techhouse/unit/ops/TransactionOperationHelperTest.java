@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -46,6 +47,11 @@ public class TransactionOperationHelperTest {
     public static void tearDownAll() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
+    }
+
+    @BeforeEach
+    void resetClientTracker() throws Exception {
+        TestUtils.resetClients();
     }
 
     private UUID newClient() {
