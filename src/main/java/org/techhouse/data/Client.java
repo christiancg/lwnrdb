@@ -12,6 +12,7 @@ public class Client {
     private String authenticatedUsername;
     private volatile BufferedWriter writer;
     private final ReentrantLock writerLock = new ReentrantLock();
+    private Transaction activeTransaction;
 
     public Client(String address) {
         this.address = address;
@@ -51,6 +52,14 @@ public class Client {
 
     public ReentrantLock getWriterLock() {
         return writerLock;
+    }
+
+    public Transaction getActiveTransaction() {
+        return activeTransaction;
+    }
+
+    public void setActiveTransaction(Transaction activeTransaction) {
+        this.activeTransaction = activeTransaction;
     }
 
     @Override

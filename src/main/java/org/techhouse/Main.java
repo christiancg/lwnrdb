@@ -21,6 +21,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.TransactionOperationHelper;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -48,6 +49,7 @@ public class Main {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         cache.loadAdminData();
+        cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
@@ -61,6 +63,16 @@ public class Main {
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
         server.serve();
+    }
+
+    // A transaction only lives while its connection is open, so any operation records still in
+    // admin/transactions at startup were orphaned by a crash/restart and are discarded (never applied).
+    private static void cleanupOrphanedTransactions() {
+        try {
+            TransactionOperationHelper.cleanupOrphansAtStartup();
+        } catch (Exception e) {
+            logger.error("Failed to clean up orphaned transactions at startup", e);
+        }
     }
 
     static SSLServerSocketFactory createTlsFactory() {

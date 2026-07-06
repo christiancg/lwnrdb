@@ -43,17 +43,24 @@ public class AdminCache {
     private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         final var pkIndexCollectionUsageEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
         final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         collectionUsagePkIndex.putAll(pkIndexCollectionUsageEntriesMap);
+        final var pkIndexTransactionEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        final var pkIndexTransactionEntriesMap = pkIndexTransactionEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
+        transactionsPkIndex.putAll(pkIndexTransactionEntriesMap);
         final var pkIndexAdminDbEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -234,6 +241,7 @@ public class AdminCache {
             case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> entries = collectionsPkIndex.values();
             case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
             case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
+            case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> entries = transactionsPkIndex.values();
             case null, default -> {
                 final var list = pagesPkIndexes.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, collName));
                 entries = list != null ? list : List.of();
@@ -352,5 +360,21 @@ public class AdminCache {
 
     public Map<String, PkIndexEntry> getCollectionUsagePkIndexes() {
         return collectionUsagePkIndex;
+    }
+
+    public PkIndexEntry getPkIndexTransaction(String opId) {
+        return transactionsPkIndex.get(opId);
+    }
+
+    public void putPkIndexTransaction(PkIndexEntry indexEntry) {
+        transactionsPkIndex.put(indexEntry.getValue(), indexEntry);
+    }
+
+    public void removePkIndexTransaction(String opId) {
+        transactionsPkIndex.remove(opId);
+    }
+
+    public Map<String, PkIndexEntry> getTransactionPkIndexes() {
+        return transactionsPkIndex;
     }
 }

@@ -2,25 +2,15 @@ package org.techhouse.ops;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.analyze.AnalyzeContext;
-import org.techhouse.bckg_ops.BackgroundTaskManager;
-import org.techhouse.bckg_ops.PendingIndexWrites;
-import org.techhouse.bckg_ops.events.BulkEntityEvent;
-import org.techhouse.bckg_ops.events.EntityEvent;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
-import org.techhouse.data.IndexedDbEntry;
-import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
@@ -52,12 +42,10 @@ import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
-import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
 import org.techhouse.ops.resp.CreateCollectionResponse;
 import org.techhouse.ops.resp.CreateDatabaseResponse;
 import org.techhouse.ops.resp.CreateIndexResponse;
-import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.DropCollectionResponse;
 import org.techhouse.ops.resp.DropDatabaseResponse;
 import org.techhouse.ops.resp.DropIndexResponse;
@@ -68,31 +56,35 @@ import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
-import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
 import org.techhouse.ops.resp.StopListenResponse;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Cache cache = IocContainer.get(Cache.class);
-    private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
-    private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
-    private final Configuration configuration = Configuration.getInstance();
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
     }
 
     public OperationResponse processMessage(OperationRequest operationRequest, UUID clientId) {
+        final var activeTransaction = clientTracker.getActiveTransaction(clientId);
+        // While a transaction is open, only its data operations, its own reads and the control
+        // operations are allowed; everything else (DDL/admin/listen) is rejected to keep atomicity
+        // reasoning simple (see TransactionOperationHelper.isAllowedDuringTransaction).
+        if (activeTransaction != null
+                && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
+            return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
+        }
         return switch (operationRequest.getType()) {
-            case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest);
-            case SAVE -> processSaveOperation((SaveRequest) operationRequest);
-            case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest);
-            case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest);
-            case DELETE -> processDeleteOperation((DeleteRequest) operationRequest);
+            case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction);
+            case SAVE -> processSaveOperation((SaveRequest) operationRequest, activeTransaction);
+            case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest, activeTransaction);
+            case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest, activeTransaction);
+            case DELETE -> processDeleteOperation((DeleteRequest) operationRequest, activeTransaction);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest, clientId);
             case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
             case LIST_DATABASES -> processListDatabasesOperation();
@@ -116,98 +108,21 @@ public class OperationProcessor {
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
             case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
+            case START_TRANSACTION -> TransactionOperationHelper.start(clientId);
+            case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
+            case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
         };
     }
 
-    private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest) {
+    private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction) {
         final var dbName = bulkSaveRequest.getDatabaseName();
         final var collName = bulkSaveRequest.getCollectionName();
-        final var entries = new ArrayList<DbEntry>();
-        for (var entry : bulkSaveRequest.getObjects()) {
-            entries.add(DbEntry.fromJsonObject(dbName, collName, entry));
-        }
-        final var maxEntrySize = configuration.getMaxEntrySize();
-        for (var entry : entries) {
-            if (entry.byteSize() > maxEntrySize) {
-                return new OperationResponse(
-                        OperationType.BULK_SAVE, "Entry size of " + entry.byteSize()
-                                + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                        ErrorCode.ENTRY_TOO_LARGE);
-            }
-        }
-        final var seenIds = new HashSet<String>();
-        for (var entry : entries) {
-            if (!seenIds.add(entry.get_id())) {
-                return new OperationResponse(OperationType.BULK_SAVE,
-                        "Duplicate _id in bulk save request: " + entry.get_id(), ErrorCode.DUPLICATE_ID);
-            }
+        if (activeTransaction != null) {
+            return TransactionOperationHelper.bufferBulkSave(bulkSaveRequest, activeTransaction);
         }
         try {
             locks.lock(dbName, collName);
-            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-            final var indexedDbEntriesToUpdate = new ArrayList<IndexedDbEntry>();
-            for (var i : entries) {
-                final var data = i.getData();
-                if (data.has(Globals.PK_FIELD)) {
-                    final var id = data.get(Globals.PK_FIELD).asJsonString().getValue();
-                    i.set_id(id);
-                    final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
-                    if (foundIndexEntry >= 0) {
-                        final var foundIndex = primaryKeyIndex.get(foundIndexEntry);
-                        final var indexedDbEntry = new IndexedDbEntry();
-                        indexedDbEntry.setIndex(foundIndex);
-                        indexedDbEntry.setDatabaseName(dbName);
-                        indexedDbEntry.setCollectionName(collName);
-                        indexedDbEntry.set_id(id);
-                        indexedDbEntry.setData(data);
-                        indexedDbEntriesToUpdate.add(indexedDbEntry);
-                    }
-                }
-            }
-            final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
-            if (!indexedDbEntriesToUpdate.isEmpty()) {
-                final var bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
-                updatedIndexEntries.addAll(bulkResult.updated());
-                // Fix the in-memory positions of non-updated survivors shifted by the batch, then
-                // replace the updated entries with their new (relocated) index entries.
-                bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
-                primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
-                        .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
-            }
-            primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
-            final var entriesToInsert = entries.stream().filter(dbEntry -> indexedDbEntriesToUpdate.stream()
-                    .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id()))).toList();
-            List<IndexedDbEntry> insertedIndexEntries = new ArrayList<>();
-            if (!entriesToInsert.isEmpty()) {
-                final var pendingPageBytes = new HashMap<Long, Long>();
-                for (var e : entriesToInsert) {
-                    final var size = e.byteSize();
-                    final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
-                    e.setPage(target);
-                    pendingPageBytes.merge(target, (long) size, Long::sum);
-                }
-                insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
-                for (var ie : insertedIndexEntries) {
-                    cache.updatePageSizeInMemory(dbName, collName, ie.getIndex().getPage(), ie.getIndex().getLength());
-                }
-            }
-            primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
-            primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
-            final var updatedDbEntries = updatedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
-            cache.addEntriesToCache(dbName, collName, updatedDbEntries);
-            final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
-            cache.addEntriesToCache(dbName, collName, insertedDbEntries);
-            final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
-            final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
-            // Mark all committed ids pending before releasing the write lock, so index-backed reads
-            // reconcile them until their asynchronous field-index update completes.
-            pendingIndexWrites.mark(dbName, collName, updatedIds);
-            pendingIndexWrites.mark(dbName, collName, insertedIds);
-            taskManager
-                    .submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
-            listenManager.markDirty(dbName, collName);
-            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-            return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
+            return SaveOperationHelper.executeBulkSave(bulkSaveRequest);
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
         } finally {
@@ -215,63 +130,15 @@ public class OperationProcessor {
         }
     }
 
-    private OperationResponse processSaveOperation(SaveRequest saveRequest) {
+    private OperationResponse processSaveOperation(SaveRequest saveRequest, Transaction activeTransaction) {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
-        final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
-        final var maxEntrySize = configuration.getMaxEntrySize();
-        if (entry.byteSize() > maxEntrySize) {
-            return new OperationResponse(
-                    OperationType.SAVE, "Entry size of " + entry.byteSize()
-                            + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                    ErrorCode.ENTRY_TOO_LARGE);
+        if (activeTransaction != null) {
+            return TransactionOperationHelper.bufferSave(saveRequest, activeTransaction);
         }
         try {
             locks.lock(dbName, collName);
-            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-            var foundIndexEntry = -1;
-            if (saveRequest.get_id() != null) {
-                foundIndexEntry = Collections.binarySearch(primaryKeyIndex, saveRequest.get_id());
-            }
-            var eventType = EventType.CREATED;
-            PkIndexEntry savedPkIndexEntry;
-            if (foundIndexEntry >= 0) {
-                final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
-                if (SaveOperationHelper.wouldOverflowPage(dbName, collName, idxEntry, entry)) {
-                    // The grown document no longer fits on its page; relocate it instead of rewriting in
-                    // place (which would push the page past maxPageSize). Handled as a delete + insert so
-                    // page metadata and field indexes stay correct via the standard background events.
-                    final var relocatedPkIndexEntry = SaveOperationHelper.relocateOnGrowUpdate(dbName, collName, entry,
-                            idxEntry, primaryKeyIndex);
-                    listenManager.markDirty(dbName, collName);
-                    CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-                    return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
-                }
-                entry.setPage(idxEntry.getPage());
-                final var updateResult = fs.updateFromCollection(entry, idxEntry);
-                savedPkIndexEntry = updateResult.indexEntry();
-                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
-                primaryKeyIndex.remove(idxEntry);
-                eventType = EventType.UPDATED;
-            } else {
-                entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
-                savedPkIndexEntry = fs.insertIntoCollection(entry);
-                cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(),
-                        savedPkIndexEntry.getLength());
-            }
-            int insertAt = Collections.binarySearch(primaryKeyIndex, savedPkIndexEntry.getValue());
-            if (insertAt < 0) {
-                insertAt = -(insertAt + 1);
-            }
-            primaryKeyIndex.add(insertAt, savedPkIndexEntry);
-            cache.addEntryToCache(dbName, collName, entry);
-            // Mark the id pending (committed, but its field-index update is asynchronous) before
-            // releasing the write lock, so index-backed reads reconcile it until indexing completes.
-            pendingIndexWrites.mark(dbName, collName, entry.get_id());
-            taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
-            listenManager.markDirty(dbName, collName);
-            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-            return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
+            return SaveOperationHelper.executeSave(saveRequest);
         } catch (Exception exception) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
         } finally {
@@ -279,10 +146,22 @@ public class OperationProcessor {
         }
     }
 
-    private OperationResponse processFindByIdOperation(FindByIdRequest findbyIdRequest) {
+    private OperationResponse processFindByIdOperation(FindByIdRequest findbyIdRequest, Transaction activeTransaction) {
         final var dbName = findbyIdRequest.getDatabaseName();
         final var collName = findbyIdRequest.getCollectionName();
         final var id = findbyIdRequest.get_id();
+        // Read-your-writes: if the caller's open transaction has buffered a write for this id, serve it
+        // (a buffered save returns the buffered document; a buffered delete reads as not-found).
+        if (activeTransaction != null) {
+            final var overlay = activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName));
+            if (overlay != null && overlay.containsKey(id)) {
+                final var buffered = overlay.get(id);
+                if (Transaction.isTombstone(buffered)) {
+                    return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
+                }
+                return new FindByIdResponse("Ok", buffered);
+            }
+        }
         List<String> readLocks = List.of();
         try {
             readLocks = locks.acquireReadLocks(findbyIdRequest.isDirtyRead(),
@@ -305,19 +184,36 @@ public class OperationProcessor {
         }
     }
 
-    private OperationResponse processAggregateOperation(AggregateRequest aggregateRequest) {
+    private OperationResponse processAggregateOperation(AggregateRequest aggregateRequest,
+            Transaction activeTransaction) {
         List<String> readLocks = List.of();
         final var analyzeContext = aggregateRequest.isAnalyze() ? new AnalyzeContext() : null;
         if (analyzeContext != null) {
             AnalyzeContext.set(analyzeContext);
         }
+        final var dbName = aggregateRequest.getDatabaseName();
+        final var collName = aggregateRequest.getCollectionName();
+        final var overlay = activeTransaction != null
+                ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName))
+                : null;
         try {
             readLocks = locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
                     AggregationOperationHelper.aggregateLockSet(aggregateRequest));
             if (analyzeContext != null) {
                 readLocks.forEach(analyzeContext::addLock);
             }
-            final var results = AggregationOperationHelper.processAggregation(aggregateRequest);
+            final List<org.techhouse.ejson.elements.JsonObject> results;
+            if (overlay != null && !overlay.isEmpty()) {
+                // Read-your-writes: run the pipeline over the committed documents with the transaction's
+                // buffered mutations applied at the source. Passing a prepared source stream also disables
+                // the index-backed source fast-paths, so the overlaid documents are honoured exactly.
+                final var committed = cache.initializeStreamIfNecessary(null, dbName, collName);
+                final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
+                        Cache.getCollectionIdentifier(dbName, collName), committed);
+                results = AggregationOperationHelper.processAggregation(aggregateRequest, source);
+            } else {
+                results = AggregationOperationHelper.processAggregation(aggregateRequest);
+            }
             CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
                     aggregateRequest.getCollectionName());
             if (analyzeContext != null) {
@@ -339,35 +235,15 @@ public class OperationProcessor {
         }
     }
 
-    private OperationResponse processDeleteOperation(DeleteRequest deleteRequest) {
+    private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction) {
         final var dbName = deleteRequest.getDatabaseName();
         final var collName = deleteRequest.getCollectionName();
+        if (activeTransaction != null) {
+            return TransactionOperationHelper.bufferDelete(deleteRequest, activeTransaction);
+        }
         try {
             locks.lock(dbName, collName);
-            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-            final var foundIndexEntry = primaryKeyIndex.stream()
-                    .filter(pkIndexEntry -> pkIndexEntry.getValue().equals(deleteRequest.get_id())).findFirst();
-            if (foundIndexEntry.isPresent()) {
-                final var idxEntry = foundIndexEntry.get();
-                final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
-                final var compaction = fs.deleteFromCollection(idxEntry);
-                cache.shiftPkPositionsAfterCompaction(compaction);
-                primaryKeyIndex.remove(idxEntry);
-                primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
-                cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
-                // Mark pending until the async index removal completes: the field index still maps the
-                // value to this id, so index-only reads that don't re-fetch the document (COUNT, DISTINCT)
-                // would otherwise count/surface the deleted doc. The DELETED event clears it.
-                pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
-                taskManager
-                        .submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
-                listenManager.markDirty(dbName, collName);
-                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-                return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");
-            } else {
-                return new OperationResponse(OperationType.DELETE,
-                        "Entry with id " + deleteRequest.get_id() + " not found", ErrorCode.ENTRY_NOT_FOUND);
-            }
+            return DeleteOperationHelper.executeDelete(deleteRequest);
         } catch (Exception exception) {
             return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         } finally {

@@ -59,6 +59,7 @@ public class ConfigReaderTest {
         expectedConfig.put("defaultAdminUsername", "admin");
         expectedConfig.put("defaultAdminPassword", "administrator");
         expectedConfig.put("maxMemory", "512mb");
+        expectedConfig.put("transactionLockTimeoutMs", "5000");
         expectedConfig.put("tlsEnabled", "false");
         expectedConfig.put("tlsKeystorePath", "certs/lwnrdb.p12");
         expectedConfig.put("tlsKeystorePassword", "change_it");

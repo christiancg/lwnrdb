@@ -13,6 +13,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
@@ -53,8 +54,13 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "transactionsPkIndex", new ConcurrentHashMap<>());
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
+        // Drop any tracked clients so leaked test connections can't fill the connection limit and make
+        // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
+        ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+        TestUtils.setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
     }
 
     private static void deleteDir(File file) {
@@ -103,6 +109,20 @@ public class TestUtils {
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(object, fieldValue);
+    }
+
+    public static <T> T getPrivateStaticField(Class<?> clazz, String fieldName, Class<T> fieldType)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var field = clazz.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return fieldType.cast(field.get(null));
+    }
+
+    public static <T> void setPrivateStaticField(Class<?> clazz, String fieldName, T fieldValue)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var field = clazz.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(null, fieldValue);
     }
 
     public static void deleteFolder(File folder) {

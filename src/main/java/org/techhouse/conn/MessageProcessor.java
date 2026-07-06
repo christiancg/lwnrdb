@@ -17,6 +17,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.RequestParser;
@@ -51,6 +52,7 @@ public class MessageProcessor implements Runnable {
                 while (!close) {
                     final var message = reader.readLine();
                     if (message == null) {
+                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
                         listenManager.unregisterAllForClient(clientId);
                         clientTracker.removeById(clientId);
                         break;
@@ -73,6 +75,7 @@ public class MessageProcessor implements Runnable {
                                     final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
                                     if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                         close = true;
+                                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
                                         listenManager.unregisterAllForClient(clientId);
                                         clientTracker.removeById(clientId);
                                     }
@@ -112,6 +115,7 @@ public class MessageProcessor implements Runnable {
                                                 }
                                                 if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                                     close = true;
+                                                    TransactionOperationHelper.cleanupOnDisconnect(clientId);
                                                     listenManager.unregisterAllForClient(clientId);
                                                     clientTracker.removeById(clientId);
                                                 }
@@ -151,11 +155,13 @@ public class MessageProcessor implements Runnable {
         } catch (SSLException e) {
             // A plaintext or otherwise incompatible client failed the TLS handshake; drop it quietly.
             if (clientId != null) {
+                TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 clientTracker.removeById(clientId);
             }
             logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
             if (clientId != null) {
+                TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 listenManager.unregisterAllForClient(clientId);
                 clientTracker.removeById(clientId);
             }

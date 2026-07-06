@@ -26,6 +26,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
@@ -1077,9 +1078,9 @@ public class OperationProcessorTest {
         // DELETED/CREATED events sit unprocessed in its queue. Otherwise, if another test class
         // (e.g. MainTest) has already started the shared IoC manager's workers, they would drain the
         // events and clear the pending marks before this assertion runs, making the test flaky.
-        final var originalTaskManager = TestUtils.getPrivateField(processor, "taskManager",
+        final var originalTaskManager = TestUtils.getPrivateStaticField(SaveOperationHelper.class, "taskManager",
                 BackgroundTaskManager.class);
-        TestUtils.setPrivateField(processor, "taskManager", new BackgroundTaskManager());
+        TestUtils.setPrivateStaticField(SaveOperationHelper.class, "taskManager", new BackgroundTaskManager());
         try {
             processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
 
@@ -1116,7 +1117,7 @@ public class OperationProcessorTest {
             assertTrue(pending.idsFor(TestGlobals.DB, collName).contains("a"),
                     "id must remain pending after relocation so both events are covered");
         } finally {
-            TestUtils.setPrivateField(processor, "taskManager", originalTaskManager);
+            TestUtils.setPrivateStaticField(SaveOperationHelper.class, "taskManager", originalTaskManager);
             TestUtils.setPrivateField(config, "maxPageSize", originalMaxPage);
             TestUtils.setPrivateField(config, "maxEntrySize", originalMaxEntry);
             processor.processMessage(new DropCollectionRequest(TestGlobals.DB, collName));
