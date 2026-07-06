@@ -65,6 +65,15 @@ public class ResourceLocking {
         return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock();
     }
 
+    // Bounded write-lock acquisition used by transactions: a transaction acquires each touched
+    // collection's write lock lazily and holds it until commit/rollback, so it waits (up to the
+    // timeout) for an in-flight write to finish rather than failing instantly, but gives up on the
+    // timeout so two concurrent transactions can never deadlock (the caller aborts the transaction).
+    public boolean tryLockWrite(String dbName, String collName, long timeoutMillis) throws InterruptedException {
+        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock(timeoutMillis,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     // ---------- collection read locking (shared) ----------
     public void lockRead(String dbName, String collName) throws InterruptedException {
         lockReadByName(Cache.getCollectionIdentifier(dbName, collName));

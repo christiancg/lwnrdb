@@ -47,6 +47,16 @@ public final class AggregationOperationHelper {
         return applySteps(request.getAggregationSteps(), null, request.getDatabaseName(), request.getCollectionName());
     }
 
+    // Runs the pipeline over a caller-supplied source stream (the transaction read-your-writes path)
+    // while keeping the real db/coll so JOIN steps still resolve their remote collections. Because the
+    // source stream is non-null, the index-backed source fast-paths are skipped and every step operates
+    // in memory over the overlaid documents.
+    public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source)
+            throws IOException {
+        return applySteps(request.getAggregationSteps(), source, request.getDatabaseName(),
+                request.getCollectionName());
+    }
+
     // The collection identifiers a request reads: the target collection plus every JOIN collection.
     // Used by the caller to acquire read locks over the full set an aggregation touches.
     public static List<String> aggregateLockSet(AggregateRequest request) {

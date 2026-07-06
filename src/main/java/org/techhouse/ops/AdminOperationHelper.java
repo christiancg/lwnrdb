@@ -19,6 +19,7 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -263,10 +264,6 @@ public final class AdminOperationHelper {
                 releaseAdminDatabaseCollection();
             }
         }
-    }
-
-    public static AdminDbEntry getDatabaseEntry(String dbName) {
-        return cache.getAdminDbEntry(dbName);
     }
 
     public static void updateDatabaseOwners(String dbName, java.util.List<String> owners)
@@ -521,6 +518,93 @@ public final class AdminOperationHelper {
             }
         } finally {
             releaseAdminCollectionUsageCollection();
+        }
+    }
+
+    private static void lockAdminTransactionsCollection() throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+    }
+
+    private static void releaseAdminTransactionsCollection() {
+        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+    }
+
+    // Appends one buffered transaction operation to admin/transactions. Op records are always new
+    // inserts (their _id is transactionId|seq, unique per transaction), so this only ever inserts.
+    public static void saveTransactionOp(AdminTransactionEntry entry) throws IOException, InterruptedException {
+        lockAdminTransactionsCollection();
+        try {
+            entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
+                    entry.byteSize()));
+            final var savedPk = fs.insertIntoCollection(entry);
+            cache.putPkIndexTransaction(savedPk);
+            baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, EventType.CREATED,
+                    List.of(entry), false);
+        } finally {
+            releaseAdminTransactionsCollection();
+        }
+    }
+
+    // Reads the buffered operations for the given op ids (in the order supplied — the caller passes
+    // them in ascending seq order) so a commit can replay them against the real collections.
+    public static List<AdminTransactionEntry> readTransactionOps(List<String> opIds)
+            throws IOException, InterruptedException {
+        lockAdminTransactionsCollection();
+        try {
+            final var result = new ArrayList<AdminTransactionEntry>();
+            for (var opId : opIds) {
+                final var pk = cache.getPkIndexTransaction(opId);
+                if (pk == null) {
+                    continue;
+                }
+                final DbEntry entry;
+                try {
+                    entry = fs.getById(pk);
+                } catch (Exception ex) {
+                    throw new IOException("Failed to read transaction op " + opId, ex);
+                }
+                if (entry == null) {
+                    continue;
+                }
+                final var data = entry.getData();
+                data.addProperty(Globals.PK_FIELD, entry.get_id());
+                result.add(AdminTransactionEntry.fromJsonObject(data));
+            }
+            return result;
+        } finally {
+            releaseAdminTransactionsCollection();
+        }
+    }
+
+    // Removes the given buffered operations from admin/transactions (used at both commit and rollback,
+    // and — with every op id — for startup cleanup of transactions orphaned by a crash).
+    public static void deleteTransactionOps(List<String> opIds) throws IOException, InterruptedException {
+        lockAdminTransactionsCollection();
+        try {
+            for (var opId : opIds) {
+                final var pk = cache.getPkIndexTransaction(opId);
+                if (pk == null) {
+                    continue;
+                }
+                final DbEntry entry;
+                try {
+                    entry = fs.getById(pk);
+                } catch (Exception ex) {
+                    throw new IOException("Failed to read transaction op " + opId, ex);
+                }
+                if (entry == null) {
+                    continue;
+                }
+                entry.setPage(pk.getPage());
+                entry.setPreviousByteSize(pk.getLength());
+                final var compaction = fs.deleteFromCollection(pk);
+                cache.shiftPkPositionsAfterCompaction(compaction);
+                cache.removePkIndexTransaction(opId);
+                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
+                        EventType.DELETED, List.of(entry), false);
+            }
+        } finally {
+            releaseAdminTransactionsCollection();
         }
     }
 

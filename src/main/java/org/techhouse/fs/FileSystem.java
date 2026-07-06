@@ -71,6 +71,7 @@ public class FileSystem {
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
@@ -79,10 +80,13 @@ public class FileSystem {
                 Globals.ADMIN_USERS_COLLECTION_NAME);
         final var pagesCollectionUsage = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
+        final var pagesTransactions = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesUsers);
         createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollectionUsage);
+        createCollectionFile(Globals.ADMIN_DB_NAME, pagesTransactions);
     }
 
     public boolean createDatabaseFolder(String dbName) {

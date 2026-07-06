@@ -76,6 +76,9 @@ public final class RequestParser {
                 case GET_DATABASE_STATS -> eJson.fromJson(message, GetDatabaseStatsRequest.class);
                 case LISTEN -> parseListenRequest(message);
                 case STOP_LISTEN -> eJson.fromJson(message, StopListenRequest.class);
+                case START_TRANSACTION -> eJson.fromJson(message, StartTransactionRequest.class);
+                case COMMIT_TRANSACTION -> eJson.fromJson(message, CommitTransactionRequest.class);
+                case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

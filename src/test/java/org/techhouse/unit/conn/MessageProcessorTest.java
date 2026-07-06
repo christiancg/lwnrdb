@@ -16,10 +16,16 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -328,6 +334,74 @@ public class MessageProcessorTest {
 
         assertTrue(response.contains("analyzeResult"), "Should include analyzeResult");
         assertTrue(response.contains("FILTER step"), "Should suggest moving the FILTER step");
+    }
+
+    // End-to-end transaction over the wire: buffered SAVE is read-your-writes visible, then committed.
+    @Test
+    public void test_transaction_happy_path_over_socket() throws Exception {
+        createAnalyzeAdmin("txn_admin");
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"txn_admin\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"START_TRANSACTION\"}\n" + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{\"_id\":\"wire-txn-1\","
+                + "\"name\":\"wired\"}}\n" + "{\"type\":\"FIND_BY_ID\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"_id\":\"wire-txn-1\"}\n"
+                + "{\"type\":\"COMMIT_TRANSACTION\"}\n";
+
+        final var response = runMessages(messages);
+
+        assertTrue(response.contains("START_TRANSACTION"), "Should include START_TRANSACTION response");
+        assertTrue(response.contains("COMMIT_TRANSACTION"), "Should include COMMIT_TRANSACTION response");
+        assertTrue(response.contains("wired"), "Read-your-writes should return the buffered document");
+
+        // Committed: a fresh reader finds it.
+        final var processor = IocContainer.get(OperationProcessor.class);
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("wire-txn-1");
+        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());
+    }
+
+    // End-to-end rollback over the wire: the buffered write is discarded.
+    @Test
+    public void test_transaction_rollback_over_socket() throws Exception {
+        createAnalyzeAdmin("txn_admin_rb");
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"txn_admin_rb\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"START_TRANSACTION\"}\n" + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{\"_id\":\"wire-rb-1\"}}\n"
+                + "{\"type\":\"ROLLBACK_TRANSACTION\"}\n";
+
+        final var response = runMessages(messages);
+        assertTrue(response.contains("ROLLBACK_TRANSACTION"), "Should include ROLLBACK_TRANSACTION response");
+
+        final var processor = IocContainer.get(OperationProcessor.class);
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("wire-rb-1");
+        assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(find).getStatus());
+    }
+
+    // Closing the connection with an open transaction auto-rolls it back: nothing is committed, the
+    // buffered op records are removed, and the collection write lock is released.
+    @Test
+    public void test_disconnect_auto_rolls_back() throws Exception {
+        createAnalyzeAdmin("txn_admin_disc");
+        // No COMMIT/ROLLBACK — the stream ends after the buffered SAVE.
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"txn_admin_disc\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"START_TRANSACTION\"}\n" + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{\"_id\":\"wire-disc-1\"}}\n";
+
+        runMessages(messages);
+
+        final var processor = IocContainer.get(OperationProcessor.class);
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("wire-disc-1");
+        assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(find).getStatus(),
+                "Uncommitted write must not survive disconnect");
+
+        final var cache = IocContainer.get(Cache.class);
+        assertTrue(cache.getTransactionPkIndexes().isEmpty(), "Buffered op records must be cleaned up on disconnect");
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL), "Collection lock must be released");
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
     }
 
     // An IOException on the output stream is handled without crashing

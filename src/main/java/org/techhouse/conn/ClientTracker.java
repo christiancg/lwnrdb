@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
+import org.techhouse.data.Transaction;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
@@ -74,5 +75,25 @@ public class ClientTracker {
             return null;
         final var client = clients.get(clientId);
         return client != null ? client.getWriterLock() : null;
+    }
+
+    public Transaction getActiveTransaction(UUID clientId) {
+        if (clientId == null)
+            return null;
+        final var client = clients.get(clientId);
+        return client != null ? client.getActiveTransaction() : null;
+    }
+
+    public void setActiveTransaction(UUID clientId, Transaction transaction) {
+        if (clientId == null)
+            return;
+        final var client = clients.get(clientId);
+        if (client != null) {
+            client.setActiveTransaction(transaction);
+        }
+    }
+
+    public void clearActiveTransaction(UUID clientId) {
+        setActiveTransaction(clientId, null);
     }
 }

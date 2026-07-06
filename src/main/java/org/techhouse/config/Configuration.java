@@ -18,6 +18,7 @@ public final class Configuration {
     private String defaultAdminUsername;
     private String defaultAdminPassword;
     private long maxMemoryBytes;
+    private long transactionLockTimeoutMs;
     private boolean tlsEnabled;
     private String tlsKeystorePath;
     private String tlsKeystorePassword;
@@ -46,6 +47,7 @@ public final class Configuration {
                 case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
                 case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
                 case "maxMemory" -> maxMemoryBytes = SizeParser.parse(config.getValue());
+                case "transactionLockTimeoutMs" -> transactionLockTimeoutMs = Long.parseLong(config.getValue());
                 case "tlsEnabled" -> tlsEnabled = Boolean.parseBoolean(config.getValue());
                 case "tlsKeystorePath" -> tlsKeystorePath = config.getValue();
                 case "tlsKeystorePassword" -> tlsKeystorePassword = config.getValue();
@@ -104,6 +106,10 @@ public final class Configuration {
 
     public long getMaxMemoryBytes() {
         return maxMemoryBytes;
+    }
+
+    public long getTransactionLockTimeoutMs() {
+        return transactionLockTimeoutMs;
     }
 
     public boolean isCachingDisabled() {

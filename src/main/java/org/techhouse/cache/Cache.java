@@ -388,4 +388,20 @@ public class Cache {
     public Map<String, PkIndexEntry> getCollectionUsagePkIndexes() {
         return adminCache.getCollectionUsagePkIndexes();
     }
+
+    public PkIndexEntry getPkIndexTransaction(String opId) {
+        return adminCache.getPkIndexTransaction(opId);
+    }
+
+    public void putPkIndexTransaction(PkIndexEntry indexEntry) {
+        adminCache.putPkIndexTransaction(indexEntry);
+    }
+
+    public void removePkIndexTransaction(String opId) {
+        adminCache.removePkIndexTransaction(opId);
+    }
+
+    public Map<String, PkIndexEntry> getTransactionPkIndexes() {
+        return adminCache.getTransactionPkIndexes();
+    }
 }
