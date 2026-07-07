@@ -575,9 +575,10 @@ def test_analyze(s, f):
     check_true("Scan path suggests indexing the filtered field",
                any("name" in sug for sug in (_dig(r, "analyzeResult.suggestions") or [])),
                detail=f"suggestions={_dig(r, 'analyzeResult.suggestions')}")
+    _duration_millis = _dig(r, "analyzeResult.durationMillis")
     check_true("Timing durationMillis is present (non-negative)",
-               (_dig(r, "analyzeResult.durationMillis") or -1) >= 0,
-               detail=f"durationMillis={_dig(r, 'analyzeResult.durationMillis')}")
+               _duration_millis is not None and _duration_millis >= 0,
+               detail=f"durationMillis={_duration_millis}")
     check_true("analyze still returns the matching results", ids_of(r) == ["z1"])
 
     # Index path: once the index exists the diagnostic reports indexUsed=true, names the index,
