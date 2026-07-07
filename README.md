@@ -31,7 +31,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
-- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages_<collection>`, and the pagination of that admin collection is itself persisted under `admin/pages_pages_<collection>` (further levels are tracked in memory only and rebuilt at startup). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
+- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
 
 ## Pending tasks
 
@@ -40,7 +40,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
-- [ ] Move pages admin collections to a separate folder called "pages" to make things more organized
+- [x] Move pages admin collections to a separate folder called "pages" to make things more organized
 - [x] Transactions
 - [x] Vector type support
   - [x] Semantic search
@@ -708,7 +708,7 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 
 **Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
 
-**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages/<db>_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
 
 `SORT`, `GROUP_BY`, `JOIN`, and `DISTINCT` also use a single-field index when one exists on the step's field **and** the step is the pipeline source (no earlier step has already produced a stream). The field index maps each value to its matching ids, so the step works from that grouping instead of scanning the whole collection: `DISTINCT` reads no documents at all (the index keys are the distinct values), `GROUP_BY`/`SORT` fetch only the grouped/ordered documents via positioned reads, and `JOIN` fetches only the remote documents whose value matches a local value. Because indexes model scalar/custom/null values only, documents whose indexed field holds a JSON object or array are outside index scope and do not appear in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results; run the step on a non-indexed field if you need those included. When no index applies, these steps still materialize their working set in memory as before.
 

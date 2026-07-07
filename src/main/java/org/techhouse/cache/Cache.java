@@ -85,7 +85,8 @@ public class Cache {
         if (compaction == null) {
             return;
         }
-        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())) {
+        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())
+                || Globals.ADMIN_PAGES_DB_NAME.equals(compaction.dbName())) {
             adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
                     compaction.removedPosition(), compaction.removedLength());
         } else {

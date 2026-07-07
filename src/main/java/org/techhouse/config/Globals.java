@@ -29,7 +29,9 @@ public final class Globals {
     public static final String ADMIN_DATABASES_COLLECTION_NAME = "databases";
     public static final String ADMIN_COLLECTIONS_COLLECTION_NAME = "collections";
     public static final String ADMIN_USERS_COLLECTION_NAME = "users";
-    public static final String ADMIN_PAGES_PER_COLLECTION_NAME = "pages_%s_%s";
+    public static final String ADMIN_PAGES_FOLDER = "pages";
+    public static final String ADMIN_PAGES_DB_NAME = "admin_pages";
+    public static final String ADMIN_PAGES_PER_COLLECTION_NAME = "%s_%s";
     public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
     public static final String ADMIN_TRANSACTIONS_COLLECTION_NAME = "transactions";
     public static final long CACHE_DISABLED = -1L;
