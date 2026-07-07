@@ -64,6 +64,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.data.admin.AdminTransactionEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.data.admin.AdminUserEntry",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -121,6 +128,13 @@
     },
     {
       "type": "org.techhouse.ops.req.CloseConnectionRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.CommitTransactionRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -233,6 +247,20 @@
     },
     {
       "type": "org.techhouse.ops.req.ReindexRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.RollbackTransactionRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.StartTransactionRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
@@ -568,6 +596,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.resp.CommitTransactionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.resp.CreateCollectionResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -674,6 +709,20 @@
     },
     {
       "type": "org.techhouse.ops.resp.ReindexResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.RollbackTransactionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.StartTransactionResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
