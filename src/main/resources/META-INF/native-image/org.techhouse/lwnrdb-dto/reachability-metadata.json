@@ -246,6 +246,13 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.listen.ResultHasher$ResultWrapper",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.req.ReindexRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
