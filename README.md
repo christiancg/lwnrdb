@@ -35,11 +35,12 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
+- [ ] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant 
+- [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
 - [x] Transactions
 - [x] Vector type support
