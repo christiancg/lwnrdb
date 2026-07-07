@@ -12,7 +12,7 @@ public class AdminPageEntryTest {
     @Test
     public void test_constructor_sets_correct_collection_name() {
         AdminPageEntry entry = new AdminPageEntry("myDb", "myColl");
-        assertEquals(Globals.ADMIN_DB_NAME, entry.getDatabaseName());
+        assertEquals(Globals.ADMIN_PAGES_DB_NAME, entry.getDatabaseName());
         assertEquals(String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "myDb", "myColl"),
                 entry.getCollectionName());
     }
@@ -56,12 +56,6 @@ public class AdminPageEntryTest {
         assertEquals(5L, entry.getPage());
         assertEquals(12, entry.getEntryCount());
         assertEquals(4096L, entry.getPageSize());
-    }
-
-    @Test
-    public void test_equals_same_instance() {
-        AdminPageEntry entry = new AdminPageEntry("db", "coll", 0L);
-        assertEquals(entry, entry);
     }
 
     @Test

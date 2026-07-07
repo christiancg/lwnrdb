@@ -413,11 +413,16 @@ public class CacheTest {
 
         cache.shiftPkPositionsAfterCompaction(
                 new org.techhouse.fs.PkCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5));
+        // Page-metadata collections live in the reserved admin_pages namespace but must route to the
+        // admin cache too.
+        cache.shiftPkPositionsAfterCompaction(
+                new org.techhouse.fs.PkCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9));
         cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
         // A null compaction (no survivor moved) is a no-op.
         cache.shiftPkPositionsAfterCompaction(null);
 
         verify(adminMock).shiftPkPositionsAfterCompaction("collections", 0, 10, 5);
+        verify(adminMock).shiftPkPositionsAfterCompaction("userDb_userColl", 2, 30, 9);
         verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
         verifyNoMoreInteractions(adminMock, userMock);
     }

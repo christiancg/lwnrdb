@@ -1020,6 +1020,35 @@ public class FileSystemTest {
         assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
     }
 
+    // The reserved ADMIN_PAGES_DB_NAME namespace resolves physically to the admin/pages subfolder,
+    // and its data/index files live inside it (and NOT flat under admin/).
+    @Test
+    public void test_pages_namespace_resolves_under_admin_pages_folder() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createAdminDatabase();
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "rdb", "coll");
+        fileSystem.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+
+        DbEntry entry = new DbEntry();
+        entry.set_id("1");
+        entry.setDatabaseName(Globals.ADMIN_PAGES_DB_NAME);
+        entry.setCollectionName(pagesCollName);
+        entry.setData(new JsonObject());
+        entry.setPage(0);
+        fileSystem.insertIntoCollection(entry);
+
+        final var nestedFolder = new File(TestGlobals.PATH + File.separator + Globals.ADMIN_DB_NAME + File.separator
+                + Globals.ADMIN_PAGES_FOLDER + File.separator + pagesCollName);
+        assertTrue(nestedFolder.isDirectory(), "page collection must live under admin/pages/<db>_<coll>");
+        assertTrue(new File(nestedFolder, pagesCollName + "-0" + Globals.DB_FILE_EXTENSION).exists());
+        final var flatFolder = new File(
+                TestGlobals.PATH + File.separator + Globals.ADMIN_DB_NAME + File.separator + pagesCollName);
+        assertFalse(flatFolder.exists(), "no flat admin/<db>_<coll> folder should exist");
+        assertEquals(1L, fileSystem.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)
+                .flatMap(m -> m.keySet().stream()).filter("1"::equals).count());
+    }
+
     // findPkIndexEntry returns matching entry from configured path
     @Test
     public void test_find_pk_index_entry() throws IOException, NoSuchFieldException, IllegalAccessException {
