@@ -130,6 +130,7 @@ public class ConfigurationTest {
         map.put("defaultAdminUsername", "admin");
         map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512mb");
+        map.put("transactionLockTimeoutMs", "5000");
         map.put("tlsEnabled", "false");
         return map;
     }
@@ -148,6 +149,7 @@ public class ConfigurationTest {
             assertEquals(7, config.getMaxLogFiles());
             assertEquals(2L * 1024L * 1024L, config.getMaxPageSize());
             assertEquals(1024L * 1024L, config.getMaxEntrySize());
+            assertEquals(5000L, config.getTransactionLockTimeoutMs());
         }
     }
 

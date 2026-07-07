@@ -26,6 +26,7 @@ public class ConfigurationValidatorTest {
         map.put("defaultAdminUsername", "admin");
         map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512Mb");
+        map.put("transactionLockTimeoutMs", "5000");
         map.put("tlsEnabled", "false");
         return map;
     }
@@ -97,6 +98,12 @@ public class ConfigurationValidatorTest {
     @Test
     public void test_invalid_maxMemory(@TempDir Path tempDir) {
         assertHasError(tempDir, "maxMemory", "nonsense", "maxMemory");
+    }
+
+    @Test
+    public void test_invalid_transaction_lock_timeout(@TempDir Path tempDir) {
+        assertHasError(tempDir, "transactionLockTimeoutMs", "0", "transactionLockTimeoutMs");
+        assertHasError(tempDir, "transactionLockTimeoutMs", "not-a-number", "transactionLockTimeoutMs");
     }
 
     @Test

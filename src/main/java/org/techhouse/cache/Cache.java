@@ -85,7 +85,8 @@ public class Cache {
         if (compaction == null) {
             return;
         }
-        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())) {
+        if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())
+                || Globals.ADMIN_PAGES_DB_NAME.equals(compaction.dbName())) {
             adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
                     compaction.removedPosition(), compaction.removedLength());
         } else {
@@ -387,5 +388,21 @@ public class Cache {
 
     public Map<String, PkIndexEntry> getCollectionUsagePkIndexes() {
         return adminCache.getCollectionUsagePkIndexes();
+    }
+
+    public PkIndexEntry getPkIndexTransaction(String opId) {
+        return adminCache.getPkIndexTransaction(opId);
+    }
+
+    public void putPkIndexTransaction(PkIndexEntry indexEntry) {
+        adminCache.putPkIndexTransaction(indexEntry);
+    }
+
+    public void removePkIndexTransaction(String opId) {
+        adminCache.removePkIndexTransaction(opId);
+    }
+
+    public Map<String, PkIndexEntry> getTransactionPkIndexes() {
+        return adminCache.getTransactionPkIndexes();
     }
 }

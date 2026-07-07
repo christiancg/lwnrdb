@@ -297,23 +297,24 @@ public class AdminCacheTest {
         assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
     }
 
-    // shiftPkPositionsAfterCompaction dispatches to the per-collection pages PK list for a pages_* name.
+    // shiftPkPositionsAfterCompaction dispatches to the per-collection pages PK list for a page-metadata name.
     @Test
     public void test_shift_pk_positions_for_pages_collection() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "db", "coll");
-        final var entry = new PkIndexEntry(Globals.ADMIN_DB_NAME, pagesCollName, "p1", 30, 10, 0);
+        final var entry = new PkIndexEntry(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, "p1", 30, 10, 0);
         final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
         TestUtils.getPrivateField(cache, "pagesPkIndexes", type).put(
-                Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, pagesCollName), new ArrayList<>(List.of(entry)));
+                Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
+                new ArrayList<>(List.of(entry)));
 
         cache.shiftPkPositionsAfterCompaction(pagesCollName, 0, 0, 10);
 
         assertEquals(20, entry.getPosition());
     }
 
-    // An unknown pages_* collection that is not cached is a no-op (does not throw).
+    // An unknown page-metadata collection that is not cached is a no-op (does not throw).
     @Test
     public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
         AdminCache cache = new AdminCache();

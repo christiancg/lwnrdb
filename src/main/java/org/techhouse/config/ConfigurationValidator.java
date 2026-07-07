@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.IntPredicate;
+import java.util.function.LongPredicate;
 
 public final class ConfigurationValidator {
 
@@ -30,6 +31,7 @@ public final class ConfigurationValidator {
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateMaxMemory(configs, errors);
+        validateLong(configs, "transactionLockTimeoutMs", 1, errors);
         validateTls(configs, errors);
         return errors;
     }
@@ -94,6 +96,24 @@ public final class ConfigurationValidator {
         }
         try {
             return !predicate.test(Integer.parseInt(value.trim()));
+        } catch (NumberFormatException e) {
+            return true;
+        }
+    }
+
+    private static void validateLong(Map<String, String> configs, String key, long min, List<String> errors) {
+        final var value = configs.get(key);
+        if (notALong(value, parsed -> parsed >= min)) {
+            errors.add(key + " must be a valid number greater than or equal to " + min + ", but was: " + value);
+        }
+    }
+
+    private static boolean notALong(String value, LongPredicate predicate) {
+        if (value == null) {
+            return true;
+        }
+        try {
+            return !predicate.test(Long.parseLong(value.trim()));
         } catch (NumberFormatException e) {
             return true;
         }

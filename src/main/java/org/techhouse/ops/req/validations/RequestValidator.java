@@ -57,6 +57,9 @@ public class RequestValidator {
             case SET_PASSWORD -> validateSetPassword((SetPasswordRequest) request);
             case LISTEN -> validateListen((ListenRequest) request);
             case STOP_LISTEN -> validateStopListen((StopListenRequest) request);
+            // Transaction control operations carry no db/coll/payload of their own — the transaction is
+            // scoped to the connection. Authentication is still enforced in MessageProcessor.
+            case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION -> ValidationResult.ok();
         };
     }
 
@@ -196,6 +199,10 @@ public class RequestValidator {
         return ValidationResult.ok();
     }
 
+    private static boolean isReservedDbName(String dbName) {
+        return Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
+    }
+
     private static ValidationResult validateDbName(String dbName, boolean rejectAdmin) {
         if (dbName == null || dbName.isBlank()) {
             return ValidationResult.fail("databaseName is required");
@@ -203,8 +210,8 @@ public class RequestValidator {
         if (!dbName.matches(NAME_PATTERN)) {
             return ValidationResult.fail("databaseName must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
-        if (rejectAdmin && Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+        if (rejectAdmin && isReservedDbName(dbName)) {
+            return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
         }
         return ValidationResult.ok();
     }
@@ -338,8 +345,8 @@ public class RequestValidator {
         if (databasePermissions != null) {
             for (var entry : databasePermissions.entrySet()) {
                 final var dbName = entry.getKey();
-                if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-                    return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+                if (isReservedDbName(dbName)) {
+                    return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
                     return ValidationResult.fail(
@@ -361,8 +368,8 @@ public class RequestValidator {
                 }
                 final var dbName = parts[0];
                 final var collName = parts[1];
-                if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-                    return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+                if (isReservedDbName(dbName)) {
+                    return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
                     return ValidationResult.fail(

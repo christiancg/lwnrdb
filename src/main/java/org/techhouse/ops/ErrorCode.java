@@ -30,7 +30,13 @@ public enum ErrorCode {
 
     // ── 409 Conflict ──────────────────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",
-            "Database already exists", OperationStatus.ERROR),
+            "Database already exists", OperationStatus.ERROR), TRANSACTION_ALREADY_ACTIVE("409-3",
+                    "A transaction is already in progress for this connection",
+                    OperationStatus.ERROR), NO_ACTIVE_TRANSACTION("409-4", "No active transaction for this connection",
+                            OperationStatus.ERROR), TRANSACTION_LOCK_TIMEOUT("409-5",
+                                    "Could not acquire the collection lock in time; transaction aborted",
+                                    OperationStatus.ERROR), OPERATION_NOT_ALLOWED_IN_TRANSACTION("409-6",
+                                            "Operation not allowed while a transaction is open", OperationStatus.ERROR),
 
     // ── 500 Internal Server Error ─────────────────────────────────────────
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR), ERROR_CREATING_USER("500-2",
@@ -84,7 +90,10 @@ public enum ErrorCode {
                                                                                                                                                                             OperationStatus.ERROR), ERROR_LISTEN(
                                                                                                                                                                                     "500-23",
                                                                                                                                                                                     "Error while processing listen operation",
-                                                                                                                                                                                    OperationStatus.ERROR),
+                                                                                                                                                                                    OperationStatus.ERROR), ERROR_TRANSACTION(
+                                                                                                                                                                                            "500-24",
+                                                                                                                                                                                            "Error while processing transaction operation",
+                                                                                                                                                                                            OperationStatus.ERROR),
 
     // ── 503 Service Unavailable ───────────────────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR);

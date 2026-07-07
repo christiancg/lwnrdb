@@ -31,17 +31,18 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - Only alphanumeric characters allowed and the following symbols are allowed: "_" and "-"
 - Indexes are updated in the background and admin collections also. This is to make the DB a little bit more agile.
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
-- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages_<collection>`, and the pagination of that admin collection is itself persisted under `admin/pages_pages_<collection>` (further levels are tracked in memory only and rebuilt at startup). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
+- Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
 
 ## Pending tasks
 
-- [ ] Transactions
 - [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
 - [x] Use GraalVM to generate native executable
+- [x] Move pages admin collections to a separate folder called "pages" to make things more organized
+- [x] Transactions
 - [x] Vector type support
   - [x] Semantic search
 - [x] Geo type support
@@ -346,6 +347,41 @@ Cancel a specific listen subscription by its ID.
 
 Returns `NOT_FOUND` (`404-7`) if the listen ID is not registered.
 
+#### Transactions
+
+A connection may open **one transaction at a time**. While a transaction is open the connection's data mutations (`SAVE`, `BULK_SAVE`, `DELETE`) are **buffered** instead of applied: they are recorded in an internal `admin/transactions` collection and are not written to the real collections until commit.
+
+The connection's own reads (`FIND_BY_ID`, `AGGREGATE`) see its buffered writes (**read-your-writes**); other connections do not. The first buffered write to a collection takes that collection's exclusive write lock and holds it until commit/rollback, so no other connection can read or write those collections meanwhile (this is what preserves atomicity). 
+
+See [Concurrency & locking](#concurrency--locking).
+
+While a transaction is open only `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID`, `AGGREGATE`, `COMMIT_TRANSACTION`, `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION` are accepted; any other operation is rejected with `409-6`. 
+
+If the connection closes with a transaction still open, it is automatically rolled back.
+
+##### `START_TRANSACTION`
+```json
+{"type":"START_TRANSACTION"}
+```
+Response carries the new transaction id:
+```json
+{"type":"START_TRANSACTION","status":"OK","message":"Transaction started","transactionId":"<uuid>"}
+```
+Returns `409-3` if a transaction is already open on the connection.
+
+##### `COMMIT_TRANSACTION`
+Applies the buffered operations to the real collections in order, then removes the buffered records and releases the held locks.
+```json
+{"type":"COMMIT_TRANSACTION"}
+```
+
+##### `ROLLBACK_TRANSACTION`
+Discards the buffered operations (nothing is written to the real collections), removes the buffered records and releases the held locks.
+```json
+{"type":"ROLLBACK_TRANSACTION"}
+```
+`COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` return `409-4` if no transaction is open.
+
 #### `CLOSE_CONNECTION`
 ```json
 {"type":"CLOSE_CONNECTION"}
@@ -561,6 +597,10 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-7` | `NOT_FOUND` | Listen registration not found |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
+| `409-3` | `ERROR` | A transaction is already in progress for this connection |
+| `409-4` | `ERROR` | No active transaction for this connection |
+| `409-5` | `ERROR` | Could not acquire the collection lock in time; transaction aborted |
+| `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -584,6 +624,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-21` | `ERROR` | Error while reindexing |
 | `500-22` | `ERROR` | Error while gathering database stats |
 | `500-23` | `ERROR` | Error while processing listen operation |
+| `500-24` | `ERROR` | Error while processing transaction operation |
 | `503-1` | `ERROR` | Max number of connections reached |
 
 ### Bootstrap
@@ -611,6 +652,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminUsername` | Non-blank string |
 | `defaultAdminPassword` | Non-blank string, at least 8 characters |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
+| `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
 | `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true` |
@@ -627,6 +669,8 @@ maxEntrySize=1Mb
 defaultAdminUsername=admin
 defaultAdminPassword=administrator
 maxMemory=512Mb
+# ms a transactional write waits for a busy collection lock before aborting (409-5)
+transactionLockTimeoutMs=5000
 # TLS: when enabled, plaintext clients are rejected at the handshake
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
@@ -665,7 +709,7 @@ Eviction order is LFU. Access counts are recorded asynchronously and persisted i
 
 **Aligning RSS with the cap.** `maxMemory` constrains JVM heap usage but cannot reclaim metaspace, JIT code, or committed-but-unused heap. To make Activity Monitor / `top` match the configured budget, set `-Xmx` close to `maxMemory`. Startup logs a warning when `-Xmx > maxMemory × 2`.
 
-**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
+**Streaming reads.** Queries no longer load an entire collection into memory before filtering. When a `FILTER` step matches against an index, only the matched entries are fetched via positioned reads (the whole collection is never loaded). When there is no usable index, the collection is scanned page-by-page: one page is resident at a time, the page-size estimate from the `admin/pages/<db>_<collection>` metadata drives a between-pages headroom check that evicts other cached resources when the budget is tight, and consumed pages are released for GC.
 
 `SORT`, `GROUP_BY`, `JOIN`, and `DISTINCT` also use a single-field index when one exists on the step's field **and** the step is the pipeline source (no earlier step has already produced a stream). The field index maps each value to its matching ids, so the step works from that grouping instead of scanning the whole collection: `DISTINCT` reads no documents at all (the index keys are the distinct values), `GROUP_BY`/`SORT` fetch only the grouped/ordered documents via positioned reads, and `JOIN` fetches only the remote documents whose value matches a local value. Because indexes model scalar/custom/null values only, documents whose indexed field holds a JSON object or array are outside index scope and do not appear in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results; run the step on a non-indexed field if you need those included. When no index applies, these steps still materialize their working set in memory as before.
 
@@ -681,7 +725,10 @@ Locking is two-tier and applies to **both reads and writes** (earlier versions l
 - **Collection-level read/write locks.** Each collection (and each field index) has a read/write lock. Reads acquire a *shared* read lock; writes (`SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`) acquire an *exclusive* write lock. While a writer holds a collection, nobody else may read or write it; multiple readers run concurrently. An `AGGREGATE` with `JOIN` steps read-locks the primary collection and every joined collection, acquiring them in a deterministic order so overlapping queries cannot deadlock. Cache eviction only evicts a resource it can exclusively (write) lock, so it never races an in-flight read or write.
 - **File-level read/write locks.** Below the collection tier, each physical `.dat`/`.idx` file has its own read/write lock, so a file's bytes are never read while they are being rewritten.
 
-**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting. Logical read-your-writes consistency against asynchronous background index updates is out of scope (it belongs to the pending *Transactions* work).
+**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting.
+
+**Transactions.** A connection can open a transaction (`START_TRANSACTION`) to make several writes atomic (see [Transactions](#transactions)). Writes inside a transaction are buffered in the internal `admin/transactions` collection rather than applied, and become visible to the real collections only on `COMMIT_TRANSACTION`; `ROLLBACK_TRANSACTION` discards them. Locking is **lazy**: the first buffered write to a collection acquires that collection's exclusive write lock (waiting up to `transactionLockTimeoutMs`, then aborting the transaction with `409-5` so two concurrent transactions can never deadlock) and holds it — on the connection's own virtual thread — until commit/rollback. 
+While held, other connections cannot read or write those collections, which is what keeps the committed batch atomic. The transaction's own reads apply its buffered mutations (**read-your-writes**); there is no snapshot isolation against other connections beyond that write-exclusivity. Committing replays the buffered operations through the normal write path, so field-index maintenance, page metadata and `LISTEN` notifications behave exactly as for ordinary writes. If the connection drops with a transaction open it is auto-rolled-back, and any operation records left behind by a crash are cleared at startup.
 
 ## Q&A
 

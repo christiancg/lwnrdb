@@ -67,10 +67,12 @@ public class FileSystem {
 
     public void createAdminDatabase() throws IOException {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
+        createAdminPagesFolder();
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
@@ -79,10 +81,22 @@ public class FileSystem {
                 Globals.ADMIN_USERS_COLLECTION_NAME);
         final var pagesCollectionUsage = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesUsers);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollectionUsage);
+        final var pagesTransactions = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesDatabases);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollections);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesUsers);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollectionUsage);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTransactions);
+    }
+
+    // Create the nested admin/pages parent up front (per-collection folders below are mkdir'd one level deep).
+    private void createAdminPagesFolder() {
+        final var pagesFolder = new File(dbPath + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME
+                + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER);
+        if (!pagesFolder.exists() && !pagesFolder.mkdirs()) {
+            throw new DirectoryNotFoundException(pagesFolder.getAbsolutePath());
+        }
     }
 
     public boolean createDatabaseFolder(String dbName) {
@@ -115,13 +129,23 @@ public class FileSystem {
         return false;
     }
 
+    // The reserved logical db name ADMIN_PAGES_DB_NAME maps to the physical admin/pages subfolder;
+    // all physical paths funnel through the three builders below, so this is the only translation point.
+    private String resolveDbPathSegment(String dbName) {
+        if (Globals.ADMIN_PAGES_DB_NAME.equals(dbName)) {
+            return Globals.ADMIN_DB_NAME + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER;
+        }
+        return dbName;
+    }
+
     private File getCollectionFolder(String dbName, String collectionName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName);
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName);
     }
 
     private File getCollectionFile(String dbName, String collectionName, long page) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName
-                + Globals.FILE_SEPARATOR + collectionName + Globals.FILE_PAGE_SEPARATOR + page
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.FILE_PAGE_SEPARATOR + page
                 + Globals.DB_FILE_EXTENSION);
     }
 
@@ -157,9 +181,9 @@ public class FileSystem {
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName, String indexType) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName
-                + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR + indexName
-                + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + indexName + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {

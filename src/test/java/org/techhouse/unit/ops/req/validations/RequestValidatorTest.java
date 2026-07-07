@@ -80,6 +80,14 @@ public class RequestValidatorTest {
     }
 
     @Test
+    public void validate_createDatabase_adminPagesName_returnsFail() {
+        final var result = RequestValidator
+                .validate(new CreateDatabaseRequest(org.techhouse.config.Globals.ADMIN_PAGES_DB_NAME));
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("reserved"));
+    }
+
+    @Test
     public void validate_createDatabase_exactlyThreeChars_returnsOk() {
         assertTrue(RequestValidator.validate(new CreateDatabaseRequest("abc")).isValid());
     }

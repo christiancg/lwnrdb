@@ -61,6 +61,35 @@ public class AdminOperationHelperTest {
         assertTrue(pageZero.get().getPageSize() > 0);
     }
 
+    // Page-metadata written for a real collection lives physically under admin/pages/<db>_<coll>,
+    // not flat under admin/ (the whole point of the relocation).
+    @Test
+    public void test_page_metadata_written_under_admin_pages_folder() throws Exception {
+        final var d = new JsonObject();
+        d.addProperty("foo", "bar");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, d);
+        entry.set_id("entryLayout");
+        entry.setPage(0L);
+        AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                java.util.List.of(entry));
+
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, TestGlobals.DB,
+                TestGlobals.COLL);
+        final var filePath = Configuration.getInstance().getFilePath();
+        final var nestedDir = new File(filePath + File.separator + Globals.ADMIN_DB_NAME + File.separator
+                + Globals.ADMIN_PAGES_FOLDER + File.separator + pagesCollName);
+        assertTrue(nestedDir.isDirectory(), "page metadata must live under admin/pages/<db>_<coll>");
+        assertTrue(new File(nestedDir, pagesCollName + "-0" + Globals.DB_FILE_EXTENSION).exists(),
+                "page metadata data file must exist inside the nested folder");
+
+        final var flatPagesDir = new File(filePath + File.separator + Globals.ADMIN_DB_NAME + File.separator + "pages_"
+                + TestGlobals.DB + "_" + TestGlobals.COLL);
+        assertFalse(flatPagesDir.exists(), "legacy flat admin/pages_<db>_<coll> folder must not be created");
+        final var flatDir = new File(
+                filePath + File.separator + Globals.ADMIN_DB_NAME + File.separator + pagesCollName);
+        assertFalse(flatDir.exists(), "no flat admin/<db>_<coll> folder should be created");
+    }
+
     // Database entry creation and update with proper locking and cache management
     @Test
     public void test_save_database_entry_creates_and_updates_with_locking() throws Exception {
@@ -225,7 +254,7 @@ public class AdminOperationHelperTest {
     }
 
     // deleteDatabaseEntry must call deletePageCollections for each collection so that
-    // admin/pages_<db>_<coll> files and their in-memory entries do not outlive the database.
+    // admin/pages/<db>_<coll> files and their in-memory entries do not outlive the database.
     @Test
     public void test_delete_database_entry_clears_page_collections() throws Exception {
         final var dbName = "pageLeakDb";
@@ -245,8 +274,8 @@ public class AdminOperationHelperTest {
 
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         final var pagesDir = new File(Configuration.getInstance().getFilePath() + File.separator + Globals.ADMIN_DB_NAME
-                + File.separator + pagesCollName);
-        assertFalse(pagesDir.exists(), "admin/pages_* directory must be removed after drop");
+                + File.separator + Globals.ADMIN_PAGES_FOLDER + File.separator + pagesCollName);
+        assertFalse(pagesDir.exists(), "admin/pages/<db>_<coll> directory must be removed after drop");
     }
 
     // Background CREATED event must not re-apply the delta that updatePageSizeInMemory already applied.
