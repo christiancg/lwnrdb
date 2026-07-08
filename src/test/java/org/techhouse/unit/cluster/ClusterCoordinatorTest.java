@@ -17,6 +17,7 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -114,5 +115,32 @@ public class ClusterCoordinatorTest {
         ownership.onMembershipChanged(new MembershipView(List.of(node("self", 9990), node("other", 9991))));
         assertEquals(ReplicationOutcome.NOT_APPLICABLE,
                 coordinator.replicateDelete(TestGlobals.DB, collectionOwnedByOther(), List.of("a")));
+    }
+
+    @Test
+    public void test_guard_admin_allows_when_disabled() {
+        assertEquals(WriteGuard.Kind.ALLOW, coordinator.guardAdmin().kind());
+    }
+
+    @Test
+    public void test_guard_admin_allows_with_quorum() throws Exception {
+        enable(1);
+        ownership.setSelfNodeId("self");
+        ownership.onMembershipChanged(new MembershipView(List.of(node("self", 9990))));
+        assertEquals(WriteGuard.Kind.ALLOW, coordinator.guardAdmin().kind());
+    }
+
+    @Test
+    public void test_guard_admin_no_quorum() throws Exception {
+        enable(3);
+        ownership.setSelfNodeId("self");
+        ownership.onMembershipChanged(new MembershipView(List.of(node("self", 9990))));
+        assertEquals(WriteGuard.Kind.NO_QUORUM, coordinator.guardAdmin().kind());
+    }
+
+    @Test
+    public void test_replicate_admin_op_not_applicable_when_disabled() {
+        assertEquals(ReplicationOutcome.NOT_APPLICABLE,
+                coordinator.replicateAdminOp(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "alice"));
     }
 }

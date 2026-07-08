@@ -8,9 +8,11 @@ import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.req.OperationRequest;
 
 /**
  * Write-path facade the operation layer consults when clustering is enabled: it decides whether this node
@@ -22,6 +24,7 @@ public class ClusterCoordinator {
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final Replicator replicator = IocContainer.get(Replicator.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
 
     public WriteGuard guardWrite(String dbName, String collName) {
         if (doesntCoordinate(dbName)) {
@@ -56,6 +59,24 @@ public class ClusterCoordinator {
             return ReplicationOutcome.NOT_APPLICABLE;
         }
         return replicator.broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids));
+    }
+
+    // Admin/DDL ops are serialized by the admin coordinator; a node without a write quorum must not apply
+    // them (split-brain protection), mirroring the per-collection write guard.
+    public WriteGuard guardAdmin() {
+        if (!clusterConfig.isEnabled()) {
+            return WriteGuard.allow();
+        }
+        return ownershipManager.hasQuorum() ? WriteGuard.allow() : WriteGuard.noQuorum();
+    }
+
+    // Broadcasts an admin/DDL op (re-executed as actingUser) to a majority. Only the coordinator replicates,
+    // so peers applying an inbound REPLICATE_ADMIN never re-broadcast.
+    public ReplicationOutcome replicateAdminOp(OperationRequest request, String actingUser) {
+        if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
+            return ReplicationOutcome.NOT_APPLICABLE;
+        }
+        return replicator.broadcastAdmin(eJson.toJson(request), actingUser);
     }
 
     private boolean doesntCoordinate(String dbName) {

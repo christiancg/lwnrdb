@@ -17,9 +17,12 @@ one large machine.
 >   any node; per-collection reads/writes are forwarded to the owner and the
 >   response is relayed back, with reads falling back to the local replica when the
 >   owner is unreachable.
-> - **Planned (later phases):** admin/DDL replication, a replication log +
->   anti-entropy catch-up, ownership handoff on failure, and distributed
->   transactions.
+> - **Phase 2b — implemented:** structural admin/DDL replication (`CREATE`/`DROP` of
+>   databases, collections and indexes, `REINDEX`, `SET_DATABASE_OWNERS`), serialized
+>   by an admin coordinator and applied on every node.
+> - **Planned (later phases):** user/password/permission replication (Phase 2c), a
+>   replication log + anti-entropy catch-up, ownership handoff on failure, and
+>   distributed transactions.
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
 > the node behaves exactly as a standalone server.
@@ -131,6 +134,35 @@ follow:
 (This assumes B exists on X, which depends on admin/DDL replication — planned for a
 later phase — propagating `CREATE_COLLECTION` to every node.)
 
+## Admin / DDL replication
+
+Admin and DDL operations mutate cluster-wide metadata (databases, collections,
+indexes) rather than a single collection's documents, so they are not per-collection
+hash-owned. Instead a single **admin coordinator** — the owner of a reserved ring key
+(`OwnershipManager.isAdminCoordinator`), chosen and handed off by the same
+consistent-hash + membership machinery — serializes them:
+
+1. A non-coordinator node **forwards** the admin op to the coordinator (reusing the
+   `FORWARD_REQUEST` path), carrying the authenticated **acting username**.
+2. The coordinator **executes it locally**, then re-executes it on a **majority** of
+   peers via a `REPLICATE_ADMIN` broadcast (waiting for `⌈N/2⌉` acks). DDL is
+   replicated by **re-execution**, not by shipping rows, because the effect is a
+   filesystem/metadata change (create a folder, rebuild an index from the node's own
+   documents) that each node must perform locally and deterministically.
+3. A node without a write quorum rejects an admin op up front (`503-2 NO_QUORUM`) —
+   the same split-brain protection as document writes.
+
+The acting username travels edge → coordinator → peers on the message and is applied
+on each node through a short-lived **synthetic client**
+(`ClientTracker.registerForwardedClient`), so an op like `CREATE_DATABASE` records
+the creator as owner identically on every node rather than losing that identity when
+executed away from the originating connection.
+
+Scope note: only *structural* DDL is replicated this way. User/password/permission
+ops are deferred to a later phase and will ship the committed `admin/users` record
+instead of re-executing (re-hashing a password with a fresh salt on each node would
+otherwise diverge the stored hashes).
+
 ## Failure & partition behaviour
 
 Because data is fully replicated, losing a node never loses data — every survivor
@@ -148,14 +180,15 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 (`clusterTlsEnabled`, reusing the PKCS12 keystore — all nodes must share the same
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
-replication, forwardBody, errorMessage}`; `correlationId` lets a single pooled
-connection multiplex many in-flight requests. Message types are
+replication, forwardBody, actingUser, errorMessage}`; `correlationId` lets a single
+pooled connection multiplex many in-flight requests. Message types are
 `JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
-`sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (writes, carrying a `replication`
-payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`), and
-`FORWARD_REQUEST`/`FORWARD_RESPONSE` (routing, carrying the Base64-wrapped request
-or response JSON in `forwardBody`). Inbound messages whose `secret` does not match
-`clusterSecret` are rejected.
+`sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (document writes, carrying a
+`replication` payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`),
+`FORWARD_REQUEST`/`FORWARD_RESPONSE` (routing, carrying the Base64-wrapped request or
+response JSON in `forwardBody`), and `REPLICATE_ADMIN`/`REPLICATE_ADMIN_ACK` (admin
+DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`). Inbound
+messages whose `secret` does not match `clusterSecret` are rejected.
 
 ## Configuration reference
 

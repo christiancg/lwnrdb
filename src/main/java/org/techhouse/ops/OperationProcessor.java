@@ -79,7 +79,12 @@ public class OperationProcessor {
                 && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
         }
-        return switch (operationRequest.getType()) {
+        final var adminGuard = ClusterAdminHelper.guard(operationRequest);
+        if (adminGuard != null) {
+            return adminGuard;
+        }
+        final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
+        final var response = switch (operationRequest.getType()) {
             case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction);
             case SAVE -> processSaveOperation((SaveRequest) operationRequest, activeTransaction);
             case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest, activeTransaction);
@@ -112,6 +117,7 @@ public class OperationProcessor {
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
         };
+        return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
 
     private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction) {

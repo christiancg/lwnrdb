@@ -1,6 +1,7 @@
 package org.techhouse.unit.cluster.ownership;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -94,5 +95,36 @@ public class OwnershipManagerTest {
         manager.onMembershipChanged(
                 new MembershipView(List.of(node("a", NodeState.ALIVE), node("b", NodeState.ALIVE))));
         assertFalse(manager.hasQuorum());
+    }
+
+    @Test
+    public void test_single_node_is_admin_coordinator() {
+        final var manager = new OwnershipManager();
+        manager.setSelfNodeId("self");
+        manager.onMembershipChanged(new MembershipView(List.of(node("self", NodeState.ALIVE))));
+        assertTrue(manager.isAdminCoordinator());
+        assertNotNull(manager.adminCoordinatorAddress());
+    }
+
+    @Test
+    public void test_admin_coordinator_is_deterministic_and_single() {
+        final var manager = new OwnershipManager();
+        manager.setSelfNodeId("self");
+        manager.onMembershipChanged(
+                new MembershipView(List.of(node("self", NodeState.ALIVE), node("other", NodeState.ALIVE))));
+        final var other = new OwnershipManager();
+        other.setSelfNodeId("other");
+        other.onMembershipChanged(
+                new MembershipView(List.of(node("self", NodeState.ALIVE), node("other", NodeState.ALIVE))));
+        // Exactly one of the two nodes considers itself the coordinator.
+        assertTrue(manager.isAdminCoordinator() ^ other.isAdminCoordinator());
+    }
+
+    @Test
+    public void test_no_members_has_no_admin_coordinator() {
+        final var manager = new OwnershipManager();
+        manager.setSelfNodeId("self");
+        assertFalse(manager.isAdminCoordinator());
+        assertNull(manager.adminCoordinatorAddress());
     }
 }

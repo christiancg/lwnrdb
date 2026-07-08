@@ -29,6 +29,17 @@ public class ClientTracker {
         clients.remove(clientId);
     }
 
+    // Registers a transient, socket-less authenticated client so a forwarded/replicated admin operation can
+    // execute on this node as the original acting user (bypasses the maxConnections limit). The caller must
+    // removeById it when the operation completes.
+    public UUID registerForwardedClient(String username) {
+        final var clientId = UUID.randomUUID();
+        final var client = new Client("forwarded");
+        client.setAuthenticatedUsername(username);
+        clients.put(clientId, client);
+        return clientId;
+    }
+
     public void updateLastCommandTime(UUID clientId) {
         if (clientId == null)
             return;

@@ -154,7 +154,7 @@ public class ClusterRouterIntegrationTest {
 
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("f1");
-        final var relayed = router.forward(request, rawFind(coll, "f1"), false);
+        final var relayed = router.forward(request, rawFind(coll, "f1"), false, null);
 
         assertNotNull(relayed);
         assertTrue(relayed.contains("f1"), "expected forwarded read response to contain the document, got: " + relayed);
@@ -165,7 +165,7 @@ public class ClusterRouterIntegrationTest {
         configureMembership(1, node("self", serverPort));
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setObject(doc("local"));
-        assertNull(router.forward(request, rawSave(TestGlobals.COLL, "local"), false));
+        assertNull(router.forward(request, rawSave(TestGlobals.COLL, "local"), false, null));
     }
 
     @Test
@@ -174,7 +174,7 @@ public class ClusterRouterIntegrationTest {
         final var coll = collectionOwnedByOther();
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("x");
-        assertNull(router.forward(request, rawFind(coll, "x"), false));
+        assertNull(router.forward(request, rawFind(coll, "x"), false, null));
     }
 
     @Test
@@ -183,7 +183,7 @@ public class ClusterRouterIntegrationTest {
         final var coll = collectionOwnedByOther();
         final var request = new SaveRequest(TestGlobals.DB, coll);
         request.setObject(doc("y"));
-        final var relayed = router.forward(request, rawSave(coll, "y"), false);
+        final var relayed = router.forward(request, rawSave(coll, "y"), false, null);
         assertNotNull(relayed);
         assertTrue(relayed.contains("503-4"), "expected OWNER_UNREACHABLE, got: " + relayed);
     }

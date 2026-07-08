@@ -165,7 +165,7 @@ public class MessageProcessor implements Runnable {
     // analyze=true is timed.
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
         final var forwarded = clusterRouter.forward(parsedMessage, rawMessage,
-                clientTracker.getActiveTransaction(clientId) != null);
+                clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId));
         if (forwarded != null) {
             return new Handled(forwarded, false);
         }

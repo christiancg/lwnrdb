@@ -47,25 +47,25 @@ public class ClusterRouterTest {
 
     @Test
     public void test_null_when_clustering_disabled() {
-        assertNull(router.forward(save(), "{}", false));
+        assertNull(router.forward(save(), "{}", false, null));
     }
 
     @Test
     public void test_null_when_transaction_active() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
-        assertNull(router.forward(save(), "{}", true));
+        assertNull(router.forward(save(), "{}", true, null));
     }
 
     @Test
     public void test_null_for_non_routable_operation() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
-        assertNull(router.forward(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "{}", false));
+        assertNull(router.forward(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "{}", false, null));
     }
 
     @Test
     public void test_null_for_admin_database() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
-        assertNull(router.forward(new SaveRequest(Globals.ADMIN_DB_NAME, "databases"), "{}", false));
+        assertNull(router.forward(new SaveRequest(Globals.ADMIN_DB_NAME, "databases"), "{}", false, null));
     }
 
     @Test
@@ -73,7 +73,7 @@ public class ClusterRouterTest {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(new MembershipView(List.of(node())));
-        assertNull(router.forward(save(), "{}", false));
+        assertNull(router.forward(save(), "{}", false, null));
     }
 
     @Test
@@ -81,6 +81,6 @@ public class ClusterRouterTest {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(new MembershipView(List.of()));
-        assertNull(router.forward(save(), "{}", false));
+        assertNull(router.forward(save(), "{}", false, null));
     }
 }

@@ -12,18 +12,22 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.resp.OperationResponse;
 
 public class ClusterConnectionHandler implements Runnable {
     private final EJson eJson = IocContainer.get(EJson.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
 
@@ -71,6 +75,7 @@ public class ClusterConnectionHandler implements Runnable {
             case JOIN_REQUEST -> membershipService.handleJoin(request);
             case GOSSIP -> membershipService.handleGossip(request);
             case REPLICATE -> handleReplicate(request);
+            case REPLICATE_ADMIN -> handleReplicateAdmin(request);
             case FORWARD_REQUEST -> handleForward(request);
             default -> {
                 final var error = new ClusterMessage();
@@ -84,16 +89,46 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleForward(ClusterMessage request) {
         final var response = new ClusterMessage();
         try {
-            // The edge node already authenticated and authorized the client; the owner re-parses the raw
-            // request and executes it directly (bypassing the router, so there is no forward loop).
-            final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
-            response.setForwardBody(ForwardBody.encode(eJson.toJson(operationProcessor.processMessage(parsed))));
+            response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request))));
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to execute forwarded request: " + e.getMessage());
         }
         return response;
+    }
+
+    private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            final var result = executeForwarded(request);
+            if (result.getStatus() == OperationStatus.OK) {
+                response.setType(ClusterMessageType.REPLICATE_ADMIN_ACK);
+            } else {
+                response.setType(ClusterMessageType.ERROR);
+                response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
+            }
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to apply replicated admin op: " + e.getMessage());
+        }
+        return response;
+    }
+
+    // Re-parses and executes a forwarded/replicated request directly through OperationProcessor (bypassing
+    // the router, so there is no forward loop). The edge already authenticated/authorized the client; a
+    // short-lived synthetic client carries the acting user so admin ops apply with the correct identity.
+    private OperationResponse executeForwarded(ClusterMessage request) {
+        final var actingUser = request.getActingUser();
+        final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
+        try {
+            final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            return operationProcessor.processMessage(parsed, clientId);
+        } finally {
+            if (clientId != null) {
+                clientTracker.removeById(clientId);
+            }
+        }
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {

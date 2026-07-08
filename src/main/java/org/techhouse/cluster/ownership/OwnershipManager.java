@@ -49,4 +49,14 @@ public class OwnershipManager implements MembershipListener {
         final var node = view.find(owner);
         return node != null ? node.address().toString() : null;
     }
+
+    // The admin coordinator is simply the owner of a reserved ring key, so it is chosen and handed off
+    // by the same consistent-hash + membership machinery as any collection owner.
+    public boolean isAdminCoordinator() {
+        return isOwner(Globals.ADMIN_DB_NAME, Globals.CLUSTER_ADMIN_COORDINATOR_KEY);
+    }
+
+    public String adminCoordinatorAddress() {
+        return ownerAddress(Globals.ADMIN_DB_NAME, Globals.CLUSTER_ADMIN_COORDINATOR_KEY);
+    }
 }

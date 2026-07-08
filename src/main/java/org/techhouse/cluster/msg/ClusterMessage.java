@@ -12,6 +12,9 @@ public class ClusterMessage {
     private ReplicationPayload replication;
     // Raw request JSON on a FORWARD_REQUEST; raw response JSON on a FORWARD_RESPONSE.
     private String forwardBody;
+    // Authenticated username the edge resolved, carried on forwarded/replicated admin ops so the executing
+    // node applies them as the same acting user (e.g. CREATE_DATABASE owner assignment).
+    private String actingUser;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -80,6 +83,14 @@ public class ClusterMessage {
 
     public void setForwardBody(String forwardBody) {
         this.forwardBody = forwardBody;
+    }
+
+    public String getActingUser() {
+        return actingUser;
+    }
+
+    public void setActingUser(String actingUser) {
+        this.actingUser = actingUser;
     }
 
     public String getErrorMessage() {

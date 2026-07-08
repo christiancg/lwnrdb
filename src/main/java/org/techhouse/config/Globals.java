@@ -63,4 +63,6 @@ public final class Globals {
     public static final String CLUSTER_NODE_ID_FILE = "node.id";
     public static final String CLUSTER_SEED_SEPARATOR = ",";
     public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
+    // Reserved ring key whose owner is the cluster's admin coordinator (serializes admin/DDL mutations).
+    public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";
 }
