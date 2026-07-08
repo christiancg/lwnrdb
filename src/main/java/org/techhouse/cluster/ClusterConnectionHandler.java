@@ -11,15 +11,19 @@ import javax.net.ssl.SSLException;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.ops.req.RequestParser;
 
 public class ClusterConnectionHandler implements Runnable {
     private final EJson eJson = IocContainer.get(EJson.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
 
@@ -67,6 +71,7 @@ public class ClusterConnectionHandler implements Runnable {
             case JOIN_REQUEST -> membershipService.handleJoin(request);
             case GOSSIP -> membershipService.handleGossip(request);
             case REPLICATE -> handleReplicate(request);
+            case FORWARD_REQUEST -> handleForward(request);
             default -> {
                 final var error = new ClusterMessage();
                 error.setType(ClusterMessageType.ERROR);
@@ -74,6 +79,21 @@ public class ClusterConnectionHandler implements Runnable {
                 yield error;
             }
         };
+    }
+
+    private ClusterMessage handleForward(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            // The edge node already authenticated and authorized the client; the owner re-parses the raw
+            // request and executes it directly (bypassing the router, so there is no forward loop).
+            final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            response.setType(ClusterMessageType.FORWARD_RESPONSE);
+            response.setForwardBody(ForwardBody.encode(eJson.toJson(operationProcessor.processMessage(parsed))));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to execute forwarded request: " + e.getMessage());
+        }
+        return response;
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {

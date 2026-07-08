@@ -13,8 +13,11 @@ one large machine.
 > - **Phase 2 — implemented:** synchronous quorum write replication for document
 >   writes (`SAVE`/`BULK_SAVE`/`DELETE`). The owner rejects writes it cannot
 >   coordinate, commits locally, and replicates to a majority before acknowledging.
-> - **Planned (later phases):** request routing (reads to the cache owner, writes
->   forwarded to the coordinator), admin/DDL replication, a replication log +
+> - **Phase 3 — implemented:** transparent request routing. A client may connect to
+>   any node; per-collection reads/writes are forwarded to the owner and the
+>   response is relayed back, with reads falling back to the local replica when the
+>   owner is unreachable.
+> - **Planned (later phases):** admin/DDL replication, a replication log +
 >   anti-entropy catch-up, ownership handoff on failure, and distributed
 >   transactions.
 >
@@ -81,13 +84,52 @@ because replication is triggered only from the owner's write handlers.
 The quorum gate is also what makes ownership handoff safe: a node in a **minority
 partition** cannot reach a majority, so it cannot commit divergent writes.
 
-## Read routing & distributed cache (planned)
+## Request routing & distributed cache
 
-A read for a collection is forwarded to that collection's owner, which serves it
-from its hot cache — so only the owner keeps the collection resident and total
-cache capacity is the sum of the nodes' budgets. If the owner is unreachable and
-`readFallbackToLocal=true`, the receiving node serves the read from its own
-(complete) on-disk replica instead of failing.
+A client may connect to any node. After authenticating/authorizing the request,
+the edge node's `MessageProcessor` consults `ClusterRouter`: for a per-collection
+operation (`SAVE`/`BULK_SAVE`/`DELETE`/`FIND_BY_ID`/`AGGREGATE`) that this node does
+**not** own, it forwards the raw request JSON to the owner in a `FORWARD_REQUEST`
+and relays the owner's response JSON verbatim to the client. The owner executes the
+forwarded request through `OperationProcessor` directly (bypassing the router, so
+there is no forward loop) — which means a forwarded write still passes the owner's
+Phase 2 ownership/quorum guard and replication.
+
+Routing a **read** to the owner is what makes the cache distributed: only the owner
+keeps that collection resident, so total cache capacity is the sum of the nodes'
+budgets. If the owner is unreachable and `readFallbackToLocal=true`, the edge node
+serves the read from its own (complete) on-disk replica instead of failing; a write
+to an unreachable owner returns `503-4 OWNER_UNREACHABLE`.
+
+Forwarded bodies are Base64-wrapped (`cluster/msg/ForwardBody`) because EJson does
+not escape string values, so raw JSON cannot be embedded directly in the outer
+message.
+
+### Joins across collections
+
+Routing is decided **once**, at the edge, on the request's *primary* collection
+(`request.getCollectionName()`) — there is no per-step routing. So an `AGGREGATE`
+on collection **A** (owned by node X) that `JOIN`s collection **B** (owned by node
+Y) is forwarded whole to X, and X reads B from its **own local replica** while
+executing the join. This works because data is fully replicated (every node has a
+complete copy of B), and it is inherent to per-collection ownership: no single node
+owns both A and B in general, so *some* joined collection is always read from a
+non-owner replica regardless of where the request is routed. Two consequences
+follow:
+
+- **Cache distribution is partially eroded for joined collections.** X will cache B
+  even though Y is B's cache home, so a frequently-joined collection ends up
+  resident on more than one node rather than exactly its owner. The "one cache home
+  per collection" property holds for the primary collection of each query, not for
+  its join targets.
+- **The joined side is read at replica consistency.** X is authoritative for A but
+  only a replica for B, so a join can combine an authoritative primary with a
+  **possibly-slightly-stale** joined collection if a write to B is mid-replication
+  and X was not in the acked majority. Reads of the primary collection remain
+  owner-authoritative; only the join targets are best-effort-fresh.
+
+(This assumes B exists on X, which depends on admin/DDL replication — planned for a
+later phase — propagating `CREATE_COLLECTION` to every node.)
 
 ## Failure & partition behaviour
 
@@ -106,12 +148,14 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 (`clusterTlsEnabled`, reusing the PKCS12 keystore — all nodes must share the same
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
-replication, errorMessage}`; `correlationId` lets a single pooled connection
-multiplex many in-flight requests. Message types are `JOIN_REQUEST`/`JOIN_RESPONSE`
-and `GOSSIP`/`GOSSIP_ACK` (membership, carrying `sender`/`members`), and
-`REPLICATE`/`REPLICATE_ACK` (writes, carrying a `replication` payload of
-`{dbName, collName, op: UPSERT|DELETE, documents, ids}`). Inbound messages whose
-`secret` does not match `clusterSecret` are rejected.
+replication, forwardBody, errorMessage}`; `correlationId` lets a single pooled
+connection multiplex many in-flight requests. Message types are
+`JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
+`sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (writes, carrying a `replication`
+payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`), and
+`FORWARD_REQUEST`/`FORWARD_RESPONSE` (routing, carrying the Base64-wrapped request
+or response JSON in `forwardBody`). Inbound messages whose `secret` does not match
+`clusterSecret` are rejected.
 
 ## Configuration reference
 

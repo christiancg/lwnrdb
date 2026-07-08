@@ -10,6 +10,8 @@ public class ClusterMessage {
     private NodeInfo sender;
     private List<NodeInfo> members;
     private ReplicationPayload replication;
+    // Raw request JSON on a FORWARD_REQUEST; raw response JSON on a FORWARD_RESPONSE.
+    private String forwardBody;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -70,6 +72,14 @@ public class ClusterMessage {
 
     public void setReplication(ReplicationPayload replication) {
         this.replication = replication;
+    }
+
+    public String getForwardBody() {
+        return forwardBody;
+    }
+
+    public void setForwardBody(String forwardBody) {
+        this.forwardBody = forwardBody;
     }
 
     public String getErrorMessage() {

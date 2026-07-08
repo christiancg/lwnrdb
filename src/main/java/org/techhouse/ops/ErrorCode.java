@@ -101,7 +101,8 @@ public enum ErrorCode {
     // ── 503 Service Unavailable ───────────────────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",
             "Cluster does not have a write quorum", OperationStatus.ERROR), REPLICATION_TIMEOUT("503-3",
-                    "Timed out waiting for the replication quorum", OperationStatus.ERROR);
+                    "Timed out waiting for the replication quorum", OperationStatus.ERROR), OWNER_UNREACHABLE("503-4",
+                            "The collection's owner node is unreachable", OperationStatus.ERROR);
 
     private final String code;
     private final String defaultMessage;
