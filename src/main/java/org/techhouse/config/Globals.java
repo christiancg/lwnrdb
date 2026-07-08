@@ -59,4 +59,8 @@ public final class Globals {
     public static final String TLS_CERT_DNAME = "lwnrdb";
     public static final String TLS_KEYSTORE_TYPE = "PKCS12";
     public static final String TLS_PROTOCOL = "TLS";
+    public static final String CLUSTER_FOLDER = "cluster";
+    public static final String CLUSTER_NODE_ID_FILE = "node.id";
+    public static final String CLUSTER_SEED_SEPARATOR = ",";
+    public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
 }

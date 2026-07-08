@@ -22,6 +22,21 @@ public final class Configuration {
     private boolean tlsEnabled;
     private String tlsKeystorePath;
     private String tlsKeystorePassword;
+    private boolean clusterEnabled;
+    private int clusterPort;
+    private String clusterBindAddress;
+    private String clusterAdvertisedAddress;
+    private String clusterSeeds;
+    private String nodeId;
+    private int clusterExpectedSize;
+    private long gossipIntervalMs;
+    private long suspectTimeoutMs;
+    private long deadTimeoutMs;
+    private long replicationAckTimeoutMs;
+    private int virtualNodesPerNode;
+    private boolean readFallbackToLocal;
+    private boolean clusterTlsEnabled;
+    private String clusterSecret;
 
     private Configuration() {
     }
@@ -51,6 +66,21 @@ public final class Configuration {
                 case "tlsEnabled" -> tlsEnabled = Boolean.parseBoolean(config.getValue());
                 case "tlsKeystorePath" -> tlsKeystorePath = config.getValue();
                 case "tlsKeystorePassword" -> tlsKeystorePassword = config.getValue();
+                case "clusterEnabled" -> clusterEnabled = Boolean.parseBoolean(config.getValue());
+                case "clusterPort" -> clusterPort = Integer.parseInt(config.getValue());
+                case "clusterBindAddress" -> clusterBindAddress = config.getValue();
+                case "clusterAdvertisedAddress" -> clusterAdvertisedAddress = config.getValue();
+                case "clusterSeeds" -> clusterSeeds = config.getValue();
+                case "nodeId" -> nodeId = config.getValue();
+                case "clusterExpectedSize" -> clusterExpectedSize = Integer.parseInt(config.getValue());
+                case "gossipIntervalMs" -> gossipIntervalMs = Long.parseLong(config.getValue());
+                case "suspectTimeoutMs" -> suspectTimeoutMs = Long.parseLong(config.getValue());
+                case "deadTimeoutMs" -> deadTimeoutMs = Long.parseLong(config.getValue());
+                case "replicationAckTimeoutMs" -> replicationAckTimeoutMs = Long.parseLong(config.getValue());
+                case "virtualNodesPerNode" -> virtualNodesPerNode = Integer.parseInt(config.getValue());
+                case "readFallbackToLocal" -> readFallbackToLocal = Boolean.parseBoolean(config.getValue());
+                case "clusterTlsEnabled" -> clusterTlsEnabled = Boolean.parseBoolean(config.getValue());
+                case "clusterSecret" -> clusterSecret = config.getValue();
                 default -> {
                 }
             }
@@ -130,5 +160,65 @@ public final class Configuration {
 
     public String getTlsKeystorePassword() {
         return tlsKeystorePassword;
+    }
+
+    public boolean isClusterEnabled() {
+        return clusterEnabled;
+    }
+
+    public int getClusterPort() {
+        return clusterPort;
+    }
+
+    public String getClusterBindAddress() {
+        return clusterBindAddress;
+    }
+
+    public String getClusterAdvertisedAddress() {
+        return clusterAdvertisedAddress;
+    }
+
+    public String getClusterSeeds() {
+        return clusterSeeds;
+    }
+
+    public String getNodeId() {
+        return nodeId;
+    }
+
+    public int getClusterExpectedSize() {
+        return clusterExpectedSize;
+    }
+
+    public long getGossipIntervalMs() {
+        return gossipIntervalMs;
+    }
+
+    public long getSuspectTimeoutMs() {
+        return suspectTimeoutMs;
+    }
+
+    public long getDeadTimeoutMs() {
+        return deadTimeoutMs;
+    }
+
+    public long getReplicationAckTimeoutMs() {
+        return replicationAckTimeoutMs;
+    }
+
+    public int getVirtualNodesPerNode() {
+        return virtualNodesPerNode;
+    }
+
+    public boolean isReadFallbackToLocal() {
+        return readFallbackToLocal;
+    }
+
+    public boolean isClusterTlsEnabled() {
+        return clusterTlsEnabled;
+    }
+
+    public String getClusterSecret() {
+        return clusterSecret;
     }
 }

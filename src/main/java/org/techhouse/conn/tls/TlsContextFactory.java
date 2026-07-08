@@ -9,6 +9,8 @@ import java.security.KeyStore;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLServerSocketFactory;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
@@ -37,6 +39,28 @@ public final class TlsContextFactory {
             return context.getServerSocketFactory();
         } catch (GeneralSecurityException e) {
             throw new TlsConfigurationException("Failed to initialise the TLS context", e);
+        }
+    }
+
+    /**
+     * Client-side factory for the node-to-node channel. The configured keystore is used as both key and
+     * trust material, so nodes must share the same PKCS12 keystore (or a common CA) for the TLS cluster
+     * channel to establish; per-node self-signed keystores will not trust each other.
+     */
+    public static SSLSocketFactory createSocketFactory(Configuration config) {
+        final var keystorePath = Paths.get(config.getTlsKeystorePath());
+        final var password = config.getTlsKeystorePassword().toCharArray();
+        final var keyStore = loadOrGenerateKeyStore(keystorePath, password);
+        try {
+            final var keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+            keyManagerFactory.init(keyStore, password);
+            final var trustManagerFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+            trustManagerFactory.init(keyStore);
+            final var context = SSLContext.getInstance(Globals.TLS_PROTOCOL);
+            context.init(keyManagerFactory.getKeyManagers(), trustManagerFactory.getTrustManagers(), null);
+            return context.getSocketFactory();
+        } catch (GeneralSecurityException e) {
+            throw new TlsConfigurationException("Failed to initialise the TLS client context", e);
         }
     }
 

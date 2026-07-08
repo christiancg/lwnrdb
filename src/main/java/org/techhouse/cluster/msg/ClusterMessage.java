@@ -1,0 +1,73 @@
+package org.techhouse.cluster.msg;
+
+import java.util.List;
+import org.techhouse.cluster.NodeInfo;
+
+public class ClusterMessage {
+    private String correlationId;
+    private ClusterMessageType type;
+    private String secret;
+    private NodeInfo sender;
+    private List<NodeInfo> members;
+    private String errorMessage;
+
+    public ClusterMessage() {
+    }
+
+    public ClusterMessage(String correlationId, ClusterMessageType type, String secret, NodeInfo sender,
+            List<NodeInfo> members) {
+        this.correlationId = correlationId;
+        this.type = type;
+        this.secret = secret;
+        this.sender = sender;
+        this.members = members;
+    }
+
+    public String getCorrelationId() {
+        return correlationId;
+    }
+
+    public void setCorrelationId(String correlationId) {
+        this.correlationId = correlationId;
+    }
+
+    public ClusterMessageType getType() {
+        return type;
+    }
+
+    public void setType(ClusterMessageType type) {
+        this.type = type;
+    }
+
+    public String getSecret() {
+        return secret;
+    }
+
+    public void setSecret(String secret) {
+        this.secret = secret;
+    }
+
+    public NodeInfo getSender() {
+        return sender;
+    }
+
+    public void setSender(NodeInfo sender) {
+        this.sender = sender;
+    }
+
+    public List<NodeInfo> getMembers() {
+        return members;
+    }
+
+    public void setMembers(List<NodeInfo> members) {
+        this.members = members;
+    }
+
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+}

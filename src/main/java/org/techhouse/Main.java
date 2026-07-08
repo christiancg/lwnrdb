@@ -7,6 +7,10 @@ import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.cluster.ClusterConfig;
+import org.techhouse.cluster.ClusterServer;
+import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.SocketServer;
@@ -30,6 +34,9 @@ public class Main {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
+    private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -58,11 +65,30 @@ public class Main {
         memoryManagement.startSweepThread();
         warnIfXmxExceedsMaxMemory();
         warnIfDefaultAdminPassword();
+        startClusterIfEnabled();
         // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
         // not lazily on the first client connection.
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
         server.serve();
+    }
+
+    private static void startClusterIfEnabled() {
+        if (!clusterConfig.isEnabled()) {
+            return;
+        }
+        try {
+            final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
+            final var clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(),
+                    factory);
+            clusterServer.start();
+            membershipService.addListener(ownershipManager);
+            membershipService.start();
+            ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
+        } catch (IOException e) {
+            logger.fatal("Failed to start the cluster server", e);
+            throw new RuntimeException("Failed to start the cluster server", e);
+        }
     }
 
     // A transaction only lives while its connection is open, so any operation records still in

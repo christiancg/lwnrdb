@@ -35,11 +35,12 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
+- [ ] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant 
+- [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
 - [x] Transactions
 - [x] Vector type support
@@ -655,6 +656,21 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
 | `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true` |
+| `clusterEnabled` | `true` or `false`. Master switch for multi-node clustering. When `false` the node runs standalone (default) |
+| `clusterPort` | Valid number 1–65535, different from `port`. Node-to-node channel |
+| `clusterBindAddress` | Interface the cluster server binds to |
+| `clusterAdvertisedAddress` | Non-blank address other nodes use to reach this node |
+| `clusterSeeds` | Comma-separated `host:port` seeds to join through (empty on the first node) |
+| `nodeId` | Stable node id; empty = auto-generate and persist under `filePath/cluster/node.id` |
+| `clusterExpectedSize` | Valid number ≥ 1. Baseline for the write-quorum majority until membership stabilizes |
+| `gossipIntervalMs` | Valid number ≥ 1. Gossip/heartbeat cadence |
+| `suspectTimeoutMs` | Valid number ≥ 1. Silence before a node is marked SUSPECT |
+| `deadTimeoutMs` | Valid number ≥ 1, greater than `suspectTimeoutMs`. Silence before a node is marked DEAD |
+| `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
+| `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
+| `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
+| `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
+| `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
 
 ```
 # the port the server listens on
@@ -697,6 +713,37 @@ it. Replace it with a proper keystore before running in production.
 
 When `tlsEnabled=false` (the default) the server listens in plaintext exactly as
 before.
+
+### Clustering (multi-node)
+
+> **Status: Phase 1 (experimental).** Node discovery, membership/gossip, failure
+> detection, and per-collection ownership calculation are implemented. Data
+> replication, request routing, and failover are planned in later phases. With
+> `clusterEnabled=false` (the default) the node behaves exactly as a standalone
+> server. See [docs/clustering.md](docs/clustering.md) for the full design.
+
+LWNRDB can run as a cluster of fully-replicated nodes with a **distributed cache**:
+every collection is consistent-hashed to an **owner node** (there is no single
+master — ownership is spread across all nodes), and a client may connect to any
+node. Nodes discover each other from a **seed list** and then **gossip** full
+membership and heartbeats over a dedicated `clusterPort`, detecting failures by
+missed heartbeats.
+
+To form a cluster, enable it on each node and point new nodes at one or more
+seeds:
+
+```
+clusterEnabled=true
+clusterPort=9990
+clusterAdvertisedAddress=10.0.0.11      # this node's reachable address
+clusterSeeds=10.0.0.10:9990             # an existing node (empty on the first node)
+clusterSecret=change_this_shared_secret
+```
+
+The node-to-node channel uses the same line-delimited JSON transport as clients,
+authenticated with `clusterSecret` and optionally encrypted with
+`clusterTlsEnabled` (which reuses the PKCS12 keystore machinery — all nodes must
+share the same keystore for the TLS cluster channel to establish).
 
 ### Memory management
 
