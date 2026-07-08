@@ -1,6 +1,7 @@
 package org.techhouse.cluster;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeoutException;
@@ -35,7 +36,11 @@ public class PeerConnectionPool {
             if (connection != null && !connection.isClosed()) {
                 return connection;
             }
-            final var socket = socketFactory().createSocket(address.getHost(), address.getPort());
+            // Connect with a bounded timeout so a hanging connect to one peer (e.g. a black-holed host)
+            // holds the pool lock for at most replicationAckTimeoutMs instead of the OS default.
+            final var socket = socketFactory().createSocket();
+            socket.connect(new InetSocketAddress(address.getHost(), address.getPort()),
+                    (int) clusterConfig.replicationAckTimeoutMs());
             connection = new PeerConnection(socket);
             connections.put(address, connection);
             return connection;

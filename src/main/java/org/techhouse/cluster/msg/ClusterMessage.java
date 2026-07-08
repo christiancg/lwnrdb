@@ -9,6 +9,7 @@ public class ClusterMessage {
     private String secret;
     private NodeInfo sender;
     private List<NodeInfo> members;
+    private ReplicationPayload replication;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -61,6 +62,14 @@ public class ClusterMessage {
 
     public void setMembers(List<NodeInfo> members) {
         this.members = members;
+    }
+
+    public ReplicationPayload getReplication() {
+        return replication;
+    }
+
+    public void setReplication(ReplicationPayload replication) {
+        this.replication = replication;
     }
 
     public String getErrorMessage() {

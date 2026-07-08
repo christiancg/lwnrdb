@@ -32,9 +32,21 @@ public class OwnershipManager implements MembershipListener {
         return owner != null && owner.equals(selfNodeId);
     }
 
-    public boolean hasQuorum() {
+    public int majority() {
         final var denominator = Math.max(clusterConfig.expectedSize(), view.size());
-        final var majority = (denominator / 2) + 1;
-        return view.aliveCount() >= majority;
+        return (denominator / 2) + 1;
+    }
+
+    public boolean hasQuorum() {
+        return view.aliveCount() >= majority();
+    }
+
+    public String ownerAddress(String dbName, String collName) {
+        final var owner = ownerFor(dbName, collName);
+        if (owner == null) {
+            return null;
+        }
+        final var node = view.find(owner);
+        return node != null ? node.address().toString() : null;
     }
 }

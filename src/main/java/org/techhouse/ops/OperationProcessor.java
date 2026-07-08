@@ -120,9 +120,14 @@ public class OperationProcessor {
         if (activeTransaction != null) {
             return TransactionOperationHelper.bufferBulkSave(bulkSaveRequest, activeTransaction);
         }
+        final var guardError = ClusterWriteHelper.guard(OperationType.BULK_SAVE, dbName, collName);
+        if (guardError != null) {
+            return guardError;
+        }
         try {
             locks.lock(dbName, collName);
-            return SaveOperationHelper.executeBulkSave(bulkSaveRequest);
+            return ClusterWriteHelper.afterBulkSave(dbName, collName,
+                    SaveOperationHelper.executeBulkSave(bulkSaveRequest));
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
         } finally {
@@ -136,9 +141,13 @@ public class OperationProcessor {
         if (activeTransaction != null) {
             return TransactionOperationHelper.bufferSave(saveRequest, activeTransaction);
         }
+        final var guardError = ClusterWriteHelper.guard(OperationType.SAVE, dbName, collName);
+        if (guardError != null) {
+            return guardError;
+        }
         try {
             locks.lock(dbName, collName);
-            return SaveOperationHelper.executeSave(saveRequest);
+            return ClusterWriteHelper.afterSave(dbName, collName, SaveOperationHelper.executeSave(saveRequest));
         } catch (Exception exception) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
         } finally {
@@ -241,9 +250,14 @@ public class OperationProcessor {
         if (activeTransaction != null) {
             return TransactionOperationHelper.bufferDelete(deleteRequest, activeTransaction);
         }
+        final var guardError = ClusterWriteHelper.guard(OperationType.DELETE, dbName, collName);
+        if (guardError != null) {
+            return guardError;
+        }
         try {
             locks.lock(dbName, collName);
-            return DeleteOperationHelper.executeDelete(deleteRequest);
+            return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                    DeleteOperationHelper.executeDelete(deleteRequest));
         } catch (Exception exception) {
             return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         } finally {

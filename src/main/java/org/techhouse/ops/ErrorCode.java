@@ -38,6 +38,9 @@ public enum ErrorCode {
                                     OperationStatus.ERROR), OPERATION_NOT_ALLOWED_IN_TRANSACTION("409-6",
                                             "Operation not allowed while a transaction is open", OperationStatus.ERROR),
 
+    // ── 421 Misdirected (cluster routing) ─────────────────────────────────
+    NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
+
     // ── 500 Internal Server Error ─────────────────────────────────────────
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR), ERROR_CREATING_USER("500-2",
             "Error creating user", OperationStatus.ERROR), ERROR_DELETING_USER("500-3", "Error deleting user",
@@ -96,7 +99,9 @@ public enum ErrorCode {
                                                                                                                                                                                             OperationStatus.ERROR),
 
     // ── 503 Service Unavailable ───────────────────────────────────────────
-    MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR);
+    MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",
+            "Cluster does not have a write quorum", OperationStatus.ERROR), REPLICATION_TIMEOUT("503-3",
+                    "Timed out waiting for the replication quorum", OperationStatus.ERROR);
 
     private final String code;
     private final String defaultMessage;

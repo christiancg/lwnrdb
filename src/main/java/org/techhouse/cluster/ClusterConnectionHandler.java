@@ -14,6 +14,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ReplicatedApplyHelper;
 
 public class ClusterConnectionHandler implements Runnable {
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -65,6 +66,7 @@ public class ClusterConnectionHandler implements Runnable {
         return switch (request.getType()) {
             case JOIN_REQUEST -> membershipService.handleJoin(request);
             case GOSSIP -> membershipService.handleGossip(request);
+            case REPLICATE -> handleReplicate(request);
             default -> {
                 final var error = new ClusterMessage();
                 error.setType(ClusterMessageType.ERROR);
@@ -72,5 +74,16 @@ public class ClusterConnectionHandler implements Runnable {
                 yield error;
             }
         };
+    }
+
+    private ClusterMessage handleReplicate(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        if (ReplicatedApplyHelper.apply(request.getReplication())) {
+            response.setType(ClusterMessageType.REPLICATE_ACK);
+        } else {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to apply replicated write");
+        }
+        return response;
     }
 }
