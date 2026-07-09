@@ -942,11 +942,11 @@ public class FileSystemTest {
 
         List<String> fileLines = Arrays.asList(
                 "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0",
                 "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0",
                 "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0");
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0");
         Files.write(path, fileLines);
 
         // Act
@@ -1157,7 +1157,7 @@ public class FileSystemTest {
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
                 + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
         // Append a second line for the same id with a different (later) position.
-        Files.writeString(indexFile.toPath(), "\ndup|172|172|0", StandardCharsets.UTF_8,
+        Files.writeString(indexFile.toPath(), "\ndup|172|172|0|0", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
 
         final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);

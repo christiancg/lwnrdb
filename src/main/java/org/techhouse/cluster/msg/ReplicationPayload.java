@@ -9,17 +9,25 @@ public class ReplicationPayload {
     private ReplicationOp op;
     private List<JsonObject> documents;
     private List<String> ids;
+    // Last-write-wins versions aligned with documents (UPSERT) or ids (DELETE); null for user/admin records.
+    private List<Long> versions;
 
     public ReplicationPayload() {
     }
 
     public ReplicationPayload(String dbName, String collName, ReplicationOp op, List<JsonObject> documents,
             List<String> ids) {
+        this(dbName, collName, op, documents, ids, null);
+    }
+
+    public ReplicationPayload(String dbName, String collName, ReplicationOp op, List<JsonObject> documents,
+            List<String> ids, List<Long> versions) {
         this.dbName = dbName;
         this.collName = collName;
         this.op = op;
         this.documents = documents;
         this.ids = ids;
+        this.versions = versions;
     }
 
     public String getDbName() {
@@ -60,5 +68,13 @@ public class ReplicationPayload {
 
     public void setIds(List<String> ids) {
         this.ids = ids;
+    }
+
+    public List<Long> getVersions() {
+        return versions;
+    }
+
+    public void setVersions(List<Long> versions) {
+        this.versions = versions;
     }
 }

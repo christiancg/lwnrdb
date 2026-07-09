@@ -7,6 +7,7 @@ import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.membership.MembershipService;
@@ -37,6 +38,7 @@ public class Main {
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
+    private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -83,6 +85,7 @@ public class Main {
                     factory);
             clusterServer.start();
             membershipService.addListener(ownershipManager);
+            membershipService.addListener(antiEntropyService);
             membershipService.start();
             ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
         } catch (IOException e) {

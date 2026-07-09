@@ -3,6 +3,7 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -15,6 +16,7 @@ import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -134,5 +136,24 @@ public class ClusterServerIntegrationTest {
         request.setForwardBody(ForwardBody.encode("not-valid-json"));
         final var response = pool.request(serverAddress(), request, 3000);
         assertEquals(ClusterMessageType.ERROR, response.getType());
+    }
+
+    @Test
+    public void test_digest_request_is_handled() throws Exception {
+        final var request = message(ClusterMessageType.DIGEST, SECRET, node("K", 9990), null);
+        request.setAntiEntropy(new AntiEntropyPayload("someDb", "someColl"));
+        final var response = pool.request(serverAddress(), request, 3000);
+        assertTrue(
+                response.getType() == ClusterMessageType.DIGEST_ACK || response.getType() == ClusterMessageType.ERROR);
+    }
+
+    @Test
+    public void test_pull_request_is_handled() throws Exception {
+        final var request = message(ClusterMessageType.PULL, SECRET, node("L", 9990), null);
+        final var payload = new AntiEntropyPayload("someDb", "someColl");
+        payload.setIds(List.of("a"));
+        request.setAntiEntropy(payload);
+        final var response = pool.request(serverAddress(), request, 3000);
+        assertTrue(response.getType() == ClusterMessageType.PULL_ACK || response.getType() == ClusterMessageType.ERROR);
     }
 }

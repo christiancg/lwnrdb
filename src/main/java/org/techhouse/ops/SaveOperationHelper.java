@@ -16,6 +16,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.WriteVersion;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -46,6 +47,7 @@ public final class SaveOperationHelper {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
+        entry.setVersion(WriteVersion.next());
         final var maxEntrySize = configuration.getMaxEntrySize();
         if (entry.byteSize() > maxEntrySize) {
             return new OperationResponse(
@@ -101,11 +103,27 @@ public final class SaveOperationHelper {
     // Executes a BULK_SAVE against the real collection. As with executeSave, the caller must already
     // hold the collection write lock. Shared by the normal path and the transaction-commit replay.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest) throws Exception {
+        return executeBulkSave(bulkSaveRequest, null);
+    }
+
+    // Versioned overload: when {@code versions} is non-null it supplies the last-write-wins version for each
+    // object (aligned by index), as used by the replica-apply path so replicas persist the owner's version
+    // rather than assigning their own. When null, each entry is stamped with a fresh local version.
+    public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions)
+            throws Exception {
         final var dbName = bulkSaveRequest.getDatabaseName();
         final var collName = bulkSaveRequest.getCollectionName();
         final var entries = new ArrayList<DbEntry>();
-        for (var entry : bulkSaveRequest.getObjects()) {
-            entries.add(DbEntry.fromJsonObject(dbName, collName, entry));
+        final var objects = bulkSaveRequest.getObjects();
+        for (var i = 0; i < objects.size(); i++) {
+            final var entry = DbEntry.fromJsonObject(dbName, collName, objects.get(i));
+            if (versions != null) {
+                entry.setVersion(versions.get(i));
+                WriteVersion.observe(versions.get(i));
+            } else {
+                entry.setVersion(WriteVersion.next());
+            }
+            entries.add(entry);
         }
         final var maxEntrySize = configuration.getMaxEntrySize();
         for (var entry : entries) {

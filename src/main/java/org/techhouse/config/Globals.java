@@ -22,6 +22,9 @@ public final class Globals {
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     public static final String INDEX_ENTRY_SEPARATOR = "|";
+    // Per-collection tombstone file infix: {coll}-tombstones.idx holds id|version records of deleted
+    // documents, so cluster anti-entropy can converge deletes (last-write-wins) without resurrecting them.
+    public static final String TOMBSTONE_FILE_NAME = "tombstones";
     public static final String ID_SEPARATOR = "";
     public static final String STRING_LITERAL_PREFIX = "-";
     public static final String FILE_CONFIG_NAME = "lwnrdb.cfg";

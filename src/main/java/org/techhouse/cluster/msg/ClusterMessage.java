@@ -15,6 +15,8 @@ public class ClusterMessage {
     // Authenticated username the edge resolved, carried on forwarded/replicated admin ops so the executing
     // node applies them as the same acting user (e.g. CREATE_DATABASE owner assignment).
     private String actingUser;
+    // Digest / pull payload on DIGEST(_ACK) and PULL(_ACK) messages used by anti-entropy reconciliation.
+    private AntiEntropyPayload antiEntropy;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -91,6 +93,14 @@ public class ClusterMessage {
 
     public void setActingUser(String actingUser) {
         this.actingUser = actingUser;
+    }
+
+    public AntiEntropyPayload getAntiEntropy() {
+        return antiEntropy;
+    }
+
+    public void setAntiEntropy(AntiEntropyPayload antiEntropy) {
+        this.antiEntropy = antiEntropy;
     }
 
     public String getErrorMessage() {

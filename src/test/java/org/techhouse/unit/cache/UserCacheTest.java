@@ -1445,4 +1445,59 @@ public class UserCacheTest {
         assertEquals(100L, requested.getFirst().getPosition());
     }
 
+    private static DbEntry cacheEntry(String id, int v) {
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, id);
+        obj.addProperty("v", v);
+        return DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+    }
+
+    // A resident document must be refreshed even when the cache is full (admission would reject a new
+    // resident): otherwise an in-place update would leave a stale copy in the cache.
+    @Test
+    public void test_addEntryToCache_refreshes_resident_document_despite_admission_reject() throws Exception {
+        final var cache = IocContainer.get(UserCache.class);
+        final var config = Configuration.getInstance();
+        final var originalMax = config.getMaxMemoryBytes();
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        TestUtils.getPrivateField(cache, "collectionMap", collType)
+                .clear();
+        try {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", 100_000_000L);
+            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("a", 1));
+            TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
+            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("a", 2));
+            final var refreshed = cache.getCachedCollection(TestGlobals.DB, TestGlobals.COLL).get("a");
+            assertEquals(2, refreshed.getData().get("v").asJsonNumber().asInteger());
+            // A brand-new id is still admission-gated under a full cache.
+            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("b", 9));
+            assertNull(cache.getCachedCollection(TestGlobals.DB, TestGlobals.COLL).get("b"));
+        } finally {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", originalMax);
+        }
+    }
+
+    @Test
+    public void test_addEntriesToCache_refreshes_resident_and_gates_new_under_reject() throws Exception {
+        final var cache = IocContainer.get(UserCache.class);
+        final var config = Configuration.getInstance();
+        final var originalMax = config.getMaxMemoryBytes();
+        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        TestUtils.getPrivateField(cache, "collectionMap", collType)
+                .clear();
+        try {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", 100_000_000L);
+            cache.addEntriesToCache(TestGlobals.DB, TestGlobals.COLL, List.of(cacheEntry("a", 1)));
+            TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
+            cache.addEntriesToCache(TestGlobals.DB, TestGlobals.COLL, List.of(cacheEntry("a", 2), cacheEntry("b", 9)));
+            final var cached = cache.getCachedCollection(TestGlobals.DB, TestGlobals.COLL);
+            assertEquals(2, cached.get("a").getData().get("v").asJsonNumber().asInteger());
+            assertNull(cached.get("b"));
+        } finally {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", originalMax);
+        }
+    }
+
 }

@@ -28,6 +28,7 @@ public class ClusterConnectionHandler implements Runnable {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
+    private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
@@ -79,6 +80,8 @@ public class ClusterConnectionHandler implements Runnable {
             case REPLICATE_ADMIN -> handleReplicateAdmin(request);
             case REPLICATE_USER -> handleReplicateUser(request);
             case FORWARD_REQUEST -> handleForward(request);
+            case DIGEST -> handleDigest(request);
+            case PULL -> handlePull(request);
             default -> {
                 final var error = new ClusterMessage();
                 error.setType(ClusterMessageType.ERROR);
@@ -151,6 +154,33 @@ public class ClusterConnectionHandler implements Runnable {
         } else {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to apply replicated write");
+        }
+        return response;
+    }
+
+    private ClusterMessage handleDigest(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            final var query = request.getAntiEntropy();
+            response.setType(ClusterMessageType.DIGEST_ACK);
+            response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName()));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to build digest: " + e.getMessage());
+        }
+        return response;
+    }
+
+    private ClusterMessage handlePull(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            final var query = request.getAntiEntropy();
+            response.setType(ClusterMessageType.PULL_ACK);
+            response.setAntiEntropy(
+                    antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds()));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to build pull response: " + e.getMessage());
         }
         return response;
     }

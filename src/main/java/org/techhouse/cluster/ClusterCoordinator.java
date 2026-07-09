@@ -8,8 +8,10 @@ import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Globals;
+import org.techhouse.data.WriteVersion;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.OperationRequest;
@@ -24,6 +26,7 @@ public class ClusterCoordinator {
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final Replicator replicator = IocContainer.get(Replicator.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
 
     public WriteGuard guardWrite(String dbName, String collName) {
@@ -44,9 +47,11 @@ public class ClusterCoordinator {
             return ReplicationOutcome.NOT_APPLICABLE;
         }
         try {
-            final var documents = readDocuments(dbName, collName, ids);
-            return replicator
-                    .broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null));
+            final var documents = new ArrayList<JsonObject>();
+            final var versions = new ArrayList<Long>();
+            readDocuments(dbName, collName, ids, documents, versions);
+            return replicator.broadcast(
+                    new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
         } catch (Exception e) {
             // The local commit stands; a failure to ship it is reported to the client and reconciled later.
             logger.warning("Failed to replicate upsert to " + dbName + "|" + collName + ": " + e.getMessage());
@@ -58,7 +63,19 @@ public class ClusterCoordinator {
         if (notApplicable(dbName, collName)) {
             return ReplicationOutcome.NOT_APPLICABLE;
         }
-        return replicator.broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids));
+        final var version = WriteVersion.next();
+        final var versions = new ArrayList<Long>(ids.size());
+        for (final var id : ids) {
+            try {
+                fs.appendTombstone(dbName, collName, id, version);
+            } catch (Exception e) {
+                logger.warning(
+                        "Failed to record tombstone for " + dbName + "|" + collName + "|" + id + ": " + e.getMessage());
+            }
+            versions.add(version);
+        }
+        return replicator
+                .broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions));
     }
 
     // Admin/DDL ops are serialized by the admin coordinator; a node without a write quorum must not apply
@@ -108,15 +125,16 @@ public class ClusterCoordinator {
         return doesntCoordinate(dbName) || !ownershipManager.isOwner(dbName, collName);
     }
 
-    private List<JsonObject> readDocuments(String dbName, String collName, List<String> ids) throws Exception {
-        final var documents = new ArrayList<JsonObject>();
+    private void readDocuments(String dbName, String collName, List<String> ids, List<JsonObject> documents,
+            List<Long> versions) throws Exception {
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         for (final var id : ids) {
             final var position = Collections.binarySearch(primaryKeyIndex, id);
             if (position >= 0) {
-                documents.add(cache.getById(dbName, collName, primaryKeyIndex.get(position)).getData());
+                final var indexEntry = primaryKeyIndex.get(position);
+                documents.add(cache.getById(dbName, collName, indexEntry).getData());
+                versions.add(indexEntry.getVersion());
             }
         }
-        return documents;
     }
 }

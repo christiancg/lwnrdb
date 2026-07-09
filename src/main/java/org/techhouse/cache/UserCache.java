@@ -356,25 +356,46 @@ public class UserCache {
     }
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
+        final var collId = Cache.getCollectionIdentifier(dbName, collName);
+        final var existing = collectionMap.get(collId);
+        // Refreshing an already-resident document must be unconditional: it replaces a document already
+        // counted against the budget, so the admission check (which only governs admitting NEW residents)
+        // must not drop it and leave a stale copy behind.
+        if (existing != null && existing.containsKey(entry.get_id())) {
+            existing.put(entry.get_id(), entry);
+            return;
+        }
         if (!shouldCache(dbName, entry.byteSize())) {
             return;
         }
-        final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        var coll = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
-        coll.put(entry.get_id(), entry);
+        collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>()).put(entry.get_id(), entry);
     }
 
     public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
-        long total = 0L;
+        final var collId = Cache.getCollectionIdentifier(dbName, collName);
+        final var existing = collectionMap.get(collId);
+        // Already-resident documents are refreshed unconditionally (see addEntryToCache); only genuinely
+        // new documents are subject to the admission check.
+        final var newEntries = new ArrayList<DbEntry>();
         for (var e : entries) {
+            if (existing != null && existing.containsKey(e.get_id())) {
+                existing.put(e.get_id(), e);
+            } else {
+                newEntries.add(e);
+            }
+        }
+        if (newEntries.isEmpty()) {
+            return;
+        }
+        long total = 0L;
+        for (var e : newEntries) {
             total += e.byteSize();
         }
         if (!shouldCache(dbName, total)) {
             return;
         }
-        final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        var coll = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
-        coll.putAll(entries.stream().collect(Collectors.toMap(DbEntry::get_id, o -> o, (_, b) -> b)));
+        collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>())
+                .putAll(newEntries.stream().collect(Collectors.toMap(DbEntry::get_id, o -> o, (_, b) -> b)));
     }
 
     public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {
@@ -448,7 +469,7 @@ public class UserCache {
             if (pos >= 0) {
                 final var e = pkIndex.get(pos);
                 toRead.add(new PkIndexEntry(e.getDatabaseName(), e.getCollectionName(), e.getValue(), e.getPosition(),
-                        e.getLength(), e.getPage()));
+                        e.getLength(), e.getPage(), e.getVersion()));
             }
         }
         if (toRead.isEmpty()) {

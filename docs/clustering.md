@@ -22,8 +22,15 @@ one large machine.
 >   by an admin coordinator and applied on every node.
 > - **Phase 2c — implemented:** user/permission replication (`CREATE_USER`,
 >   `DELETE_USER`, `SET_PASSWORD`, `CHANGE_PERMISSIONS`) via record-shipping.
-> - **Planned (later phases):** a replication log + anti-entropy catch-up, ownership
->   handoff on failure, and distributed transactions.
+> - **Phase 4a — implemented:** version-based (last-write-wins) anti-entropy. Every
+>   document write is stamped with a version and deletes leave versioned tombstones;
+>   on a membership change each node reconciles its collections against the live
+>   members (digest exchange + pull-newest), converging every id to the highest
+>   version seen anywhere. This makes ownership handoff and rejoining-node catch-up
+>   data-safe (no committed write is lost or a deleted document resurrected).
+> - **Planned (later phases):** 4b — a periodic background anti-entropy sweep and
+>   ownership-handoff cache warm-up; admin/DDL anti-entropy for nodes that were down
+>   during a DDL op; and distributed transactions.
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
 > the node behaves exactly as a standalone server.
@@ -174,9 +181,40 @@ Because data is fully replicated, losing a node never loses data — every survi
 has a complete copy. When an owner dies, the ring is recomputed and its collections
 are reassigned to survivors (no data movement; caches warm lazily). During a
 partition, only the majority side accepts writes for its owned collections; the
-minority side is read-only until the partition heals. (Reassignment, anti-entropy
-catch-up for rejoining nodes, and the read-only minority behaviour are part of the
-planned phases.)
+minority side is read-only until the partition heals. Reassignment is automatic (the
+ring is a pure function of the ALIVE membership) and **anti-entropy** (below) makes
+the handoff and the rejoining of a previously-down node data-safe.
+
+## Anti-entropy & versioning (last-write-wins)
+
+Every document write is stamped with a **version** — a node-global monotonic
+epoch-millis value (`data/WriteVersion`), assigned by the coordinating owner and
+persisted as an extra trailing column of the PK index (`id|position|length|page|version`).
+The version is
+shipped in the `REPLICATE` payload so replicas store the owner's version rather than
+assigning their own, and a node advances its clock past any version it receives
+(`WriteVersion.observe`) so it never later assigns a lower one. A **delete** records a
+versioned **tombstone** (`{coll}-tombstones.idx`, `id|version`) — needed because a
+plain delete cannot converge (a lagging replica that still holds the document would
+otherwise resurrect it).
+
+On any membership change, `cluster/AntiEntropyService` (a `MembershipListener`)
+reconciles each of this node's collections against the live members:
+
+1. It builds a local **digest** (`id → version` for live documents, plus tombstones)
+   and requests each peer's digest via a `DIGEST` message.
+2. It computes, per id, the **highest version seen anywhere** (a tombstone wins a tie
+   with a live document, so a delete beats a concurrent write at the same version).
+3. Where a peer holds the winning live version it `PULL`s that document and applies it
+   as a versioned upsert; where a tombstone wins it deletes locally and records the
+   tombstone. It never overwrites an id it already holds at the winning version.
+
+Because every node runs the same pull-newest reconciliation and the version totally
+orders writes per id, the cluster converges to the latest write regardless of which
+node became a collection's owner after a failure — so no committed write is lost when
+ownership hands off, and a node that was down catches up when it rejoins. Tombstone
+garbage-collection, a periodic (not just membership-triggered) sweep, and owner
+cache warm-up are Phase 4b.
 
 ## Wire protocol
 
@@ -192,10 +230,12 @@ pooled connection multiplex many in-flight requests. Message types are
 `replication` payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`),
 `FORWARD_REQUEST`/`FORWARD_RESPONSE` (routing, carrying the Base64-wrapped request or
 response JSON in `forwardBody`), `REPLICATE_ADMIN`/`REPLICATE_ADMIN_ACK` (admin
-DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`), and
+DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`),
 `REPLICATE_USER`/`REPLICATE_USER_ACK` (user/permission ops, carrying the committed
-`admin/users` record in a `replication` payload). Inbound messages whose `secret`
-does not match `clusterSecret` are rejected.
+`admin/users` record in a `replication` payload), and `DIGEST`/`DIGEST_ACK` and
+`PULL`/`PULL_ACK` (anti-entropy, carrying an `antiEntropy` payload of a collection's
+`{id, version, deleted}` digest or of pulled `documents`/`versions`). Inbound messages
+whose `secret` does not match `clusterSecret` are rejected.
 
 ## Configuration reference
 
