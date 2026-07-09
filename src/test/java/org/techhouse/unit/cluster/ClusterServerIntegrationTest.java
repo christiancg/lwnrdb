@@ -17,6 +17,8 @@ import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.cluster.msg.ForwardBody;
+import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
@@ -108,5 +110,29 @@ public class ClusterServerIntegrationTest {
     @Test
     public void test_get_port_before_start_returns_configured_port() {
         assertEquals(12345, new ClusterServer(12345, "127.0.0.1", null).getPort());
+    }
+
+    @Test
+    public void test_replicate_with_invalid_payload_is_nacked() throws Exception {
+        final var request = message(ClusterMessageType.REPLICATE, SECRET, node("H", 9997), null);
+        request.setReplication(new ReplicationPayload());
+        final var response = pool.request(serverAddress(), request, 3000);
+        assertEquals(ClusterMessageType.ERROR, response.getType());
+    }
+
+    @Test
+    public void test_replicate_user_with_invalid_payload_is_nacked() throws Exception {
+        final var request = message(ClusterMessageType.REPLICATE_USER, SECRET, node("I", 9998), null);
+        request.setReplication(new ReplicationPayload());
+        final var response = pool.request(serverAddress(), request, 3000);
+        assertEquals(ClusterMessageType.ERROR, response.getType());
+    }
+
+    @Test
+    public void test_forward_with_unparseable_body_is_error() throws Exception {
+        final var request = message(ClusterMessageType.FORWARD_REQUEST, SECRET, node("J", 9999), null);
+        request.setForwardBody(ForwardBody.encode("not-valid-json"));
+        final var response = pool.request(serverAddress(), request, 3000);
+        assertEquals(ClusterMessageType.ERROR, response.getType());
     }
 }
