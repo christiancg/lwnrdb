@@ -10,6 +10,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
@@ -24,10 +25,6 @@ public class ClusterRouter {
     private static final Set<OperationType> ROUTABLE = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
             OperationType.DELETE, OperationType.FIND_BY_ID, OperationType.AGGREGATE);
     private static final Set<OperationType> READS = Set.of(OperationType.FIND_BY_ID, OperationType.AGGREGATE);
-    private static final Set<OperationType> ADMIN_DDL = Set.of(OperationType.CREATE_DATABASE,
-            OperationType.DROP_DATABASE, OperationType.CREATE_COLLECTION, OperationType.DROP_COLLECTION,
-            OperationType.CREATE_INDEX, OperationType.DROP_INDEX, OperationType.REINDEX,
-            OperationType.SET_DATABASE_OWNERS);
     private final Logger logger = Logger.logFor(ClusterRouter.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
@@ -46,7 +43,7 @@ public class ClusterRouter {
             return null;
         }
         final var type = request.getType();
-        if (ADMIN_DDL.contains(type)) {
+        if (ClusterAdminHelper.isCoordinatedAdminOp(type)) {
             return forwardAdmin(type, rawJson, actingUser);
         }
         if (!ROUTABLE.contains(type)) {

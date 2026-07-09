@@ -20,9 +20,10 @@ one large machine.
 > - **Phase 2b — implemented:** structural admin/DDL replication (`CREATE`/`DROP` of
 >   databases, collections and indexes, `REINDEX`, `SET_DATABASE_OWNERS`), serialized
 >   by an admin coordinator and applied on every node.
-> - **Planned (later phases):** user/password/permission replication (Phase 2c), a
->   replication log + anti-entropy catch-up, ownership handoff on failure, and
->   distributed transactions.
+> - **Phase 2c — implemented:** user/permission replication (`CREATE_USER`,
+>   `DELETE_USER`, `SET_PASSWORD`, `CHANGE_PERMISSIONS`) via record-shipping.
+> - **Planned (later phases):** a replication log + anti-entropy catch-up, ownership
+>   handoff on failure, and distributed transactions.
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
 > the node behaves exactly as a standalone server.
@@ -158,10 +159,14 @@ on each node through a short-lived **synthetic client**
 the creator as owner identically on every node rather than losing that identity when
 executed away from the originating connection.
 
-Scope note: only *structural* DDL is replicated this way. User/password/permission
-ops are deferred to a later phase and will ship the committed `admin/users` record
-instead of re-executing (re-hashing a password with a fresh salt on each node would
-otherwise diverge the stored hashes).
+**User and permission ops** (`CREATE_USER`, `DELETE_USER`, `SET_PASSWORD`,
+`CHANGE_PERMISSIONS`) are coordinated the same way but replicated by **record-shipping**
+rather than re-execution: the coordinator ships the committed `admin/users` record
+(a `REPLICATE_USER` message carrying the entry's JSON, or the username to delete) and
+each peer upserts/deletes it via `AdminOperationHelper`. This is because re-executing
+`CREATE_USER`/`SET_PASSWORD` would re-hash the password with a fresh random salt on
+each node, diverging the stored hashes; shipping the already-hashed record keeps every
+node byte-identical (and password verification still works everywhere).
 
 ## Failure & partition behaviour
 
@@ -186,9 +191,11 @@ pooled connection multiplex many in-flight requests. Message types are
 `sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (document writes, carrying a
 `replication` payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`),
 `FORWARD_REQUEST`/`FORWARD_RESPONSE` (routing, carrying the Base64-wrapped request or
-response JSON in `forwardBody`), and `REPLICATE_ADMIN`/`REPLICATE_ADMIN_ACK` (admin
-DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`). Inbound
-messages whose `secret` does not match `clusterSecret` are rejected.
+response JSON in `forwardBody`), `REPLICATE_ADMIN`/`REPLICATE_ADMIN_ACK` (admin
+DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`), and
+`REPLICATE_USER`/`REPLICATE_USER_ACK` (user/permission ops, carrying the committed
+`admin/users` record in a `replication` payload). Inbound messages whose `secret`
+does not match `clusterSecret` are rejected.
 
 ## Configuration reference
 

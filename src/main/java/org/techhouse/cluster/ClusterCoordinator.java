@@ -79,6 +79,27 @@ public class ClusterCoordinator {
         return replicator.broadcastAdmin(eJson.toJson(request), actingUser);
     }
 
+    // Replicates a user mutation by shipping the committed admin/users record (or a delete by username), so
+    // the salted password hash is identical on every node rather than re-hashed per node.
+    public ReplicationOutcome replicateUserOp(String username, boolean delete) {
+        if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
+            return ReplicationOutcome.NOT_APPLICABLE;
+        }
+        final ReplicationPayload payload;
+        if (delete) {
+            payload = new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
+                    ReplicationOp.DELETE, null, List.of(username));
+        } else {
+            final var entry = cache.getAdminUserEntry(username);
+            if (entry == null) {
+                return ReplicationOutcome.NOT_APPLICABLE;
+            }
+            payload = new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
+                    ReplicationOp.UPSERT, List.of(entry.getData()), null);
+        }
+        return replicator.broadcastUser(payload);
+    }
+
     private boolean doesntCoordinate(String dbName) {
         return !clusterConfig.isEnabled() || Globals.ADMIN_DB_NAME.equals(dbName);
     }

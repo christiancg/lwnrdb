@@ -716,17 +716,17 @@ before.
 
 ### Clustering (multi-node)
 
-> **Status: Phases 1–3 + 2b (experimental).** Node discovery, membership/gossip,
+> **Status: Phases 1–3 + 2b/2c (experimental).** Node discovery, membership/gossip,
 > failure detection, per-collection ownership, **synchronous quorum write
-> replication**, **transparent request routing**, and **admin/DDL replication** are
-> implemented: a client can connect to any node; per-collection reads/writes are
-> forwarded to the collection's owner (which replicates writes to a majority before
-> acknowledging), and structural DDL (databases, collections, indexes) is serialized
-> by an admin coordinator and replicated to every node. Reads fall back to the local
-> full replica when the owner is unreachable. User/password/permission replication
-> and failover/anti-entropy are planned in later phases. With `clusterEnabled=false`
-> (the default) the node behaves exactly as a standalone server. See
-> [docs/clustering.md](docs/clustering.md) for the full design.
+> replication**, **transparent request routing**, and **admin/DDL + user/permission
+> replication** are implemented: a client can connect to any node; per-collection
+> reads/writes are forwarded to the collection's owner (which replicates writes to a
+> majority before acknowledging), and admin changes (databases, collections, indexes,
+> users, permissions) are serialized by an admin coordinator and replicated to every
+> node. Reads fall back to the local full replica when the owner is unreachable.
+> Failover/anti-entropy and clustered transactions are planned in later phases. With
+> `clusterEnabled=false` (the default) the node behaves exactly as a standalone
+> server. See [docs/clustering.md](docs/clustering.md) for the full design.
 
 LWNRDB can run as a cluster of fully-replicated nodes with a **distributed cache**:
 every collection is consistent-hashed to an **owner node** (there is no single

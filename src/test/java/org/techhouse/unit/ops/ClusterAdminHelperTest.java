@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.List;
 import java.util.Objects;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,8 +19,13 @@ import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -100,5 +104,34 @@ public class ClusterAdminHelperTest {
     public void test_after_admin_op_passes_through_when_not_applicable() {
         final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
         assertSame(response, ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response));
+    }
+
+    @Test
+    public void test_guard_rejects_user_op_without_quorum() throws Exception {
+        enable(3);
+        final var request = new CreateUserRequest();
+        request.setUsername("bob");
+        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
+    }
+
+    @Test
+    public void test_after_admin_op_passes_through_user_ops_when_not_applicable() {
+        for (final var request : userOps()) {
+            final var response = new OperationResponse(request.getType(), OperationStatus.OK, "ok");
+            assertSame(response, ClusterAdminHelper.afterAdminOp(request, "alice", response),
+                    "expected passthrough for " + request.getType());
+        }
+    }
+
+    private static List<OperationRequest> userOps() {
+        final var create = new CreateUserRequest();
+        create.setUsername("u");
+        final var delete = new DeleteUserRequest();
+        delete.setUsername("u");
+        final var setPassword = new SetPasswordRequest();
+        setPassword.setUsername("u");
+        final var changePermissions = new ChangePermissionsRequest();
+        changePermissions.setUsername("u");
+        return List.of(create, delete, setPassword, changePermissions);
     }
 }

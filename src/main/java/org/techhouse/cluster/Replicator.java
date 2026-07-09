@@ -28,6 +28,15 @@ public class Replicator {
         });
     }
 
+    // Replicates a committed admin/users record (upsert or delete) to a majority of peers.
+    public ReplicationOutcome broadcastUser(ReplicationPayload payload) {
+        return awaitQuorum(ClusterMessageType.REPLICATE_USER_ACK, () -> {
+            final var message = replicateMessage(ClusterMessageType.REPLICATE_USER);
+            message.setReplication(payload);
+            return message;
+        });
+    }
+
     // Replicates an admin/DDL operation to a majority of peers, to be re-executed there as actingUser.
     public ReplicationOutcome broadcastAdmin(String rawJson, String actingUser) {
         return awaitQuorum(ClusterMessageType.REPLICATE_ADMIN_ACK, () -> {

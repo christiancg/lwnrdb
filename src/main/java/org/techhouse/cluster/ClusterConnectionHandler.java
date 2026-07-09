@@ -19,6 +19,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.ops.ReplicatedUserApplyHelper;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -76,6 +77,7 @@ public class ClusterConnectionHandler implements Runnable {
             case GOSSIP -> membershipService.handleGossip(request);
             case REPLICATE -> handleReplicate(request);
             case REPLICATE_ADMIN -> handleReplicateAdmin(request);
+            case REPLICATE_USER -> handleReplicateUser(request);
             case FORWARD_REQUEST -> handleForward(request);
             default -> {
                 final var error = new ClusterMessage();
@@ -129,6 +131,17 @@ public class ClusterConnectionHandler implements Runnable {
                 clientTracker.removeById(clientId);
             }
         }
+    }
+
+    private ClusterMessage handleReplicateUser(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
+            response.setType(ClusterMessageType.REPLICATE_USER_ACK);
+        } else {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to apply replicated user mutation");
+        }
+        return response;
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {
