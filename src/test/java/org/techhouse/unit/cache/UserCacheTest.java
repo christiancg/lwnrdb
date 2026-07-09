@@ -1461,8 +1461,7 @@ public class UserCacheTest {
         final var originalMax = config.getMaxMemoryBytes();
         final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
-        TestUtils.getPrivateField(cache, "collectionMap", collType)
-                .clear();
+        TestUtils.getPrivateField(cache, "collectionMap", collType).clear();
         try {
             TestUtils.setPrivateField(config, "maxMemoryBytes", 100_000_000L);
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("a", 1));
@@ -1485,8 +1484,7 @@ public class UserCacheTest {
         final var originalMax = config.getMaxMemoryBytes();
         final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
-        TestUtils.getPrivateField(cache, "collectionMap", collType)
-                .clear();
+        TestUtils.getPrivateField(cache, "collectionMap", collType).clear();
         try {
             TestUtils.setPrivateField(config, "maxMemoryBytes", 100_000_000L);
             cache.addEntriesToCache(TestGlobals.DB, TestGlobals.COLL, List.of(cacheEntry("a", 1)));

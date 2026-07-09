@@ -2,6 +2,7 @@ package org.techhouse.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -214,5 +215,70 @@ public class AntiEntropyServiceTest {
 
         assertTrue(hasLive());
         assertEquals(localVersion, versionOf());
+    }
+
+    private static PeerConnectionPool emptyDigestPool() {
+        final var pool = mock(PeerConnectionPool.class);
+        try {
+            when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+                final var response = new ClusterMessage();
+                response.setType(ClusterMessageType.DIGEST_ACK);
+                final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
+                payload.setDigest(List.of());
+                response.setAntiEntropy(payload);
+                return response;
+            });
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return pool;
+    }
+
+    @Test
+    public void test_start_runs_periodic_sweep() throws Exception {
+        final var config = Configuration.getInstance();
+        final var originalEnabled = config.isClusterEnabled();
+        final var originalInterval = config.getAntiEntropyIntervalMs();
+        final var pool = emptyDigestPool();
+        try {
+            TestUtils.setPrivateField(config, "clusterEnabled", true);
+            TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 50L);
+            injectPeer(pool);
+            service.start();
+            verify(pool, timeout(3000).atLeastOnce()).request(any(), any(), anyLong());
+        } finally {
+            service.stop();
+            TestUtils.setPrivateField(config, "clusterEnabled", originalEnabled);
+            TestUtils.setPrivateField(config, "antiEntropyIntervalMs", originalInterval);
+        }
+    }
+
+    @Test
+    public void test_start_is_noop_when_disabled() throws Exception {
+        final var config = Configuration.getInstance();
+        final var originalEnabled = config.isClusterEnabled();
+        try {
+            TestUtils.setPrivateField(config, "clusterEnabled", false);
+            service.start();
+            service.stop();
+        } finally {
+            TestUtils.setPrivateField(config, "clusterEnabled", originalEnabled);
+        }
+    }
+
+    @Test
+    public void test_reconcile_garbage_collects_expired_tombstones() throws Exception {
+        final var retention = Configuration.getInstance().getTombstoneRetentionMs();
+        final var expired = System.currentTimeMillis() - (2L * retention);
+        final var recent = System.currentTimeMillis();
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", expired);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "recent", recent);
+        injectPeer(emptyDigestPool());
+
+        service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        final var tombstones = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        assertNull(tombstones.get("old"));
+        assertEquals(recent, tombstones.get("recent"));
     }
 }

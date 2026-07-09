@@ -28,8 +28,13 @@ one large machine.
 >   members (digest exchange + pull-newest), converging every id to the highest
 >   version seen anywhere. This makes ownership handoff and rejoining-node catch-up
 >   data-safe (no committed write is lost or a deleted document resurrected).
-> - **Planned (later phases):** 4b — a periodic background anti-entropy sweep and
->   ownership-handoff cache warm-up; admin/DDL anti-entropy for nodes that were down
+> - **Phase 4b — implemented:** a **periodic** background anti-entropy sweep
+>   (`antiEntropyIntervalMs`) that reconciles every collection on a fixed interval in
+>   addition to the membership-triggered pass — catching replicas left behind by a
+>   replication timeout — and **tombstone garbage-collection** that deduplicates the
+>   tombstone files and drops deletes older than `tombstoneRetentionMs`. Ownership-
+>   handoff cache warm-up was intentionally left as lazy (caches warm on first read).
+> - **Planned (later phases):** admin/DDL anti-entropy for nodes that were down
 >   during a DDL op; and distributed transactions.
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
@@ -212,9 +217,18 @@ reconciles each of this node's collections against the live members:
 Because every node runs the same pull-newest reconciliation and the version totally
 orders writes per id, the cluster converges to the latest write regardless of which
 node became a collection's owner after a failure — so no committed write is lost when
-ownership hands off, and a node that was down catches up when it rejoins. Tombstone
-garbage-collection, a periodic (not just membership-triggered) sweep, and owner
-cache warm-up are Phase 4b.
+ownership hands off, and a node that was down catches up when it rejoins.
+
+Beyond the membership-triggered pass, a **periodic sweep** runs the same
+reconciliation on every collection each `antiEntropyIntervalMs` (default 60s), so a
+replica left behind by a replication timeout is repaired without waiting for the next
+membership change. At the end of each collection's reconciliation the tombstone file
+is **garbage-collected** (`FileSystem.compactTombstones`): duplicate tombstones are
+collapsed to the highest version per id and any tombstone older than
+`tombstoneRetentionMs` (default 24h) is dropped. Retention must comfortably exceed the
+longest expected node downtime, otherwise a delete could be collected before a
+still-down replica has converged on it and would be resurrected on rejoin. Owner cache
+warm-up on handoff is deliberately lazy — a new owner's cache fills on first read.
 
 ## Wire protocol
 

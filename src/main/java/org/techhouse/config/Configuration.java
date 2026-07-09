@@ -37,6 +37,8 @@ public final class Configuration {
     private boolean readFallbackToLocal;
     private boolean clusterTlsEnabled;
     private String clusterSecret;
+    private long antiEntropyIntervalMs;
+    private long tombstoneRetentionMs;
 
     private Configuration() {
     }
@@ -81,6 +83,8 @@ public final class Configuration {
                 case "readFallbackToLocal" -> readFallbackToLocal = Boolean.parseBoolean(config.getValue());
                 case "clusterTlsEnabled" -> clusterTlsEnabled = Boolean.parseBoolean(config.getValue());
                 case "clusterSecret" -> clusterSecret = config.getValue();
+                case "antiEntropyIntervalMs" -> antiEntropyIntervalMs = Long.parseLong(config.getValue());
+                case "tombstoneRetentionMs" -> tombstoneRetentionMs = Long.parseLong(config.getValue());
                 default -> {
                 }
             }
@@ -220,5 +224,13 @@ public final class Configuration {
 
     public String getClusterSecret() {
         return clusterSecret;
+    }
+
+    public long getAntiEntropyIntervalMs() {
+        return antiEntropyIntervalMs;
+    }
+
+    public long getTombstoneRetentionMs() {
+        return tombstoneRetentionMs;
     }
 }

@@ -1,5 +1,6 @@
 package org.techhouse.cluster;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -7,6 +8,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
@@ -43,6 +46,30 @@ public class AntiEntropyService implements MembershipListener {
     });
     // Coalesces bursts of membership changes into at most one queued reconcile pass.
     private final AtomicBoolean scheduled = new AtomicBoolean(false);
+    private ScheduledExecutorService periodicScheduler;
+
+    // Starts the periodic background sweep that reconciles every collection against live peers on a fixed
+    // interval (in addition to the membership-triggered pass), catching replicas left behind by a
+    // replication timeout. No-op when clustering is disabled or the interval is not positive.
+    public void start() {
+        if (!clusterConfig.isEnabled() || clusterConfig.antiEntropyIntervalMs() <= 0) {
+            return;
+        }
+        periodicScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+            final var t = new Thread(r, "cluster-anti-entropy-sweep");
+            t.setDaemon(true);
+            return t;
+        });
+        final var interval = clusterConfig.antiEntropyIntervalMs();
+        periodicScheduler.scheduleAtFixedRate(this::scheduleReconcile, interval, interval, TimeUnit.MILLISECONDS);
+    }
+
+    public void stop() {
+        if (periodicScheduler != null) {
+            periodicScheduler.shutdownNow();
+            periodicScheduler = null;
+        }
+    }
 
     @Override
     public void onMembershipChanged(MembershipView view) {
@@ -167,6 +194,17 @@ public class AntiEntropyService implements MembershipListener {
                         response.getDocuments(), null, response.getVersions()));
             }
         }
+        garbageCollectTombstones(dbName, collName);
+    }
+
+    // Deduplicates the tombstone file and drops deletes older than the retention window (they have converged
+    // everywhere by now, so keeping them would only grow the file). A retention of <= 0 disables GC.
+    private void garbageCollectTombstones(String dbName, String collName) throws IOException {
+        final var retention = clusterConfig.tombstoneRetentionMs();
+        if (retention <= 0) {
+            return;
+        }
+        fs.compactTombstones(dbName, collName, System.currentTimeMillis() - retention);
     }
 
     private void merge(Map<String, Best> best, String id, long version, boolean deleted, NodeAddress source) {

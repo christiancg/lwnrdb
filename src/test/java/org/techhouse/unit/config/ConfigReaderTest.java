@@ -78,6 +78,8 @@ public class ConfigReaderTest {
         expectedConfig.put("readFallbackToLocal", "true");
         expectedConfig.put("clusterTlsEnabled", "false");
         expectedConfig.put("clusterSecret", "");
+        expectedConfig.put("antiEntropyIntervalMs", "60000");
+        expectedConfig.put("tombstoneRetentionMs", "86400000");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

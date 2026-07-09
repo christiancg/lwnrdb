@@ -42,6 +42,8 @@ public class ClusterConfigurationValidatorTest {
         map.put("readFallbackToLocal", "true");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "shared-secret");
+        map.put("antiEntropyIntervalMs", "60000");
+        map.put("tombstoneRetentionMs", "86400000");
         return map;
     }
 

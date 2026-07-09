@@ -671,6 +671,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
 | `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
 | `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
+| `antiEntropyIntervalMs` | Valid number ≥ 1. How often each node runs a background anti-entropy sweep reconciling its collections against live peers |
+| `tombstoneRetentionMs` | Valid number ≥ 1. How long delete tombstones are kept before anti-entropy GC; must exceed the longest expected node downtime |
 
 ```
 # the port the server listens on

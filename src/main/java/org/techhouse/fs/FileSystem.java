@@ -235,6 +235,43 @@ public class FileSystem {
         return result;
     }
 
+    // Garbage-collects the tombstone file: keeps only the highest version per id and drops any tombstone
+    // older than minVersionToKeep (an epoch-millis cutoff). This both deduplicates the append-only file and
+    // removes fully-converged deletes. A missing/empty file is left untouched.
+    public void compactTombstones(String dbName, String collName, long minVersionToKeep) throws IOException {
+        final var file = getTombstoneFile(dbName, collName);
+        if (!file.exists()) {
+            return;
+        }
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            final var kept = new LinkedHashMap<String, Long>();
+            for (final var line : Files.readAllLines(file.toPath())) {
+                final var cleaned = line.trim();
+                final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+                if (sep <= 0) {
+                    continue;
+                }
+                try {
+                    final var version = Long.parseLong(cleaned.substring(sep + 1));
+                    if (version >= minVersionToKeep) {
+                        kept.merge(cleaned.substring(0, sep), version, Math::max);
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Drop a torn/malformed tombstone line.
+                }
+            }
+            final var lines = new ArrayList<String>(kept.size());
+            for (final var entry : kept.entrySet()) {
+                lines.add(entry.getKey() + Globals.INDEX_ENTRY_SEPARATOR + entry.getValue());
+            }
+            rewriteFileAtomically(file.toPath(), lines);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
         final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
                 pkIndexEntry.getPage());

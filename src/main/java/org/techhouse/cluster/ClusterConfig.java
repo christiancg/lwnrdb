@@ -86,4 +86,12 @@ public class ClusterConfig {
     public String secret() {
         return configuration.getClusterSecret();
     }
+
+    public long antiEntropyIntervalMs() {
+        return configuration.getAntiEntropyIntervalMs();
+    }
+
+    public long tombstoneRetentionMs() {
+        return configuration.getTombstoneRetentionMs();
+    }
 }

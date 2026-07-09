@@ -88,6 +88,7 @@ public class Main {
             membershipService.addListener(antiEntropyService);
             membershipService.start();
             ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
+            antiEntropyService.start();
         } catch (IOException e) {
             logger.fatal("Failed to start the cluster server", e);
             throw new RuntimeException("Failed to start the cluster server", e);

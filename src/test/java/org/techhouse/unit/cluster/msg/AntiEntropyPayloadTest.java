@@ -1,12 +1,12 @@
 package org.techhouse.unit.cluster.msg;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.ejson.elements.JsonObject;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class AntiEntropyPayloadTest {
 

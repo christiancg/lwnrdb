@@ -147,6 +147,8 @@ public class ConfigurationTest {
         map.put("readFallbackToLocal", "true");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "");
+        map.put("antiEntropyIntervalMs", "60000");
+        map.put("tombstoneRetentionMs", "86400000");
         return map;
     }
 

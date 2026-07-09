@@ -1694,4 +1694,26 @@ public class FileSystemTest {
         final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(disk.stream().noneMatch(p -> p.getValue().equals("b")), "'b' must be removed from the index");
     }
+
+    @Test
+    public void test_compactTombstones_dedups_and_drops_old() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "keep", 1000L);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "keep", 2000L);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", 100L);
+        fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 500L);
+        final var tombstones = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, tombstones.size());
+        assertEquals(2000L, tombstones.get("keep"));
+        assertNull(tombstones.get("old"));
+    }
+
+    @Test
+    public void test_compactTombstones_missing_file_is_noop() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.compactTombstones(TestGlobals.DB, "noSuchColl", 0L);
+        assertTrue(fs.readTombstones(TestGlobals.DB, "noSuchColl").isEmpty());
+    }
 }

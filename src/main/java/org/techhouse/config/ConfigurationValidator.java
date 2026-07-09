@@ -51,8 +51,10 @@ public final class ConfigurationValidator {
         validateLong(configs, "suspectTimeoutMs", 1, errors);
         validateLong(configs, "deadTimeoutMs", 1, errors);
         validateLong(configs, "replicationAckTimeoutMs", 1, errors);
+        validateLong(configs, "antiEntropyIntervalMs", 1, errors);
+        validateLong(configs, "tombstoneRetentionMs", 1, errors);
         final var enabledValue = configs.get("clusterEnabled");
-        if (enabledValue == null || !isBoolean(enabledValue) || !Boolean.parseBoolean(enabledValue.trim())) {
+        if (enabledValue == null || isNotBoolean(enabledValue) || !Boolean.parseBoolean(enabledValue.trim())) {
             return;
         }
         validateEnabledClusterConstraints(configs, errors);
@@ -99,7 +101,7 @@ public final class ConfigurationValidator {
 
     private static void validateBoolean(Map<String, String> configs, String key, List<String> errors) {
         final var value = configs.get(key);
-        if (value == null || !isBoolean(value)) {
+        if (value == null || isNotBoolean(value)) {
             errors.add(key + " must be true or false, but was: " + value);
         }
     }
@@ -132,7 +134,7 @@ public final class ConfigurationValidator {
 
     private static void validateTls(Map<String, String> configs, List<String> errors) {
         final var enabledValue = configs.get("tlsEnabled");
-        if (enabledValue == null || !isBoolean(enabledValue)) {
+        if (enabledValue == null || isNotBoolean(enabledValue)) {
             errors.add("tlsEnabled must be true or false, but was: " + enabledValue);
             return;
         }
@@ -165,9 +167,9 @@ public final class ConfigurationValidator {
         }
     }
 
-    private static boolean isBoolean(String value) {
+    private static boolean isNotBoolean(String value) {
         final var trimmed = value.trim();
-        return trimmed.equalsIgnoreCase("true") || trimmed.equalsIgnoreCase("false");
+        return !trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false");
     }
 
     private static void validatePort(Map<String, String> configs, List<String> errors) {
