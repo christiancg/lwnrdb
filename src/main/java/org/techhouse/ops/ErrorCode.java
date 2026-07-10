@@ -36,7 +36,10 @@ public enum ErrorCode {
                             OperationStatus.ERROR), TRANSACTION_LOCK_TIMEOUT("409-5",
                                     "Could not acquire the collection lock in time; transaction aborted",
                                     OperationStatus.ERROR), OPERATION_NOT_ALLOWED_IN_TRANSACTION("409-6",
-                                            "Operation not allowed while a transaction is open", OperationStatus.ERROR),
+                                            "Operation not allowed while a transaction is open",
+                                            OperationStatus.ERROR), TRANSACTION_ABORTED("409-7",
+                                                    "Transaction aborted: a participant could not prepare",
+                                                    OperationStatus.ERROR),
 
     // ── 421 Misdirected (cluster routing) ─────────────────────────────────
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection",

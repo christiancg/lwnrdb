@@ -20,6 +20,9 @@ public class ClusterMessage {
     // Stable per-connection transaction session id (the edge client id) on a FORWARD_TX_REQUEST, so the
     // owner keeps the same buffered transaction across the session's forwarded operations.
     private String txSessionId;
+    // The distributed-transaction id (the coordinator's transaction UUID) on 2PC control messages, used as
+    // the correlation key for the durable recovery-log markers.
+    private String txId;
     // A committed transaction's atomic write batch on a REPLICATE_TX message.
     private TxReplicationPayload txReplication;
     private String errorMessage;
@@ -114,6 +117,14 @@ public class ClusterMessage {
 
     public void setTxSessionId(String txSessionId) {
         this.txSessionId = txSessionId;
+    }
+
+    public String getTxId() {
+        return txId;
+    }
+
+    public void setTxId(String txId) {
+        this.txId = txId;
     }
 
     public TxReplicationPayload getTxReplication() {

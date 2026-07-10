@@ -11,6 +11,7 @@ import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.TransactionSessionReaper;
+import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
@@ -42,6 +43,7 @@ public class Main {
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final TransactionSessionReaper transactionSessionReaper = IocContainer
             .get(TransactionSessionReaper.class);
+    private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -90,9 +92,11 @@ public class Main {
             membershipService.addListener(ownershipManager);
             membershipService.addListener(antiEntropyService);
             membershipService.addListener(transactionSessionReaper);
+            membershipService.addListener(tx2pcRecovery);
             membershipService.start();
             ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
             antiEntropyService.start();
+            tx2pcRecovery.recover();
         } catch (IOException e) {
             logger.fatal("Failed to start the cluster server", e);
             throw new RuntimeException("Failed to start the cluster server", e);

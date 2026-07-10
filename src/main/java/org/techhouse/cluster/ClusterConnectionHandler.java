@@ -23,6 +23,7 @@ import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
 import org.techhouse.ops.ReplicatedUserApplyHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -85,6 +86,10 @@ public class ClusterConnectionHandler implements Runnable {
             case REPLICATE_TX -> handleReplicateTx(request);
             case FORWARD_REQUEST -> handleForward(request);
             case FORWARD_TX_REQUEST -> handleForwardTx(request);
+            case PREPARE_TX -> handlePrepareTx(request);
+            case COMMIT_TX -> handleCommitTx(request);
+            case ABORT_TX -> handleAbortTx(request);
+            case TX_STATUS -> handleTxStatus(request);
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
             default -> {
@@ -122,9 +127,12 @@ public class ClusterConnectionHandler implements Runnable {
             final var type = parsed.getType();
             // Run every op of the session on its own single-thread executor so the collection write locks it
             // holds across messages are acquired and released by the same thread.
+            final var txId = request.getTxId();
             final var result = session.submit(() -> {
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
-                    TransactionOperationHelper.start(clientId);
+                    // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
+                    // key on the same id everywhere.
+                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId));
                 }
                 return operationProcessor.processMessage(parsed, clientId);
             }).get();
@@ -155,6 +163,88 @@ public class ClusterConnectionHandler implements Runnable {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to apply replicated transaction");
         }
+        return response;
+    }
+
+    // Phase 5b participant: votes on a PREPARE from the coordinator, running on the session's executor thread
+    // (the holder of its write locks). No session means nothing was buffered here, so it votes no.
+    private ClusterMessage handlePrepareTx(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        final var session = clientTracker.txSession(request.getTxSessionId());
+        final var coordinatorAddress = request.getSender() != null ? request.getSender().address().toString() : null;
+        var vote = false;
+        if (session != null) {
+            try {
+                vote = session.submit(() -> TransactionOperationHelper.prepare(session.clientId(), coordinatorAddress))
+                        .get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                logger.warning("Failed to prepare forwarded transaction: " + e.getMessage());
+            }
+        }
+        if (vote) {
+            response.setType(ClusterMessageType.PREPARE_TX_ACK);
+        } else {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Participant voted no");
+        }
+        return response;
+    }
+
+    private ClusterMessage handleCommitTx(ClusterMessage request) {
+        return resolveTx(request, true, ClusterMessageType.COMMIT_TX_ACK);
+    }
+
+    private ClusterMessage handleAbortTx(ClusterMessage request) {
+        return resolveTx(request, false, ClusterMessageType.ABORT_TX_ACK);
+    }
+
+    // Commits or aborts a prepared participant slice. If the in-memory session is still present the work runs
+    // on its executor thread; otherwise (e.g. after a participant restart during coordinator re-drive) it
+    // resolves the durable slice directly.
+    private ClusterMessage resolveTx(ClusterMessage request, boolean commit, ClusterMessageType ackType) {
+        final var response = new ClusterMessage();
+        final var sessionId = request.getTxSessionId();
+        final var session = clientTracker.txSession(sessionId);
+        try {
+            if (session != null) {
+                session.submit(() -> commit
+                        ? TransactionOperationHelper.commitPrepared(session.clientId())
+                        : TransactionOperationHelper.abort(session.clientId())).get();
+                clientTracker.removeTxSession(sessionId);
+            } else {
+                resolveFromDurable(request.getTxId(), commit);
+            }
+            response.setType(ackType);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Interrupted resolving transaction");
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to resolve transaction: " + e.getMessage());
+        }
+        return response;
+    }
+
+    private void resolveFromDurable(String dtxId, boolean commit) throws Exception {
+        if (commit) {
+            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
+            TransactionOperationHelper.commitPreparedFromDurable(dtxId,
+                    marker != null ? marker.collections() : java.util.List.of());
+        } else {
+            TransactionOperationHelper.abortFromDurable(dtxId);
+        }
+    }
+
+    // Phase 5b coordinator query: reports whether the distributed transaction was decided commit (its
+    // coordinator marker is present) or, by presumed-abort, not.
+    private ClusterMessage handleTxStatus(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        response.setType(Tx2pcLog.isCommitted(request.getTxId())
+                ? ClusterMessageType.COMMIT_TX_ACK
+                : ClusterMessageType.ABORT_TX_ACK);
         return response;
     }
 

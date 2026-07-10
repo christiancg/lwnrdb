@@ -34,15 +34,19 @@ one large machine.
 >   replication timeout — and **tombstone garbage-collection** that deduplicates the
 >   tombstone files and drops deletes older than `tombstoneRetentionMs`. Ownership-
 >   handoff cache warm-up was intentionally left as lazy (caches warm on first read).
-> - **Phase 5a — implemented:** transactions under clustering, pinned to a single
->   owner. A transaction is bound (on its first write) to the owner of that collection;
->   the edge node forwards the whole session there, and the owner runs it locally
->   (holding the write locks, buffering, serving read-your-writes) and at commit
->   replays and replicates the transaction to a majority as **one atomic batch**. A
->   transaction that tries to write a collection owned by a different node is rejected
->   (`421-2 CROSS_OWNER_TRANSACTION`). Cross-owner transactions are Phase 5b.
-> - **Planned (later phases):** cross-owner distributed transactions (Phase 5b — 2PC
->   with a recovery log); and admin/DDL anti-entropy for nodes that were down during a
+> - **Phase 5a — implemented:** transactions under clustering, single-owner. The edge
+>   forwards a transaction's session to the owner of its collection, which runs it
+>   locally (holding the write locks, buffering, serving read-your-writes) and at commit
+>   replays and replicates the transaction to a majority as **one atomic batch**. Kept
+>   as a fast path when only one owner is involved.
+> - **Phase 5b — implemented:** cross-owner distributed transactions via **two-phase
+>   commit** with a durable recovery log. The edge coordinates; each written owner is a
+>   participant holding its buffered slice + locks. Commit runs PREPARE across all
+>   participants and, on a unanimous yes, durably records the decision before driving
+>   COMMIT; any no vote or unreachable participant aborts them all. A coordinator or
+>   participant crash mid-commit is resolved from the durable log (re-drive the commit,
+>   or presumed-abort), with prepared participants re-acquiring their locks on restart.
+> - **Planned (later phases):** admin/DDL anti-entropy for nodes that were down during a
 >   DDL op.
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
@@ -238,18 +242,18 @@ longest expected node downtime, otherwise a delete could be collected before a
 still-down replica has converged on it and would be resurrected on rejoin. Owner cache
 warm-up on handoff is deliberately lazy — a new owner's cache fills on first read.
 
-## Transactions under clustering (Phase 5a)
+## Transactions under clustering (Phases 5a–5b)
 
-A transaction is **pinned to a single owner**. The node the client connects to (the
-edge) keeps only lightweight affinity: on the transaction's **first write** it looks
-up that collection's owner and *binds* the transaction to it. `START_TRANSACTION` and
-any read issued before the first write run locally; once bound, every operation
-(`SAVE`/`BULK_SAVE`/`DELETE`/`FIND_BY_ID`/`AGGREGATE`/`COMMIT`/`ROLLBACK`) is forwarded
-to the owner in a `FORWARD_TX_REQUEST` carrying a stable `txSessionId` (the edge client
-id). If the edge *is* the owner, the transaction simply runs locally.
+The node the client connects to (the **edge**) coordinates the transaction. Each write
+is routed to its collection's owner: buffered locally when the edge owns it, else
+forwarded to that owner in a `FORWARD_TX_REQUEST` (carrying a stable `txSessionId` = the
+edge client id, and the distributed-tx id `txId`), which makes that owner a
+**participant**. `START_TRANSACTION` and a read of a not-yet-written collection run
+locally; a read of a written collection is forwarded to its participant for
+read-your-writes.
 
-The owner runs each forwarded session on its **own single-thread executor** under a
-persistent synthetic client. This matters: the transaction holds the collection write
+Each participant runs its forwarded session on its **own single-thread executor** under
+a persistent synthetic client. This matters: the transaction holds the collection write
 lock from its first write until commit, and a `ReentrantReadWriteLock` write lock is
 thread-owned — running the whole session on one thread keeps acquire/release on the
 same thread and makes two concurrent sessions genuinely mutually exclusive rather than
@@ -257,24 +261,37 @@ falsely sharing a reentrant lock. Because the lock lives on the owner (where wri
 also coordinated), a concurrent non-transactional write routed to the owner is properly
 serialized against the transaction.
 
-At **commit** the owner checks it still holds a write quorum (else `503-2`), replays
-the buffered operations locally, then replicates the transaction's writes to a majority
-as **one atomic batch** (`REPLICATE_TX`, a `txReplication` payload of per-collection
-UPSERT/DELETE entries). A replica applies the whole batch inside a single
-multi-collection lock window (locks taken in sorted order), so no other writer
-interleaves mid-transaction. A replication timeout returns `503-3` but the local commit
+**Single-owner fast path (5a).** When only one owner is involved, commit skips 2PC: the
+sole owner replays its buffered ops, checks quorum (else `503-2`), and replicates them
+to a majority as **one atomic batch** (`REPLICATE_TX`, a `txReplication` payload of
+per-collection UPSERT/DELETE entries applied inside one multi-collection lock window so
+no other writer interleaves). A replication timeout returns `503-3` but the local commit
 stands (anti-entropy reconciles the lagging replicas).
 
-**Single-owner restriction.** A write to a collection owned by a *different* node than
-the one the transaction is bound to is rejected with `421-2 CROSS_OWNER_TRANSACTION`.
-Since collections of the same database are spread across owners by the hash ring,
-multi-collection transactions are frequently cross-owner — true cross-owner atomicity
-(two-phase commit with a recovery log) is **Phase 5b**.
+**Cross-owner two-phase commit (5b).** When a transaction spans multiple owners the edge
+runs 2PC: `PREPARE_TX` to every participant (each votes yes only after durably recording
+a PREPARED marker and confirming quorum), then — on a unanimous yes — the coordinator
+**durably records the commit decision** and drives `COMMIT_TX` to all; any no vote or
+unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
+Each participant's commit reuses the 5a atomic `REPLICATE_TX` batch to its own replicas.
 
-**Liveness.** If the edge connection closes, the edge tells the owner to roll the
-transaction back (releasing its locks). If the edge *node* crashes, a membership
-listener on the owner reaps sessions whose originating node has left the cluster — the
-interim safety net until Phase 5b's recovery protocol.
+**Durable recovery log.** The PREPARED markers and the coordinator's COMMIT decision are
+stored as records in the `admin/transactions` collection (keyed `{dtxId}|part` /
+`{dtxId}|coord`, alongside the transaction's buffered slice). Presence of the coordinator
+marker is the commit point: present ⇒ commit, absent ⇒ **presumed abort**. On restart
+(`Tx2pcRecovery`): a prepared participant re-acquires its write locks and asks the
+coordinator (`TX_STATUS`) whether to commit or abort; a coordinator that recorded a
+commit re-drives `COMMIT_TX` to its participants. Recovery re-runs on every membership
+change to retry participants whose coordinator was unreachable. A participant that has
+voted yes but cannot reach its coordinator stays in-doubt holding its locks until the
+coordinator answers — the standard 2PC blocking trade-off (an unsafe timeout is *not*
+used).
+
+**Liveness before prepare.** If the edge connection closes (or the edge node crashes)
+before commit, the not-yet-prepared session is rolled back — the edge aborts its
+participants, and a membership listener reaps sessions of a departed edge node. A session
+that has already voted yes is left for recovery (never reaped), so a coordinator commit
+is never lost to a premature abort.
 
 ## Wire protocol
 
@@ -283,7 +300,7 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 (`clusterTlsEnabled`, reusing the PKCS12 keystore — all nodes must share the same
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
-replication, forwardBody, actingUser, antiEntropy, txSessionId, txReplication,
+replication, forwardBody, actingUser, antiEntropy, txSessionId, txId, txReplication,
 errorMessage}`; `correlationId` lets a single pooled connection multiplex many
 in-flight requests. Message types are
 `JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
@@ -297,10 +314,13 @@ DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`),
 `PULL`/`PULL_ACK` (anti-entropy, carrying an `antiEntropy` payload of a collection's
 `{id, version, deleted}` digest or of pulled `documents`/`versions`),
 `FORWARD_TX_REQUEST` (a forwarded transaction operation, carrying the Base64-wrapped
-request in `forwardBody` plus a `txSessionId`; the reply reuses `FORWARD_RESPONSE`), and
-`REPLICATE_TX`/`REPLICATE_TX_ACK` (a committed transaction's atomic write batch, carrying
-a `txReplication` payload of per-collection replication entries). Inbound messages
-whose `secret` does not match `clusterSecret` are rejected.
+request in `forwardBody` plus a `txSessionId` and `txId`; the reply reuses
+`FORWARD_RESPONSE`), `REPLICATE_TX`/`REPLICATE_TX_ACK` (a committed transaction's atomic
+write batch, carrying a `txReplication` payload of per-collection replication entries),
+and the 2PC control messages `PREPARE_TX`/`PREPARE_TX_ACK`, `COMMIT_TX`/`COMMIT_TX_ACK`,
+`ABORT_TX`/`ABORT_TX_ACK` and `TX_STATUS` (which replies with `COMMIT_TX_ACK` /
+`ABORT_TX_ACK`), all keyed by `txSessionId`/`txId`. Inbound messages whose `secret` does
+not match `clusterSecret` are rejected.
 
 ## Configuration reference
 

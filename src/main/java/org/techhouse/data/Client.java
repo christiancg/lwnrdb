@@ -3,6 +3,8 @@ package org.techhouse.data;
 import java.io.BufferedWriter;
 import java.time.LocalDateTime;
 import java.util.Objects;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class Client {
@@ -13,11 +15,11 @@ public class Client {
     private volatile BufferedWriter writer;
     private final ReentrantLock writerLock = new ReentrantLock();
     private Transaction activeTransaction;
-    // Edge-side clustering affinity for an open transaction: once bound (on the first write), the
-    // transaction is pinned to one owner. transactionOwner is null when this node is the owner (run
-    // locally) and the owner's "host:port" address when the session is forwarded to a remote owner.
-    private volatile boolean transactionBound;
-    private volatile String transactionOwner;
+    // Edge-side coordinator state for an open (possibly cross-owner) transaction: whether this node holds a
+    // local slice (a write to a collection it owns) and the "host:port" addresses of the remote owners that
+    // hold a slice (the 2PC participants). Populated as the transaction's writes are routed.
+    private volatile boolean hasLocalSlice;
+    private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
 
     public Client(String address) {
         this.address = address;
@@ -67,20 +69,25 @@ public class Client {
         this.activeTransaction = activeTransaction;
     }
 
-    public boolean isTransactionBound() {
-        return transactionBound;
+    public boolean hasLocalSlice() {
+        return hasLocalSlice;
     }
 
-    public void setTransactionBound(boolean transactionBound) {
-        this.transactionBound = transactionBound;
+    public void markLocalSlice() {
+        this.hasLocalSlice = true;
     }
 
-    public String getTransactionOwner() {
-        return transactionOwner;
+    public Set<String> getTransactionParticipants() {
+        return transactionParticipants;
     }
 
-    public void setTransactionOwner(String transactionOwner) {
-        this.transactionOwner = transactionOwner;
+    public void addTransactionParticipant(String ownerAddress) {
+        transactionParticipants.add(ownerAddress);
+    }
+
+    public void clearTransactionState() {
+        hasLocalSlice = false;
+        transactionParticipants.clear();
     }
 
     @Override

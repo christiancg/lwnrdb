@@ -23,6 +23,14 @@ public class AdminTransactionEntry extends DbEntry {
     public static final String OP_TYPE_SAVE = "SAVE";
     public static final String OP_TYPE_BULK_SAVE = "BULK_SAVE";
     public static final String OP_TYPE_DELETE = "DELETE";
+    // Phase 5b two-phase-commit recovery markers, stored in admin/transactions alongside the slice ops:
+    // a participant's PREPARED marker (_id = {dtxId}|part) and the coordinator's COMMIT decision
+    // (_id = {dtxId}|coord). The distributed-tx id is a UUID (never contains the '|' separator), so an
+    // id whose trailing token is "part"/"coord" is a marker and a numeric trailing token is a slice op.
+    public static final String OP_TYPE_PARTICIPANT_PREPARED = "PARTICIPANT_PREPARED";
+    public static final String OP_TYPE_COORDINATOR_COMMIT = "COORDINATOR_COMMIT";
+    public static final String MARKER_PARTICIPANT = "part";
+    public static final String MARKER_COORDINATOR = "coord";
 
     private String transactionId;
     private String clientId;
@@ -56,6 +64,23 @@ public class AdminTransactionEntry extends DbEntry {
 
     public static String buildId(String transactionId, long seq) {
         return transactionId + Globals.COLL_IDENTIFIER_SEPARATOR + seq;
+    }
+
+    // Builds a recovery marker record (see the MARKER_* constants). The marker's descriptive fields are
+    // carried in the payload.
+    public static AdminTransactionEntry marker(String transactionId, String markerSuffix, String opType,
+            JsonObject payload) {
+        final var result = new AdminTransactionEntry();
+        result.transactionId = transactionId;
+        result.clientId = "";
+        result.seq = 0;
+        result.opType = opType;
+        result.targetDb = "";
+        result.targetColl = "";
+        result.payload = payload;
+        result.set_id(transactionId + Globals.COLL_IDENTIFIER_SEPARATOR + markerSuffix);
+        result.syncData();
+        return result;
     }
 
     public static AdminTransactionEntry fromJsonObject(JsonObject object) {

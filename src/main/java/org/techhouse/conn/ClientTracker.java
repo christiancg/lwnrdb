@@ -5,6 +5,7 @@ import java.net.Socket;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -68,41 +69,42 @@ public class ClientTracker {
         }
     }
 
+    public TxSession txSession(String sessionId) {
+        return sessionId != null ? txSessions.get(sessionId) : null;
+    }
+
     public Map<String, TxSession> txSessionsSnapshot() {
         return new HashMap<>(txSessions);
     }
 
-    public void bindLocalTransaction(UUID clientId) {
+    public void markLocalSlice(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         if (client != null) {
-            client.setTransactionBound(true);
-            client.setTransactionOwner(null);
+            client.markLocalSlice();
         }
     }
 
-    public void bindRemoteTransaction(UUID clientId, String ownerAddress) {
+    public boolean hasLocalSlice(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.hasLocalSlice();
+    }
+
+    public void addTransactionParticipant(UUID clientId, String ownerAddress) {
         final var client = clientId != null ? clients.get(clientId) : null;
         if (client != null) {
-            client.setTransactionBound(true);
-            client.setTransactionOwner(ownerAddress);
+            client.addTransactionParticipant(ownerAddress);
         }
     }
 
-    public boolean isTransactionBound(UUID clientId) {
+    public Set<String> transactionParticipants(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
-        return client != null && client.isTransactionBound();
+        return client != null ? client.getTransactionParticipants() : Set.of();
     }
 
-    public String getTransactionOwner(UUID clientId) {
-        final var client = clientId != null ? clients.get(clientId) : null;
-        return client != null ? client.getTransactionOwner() : null;
-    }
-
-    public void clearTransactionBinding(UUID clientId) {
+    public void clearTransactionState(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         if (client != null) {
-            client.setTransactionBound(false);
-            client.setTransactionOwner(null);
+            client.clearTransactionState();
         }
     }
 

@@ -1,9 +1,6 @@
 package org.techhouse.unit.cluster;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.InetAddress;
 import java.net.Socket;
@@ -14,6 +11,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.MembershipView;
@@ -31,12 +29,17 @@ import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.RollbackTransactionRequest;
@@ -54,6 +57,7 @@ public class TransactionClusterIntegrationTest {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private ClusterServer server;
     private int serverPort;
@@ -118,6 +122,14 @@ public class TransactionClusterIntegrationTest {
         message.setForwardBody(ForwardBody.encode(eJson.toJson(request)));
         message.setActingUser("admin");
         message.setTxSessionId(sessionId);
+        message.setTxId(UUID.nameUUIDFromBytes(sessionId.getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString());
+        return message;
+    }
+
+    private ClusterMessage control(ClusterMessageType type, String sessionId, String dtxId) {
+        final var message = new ClusterMessage(null, type, SECRET, node("self", serverPort), null);
+        message.setTxSessionId(sessionId);
+        message.setTxId(dtxId);
         return message;
     }
 
@@ -156,6 +168,11 @@ public class TransactionClusterIntegrationTest {
             }
         }
         throw new IllegalStateException("no collection owned by the other node");
+    }
+
+    private void createCollection(String coll) throws Exception {
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, coll));
+        fs.createCollectionFile(TestGlobals.DB, coll);
     }
 
     private UUID newClient() {
@@ -219,6 +236,44 @@ public class TransactionClusterIntegrationTest {
         assertEquals(ClusterMessageType.ERROR, response.getType());
     }
 
+    // ---------- owner-side 2PC handlers ----------
+
+    @Test
+    public void test_prepare_then_commit_tx_over_wire() throws Exception {
+        configureMembership(1, node("self", serverPort));
+        pool.request(serverAddress(), forwardTx("tpc-1", saveRequest(TestGlobals.COLL, "tpc-doc-1")), 2000);
+        final var dtxId = UUID.nameUUIDFromBytes("tpc-1".getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        assertEquals(ClusterMessageType.PREPARE_TX_ACK,
+                pool.request(serverAddress(), control(ClusterMessageType.PREPARE_TX, "tpc-1", dtxId), 2000).getType());
+        assertEquals(ClusterMessageType.COMMIT_TX_ACK,
+                pool.request(serverAddress(), control(ClusterMessageType.COMMIT_TX, "tpc-1", dtxId), 2000).getType());
+        assertEquals(OperationStatus.OK, findStatus("tpc-doc-1"));
+        assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
+    }
+
+    @Test
+    public void test_prepare_then_abort_tx_over_wire() throws Exception {
+        configureMembership(1, node("self", serverPort));
+        pool.request(serverAddress(), forwardTx("tpc-2", saveRequest(TestGlobals.COLL, "tpc-doc-2")), 2000);
+        final var dtxId = UUID.nameUUIDFromBytes("tpc-2".getBytes(java.nio.charset.StandardCharsets.UTF_8)).toString();
+        pool.request(serverAddress(), control(ClusterMessageType.PREPARE_TX, "tpc-2", dtxId), 2000);
+        assertEquals(ClusterMessageType.ABORT_TX_ACK,
+                pool.request(serverAddress(), control(ClusterMessageType.ABORT_TX, "tpc-2", dtxId), 2000).getType());
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("tpc-doc-2"));
+        assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
+    }
+
+    @Test
+    public void test_tx_status_reflects_commit_decision() throws Exception {
+        configureMembership(1, node("self", serverPort));
+        final var dtxId = UUID.randomUUID().toString();
+        assertEquals(ClusterMessageType.ABORT_TX_ACK,
+                pool.request(serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId), 2000).getType());
+        org.techhouse.ops.Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:1"));
+        assertEquals(ClusterMessageType.COMMIT_TX_ACK,
+                pool.request(serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId), 2000).getType());
+    }
+
     // ---------- edge routing ----------
 
     @Test
@@ -231,13 +286,12 @@ public class TransactionClusterIntegrationTest {
         final var request = saveRequest(coll, "routed");
         final var relayed = router.forward(request, eJson.toJson(request), true, "admin", clientId);
 
-        // The owner (this JVM, sharing the ownership singleton) rejects it as cross-owner, but the response
-        // travelled through the edge->owner forward path, and the edge is now bound to the remote owner.
+        // The write is forwarded to (and buffered on) the owner, which is now registered as a participant.
         assertNotNull(relayed);
-        assertTrue(relayed.contains("421-2"), "expected forwarded owner response, got: " + relayed);
-        assertEquals(serverAddress().toString(), clientTracker.getTransactionOwner(clientId));
+        assertTrue(relayed.contains("routed"), "expected the forwarded write to be buffered, got: " + relayed);
+        assertTrue(clientTracker.transactionParticipants(clientId).contains(serverAddress().toString()));
 
-        // Teardown forwards a rollback to the owner, releasing its session.
+        // Teardown aborts the participant, releasing its session.
         router.teardownTransaction(clientId);
     }
 
@@ -267,23 +321,115 @@ public class TransactionClusterIntegrationTest {
     }
 
     @Test
-    public void test_bound_local_transaction_runs_locally() throws Exception {
+    public void test_local_owned_write_runs_locally() throws Exception {
         configureMembership(1, node("self", serverPort));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        final var request = saveRequest(TestGlobals.COLL, "local-bound");
-        // Self owns everything in a single-node ring: the write binds local and runs locally (null).
+        final var request = saveRequest(TestGlobals.COLL, "local-slice");
+        // Self owns everything in a single-node ring: the write runs locally (null) and records a local slice.
         assertNull(router.forward(request, eJson.toJson(request), true, "admin", clientId));
-        assertTrue(clientTracker.isTransactionBound(clientId));
-        assertNull(clientTracker.getTransactionOwner(clientId));
+        assertTrue(clientTracker.hasLocalSlice(clientId));
+        assertTrue(clientTracker.transactionParticipants(clientId).isEmpty());
     }
 
     @Test
-    public void test_teardown_is_noop_for_unbound_transaction() throws Exception {
+    public void test_teardown_is_noop_without_remote_participants() throws Exception {
         configureMembership(1, node("self", serverPort));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        // Not bound to a remote owner: teardown does nothing and does not throw.
+        // No remote participants: teardown is a no-op returning false (caller does local cleanup).
+        assertFalse(router.teardownTransaction(clientId));
+    }
+
+    @Test
+    public void test_single_remote_commit_uses_fast_path() throws Exception {
+        configureMembership(2, node("self", 19990), node("other", serverPort));
+        final var coll = collectionOwnedByOther();
+        createCollection(coll);
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        final var save = saveRequest(coll, "fastpath");
+        router.forward(save, eJson.toJson(save), true, "admin", clientId);
+        final var commit = new CommitTransactionRequest();
+        final var relayed = router.forward(commit, eJson.toJson(commit), true, "admin", clientId);
+        assertNotNull(relayed);
+        assertTrue(relayed.contains("committed"), "expected committed response, got: " + relayed);
+        final var find = new FindByIdRequest(TestGlobals.DB, coll);
+        find.set_id("fastpath");
+        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());
+        assertNull(clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_transaction_read_forwarded_to_participant() throws Exception {
+        configureMembership(2, node("self", 19990), node("other", serverPort));
+        final var coll = collectionOwnedByOther();
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        final var save = saveRequest(coll, "read-yw");
+        router.forward(save, eJson.toJson(save), true, "admin", clientId);
+        final var read = new FindByIdRequest(TestGlobals.DB, coll);
+        read.set_id("read-yw");
+        final var relayed = router.forward(read, eJson.toJson(read), true, "admin", clientId);
+        assertNotNull(relayed);
+        assertTrue(relayed.contains("read-yw"), "expected read-your-writes result, got: " + relayed);
         router.teardownTransaction(clientId);
+    }
+
+    @Test
+    public void test_rollback_routed_to_participant() throws Exception {
+        configureMembership(2, node("self", 19990), node("other", serverPort));
+        final var coll = collectionOwnedByOther();
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        final var save = saveRequest(coll, "rb-routed");
+        router.forward(save, eJson.toJson(save), true, "admin", clientId);
+        final var rollback = new RollbackTransactionRequest();
+        final var relayed = router.forward(rollback, eJson.toJson(rollback), true, "admin", clientId);
+        assertNotNull(relayed);
+        assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
+        assertNull(clientTracker.getActiveTransaction(clientId));
+    }
+
+    // ---------- owner-side durable resolution & no-session paths ----------
+
+    @Test
+    public void test_prepare_tx_for_unknown_session_votes_no() throws Exception {
+        final var response = pool.request(serverAddress(),
+                control(ClusterMessageType.PREPARE_TX, "no-such-session", UUID.randomUUID().toString()), 2000);
+        assertEquals(ClusterMessageType.ERROR, response.getType());
+    }
+
+    @Test
+    public void test_commit_tx_resolves_durable_slice_when_session_absent() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("durable-commit"));
+        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
+                AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
+        Tx2pcLog.recordParticipantPrepared(dtxId, serverAddress().toString(),
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+
+        final var response = pool.request(serverAddress(), control(ClusterMessageType.COMMIT_TX, "gone-session", dtxId),
+                2000);
+        assertEquals(ClusterMessageType.COMMIT_TX_ACK, response.getType());
+        assertEquals(OperationStatus.OK, findStatus("durable-commit"));
+    }
+
+    @Test
+    public void test_abort_tx_resolves_durable_slice_when_session_absent() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("durable-abort"));
+        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
+                AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
+        Tx2pcLog.recordParticipantPrepared(dtxId, serverAddress().toString(),
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+
+        final var response = pool.request(serverAddress(), control(ClusterMessageType.ABORT_TX, "gone-session", dtxId),
+                2000);
+        assertEquals(ClusterMessageType.ABORT_TX_ACK, response.getType());
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("durable-abort"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
     }
 }

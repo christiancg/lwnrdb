@@ -83,8 +83,8 @@ public class ClusterCoordinator {
 
     // A clustered transaction must not commit without a write quorum (split-brain protection). Always true
     // when clustering is off, so the standalone commit path is unchanged.
-    public boolean hasTransactionQuorum() {
-        return !clusterConfig.isEnabled() || ownershipManager.hasQuorum();
+    public boolean hasNotTransactionQuorum() {
+        return clusterConfig.isEnabled() && !ownershipManager.hasQuorum();
     }
 
     // Replicates a just-committed transaction to a majority as one atomic batch, built from the transaction's
@@ -98,7 +98,11 @@ public class ClusterCoordinator {
         try {
             for (final var collId : transaction.touchedCollections()) {
                 final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-                buildCollectionEntries(parts[0], parts[1], transaction.overlayFor(collId), entries);
+                // Only replicate collections this node owns — a 2PC participant owns its slice's collections
+                // and replicates them to their replicas; a collection owned elsewhere is that owner's to ship.
+                if (ownershipManager.isOwner(parts[0], parts[1])) {
+                    buildCollectionEntries(parts[0], parts[1], transaction.overlayFor(collId), entries);
+                }
             }
         } catch (Exception e) {
             logger.warning("Failed to build transaction replication batch: " + e.getMessage());

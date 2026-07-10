@@ -29,13 +29,13 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -96,18 +96,8 @@ public class TransactionClusteringTest {
         ownership.onMembershipChanged(membershipService.membershipView());
     }
 
-    private String collectionOwnedByOther() {
-        for (var i = 0; i < 500; i++) {
-            final var coll = "owned-elsewhere-" + i;
-            if (!ownership.isOwner(TestGlobals.DB, coll)) {
-                return coll;
-            }
-        }
-        throw new IllegalStateException("no collection owned by the other node");
-    }
-
-    private SaveRequest saveRequest(String coll, String id) {
-        final var req = new SaveRequest(TestGlobals.DB, coll);
+    private SaveRequest saveRequest(String id) {
+        final var req = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var obj = new JsonObject();
         obj.add("_id", new JsonString(id));
         req.setObject(obj);
@@ -129,13 +119,42 @@ public class TransactionClusteringTest {
         return processor.processMessage(request).getStatus();
     }
 
+    private UUID startedClientWithWrite(String id) {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        processor.processMessage(saveRequest(id), clientId);
+        return clientId;
+    }
+
     @Test
-    public void test_cross_owner_write_is_rejected() throws Exception {
-        configureMembership(2, node("self", 5000), node("other", 5001));
-        final var coll = collectionOwnedByOther();
-        final var transaction = new Transaction(UUID.randomUUID(), UUID.randomUUID());
-        final var response = TransactionOperationHelper.bufferSave(saveRequest(coll, "x"), transaction);
-        assertEquals("421-2", response.getErrorCode());
+    public void test_prepare_then_commit_prepared_persists() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var clientId = startedClientWithWrite("prep-commit");
+        final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000"));
+        assertTrue(Tx2pcLog.isPrepared(dtxId));
+        assertEquals(OperationStatus.OK, TransactionOperationHelper.commitPrepared(clientId).getStatus());
+        assertEquals(OperationStatus.OK, findStatus("prep-commit"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+        assertNull(clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_prepare_without_quorum_votes_no() throws Exception {
+        configureMembership(3, node("self", 5000));
+        final var clientId = startedClientWithWrite("prep-nq");
+        assertFalse(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000"));
+    }
+
+    @Test
+    public void test_abort_discards_prepared_slice() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var clientId = startedClientWithWrite("prep-abort");
+        final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000"));
+        TransactionOperationHelper.abort(clientId);
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("prep-abort"));
     }
 
     @Test
@@ -143,7 +162,7 @@ public class TransactionClusteringTest {
         configureMembership(1, node("self", 5000));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        processor.processMessage(saveRequest(TestGlobals.COLL, "committed"), clientId);
+        processor.processMessage(saveRequest("committed"), clientId);
         final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(OperationStatus.OK, findStatus("committed"));
@@ -156,7 +175,7 @@ public class TransactionClusteringTest {
         configureMembership(3, node("self", 5000));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        processor.processMessage(saveRequest(TestGlobals.COLL, "no-quorum"), clientId);
+        processor.processMessage(saveRequest("no-quorum"), clientId);
         final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
         assertEquals("503-2", response.getErrorCode());
         assertEquals(OperationStatus.NOT_FOUND, findStatus("no-quorum"));
@@ -171,7 +190,7 @@ public class TransactionClusteringTest {
         TestUtils.setPrivateField(coordinator, "replicator", replicator);
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        processor.processMessage(saveRequest(TestGlobals.COLL, "timed-out"), clientId);
+        processor.processMessage(saveRequest("timed-out"), clientId);
         final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
         assertEquals("503-3", response.getErrorCode());
         // The local commit stands even when replication timed out.
@@ -185,7 +204,7 @@ public class TransactionClusteringTest {
         // Buffer a write on the session's own executor thread so it holds the collection write lock there.
         session.submit(() -> {
             TransactionOperationHelper.start(session.clientId());
-            return TransactionOperationHelper.bufferSave(saveRequest(TestGlobals.COLL, "stranded"),
+            return TransactionOperationHelper.bufferSave(saveRequest("stranded"),
                     clientTracker.getActiveTransaction(session.clientId()));
         }).get();
         assertFalse(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL), "lock should be held by the session");

@@ -16,7 +16,6 @@ import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
-import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
 /**
@@ -30,17 +29,13 @@ public class ClusterRouter {
     private static final Set<OperationType> READS = Set.of(OperationType.FIND_BY_ID, OperationType.AGGREGATE);
     private static final Set<OperationType> WRITES = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
             OperationType.DELETE);
-    // Operations a bound-remote transaction forwards to its owner; anything else (DDL/admin/listen) is left to
-    // execute locally, where the OperationProcessor guard rejects it as not-allowed-in-transaction.
-    private static final Set<OperationType> FORWARDABLE_TX_OPS = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
-            OperationType.DELETE, OperationType.FIND_BY_ID, OperationType.AGGREGATE, OperationType.COMMIT_TRANSACTION,
-            OperationType.ROLLBACK_TRANSACTION);
     private final Logger logger = Logger.logFor(ClusterRouter.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final Tx2pcCoordinator tx2pcCoordinator = IocContainer.get(Tx2pcCoordinator.class);
     private final EJson eJson = IocContainer.get(EJson.class);
 
     /**
@@ -75,60 +70,92 @@ public class ClusterRouter {
         return forwardToOwner(type, rawJson, ownerAddress, null);
     }
 
-    // Routes an operation issued while a transaction is open. The transaction is pinned to one owner: bound on
-    // the first write, forwarded there (session-scoped) thereafter. START and reads-before-the-first-write run
-    // locally; a bound-local transaction runs locally; disallowed ops fall through to a local rejection.
+    // Routes an operation issued while a transaction is open. Each write is routed to its collection's owner
+    // (buffered locally when this node owns it, else forwarded to the owner, which becomes a 2PC participant);
+    // a read is forwarded only to an owner already holding a slice (read-your-writes), else served locally.
+    // START runs locally; COMMIT/ROLLBACK are driven by the coordinator (2PC unless a single owner is
+    // involved, which keeps the 5a fast path); any other op falls through to a local rejection.
     private String routeActiveTransaction(OperationRequest request, String rawJson, OperationType type,
             String actingUser, UUID clientId) {
-        if (type == OperationType.START_TRANSACTION) {
-            return null;
+        if (type == OperationType.COMMIT_TRANSACTION) {
+            return routeCommit(rawJson, actingUser, clientId);
         }
-        if (clientTracker.isTransactionBound(clientId)) {
-            final var owner = clientTracker.getTransactionOwner(clientId);
-            if (owner == null || !FORWARDABLE_TX_OPS.contains(type)) {
-                return null;
-            }
-            final var response = forwardTx(rawJson, owner, type, actingUser, clientId);
-            if (type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION) {
-                clearEdgeTransaction(clientId);
-            }
-            return response;
+        if (type == OperationType.ROLLBACK_TRANSACTION) {
+            return routeRollback(clientId);
         }
-        if (!WRITES.contains(type)) {
-            return null;
+        if (WRITES.contains(type)) {
+            return routeTransactionWrite(request, rawJson, type, actingUser, clientId);
         }
+        if (READS.contains(type)) {
+            return routeTransactionRead(request, rawJson, type, actingUser, clientId);
+        }
+        return null;
+    }
+
+    private String routeTransactionWrite(OperationRequest request, String rawJson, OperationType type,
+            String actingUser, UUID clientId) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (Globals.ADMIN_DB_NAME.equals(dbName) || ownershipManager.isOwner(dbName, collName)) {
-            clientTracker.bindLocalTransaction(clientId);
+            clientTracker.markLocalSlice(clientId);
             return null;
         }
         final var ownerAddress = ownershipManager.ownerAddress(dbName, collName);
         if (ownerAddress == null) {
-            clientTracker.bindLocalTransaction(clientId);
+            clientTracker.markLocalSlice(clientId);
             return null;
         }
-        clientTracker.bindRemoteTransaction(clientId, ownerAddress);
+        clientTracker.addTransactionParticipant(clientId, ownerAddress);
         return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
     }
 
-    // Tells the bound remote owner to roll back a transaction whose edge connection is closing, so the owner
-    // releases the write locks it holds. A no-op for a local or unbound transaction.
-    public void teardownTransaction(UUID clientId) {
-        if (!clusterConfig.isEnabled() || !clientTracker.isTransactionBound(clientId)) {
-            return;
+    private String routeTransactionRead(OperationRequest request, String rawJson, OperationType type, String actingUser,
+            UUID clientId) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        if (Globals.ADMIN_DB_NAME.equals(dbName) || ownershipManager.isOwner(dbName, collName)) {
+            return null;
         }
-        final var owner = clientTracker.getTransactionOwner(clientId);
-        if (owner == null) {
-            return;
+        final var ownerAddress = ownershipManager.ownerAddress(dbName, collName);
+        if (ownerAddress != null && clientTracker.transactionParticipants(clientId).contains(ownerAddress)) {
+            return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
         }
-        forwardTx(eJson.toJson(new RollbackTransactionRequest()), owner, OperationType.ROLLBACK_TRANSACTION, null,
-                clientId);
+        return null;
     }
 
-    private void clearEdgeTransaction(UUID clientId) {
-        clientTracker.clearActiveTransaction(clientId);
-        clientTracker.clearTransactionBinding(clientId);
+    private String routeCommit(String rawJson, String actingUser, UUID clientId) {
+        final var remotes = clientTracker.transactionParticipants(clientId);
+        final var local = clientTracker.hasLocalSlice(clientId);
+        if (remotes.isEmpty()) {
+            return null;
+        }
+        if (!local && remotes.size() == 1) {
+            // Single remote owner: keep the 5a fast path (forward a plain COMMIT_TRANSACTION, no 2PC).
+            final var response = forwardTx(rawJson, remotes.iterator().next(), OperationType.COMMIT_TRANSACTION,
+                    actingUser, clientId);
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+            return response;
+        }
+        return eJson.toJson(tx2pcCoordinator.commit(clientId));
+    }
+
+    private String routeRollback(UUID clientId) {
+        if (clientTracker.transactionParticipants(clientId).isEmpty()) {
+            return null;
+        }
+        return eJson.toJson(tx2pcCoordinator.rollback(clientId));
+    }
+
+    // Rolls back a transaction whose edge connection is closing across its remote participants (and local
+    // slice). Returns true when it handled the teardown (participants existed), so the caller skips the
+    // purely-local cleanup path.
+    public boolean teardownTransaction(UUID clientId) {
+        if (!clusterConfig.isEnabled() || clientTracker.transactionParticipants(clientId).isEmpty()) {
+            return false;
+        }
+        tx2pcCoordinator.rollback(clientId);
+        return true;
     }
 
     private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser,
@@ -138,6 +165,10 @@ public class ClusterRouter {
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         message.setTxSessionId(clientId.toString());
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        if (transaction != null) {
+            message.setTxId(transaction.getTransactionId().toString());
+        }
         try {
             final var response = pool.request(NodeAddress.parse(ownerAddress), message,
                     clusterConfig.replicationAckTimeoutMs());
