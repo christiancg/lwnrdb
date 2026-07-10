@@ -3,9 +3,11 @@ package org.techhouse.conn;
 import java.io.BufferedWriter;
 import java.net.Socket;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.Client;
@@ -13,6 +15,9 @@ import org.techhouse.data.Transaction;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
+    // Owner-side registry for forwarded transactions: edge session id -> the session running its buffered
+    // operations on a dedicated single-thread executor (see TxSession).
+    private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
     public UUID addClient(Socket socket) {
@@ -38,6 +43,67 @@ public class ClientTracker {
         client.setAuthenticatedUsername(username);
         clients.put(clientId, client);
         return clientId;
+    }
+
+    // Resolves (creating on first use) the persistent synthetic client that runs a forwarded transaction's
+    // buffered operations on the owner. Unlike registerForwardedClient this client is retained across the
+    // session's forwarded messages and is removed only by removeTxSession (commit/rollback/reaper).
+    public TxSession registerTxSession(String sessionId, String username, String edgeNodeId) {
+        return txSessions.computeIfAbsent(sessionId, _ -> {
+            final var id = UUID.randomUUID();
+            final var client = new Client("tx-forwarded");
+            client.setAuthenticatedUsername(username);
+            client.setLastCommandTime(LocalDateTime.now());
+            clients.put(id, client);
+            final var executor = Executors.newSingleThreadExecutor(Thread.ofVirtual().name("tx-session-", 0).factory());
+            return new TxSession(id, executor, edgeNodeId);
+        });
+    }
+
+    public void removeTxSession(String sessionId) {
+        final var session = txSessions.remove(sessionId);
+        if (session != null) {
+            clients.remove(session.clientId());
+            session.shutdown();
+        }
+    }
+
+    public Map<String, TxSession> txSessionsSnapshot() {
+        return new HashMap<>(txSessions);
+    }
+
+    public void bindLocalTransaction(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.setTransactionBound(true);
+            client.setTransactionOwner(null);
+        }
+    }
+
+    public void bindRemoteTransaction(UUID clientId, String ownerAddress) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.setTransactionBound(true);
+            client.setTransactionOwner(ownerAddress);
+        }
+    }
+
+    public boolean isTransactionBound(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null && client.isTransactionBound();
+    }
+
+    public String getTransactionOwner(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null ? client.getTransactionOwner() : null;
+    }
+
+    public void clearTransactionBinding(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.setTransactionBound(false);
+            client.setTransactionOwner(null);
+        }
     }
 
     public void updateLastCommandTime(UUID clientId) {

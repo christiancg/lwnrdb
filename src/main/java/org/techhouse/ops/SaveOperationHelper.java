@@ -118,8 +118,11 @@ public final class SaveOperationHelper {
         for (var i = 0; i < objects.size(); i++) {
             final var entry = DbEntry.fromJsonObject(dbName, collName, objects.get(i));
             if (versions != null) {
-                entry.setVersion(versions.get(i));
-                WriteVersion.observe(versions.get(i));
+                // Versions arriving over the wire deserialize as a boxed Integer/Long/Double; the Number
+                // supertype reads the value as a long regardless of the concrete boxed type.
+                final Number version = versions.get(i);
+                entry.setVersion(version.longValue());
+                WriteVersion.observe(version.longValue());
             } else {
                 entry.setVersion(WriteVersion.next());
             }

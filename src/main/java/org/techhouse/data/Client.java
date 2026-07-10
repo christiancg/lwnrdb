@@ -13,6 +13,11 @@ public class Client {
     private volatile BufferedWriter writer;
     private final ReentrantLock writerLock = new ReentrantLock();
     private Transaction activeTransaction;
+    // Edge-side clustering affinity for an open transaction: once bound (on the first write), the
+    // transaction is pinned to one owner. transactionOwner is null when this node is the owner (run
+    // locally) and the owner's "host:port" address when the session is forwarded to a remote owner.
+    private volatile boolean transactionBound;
+    private volatile String transactionOwner;
 
     public Client(String address) {
         this.address = address;
@@ -60,6 +65,22 @@ public class Client {
 
     public void setActiveTransaction(Transaction activeTransaction) {
         this.activeTransaction = activeTransaction;
+    }
+
+    public boolean isTransactionBound() {
+        return transactionBound;
+    }
+
+    public void setTransactionBound(boolean transactionBound) {
+        this.transactionBound = transactionBound;
+    }
+
+    public String getTransactionOwner() {
+        return transactionOwner;
+    }
+
+    public void setTransactionOwner(String transactionOwner) {
+        this.transactionOwner = transactionOwner;
     }
 
     @Override

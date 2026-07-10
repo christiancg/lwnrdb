@@ -34,8 +34,16 @@ one large machine.
 >   replication timeout — and **tombstone garbage-collection** that deduplicates the
 >   tombstone files and drops deletes older than `tombstoneRetentionMs`. Ownership-
 >   handoff cache warm-up was intentionally left as lazy (caches warm on first read).
-> - **Planned (later phases):** admin/DDL anti-entropy for nodes that were down
->   during a DDL op; and distributed transactions.
+> - **Phase 5a — implemented:** transactions under clustering, pinned to a single
+>   owner. A transaction is bound (on its first write) to the owner of that collection;
+>   the edge node forwards the whole session there, and the owner runs it locally
+>   (holding the write locks, buffering, serving read-your-writes) and at commit
+>   replays and replicates the transaction to a majority as **one atomic batch**. A
+>   transaction that tries to write a collection owned by a different node is rejected
+>   (`421-2 CROSS_OWNER_TRANSACTION`). Cross-owner transactions are Phase 5b.
+> - **Planned (later phases):** cross-owner distributed transactions (Phase 5b — 2PC
+>   with a recovery log); and admin/DDL anti-entropy for nodes that were down during a
+>   DDL op.
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
 > the node behaves exactly as a standalone server.
@@ -230,6 +238,44 @@ longest expected node downtime, otherwise a delete could be collected before a
 still-down replica has converged on it and would be resurrected on rejoin. Owner cache
 warm-up on handoff is deliberately lazy — a new owner's cache fills on first read.
 
+## Transactions under clustering (Phase 5a)
+
+A transaction is **pinned to a single owner**. The node the client connects to (the
+edge) keeps only lightweight affinity: on the transaction's **first write** it looks
+up that collection's owner and *binds* the transaction to it. `START_TRANSACTION` and
+any read issued before the first write run locally; once bound, every operation
+(`SAVE`/`BULK_SAVE`/`DELETE`/`FIND_BY_ID`/`AGGREGATE`/`COMMIT`/`ROLLBACK`) is forwarded
+to the owner in a `FORWARD_TX_REQUEST` carrying a stable `txSessionId` (the edge client
+id). If the edge *is* the owner, the transaction simply runs locally.
+
+The owner runs each forwarded session on its **own single-thread executor** under a
+persistent synthetic client. This matters: the transaction holds the collection write
+lock from its first write until commit, and a `ReentrantReadWriteLock` write lock is
+thread-owned — running the whole session on one thread keeps acquire/release on the
+same thread and makes two concurrent sessions genuinely mutually exclusive rather than
+falsely sharing a reentrant lock. Because the lock lives on the owner (where writes are
+also coordinated), a concurrent non-transactional write routed to the owner is properly
+serialized against the transaction.
+
+At **commit** the owner checks it still holds a write quorum (else `503-2`), replays
+the buffered operations locally, then replicates the transaction's writes to a majority
+as **one atomic batch** (`REPLICATE_TX`, a `txReplication` payload of per-collection
+UPSERT/DELETE entries). A replica applies the whole batch inside a single
+multi-collection lock window (locks taken in sorted order), so no other writer
+interleaves mid-transaction. A replication timeout returns `503-3` but the local commit
+stands (anti-entropy reconciles the lagging replicas).
+
+**Single-owner restriction.** A write to a collection owned by a *different* node than
+the one the transaction is bound to is rejected with `421-2 CROSS_OWNER_TRANSACTION`.
+Since collections of the same database are spread across owners by the hash ring,
+multi-collection transactions are frequently cross-owner — true cross-owner atomicity
+(two-phase commit with a recovery log) is **Phase 5b**.
+
+**Liveness.** If the edge connection closes, the edge tells the owner to roll the
+transaction back (releasing its locks). If the edge *node* crashes, a membership
+listener on the owner reaps sessions whose originating node has left the cluster — the
+interim safety net until Phase 5b's recovery protocol.
+
 ## Wire protocol
 
 The node-to-node channel reuses the client transport: line-delimited JSON
@@ -237,8 +283,9 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 (`clusterTlsEnabled`, reusing the PKCS12 keystore — all nodes must share the same
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
-replication, forwardBody, actingUser, errorMessage}`; `correlationId` lets a single
-pooled connection multiplex many in-flight requests. Message types are
+replication, forwardBody, actingUser, antiEntropy, txSessionId, txReplication,
+errorMessage}`; `correlationId` lets a single pooled connection multiplex many
+in-flight requests. Message types are
 `JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
 `sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (document writes, carrying a
 `replication` payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`),
@@ -246,9 +293,13 @@ pooled connection multiplex many in-flight requests. Message types are
 response JSON in `forwardBody`), `REPLICATE_ADMIN`/`REPLICATE_ADMIN_ACK` (admin
 DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`),
 `REPLICATE_USER`/`REPLICATE_USER_ACK` (user/permission ops, carrying the committed
-`admin/users` record in a `replication` payload), and `DIGEST`/`DIGEST_ACK` and
+`admin/users` record in a `replication` payload), `DIGEST`/`DIGEST_ACK` and
 `PULL`/`PULL_ACK` (anti-entropy, carrying an `antiEntropy` payload of a collection's
-`{id, version, deleted}` digest or of pulled `documents`/`versions`). Inbound messages
+`{id, version, deleted}` digest or of pulled `documents`/`versions`),
+`FORWARD_TX_REQUEST` (a forwarded transaction operation, carrying the Base64-wrapped
+request in `forwardBody` plus a `txSessionId`; the reply reuses `FORWARD_RESPONSE`), and
+`REPLICATE_TX`/`REPLICATE_TX_ACK` (a committed transaction's atomic write batch, carrying
+a `txReplication` payload of per-collection replication entries). Inbound messages
 whose `secret` does not match `clusterSecret` are rejected.
 
 ## Configuration reference

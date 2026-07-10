@@ -179,7 +179,7 @@ public class AdminReplicationIntegrationTest {
     public void test_router_forwards_admin_op_to_coordinator() throws Exception {
         configureRemoteCoordinator();
         final var request = new CreateCollectionRequest(TestGlobals.DB, "routed-coll");
-        final var relayed = router.forward(request, eJson.toJson(request), false, "alice");
+        final var relayed = router.forward(request, eJson.toJson(request), false, "alice", null);
         assertNotNull(relayed);
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "routed-coll"));
     }
@@ -188,7 +188,7 @@ public class AdminReplicationIntegrationTest {
     public void test_router_executes_admin_locally_when_this_node_is_coordinator() throws Exception {
         configureMembership(1, node("self", 19990));
         final var request = new CreateCollectionRequest(TestGlobals.DB, "local-coll");
-        assertNull(router.forward(request, eJson.toJson(request), false, "alice"));
+        assertNull(router.forward(request, eJson.toJson(request), false, "alice", null));
     }
 
     @Test

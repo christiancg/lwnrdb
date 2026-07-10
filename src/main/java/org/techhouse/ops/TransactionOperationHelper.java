@@ -7,6 +7,13 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterConfig;
+import org.techhouse.cluster.ClusterCoordinator;
+import org.techhouse.cluster.ClusterRouter;
+import org.techhouse.cluster.MembershipView;
+import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.ReplicationOutcome;
+import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -48,6 +55,10 @@ public final class TransactionOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
+    private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
 
@@ -80,17 +91,29 @@ public final class TransactionOperationHelper {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
         }
         try {
+            // A clustered commit must still hold a write quorum (split-brain protection); abort before
+            // applying if it was lost between the first write and commit.
+            if (!coordinator.hasTransactionQuorum()) {
+                AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM);
+            }
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
             for (final var op : ops) {
                 applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+            // Replicate the whole transaction to the quorum as one atomic batch. The local commit stands even
+            // on a replication timeout; Phase 4 anti-entropy reconciles the lagging replicas.
+            if (coordinator.replicateTransaction(transaction) == ReplicationOutcome.TIMEOUT) {
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);
+            }
             return new CommitTransactionResponse("Transaction committed");
         } catch (Exception e) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionBinding(clientId);
         }
     }
 
@@ -107,23 +130,49 @@ public final class TransactionOperationHelper {
         } finally {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionBinding(clientId);
         }
     }
 
     // Best-effort teardown when a connection closes with a transaction still open. Runs on the
-    // connection's own thread (the only thread allowed to release its write locks).
+    // connection's own thread (the only thread allowed to release its write locks). When the transaction was
+    // forwarded to a remote owner, tells that owner to roll it back too (releasing the owner's held locks).
     public static void cleanupOnDisconnect(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return;
         }
         try {
+            clusterRouter.teardownTransaction(clientId);
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
         } catch (Exception e) {
             logger.warning("Failed to clean up transaction on disconnect: " + e.getMessage());
         } finally {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionBinding(clientId);
+        }
+    }
+
+    // Owner-side safety net: rolls back and releases forwarded transactions whose originating edge node has
+    // left the cluster (absent or DEAD), so an edge-node crash cannot strand the owner's write locks. The
+    // rollback runs on each session's own executor thread (the holder of its locks).
+    public static void reapTransactionsForDeparted(MembershipView view) {
+        for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
+            final var session = entry.getValue();
+            final var origin = session.edgeNodeId();
+            final var node = origin != null ? view.find(origin) : null;
+            if (node != null && node.getState() != NodeState.DEAD) {
+                continue;
+            }
+            try {
+                session.submit(() -> rollback(session.clientId())).get();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            } catch (Exception ex) {
+                logger.warning("Failed to reap forwarded transaction: " + ex.getMessage());
+            }
+            clientTracker.removeTxSession(entry.getKey());
         }
     }
 
@@ -150,6 +199,10 @@ public final class TransactionOperationHelper {
                         OperationType.SAVE, "Entry size of " + entry.byteSize()
                                 + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
                         ErrorCode.ENTRY_TOO_LARGE);
+            }
+            final var ownerResult = enforceSingleOwner(OperationType.SAVE, dbName, collName);
+            if (ownerResult != null) {
+                return ownerResult;
             }
             final var lockResult = ensureLock(transaction, OperationType.SAVE, dbName, collName);
             if (lockResult != null) {
@@ -184,6 +237,10 @@ public final class TransactionOperationHelper {
                             ErrorCode.DUPLICATE_ID);
                 }
             }
+            final var ownerResult = enforceSingleOwner(OperationType.BULK_SAVE, dbName, collName);
+            if (ownerResult != null) {
+                return ownerResult;
+            }
             final var lockResult = ensureLock(transaction, OperationType.BULK_SAVE, dbName, collName);
             if (lockResult != null) {
                 return lockResult;
@@ -217,6 +274,10 @@ public final class TransactionOperationHelper {
         final var collName = request.getCollectionName();
         final var id = request.get_id();
         try {
+            final var ownerResult = enforceSingleOwner(OperationType.DELETE, dbName, collName);
+            if (ownerResult != null) {
+                return ownerResult;
+            }
             final var lockResult = ensureLock(transaction, OperationType.DELETE, dbName, collName);
             if (lockResult != null) {
                 return lockResult;
@@ -306,6 +367,15 @@ public final class TransactionOperationHelper {
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
         AdminOperationHelper.saveTransactionOp(opEntry);
         transaction.addBufferedOpId(opEntry.get_id());
+    }
+
+    // Under clustering, a transaction is pinned to the owner of its collections: a write to a collection this
+    // node does not own is a cross-owner attempt and is rejected. Returns null when allowed.
+    private static OperationResponse enforceSingleOwner(OperationType type, String dbName, String collName) {
+        if (clusterConfig.isEnabled() && !ownershipManager.isOwner(dbName, collName)) {
+            return new OperationResponse(type, ErrorCode.CROSS_OWNER_TRANSACTION);
+        }
+        return null;
     }
 
     // Acquires the collection's write lock for the transaction on first touch (holding it until

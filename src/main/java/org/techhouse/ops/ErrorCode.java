@@ -39,7 +39,9 @@ public enum ErrorCode {
                                             "Operation not allowed while a transaction is open", OperationStatus.ERROR),
 
     // ── 421 Misdirected (cluster routing) ─────────────────────────────────
-    NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
+    NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection",
+            OperationStatus.ERROR), CROSS_OWNER_TRANSACTION("421-2",
+                    "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
 
     // ── 500 Internal Server Error ─────────────────────────────────────────
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR), ERROR_CREATING_USER("500-2",

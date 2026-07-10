@@ -31,16 +31,22 @@ public final class ReplicatedApplyHelper {
         final var collName = payload.getCollName();
         try {
             locks.lock(dbName, collName);
-            return switch (payload.getOp()) {
-                case UPSERT -> applyUpsert(payload);
-                case DELETE -> applyDelete(payload);
-            };
+            return applyLocked(payload);
         } catch (Exception e) {
             logger.error("Failed to apply replicated write to " + dbName + "|" + collName, e);
             return false;
         } finally {
             locks.release(dbName, collName);
         }
+    }
+
+    // Applies a single replication entry assuming the caller already holds the collection write lock. Used by
+    // the transaction-batch apply path, which locks every involved collection up front for one atomic window.
+    static boolean applyLocked(ReplicationPayload payload) throws Exception {
+        return switch (payload.getOp()) {
+            case UPSERT -> applyUpsert(payload);
+            case DELETE -> applyDelete(payload);
+        };
     }
 
     private static boolean applyUpsert(ReplicationPayload payload) throws Exception {
@@ -61,8 +67,11 @@ public final class ReplicatedApplyHelper {
             // Record the tombstone with the owner's version even when the doc was absent, so this replica
             // will not resurrect it during anti-entropy and stays convergent on the delete.
             if (versions != null && i < versions.size()) {
-                fs.appendTombstone(payload.getDbName(), payload.getCollName(), id, versions.get(i));
-                WriteVersion.observe(versions.get(i));
+                // Versions arriving over the wire deserialize as a boxed Integer/Long/Double; the Number
+                // supertype reads the value as a long regardless of the concrete boxed type.
+                final Number version = versions.get(i);
+                fs.appendTombstone(payload.getDbName(), payload.getCollName(), id, version.longValue());
+                WriteVersion.observe(version.longValue());
             }
         }
         return true;

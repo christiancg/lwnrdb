@@ -3,11 +3,14 @@ package org.techhouse.cluster;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Globals;
+import org.techhouse.data.Transaction;
 import org.techhouse.data.WriteVersion;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -76,6 +79,63 @@ public class ClusterCoordinator {
         }
         return replicator
                 .broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions));
+    }
+
+    // A clustered transaction must not commit without a write quorum (split-brain protection). Always true
+    // when clustering is off, so the standalone commit path is unchanged.
+    public boolean hasTransactionQuorum() {
+        return !clusterConfig.isEnabled() || ownershipManager.hasQuorum();
+    }
+
+    // Replicates a just-committed transaction to a majority as one atomic batch, built from the transaction's
+    // overlay: per touched collection, the net upserts (with their committed versions) and deletes (with
+    // fresh tombstone versions). Returns NOT_APPLICABLE when clustering is off or nothing needs shipping.
+    public ReplicationOutcome replicateTransaction(Transaction transaction) {
+        if (!clusterConfig.isEnabled()) {
+            return ReplicationOutcome.NOT_APPLICABLE;
+        }
+        final var entries = new ArrayList<ReplicationPayload>();
+        try {
+            for (final var collId : transaction.touchedCollections()) {
+                final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+                buildCollectionEntries(parts[0], parts[1], transaction.overlayFor(collId), entries);
+            }
+        } catch (Exception e) {
+            logger.warning("Failed to build transaction replication batch: " + e.getMessage());
+            return ReplicationOutcome.TIMEOUT;
+        }
+        if (entries.isEmpty()) {
+            return ReplicationOutcome.NOT_APPLICABLE;
+        }
+        return replicator.broadcastTx(new TxReplicationPayload(entries));
+    }
+
+    private void buildCollectionEntries(String dbName, String collName, Map<String, JsonObject> overlay,
+            List<ReplicationPayload> entries) throws Exception {
+        final var upsertIds = new ArrayList<String>();
+        final var deleteIds = new ArrayList<String>();
+        for (final var overlayEntry : overlay.entrySet()) {
+            if (Transaction.isTombstone(overlayEntry.getValue())) {
+                deleteIds.add(overlayEntry.getKey());
+            } else {
+                upsertIds.add(overlayEntry.getKey());
+            }
+        }
+        if (!upsertIds.isEmpty()) {
+            final var documents = new ArrayList<JsonObject>();
+            final var versions = new ArrayList<Long>();
+            readDocuments(dbName, collName, upsertIds, documents, versions);
+            entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
+        }
+        if (!deleteIds.isEmpty()) {
+            final var version = WriteVersion.next();
+            final var versions = new ArrayList<Long>(deleteIds.size());
+            for (final var id : deleteIds) {
+                fs.appendTombstone(dbName, collName, id, version);
+                versions.add(version);
+            }
+            entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, versions));
+        }
     }
 
     // Admin/DDL ops are serialized by the admin coordinator; a node without a write quorum must not apply

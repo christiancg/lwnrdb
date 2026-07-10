@@ -17,6 +17,11 @@ public class ClusterMessage {
     private String actingUser;
     // Digest / pull payload on DIGEST(_ACK) and PULL(_ACK) messages used by anti-entropy reconciliation.
     private AntiEntropyPayload antiEntropy;
+    // Stable per-connection transaction session id (the edge client id) on a FORWARD_TX_REQUEST, so the
+    // owner keeps the same buffered transaction across the session's forwarded operations.
+    private String txSessionId;
+    // A committed transaction's atomic write batch on a REPLICATE_TX message.
+    private TxReplicationPayload txReplication;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -101,6 +106,22 @@ public class ClusterMessage {
 
     public void setAntiEntropy(AntiEntropyPayload antiEntropy) {
         this.antiEntropy = antiEntropy;
+    }
+
+    public String getTxSessionId() {
+        return txSessionId;
+    }
+
+    public void setTxSessionId(String txSessionId) {
+        this.txSessionId = txSessionId;
+    }
+
+    public TxReplicationPayload getTxReplication() {
+        return txReplication;
+    }
+
+    public void setTxReplication(TxReplicationPayload txReplication) {
+        this.txReplication = txReplication;
     }
 
     public String getErrorMessage() {

@@ -8,6 +8,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -24,6 +25,15 @@ public class Replicator {
         return awaitQuorum(ClusterMessageType.REPLICATE_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REPLICATE);
             message.setReplication(payload);
+            return message;
+        });
+    }
+
+    // Replicates a committed transaction's writes to a majority of peers as one atomic batch.
+    public ReplicationOutcome broadcastTx(TxReplicationPayload payload) {
+        return awaitQuorum(ClusterMessageType.REPLICATE_TX_ACK, () -> {
+            final var message = replicateMessage(ClusterMessageType.REPLICATE_TX);
+            message.setTxReplication(payload);
             return message;
         });
     }

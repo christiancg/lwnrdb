@@ -18,8 +18,11 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.ops.ReplicatedTxApplyHelper;
 import org.techhouse.ops.ReplicatedUserApplyHelper;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -79,7 +82,9 @@ public class ClusterConnectionHandler implements Runnable {
             case REPLICATE -> handleReplicate(request);
             case REPLICATE_ADMIN -> handleReplicateAdmin(request);
             case REPLICATE_USER -> handleReplicateUser(request);
+            case REPLICATE_TX -> handleReplicateTx(request);
             case FORWARD_REQUEST -> handleForward(request);
+            case FORWARD_TX_REQUEST -> handleForwardTx(request);
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
             default -> {
@@ -99,6 +104,56 @@ public class ClusterConnectionHandler implements Runnable {
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to execute forwarded request: " + e.getMessage());
+        }
+        return response;
+    }
+
+    // Runs one operation of a forwarded transaction on this (owner) node, under a persistent synthetic client
+    // keyed by the edge's session id so the buffered transaction survives across the session's messages. The
+    // transaction is started lazily on the first data/read op; commit/rollback tears the session down.
+    private ClusterMessage handleForwardTx(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        final var sessionId = request.getTxSessionId();
+        try {
+            final var edgeNodeId = request.getSender() != null ? request.getSender().getNodeId() : null;
+            final var session = clientTracker.registerTxSession(sessionId, request.getActingUser(), edgeNodeId);
+            final var clientId = session.clientId();
+            final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var type = parsed.getType();
+            // Run every op of the session on its own single-thread executor so the collection write locks it
+            // holds across messages are acquired and released by the same thread.
+            final var result = session.submit(() -> {
+                if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
+                    TransactionOperationHelper.start(clientId);
+                }
+                return operationProcessor.processMessage(parsed, clientId);
+            }).get();
+            if (type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION) {
+                clientTracker.removeTxSession(sessionId);
+            }
+            response.setType(ClusterMessageType.FORWARD_RESPONSE);
+            response.setForwardBody(ForwardBody.encode(eJson.toJson(result)));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to execute forwarded transaction op: " + e.getMessage());
+        }
+        return response;
+    }
+
+    private static boolean startsTransaction(OperationType type) {
+        return switch (type) {
+            case SAVE, BULK_SAVE, DELETE, FIND_BY_ID, AGGREGATE -> true;
+            default -> false;
+        };
+    }
+
+    private ClusterMessage handleReplicateTx(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        if (ReplicatedTxApplyHelper.apply(request.getTxReplication())) {
+            response.setType(ClusterMessageType.REPLICATE_TX_ACK);
+        } else {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to apply replicated transaction");
         }
         return response;
     }

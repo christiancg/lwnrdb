@@ -191,6 +191,6 @@ public class UserReplicationIntegrationTest {
         configureRemoteCoordinator();
         final var request = new DeleteUserRequest();
         request.setUsername("ghost");
-        assertNotNull(router.forward(request, eJson.toJson(request), false, "alice"));
+        assertNotNull(router.forward(request, eJson.toJson(request), false, "alice", null));
     }
 }
