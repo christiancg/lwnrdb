@@ -46,11 +46,15 @@ one large machine.
 >   COMMIT; any no vote or unreachable participant aborts them all. A coordinator or
 >   participant crash mid-commit is resolved from the durable log (re-drive the commit,
 >   or presumed-abort), with prepared participants re-acquiring their locks on restart.
-> - **Planned (later phases):** admin/DDL anti-entropy for nodes that were down during a
->   DDL op.
+> - **Admin/DDL anti-entropy — implemented:** a node that was down during a DDL or
+>   user/permission op catches up on rejoin from a coordinator-authoritative admin
+>   snapshot ordered by a cluster-wide **admin epoch** (see below).
 >
 > Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
-> the node behaves exactly as a standalone server.
+> the node behaves exactly as a standalone server. **Residual future work:** fully
+> non-blocking admin-coordinator handoff, and consensus-durable 2PC decisions so a
+> prepared transaction is never left in-doubt when its coordinator and all peers are
+> uncertain (today an operator resolves that rare case with `RESOLVE_TRANSACTION`).
 
 ## Topology: per-collection ownership (distributed mastership)
 
@@ -92,7 +96,8 @@ A document write (`SAVE`/`BULK_SAVE`/`DELETE`) is coordinated by the owner:
 1. **Guard (before commit).** `OperationProcessor` consults `ClusterCoordinator`
    via `ClusterWriteHelper`. If this node lacks a write quorum it returns
    `503-2 NO_QUORUM`; if it is not the owner it returns `421-1 NOT_COLLECTION_OWNER`
-   with the owner's address (retryable — Phase 3 will forward instead of reject).
+   with the owner's address (a direct-to-non-owner write; request routing forwards to
+   the owner instead of rejecting — see *Request routing* below).
 2. **Local commit.** The owner acquires the collection write lock and commits
    through the normal `executeSave`/`executeBulkSave`/`executeDelete` path.
 3. **Replicate.** Still holding the lock, the owner re-reads the committed
@@ -156,8 +161,10 @@ follow:
   and X was not in the acked majority. Reads of the primary collection remain
   owner-authoritative; only the join targets are best-effort-fresh.
 
-(This assumes B exists on X, which depends on admin/DDL replication — planned for a
-later phase — propagating `CREATE_COLLECTION` to every node.)
+(This assumes B exists on X, which relies on admin/DDL replication propagating
+`CREATE_COLLECTION` to every node, and on admin/DDL anti-entropy catching up a node that
+was down when B was created — both implemented; see *Admin / DDL replication* and
+*Admin/DDL anti-entropy* below.)
 
 ## Admin / DDL replication
 

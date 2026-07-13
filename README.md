@@ -40,7 +40,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Jobs
   - [ ] Triggers
 - [ ] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant 
-- [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
+- [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
 - [x] Transactions
 - [x] Vector type support
@@ -295,6 +295,19 @@ Returned even when there are no results: in analyze mode an empty result set sti
 {"type":"DROP_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
 ```
 
+#### `REINDEX`
+Rebuilds field indexes from the authoritative document store (recovers from a background-processing failure that left an index stale).
+`fieldNames` is optional; omit it to rebuild every registered index on the collection, or pass a subset to rebuild only those.
+Requires `READ_WRITE`.
+```json
+{"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","fieldNames":["email"]}
+```
+The response lists the fields that were rebuilt:
+```json
+{"type":"REINDEX","status":"OK","message":"Rebuilt 1 index(es)","rebuiltFields":["email"]}
+```
+Returns `404-6` if a named field has no registered index.
+
 #### `LISTEN`
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
@@ -381,6 +394,41 @@ Discards the buffered operations (nothing is written to the real collections), r
 {"type":"ROLLBACK_TRANSACTION"}
 ```
 `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` return `409-4` if no transaction is open.
+
+##### `LIST_TRANSACTIONS` (admin only)
+Discovers in-doubt distributed (2PC) transactions **cluster-wide** — the ones that have prepared but not yet resolved because their coordinator was lost.
+Runs only when clustering is enabled (standalone returns this node's local view). It fans a query out to every live member and aggregates the results by distributed-transaction id.
+This is the diagnostic input to `RESOLVE_TRANSACTION`.
+```json
+{"type":"LIST_TRANSACTIONS"}
+```
+Response (`transactions` is the aggregated list; each row describes one stuck transaction):
+```json
+{
+  "type": "LIST_TRANSACTIONS",
+  "status": "OK",
+  "transactions": [
+    {
+      "dtxId": "<uuid>",
+      "coordinator": "10.0.0.11:9990",
+      "coordinatorReachable": false,
+      "participants": ["10.0.0.12:9990", "10.0.0.13:9990"],
+      "ageMs": 42000,
+      "perNodeStatus": {"10.0.0.12:9990": "PREPARED", "10.0.0.13:9990": "PREPARED"}
+    }
+  ]
+}
+```
+
+##### `RESOLVE_TRANSACTION` (admin only)
+Manually forces the outcome of an in-doubt distributed transaction identified by `dtxId` (from `LIST_TRANSACTIONS`). `decision` must be `"commit"` or `"abort"`; the decision is broadcast to all members so every participant applies it. Use only after confirming the correct outcome — see [docs/clustering.md](docs/clustering.md).
+```json
+{"type":"RESOLVE_TRANSACTION","dtxId":"<uuid>","decision":"commit"}
+```
+```json
+{"type":"RESOLVE_TRANSACTION","status":"OK","message":"Transaction committed"}
+```
+Returns `400-1` if `dtxId` is missing or `decision` is not `commit`/`abort`.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -725,20 +773,9 @@ before.
 
 ### Clustering (multi-node)
 
-> **Status: Phases 1–5 (experimental).** Node discovery, membership/gossip,
-> failure detection, per-collection ownership, **synchronous quorum write
-> replication**, **transparent request routing**, **admin/DDL + user/permission
-> replication**, **version-based document anti-entropy**, **admin/DDL anti-entropy**,
-> and **clustered transactions** (single-owner fast path + cross-owner two-phase
-> commit) are implemented: a client can connect to any node; per-collection
-> reads/writes are forwarded to the collection's owner (which replicates writes to a
-> majority before acknowledging), and admin changes (databases, collections, indexes,
-> users, permissions) are serialized by an admin coordinator and replicated to every
-> node. Reads fall back to the local full replica when the owner is unreachable. A node
-> that was down catches up on rejoin — both document contents and structural/admin state
-> reconcile via anti-entropy. With `clusterEnabled=false` (the default) the node behaves
-> exactly as a standalone server. See [docs/clustering.md](docs/clustering.md) for the
-> full design.
+> **Experimental.** Full design, implementation details, and the operations runbook
+> live in [docs/clustering.md](docs/clustering.md). With `clusterEnabled=false` (the
+> default) the node behaves exactly as a standalone server.
 
 LWNRDB can run as a cluster of fully-replicated nodes with a **distributed cache**:
 every collection is consistent-hashed to an **owner node** (there is no single
