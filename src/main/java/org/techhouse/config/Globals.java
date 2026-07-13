@@ -22,6 +22,9 @@ public final class Globals {
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     public static final String INDEX_ENTRY_SEPARATOR = "|";
+    // Per-collection tombstone file infix: {coll}-tombstones.idx holds id|version records of deleted
+    // documents, so cluster anti-entropy can converge deletes (last-write-wins) without resurrecting them.
+    public static final String TOMBSTONE_FILE_NAME = "tombstones";
     public static final String ID_SEPARATOR = "";
     public static final String STRING_LITERAL_PREFIX = "-";
     public static final String FILE_CONFIG_NAME = "lwnrdb.cfg";
@@ -59,4 +62,11 @@ public final class Globals {
     public static final String TLS_CERT_DNAME = "lwnrdb";
     public static final String TLS_KEYSTORE_TYPE = "PKCS12";
     public static final String TLS_PROTOCOL = "TLS";
+    public static final String CLUSTER_FOLDER = "cluster";
+    public static final String CLUSTER_NODE_ID_FILE = "node.id";
+    public static final String CLUSTER_ADMIN_EPOCH_FILE = "admin.epoch";
+    public static final String CLUSTER_SEED_SEPARATOR = ",";
+    public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
+    // Reserved ring key whose owner is the cluster's admin coordinator (serializes admin/DDL mutations).
+    public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";
 }

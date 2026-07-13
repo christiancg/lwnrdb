@@ -19,7 +19,11 @@ public final class ConfigReader {
     private static final Set<String> configKeys = Set.of("port", "maxConnections", "filePath",
             "backgroundProcessingThreads", "logPath", "maxLogFiles", "maxPageSize", "maxEntrySize",
             "defaultAdminUsername", "defaultAdminPassword", "maxMemory", "transactionLockTimeoutMs", "tlsEnabled",
-            "tlsKeystorePath", "tlsKeystorePassword");
+            "tlsKeystorePath", "tlsKeystorePassword", "clusterEnabled", "clusterPort", "clusterBindAddress",
+            "clusterAdvertisedAddress", "clusterSeeds", "nodeId", "clusterExpectedSize", "gossipIntervalMs",
+            "suspectTimeoutMs", "deadTimeoutMs", "replicationAckTimeoutMs", "virtualNodesPerNode",
+            "readFallbackToLocal", "clusterTlsEnabled", "clusterSecret", "antiEntropyIntervalMs",
+            "tombstoneRetentionMs");
     private static final String COMMENT_PREFIX = "#";
     private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
     private static final Logger logger = Logger.logFor(ConfigReader.class);

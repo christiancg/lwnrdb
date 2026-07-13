@@ -7,6 +7,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterCoordinator;
+import org.techhouse.cluster.ClusterRouter;
+import org.techhouse.cluster.MembershipView;
+import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -48,6 +53,8 @@ public final class TransactionOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
+    private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
 
@@ -66,15 +73,40 @@ public final class TransactionOperationHelper {
     }
 
     public static OperationResponse start(UUID clientId) {
+        return start(clientId, UUID.randomUUID());
+    }
+
+    // Starts a transaction with a caller-supplied id. A forwarded 2PC participant uses the coordinator's
+    // distributed-tx id so its buffered slice and recovery markers key on the same id everywhere.
+    public static OperationResponse start(UUID clientId, UUID transactionId) {
         if (clientTracker.getActiveTransaction(clientId) != null) {
             return new OperationResponse(OperationType.START_TRANSACTION, ErrorCode.TRANSACTION_ALREADY_ACTIVE);
         }
-        final var transactionId = UUID.randomUUID();
         clientTracker.setActiveTransaction(clientId, new Transaction(transactionId, clientId));
         return new StartTransactionResponse("Transaction started", transactionId.toString());
     }
 
-    public static OperationResponse commit(UUID clientId) {
+    // Phase 5b participant vote: durably records this node's PREPARED marker (with the collections whose
+    // write locks it holds, for recovery) and votes yes, unless the write quorum has been lost. The locks
+    // stay held until commit/abort. Returns true for a yes vote.
+    public static boolean prepare(UUID clientId, String coordinatorAddress, List<String> participants) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        if (transaction == null || coordinator.hasNotTransactionQuorum()) {
+            return false;
+        }
+        try {
+            Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), coordinatorAddress,
+                    participants, new ArrayList<>(transaction.getHeldLocks()));
+            return true;
+        } catch (Exception e) {
+            logger.warning("Failed to prepare transaction: " + e.getMessage());
+            return false;
+        }
+    }
+
+    // Phase 5b participant commit of a prepared slice held in memory: replays the buffered ops, replicates
+    // the batch, then removes the slice + PREPARED marker and releases the locks.
+    public static OperationResponse commitPrepared(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
@@ -85,12 +117,143 @@ public final class TransactionOperationHelper {
                 applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+            resolveMarkers(transaction.getTransactionId().toString(), true);
+            // A replication timeout does not fail the commit — the decision is made and the local commit is
+            // durable; anti-entropy reconciles the lagging replicas.
+            coordinator.replicateTransaction(transaction);
             return new CommitTransactionResponse("Transaction committed");
         } catch (Exception e) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+        }
+    }
+
+    // Phase 5b participant abort of an in-memory slice: discards the buffered ops + PREPARED marker and
+    // releases the locks.
+    public static OperationResponse abort(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        if (transaction == null) {
+            return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
+        }
+        try {
+            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+            resolveMarkers(transaction.getTransactionId().toString(), false);
+            return new RollbackTransactionResponse("Transaction aborted");
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+        } finally {
+            releaseHeldLocks(transaction);
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+        }
+    }
+
+    // Recovery commit of a prepared slice with no in-memory transaction (after a restart): re-acquires the
+    // collection write locks (sorted, deadlock-safe), replays the durable slice, replicates, then removes the
+    // slice + PREPARED marker.
+    public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
+        final var acquired = new ArrayList<String>();
+        try {
+            for (final var collId : new java.util.TreeSet<>(collections)) {
+                locks.lockWrite(collId);
+                acquired.add(collId);
+            }
+            final var ops = AdminOperationHelper.readTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
+            ops.sort(java.util.Comparator.comparingLong(AdminTransactionEntry::getSeq));
+            final var reconstructed = new Transaction(UUID.fromString(dtxId), UUID.randomUUID());
+            for (final var op : ops) {
+                applyBufferedOp(op);
+                recordIntoOverlay(reconstructed, op);
+            }
+            AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
+            resolveMarkers(dtxId, true);
+            coordinator.replicateTransaction(reconstructed);
+        } finally {
+            for (final var collId : acquired) {
+                locks.releaseWrite(collId);
+            }
+        }
+    }
+
+    // Recovery abort of a prepared slice with no in-memory transaction: discards the durable slice + marker.
+    public static void abortFromDurable(String dtxId) throws Exception {
+        AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
+        resolveMarkers(dtxId, false);
+    }
+
+    // Resolves a prepared slice from the durable log (no in-memory transaction), used by session-less
+    // COMMIT_TX/ABORT_TX and by force-resolve. A no-op when this node holds no prepared slice for the id, so
+    // a broadcast force-resolve is safely ignored by non-participants and re-drives are idempotent.
+    public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
+        if (!Tx2pcLog.isPrepared(dtxId)) {
+            return;
+        }
+        if (commit) {
+            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
+            commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of());
+        } else {
+            abortFromDurable(dtxId);
+        }
+    }
+
+    // Replaces a resolved transaction's PREPARED marker with a retained OUTCOME marker, so a peer can still
+    // report the decision during another participant's cooperative termination.
+    private static void resolveMarkers(String dtxId, boolean committed) throws Exception {
+        Tx2pcLog.deleteParticipantMarker(dtxId);
+        Tx2pcLog.recordOutcome(dtxId, committed);
+    }
+
+    private static void recordIntoOverlay(Transaction transaction, AdminTransactionEntry op) {
+        final var collId = Cache.getCollectionIdentifier(op.getTargetDb(), op.getTargetColl());
+        switch (op.getOpType()) {
+            case AdminTransactionEntry.OP_TYPE_SAVE -> transaction.recordSave(collId,
+                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.getPayload());
+            case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
+                for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
+                    final var obj = element.asJsonObject();
+                    transaction.recordSave(collId, obj.get(Globals.PK_FIELD).asJsonString().getValue(), obj);
+                }
+            }
+            case AdminTransactionEntry.OP_TYPE_DELETE ->
+                transaction.recordDelete(collId, op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue());
+            default -> {
+                // markers never appear in the slice op id list
+            }
+        }
+    }
+
+    public static OperationResponse commit(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        if (transaction == null) {
+            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
+        }
+        try {
+            // A clustered commit must still hold a write quorum (split-brain protection); abort before
+            // applying if it was lost between the first write and commit.
+            if (coordinator.hasNotTransactionQuorum()) {
+                AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM);
+            }
+            final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
+            for (final var op : ops) {
+                applyBufferedOp(op);
+            }
+            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+            // Replicate the whole transaction to the quorum as one atomic batch. The local commit stands even
+            // on a replication timeout; Phase 4 anti-entropy reconciles the lagging replicas.
+            if (coordinator.replicateTransaction(transaction) == ReplicationOutcome.TIMEOUT) {
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);
+            }
+            return new CommitTransactionResponse("Transaction committed");
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+        } finally {
+            releaseHeldLocks(transaction);
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
         }
     }
 
@@ -107,14 +270,21 @@ public final class TransactionOperationHelper {
         } finally {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
         }
     }
 
     // Best-effort teardown when a connection closes with a transaction still open. Runs on the
-    // connection's own thread (the only thread allowed to release its write locks).
+    // connection's own thread (the only thread allowed to release its write locks). When the transaction was
+    // forwarded to a remote owner, tells that owner to roll it back too (releasing the owner's held locks).
     public static void cleanupOnDisconnect(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
+            return;
+        }
+        // A cross-owner transaction is torn down through the coordinator (aborts remote participants + the
+        // local slice, and clears state); only a purely-local transaction falls through to the local cleanup.
+        if (clusterRouter.teardownTransaction(clientId)) {
             return;
         }
         try {
@@ -124,18 +294,59 @@ public final class TransactionOperationHelper {
         } finally {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
         }
     }
 
-    // Removes any operation records left in admin/transactions by transactions that were open when the
-    // server stopped (their owning connections are gone, so the records are orphans). Called at startup.
+    // Owner-side safety net: rolls back and releases forwarded transactions whose originating edge node has
+    // left the cluster (absent or DEAD), so an edge-node crash cannot strand the owner's write locks. The
+    // rollback runs on each session's own executor thread (the holder of its locks). A session that has
+    // already voted yes (has a PREPARED marker) is in-doubt and is left for 2PC recovery to resolve against
+    // the coordinator's decision — aborting it here could break atomicity if the coordinator committed.
+    public static void reapTransactionsForDeparted(MembershipView view) {
+        for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
+            final var session = entry.getValue();
+            final var origin = session.edgeNodeId();
+            final var node = origin != null ? view.find(origin) : null;
+            if (node != null && node.getState() != NodeState.DEAD) {
+                continue;
+            }
+            final var transaction = clientTracker.getActiveTransaction(session.clientId());
+            if (transaction != null && Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
+                continue;
+            }
+            try {
+                session.submit(() -> rollback(session.clientId())).get();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            } catch (Exception ex) {
+                logger.warning("Failed to reap forwarded transaction: " + ex.getMessage());
+            }
+            clientTracker.removeTxSession(entry.getKey());
+        }
+    }
+
+    // Removes operation records left in admin/transactions by transactions that were open when the server
+    // stopped (their owning connections are gone). Records belonging to an in-doubt 2PC transaction (one
+    // with a PREPARED or COMMITTED marker) are preserved for recovery to resolve.
     public static void cleanupOrphansAtStartup() throws Exception {
-        final var opIds = new ArrayList<>(cache.getTransactionPkIndexes().keySet());
-        if (opIds.isEmpty()) {
+        final var inDoubt = new HashSet<String>();
+        inDoubt.addAll(Tx2pcLog.preparedDtxIds());
+        inDoubt.addAll(Tx2pcLog.committedDtxIds());
+        // Retained outcome markers (for cooperative termination) must also survive restart cleanup.
+        inDoubt.addAll(Tx2pcLog.outcomeDtxIds());
+        final var orphans = cache.getTransactionPkIndexes().keySet().stream()
+                .filter(id -> !inDoubt.contains(dtxIdOf(id))).toList();
+        if (orphans.isEmpty()) {
             return;
         }
-        AdminOperationHelper.deleteTransactionOps(opIds);
-        logger.info("Removed " + opIds.size() + " orphaned transaction operation(s) at startup");
+        AdminOperationHelper.deleteTransactionOps(orphans);
+        logger.info("Removed " + orphans.size() + " orphaned transaction operation(s) at startup");
+    }
+
+    private static String dtxIdOf(String recordId) {
+        final var sep = recordId.lastIndexOf(Globals.COLL_IDENTIFIER_SEPARATOR);
+        return sep > 0 ? recordId.substring(0, sep) : recordId;
     }
 
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction) {
