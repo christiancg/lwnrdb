@@ -5,56 +5,18 @@ Data lives on every node; only the cache (and write coordination) is partitioned
 so aggregate cache capacity scales with the number of nodes instead of requiring
 one large machine.
 
-> **Implementation status**
->
-> - **Phase 1 — implemented:** node discovery (seed list), membership + gossip,
->   heartbeat failure detection, per-collection ownership calculation, the
->   node-to-node transport (plaintext or TLS, shared-secret authenticated).
-> - **Phase 2 — implemented:** synchronous quorum write replication for document
->   writes (`SAVE`/`BULK_SAVE`/`DELETE`). The owner rejects writes it cannot
->   coordinate, commits locally, and replicates to a majority before acknowledging.
-> - **Phase 3 — implemented:** transparent request routing. A client may connect to
->   any node; per-collection reads/writes are forwarded to the owner and the
->   response is relayed back, with reads falling back to the local replica when the
->   owner is unreachable.
-> - **Phase 2b — implemented:** structural admin/DDL replication (`CREATE`/`DROP` of
->   databases, collections and indexes, `REINDEX`, `SET_DATABASE_OWNERS`), serialized
->   by an admin coordinator and applied on every node.
-> - **Phase 2c — implemented:** user/permission replication (`CREATE_USER`,
->   `DELETE_USER`, `SET_PASSWORD`, `CHANGE_PERMISSIONS`) via record-shipping.
-> - **Phase 4a — implemented:** version-based (last-write-wins) anti-entropy. Every
->   document write is stamped with a version and deletes leave versioned tombstones;
->   on a membership change each node reconciles its collections against the live
->   members (digest exchange + pull-newest), converging every id to the highest
->   version seen anywhere. This makes ownership handoff and rejoining-node catch-up
->   data-safe (no committed write is lost or a deleted document resurrected).
-> - **Phase 4b — implemented:** a **periodic** background anti-entropy sweep
->   (`antiEntropyIntervalMs`) that reconciles every collection on a fixed interval in
->   addition to the membership-triggered pass — catching replicas left behind by a
->   replication timeout — and **tombstone garbage-collection** that deduplicates the
->   tombstone files and drops deletes older than `tombstoneRetentionMs`. Ownership-
->   handoff cache warm-up was intentionally left as lazy (caches warm on first read).
-> - **Phase 5a — implemented:** transactions under clustering, single-owner. The edge
->   forwards a transaction's session to the owner of its collection, which runs it
->   locally (holding the write locks, buffering, serving read-your-writes) and at commit
->   replays and replicates the transaction to a majority as **one atomic batch**. Kept
->   as a fast path when only one owner is involved.
-> - **Phase 5b — implemented:** cross-owner distributed transactions via **two-phase
->   commit** with a durable recovery log. The edge coordinates; each written owner is a
->   participant holding its buffered slice + locks. Commit runs PREPARE across all
->   participants and, on a unanimous yes, durably records the decision before driving
->   COMMIT; any no vote or unreachable participant aborts them all. A coordinator or
->   participant crash mid-commit is resolved from the durable log (re-drive the commit,
->   or presumed-abort), with prepared participants re-acquiring their locks on restart.
-> - **Admin/DDL anti-entropy — implemented:** a node that was down during a DDL or
->   user/permission op catches up on rejoin from a coordinator-authoritative admin
->   snapshot ordered by a cluster-wide **admin epoch** (see below).
->
-> Everything is gated by `clusterEnabled`. With `clusterEnabled=false` (default)
-> the node behaves exactly as a standalone server. **Residual future work:** fully
-> non-blocking admin-coordinator handoff, and consensus-durable 2PC decisions so a
-> prepared transaction is never left in-doubt when its coordinator and all peers are
-> uncertain (today an operator resolves that rare case with `RESOLVE_TRANSACTION`).
+Clustering is fully implemented. It is entirely gated by `clusterEnabled`: with
+`clusterEnabled=false` (the default) a node behaves exactly as a standalone server,
+with no behaviour change. The capabilities described below — membership and
+discovery, per-collection ownership, quorum write replication, transparent request
+routing, admin/DDL and user/permission replication, version-based anti-entropy
+(membership-triggered and periodic), and single- and cross-owner transactions —
+are all in place.
+
+> **Residual future work:** fully non-blocking admin-coordinator handoff, and
+> consensus-durable 2PC decisions so a prepared transaction is never left in-doubt
+> when its coordinator and all peers are uncertain (today an operator resolves that
+> rare case with `RESOLVE_TRANSACTION`).
 
 ## Topology: per-collection ownership (distributed mastership)
 
@@ -390,7 +352,8 @@ See the *Clustering* row of the configuration table in the main
 `clusterPort`, `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`,
 `nodeId`, `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`,
 `deadTimeoutMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`,
-`readFallbackToLocal`, `clusterTlsEnabled`, `clusterSecret`.
+`readFallbackToLocal`, `clusterTlsEnabled`, `clusterSecret`,
+`antiEntropyIntervalMs`, `tombstoneRetentionMs`.
 
 ## Operations runbook
 
