@@ -53,6 +53,17 @@ FAIL = "\033[91mFAIL\033[0m"
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Server launch is configurable: by default the suite runs against the JAR, but
+# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
+# it launch that binary instead. Native images honor -Xmx as a runtime arg.
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+
+
+def server_argv(xmx: str):
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(REPO_ROOT, JAR)]
+
 failures = 0
 nodes: list["Node"] = []
 
@@ -356,10 +367,9 @@ class Node:
             fp.write(cfg)
 
     def start(self):
-        jar = os.path.join(REPO_ROOT, JAR)
         log = open(self.log_path, "ab")
         self.proc = subprocess.Popen(
-            ["java", "-Xmx512m", "-jar", jar],
+            server_argv("512m"),
             stdout=log, stderr=log, cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:
@@ -727,10 +737,15 @@ def main():
     print("  LWNRDB — Clustering (multi-node) integration suite")
     print("═" * 60)
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    if SERVER_BIN:
+        if not os.path.isfile(SERVER_BIN):
+            print(f"\n[ERROR] Server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN).\n")
+            sys.exit(1)
+    else:
+        jar = os.path.join(REPO_ROOT, JAR)
+        if not os.path.isfile(jar):
+            print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+            sys.exit(1)
 
     base_dir = tempfile.mkdtemp(prefix="lwnrdb-cluster-")
     print(f"  Base working dir: {base_dir}")
