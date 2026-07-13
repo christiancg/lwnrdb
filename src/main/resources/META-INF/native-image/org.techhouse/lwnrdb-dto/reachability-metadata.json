@@ -895,6 +895,58 @@
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
       "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.ClusterConfig",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.ClusterCoordinator",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.ClusterRouter",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.Replicator",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.AntiEntropyService",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.AdminAntiEntropyService",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.AdminEpoch",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.PeerConnectionPool",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.Tx2pcCoordinator",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.Tx2pcDirectory",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.Tx2pcRecovery",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.membership.MembershipService",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cluster.ownership.OwnershipManager",
+      "allDeclaredConstructors": true
     }
   ]
 }
