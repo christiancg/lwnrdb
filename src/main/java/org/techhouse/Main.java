@@ -97,6 +97,7 @@ public class Main {
             ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
             antiEntropyService.start();
             tx2pcRecovery.recover();
+            tx2pcRecovery.start();
         } catch (IOException e) {
             logger.fatal("Failed to start the cluster server", e);
             throw new RuntimeException("Failed to start the cluster server", e);

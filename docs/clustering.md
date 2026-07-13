@@ -282,10 +282,23 @@ marker is the commit point: present ⇒ commit, absent ⇒ **presumed abort**. O
 (`Tx2pcRecovery`): a prepared participant re-acquires its write locks and asks the
 coordinator (`TX_STATUS`) whether to commit or abort; a coordinator that recorded a
 commit re-drives `COMMIT_TX` to its participants. Recovery re-runs on every membership
-change to retry participants whose coordinator was unreachable. A participant that has
-voted yes but cannot reach its coordinator stays in-doubt holding its locks until the
-coordinator answers — the standard 2PC blocking trade-off (an unsafe timeout is *not*
-used).
+change and on a periodic sweep (which also GCs old outcome markers and logs long in-doubt
+transactions).
+
+**Coordinator-loss mitigation.** When a prepared participant cannot reach its
+coordinator, it falls back to **cooperative termination**: it polls the *other
+participants* (whose addresses it recorded in its PREPARED marker) via `TX_STATUS` and
+adopts any definitive decision one of them already reached (a peer reporting `COMMITTED` ⇒
+commit, `ABORTED` ⇒ abort). To make this work after a peer has already applied and
+forgotten the transaction, each participant retains a short-lived **outcome marker**
+(`{dtxId}|outcome`, GC'd after `tombstoneRetentionMs`) so it can still answer. This
+resolves the common "coordinator died mid-fan-out" case from the peers that committed. If
+*every* reachable participant is still uncertain, the transaction stays in-doubt (holding
+its locks) — the residual 2PC blocking case; an operator resolves it with the
+`RESOLVE_TRANSACTION` admin op (force-commit or force-abort, broadcast to all members).
+In-doubt transactions are surfaced in `GET_DATABASE_STATS` (`inDoubtTransactions`) and in
+periodic warning logs. An unsafe lock-releasing timeout is deliberately *not* used;
+consensus-durable decisions (fully non-blocking) remain future work.
 
 **Liveness before prepare.** If the edge connection closes (or the edge node crashes)
 before commit, the not-yet-prepared session is rolled back — the edge aborts its
@@ -300,9 +313,9 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 (`clusterTlsEnabled`, reusing the PKCS12 keystore — all nodes must share the same
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
-replication, forwardBody, actingUser, antiEntropy, txSessionId, txId, txReplication,
-errorMessage}`; `correlationId` lets a single pooled connection multiplex many
-in-flight requests. Message types are
+replication, forwardBody, actingUser, antiEntropy, txSessionId, txId, txParticipants,
+txStatus, txReplication, errorMessage}`; `correlationId` lets a single pooled connection
+multiplex many in-flight requests. Message types are
 `JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
 `sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (document writes, carrying a
 `replication` payload of `{dbName, collName, op: UPSERT|DELETE, documents, ids}`),
@@ -317,10 +330,11 @@ DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`),
 request in `forwardBody` plus a `txSessionId` and `txId`; the reply reuses
 `FORWARD_RESPONSE`), `REPLICATE_TX`/`REPLICATE_TX_ACK` (a committed transaction's atomic
 write batch, carrying a `txReplication` payload of per-collection replication entries),
-and the 2PC control messages `PREPARE_TX`/`PREPARE_TX_ACK`, `COMMIT_TX`/`COMMIT_TX_ACK`,
-`ABORT_TX`/`ABORT_TX_ACK` and `TX_STATUS` (which replies with `COMMIT_TX_ACK` /
-`ABORT_TX_ACK`), all keyed by `txSessionId`/`txId`. Inbound messages whose `secret` does
-not match `clusterSecret` are rejected.
+and the 2PC control messages `PREPARE_TX`/`PREPARE_TX_ACK` (carrying the participant set for
+cooperative termination), `COMMIT_TX`/`COMMIT_TX_ACK`, `ABORT_TX`/`ABORT_TX_ACK`, and
+`TX_STATUS`/`TX_STATUS_ACK` (reporting `COMMITTED`/`ABORTED`/`PREPARED`/`UNKNOWN`), all
+keyed by `txSessionId`/`txId`. Inbound messages whose `secret` does not match
+`clusterSecret` are rejected.
 
 ## Configuration reference
 

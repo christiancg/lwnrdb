@@ -1,6 +1,7 @@
 package org.techhouse.cluster;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -14,6 +15,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.resp.CommitTransactionResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.ResolveTransactionResponse;
 import org.techhouse.ops.resp.RollbackTransactionResponse;
 
 /**
@@ -40,16 +42,16 @@ public class Tx2pcCoordinator {
         final var local = clientTracker.hasLocalSlice(clientId);
         final var remotes = new ArrayList<>(clientTracker.transactionParticipants(clientId));
         final var selfAddress = membershipService.getSelf().address().toString();
+        final var participants = new ArrayList<>(remotes);
+        if (local) {
+            participants.add(selfAddress);
+        }
 
-        final var yes = prepareAll(clientId, sessionId, dtxId, local, remotes, selfAddress);
+        final var yes = prepareAll(clientId, sessionId, dtxId, local, remotes, selfAddress, participants);
         if (!yes) {
             abortAll(clientId, sessionId, dtxId, local, remotes);
             finishEdge(clientId, local);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_ABORTED);
-        }
-        final var participants = new ArrayList<>(remotes);
-        if (local) {
-            participants.add(selfAddress);
         }
         try {
             Tx2pcLog.recordCoordinatorCommit(dtxId, participants);
@@ -61,11 +63,35 @@ public class Tx2pcCoordinator {
             TransactionOperationHelper.commitPrepared(clientId);
         }
         for (final var address : remotes) {
-            send(address, ClusterMessageType.COMMIT_TX, sessionId, dtxId, ClusterMessageType.COMMIT_TX_ACK);
+            send(address, ClusterMessageType.COMMIT_TX, sessionId, dtxId, ClusterMessageType.COMMIT_TX_ACK, null);
         }
         deleteCoordinatorMarkerQuietly(dtxId);
         finishEdge(clientId, local);
         return new CommitTransactionResponse("Transaction committed");
+    }
+
+    // Operator escape hatch: force an in-doubt distributed transaction to a decision. Records the decision
+    // (commit only) so it is durable and consistent with recovery, resolves any local slice, and broadcasts
+    // COMMIT_TX/ABORT_TX to every alive member (a no-op on nodes that hold no slice for it).
+    public OperationResponse forceResolve(String dtxId, boolean commit) {
+        try {
+            if (commit && !Tx2pcLog.isCommitted(dtxId)) {
+                Tx2pcLog.recordCoordinatorCommit(dtxId, List.of());
+            }
+            TransactionOperationHelper.resolveFromDurable(dtxId, commit);
+        } catch (Exception e) {
+            logger.error("Failed to force-resolve transaction " + dtxId, e);
+            return new OperationResponse(OperationType.RESOLVE_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+        }
+        final var self = membershipService.getSelf();
+        final var type = commit ? ClusterMessageType.COMMIT_TX : ClusterMessageType.ABORT_TX;
+        final var ack = commit ? ClusterMessageType.COMMIT_TX_ACK : ClusterMessageType.ABORT_TX_ACK;
+        for (final var member : membershipService.membershipView().aliveMembers()) {
+            if (self == null || !member.getNodeId().equals(self.getNodeId())) {
+                send(member.address().toString(), type, dtxId, dtxId, ack, null);
+            }
+        }
+        return new ResolveTransactionResponse("Transaction " + (commit ? "committed" : "aborted"));
     }
 
     public OperationResponse rollback(UUID clientId) {
@@ -83,12 +109,13 @@ public class Tx2pcCoordinator {
     }
 
     private boolean prepareAll(UUID clientId, String sessionId, String dtxId, boolean local, ArrayList<String> remotes,
-            String selfAddress) {
-        if (local && !TransactionOperationHelper.prepare(clientId, selfAddress)) {
+            String selfAddress, List<String> participants) {
+        if (local && !TransactionOperationHelper.prepare(clientId, selfAddress, participants)) {
             return false;
         }
         for (final var address : remotes) {
-            if (!send(address, ClusterMessageType.PREPARE_TX, sessionId, dtxId, ClusterMessageType.PREPARE_TX_ACK)) {
+            if (!send(address, ClusterMessageType.PREPARE_TX, sessionId, dtxId, ClusterMessageType.PREPARE_TX_ACK,
+                    participants)) {
                 return false;
             }
         }
@@ -100,7 +127,7 @@ public class Tx2pcCoordinator {
             TransactionOperationHelper.abort(clientId);
         }
         for (final var address : remotes) {
-            send(address, ClusterMessageType.ABORT_TX, sessionId, dtxId, ClusterMessageType.ABORT_TX_ACK);
+            send(address, ClusterMessageType.ABORT_TX, sessionId, dtxId, ClusterMessageType.ABORT_TX_ACK, null);
         }
     }
 
@@ -115,10 +142,11 @@ public class Tx2pcCoordinator {
     }
 
     private boolean send(String address, ClusterMessageType type, String sessionId, String dtxId,
-            ClusterMessageType expectedAck) {
+            ClusterMessageType expectedAck, List<String> participants) {
         final var message = new ClusterMessage(null, type, clusterConfig.secret(), membershipService.getSelf(), null);
         message.setTxSessionId(sessionId);
         message.setTxId(dtxId);
+        message.setTxParticipants(participants);
         try {
             final var response = pool.request(NodeAddress.parse(address), message,
                     clusterConfig.replicationAckTimeoutMs());

@@ -29,8 +29,12 @@ public class AdminTransactionEntry extends DbEntry {
     // id whose trailing token is "part"/"coord" is a marker and a numeric trailing token is a slice op.
     public static final String OP_TYPE_PARTICIPANT_PREPARED = "PARTICIPANT_PREPARED";
     public static final String OP_TYPE_COORDINATOR_COMMIT = "COORDINATOR_COMMIT";
+    // A resolved participant's retained outcome (committed/aborted), so a peer can still report the decision
+    // during cooperative termination after the participant has already applied it. GC'd after a retention.
+    public static final String OP_TYPE_TRANSACTION_OUTCOME = "TRANSACTION_OUTCOME";
     public static final String MARKER_PARTICIPANT = "part";
     public static final String MARKER_COORDINATOR = "coord";
+    public static final String MARKER_OUTCOME = "outcome";
 
     private String transactionId;
     private String clientId;

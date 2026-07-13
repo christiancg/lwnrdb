@@ -172,10 +172,12 @@ public class ClusterConnectionHandler implements Runnable {
         final var response = new ClusterMessage();
         final var session = clientTracker.txSession(request.getTxSessionId());
         final var coordinatorAddress = request.getSender() != null ? request.getSender().address().toString() : null;
+        final var participants = request.getTxParticipants();
         var vote = false;
         if (session != null) {
             try {
-                vote = session.submit(() -> TransactionOperationHelper.prepare(session.clientId(), coordinatorAddress))
+                vote = session.submit(
+                        () -> TransactionOperationHelper.prepare(session.clientId(), coordinatorAddress, participants))
                         .get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -214,7 +216,7 @@ public class ClusterConnectionHandler implements Runnable {
                         : TransactionOperationHelper.abort(session.clientId())).get();
                 clientTracker.removeTxSession(sessionId);
             } else {
-                resolveFromDurable(request.getTxId(), commit);
+                TransactionOperationHelper.resolveFromDurable(request.getTxId(), commit);
             }
             response.setType(ackType);
         } catch (InterruptedException e) {
@@ -228,23 +230,18 @@ public class ClusterConnectionHandler implements Runnable {
         return response;
     }
 
-    private void resolveFromDurable(String dtxId, boolean commit) throws Exception {
-        if (commit) {
-            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-            TransactionOperationHelper.commitPreparedFromDurable(dtxId,
-                    marker != null ? marker.collections() : java.util.List.of());
-        } else {
-            TransactionOperationHelper.abortFromDurable(dtxId);
-        }
-    }
-
-    // Phase 5b coordinator query: reports whether the distributed transaction was decided commit (its
-    // coordinator marker is present) or, by presumed-abort, not.
+    // Phase 5b status query: reports this node's own knowledge of the transaction
+    // (COMMITTED/ABORTED/PREPARED/UNKNOWN) for the coordinator's presumed-abort check and for a peer's
+    // cooperative termination.
     private ClusterMessage handleTxStatus(ClusterMessage request) {
         final var response = new ClusterMessage();
-        response.setType(Tx2pcLog.isCommitted(request.getTxId())
-                ? ClusterMessageType.COMMIT_TX_ACK
-                : ClusterMessageType.ABORT_TX_ACK);
+        try {
+            response.setType(ClusterMessageType.TX_STATUS_ACK);
+            response.setTxStatus(Tx2pcLog.status(request.getTxId()).name());
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to read transaction status: " + e.getMessage());
+        }
         return response;
     }
 

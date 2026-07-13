@@ -267,11 +267,13 @@ public class TransactionClusterIntegrationTest {
     public void test_tx_status_reflects_commit_decision() throws Exception {
         configureMembership(1, node("self", serverPort));
         final var dtxId = UUID.randomUUID().toString();
-        assertEquals(ClusterMessageType.ABORT_TX_ACK,
-                pool.request(serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId), 2000).getType());
+        final var unknown = pool.request(serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId), 2000);
+        assertEquals(ClusterMessageType.TX_STATUS_ACK, unknown.getType());
+        assertEquals("UNKNOWN", unknown.getTxStatus());
         org.techhouse.ops.Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:1"));
-        assertEquals(ClusterMessageType.COMMIT_TX_ACK,
-                pool.request(serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId), 2000).getType());
+        final var committed = pool.request(serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId), 2000);
+        assertEquals(ClusterMessageType.TX_STATUS_ACK, committed.getType());
+        assertEquals("COMMITTED", committed.getTxStatus());
     }
 
     // ---------- edge routing ----------
@@ -407,7 +409,7 @@ public class TransactionClusterIntegrationTest {
         obj.add("_id", new JsonString("durable-commit"));
         AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
                 AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
-        Tx2pcLog.recordParticipantPrepared(dtxId, serverAddress().toString(),
+        Tx2pcLog.recordParticipantPrepared(dtxId, serverAddress().toString(), List.of(serverAddress().toString()),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
 
         final var response = pool.request(serverAddress(), control(ClusterMessageType.COMMIT_TX, "gone-session", dtxId),
@@ -423,7 +425,7 @@ public class TransactionClusterIntegrationTest {
         obj.add("_id", new JsonString("durable-abort"));
         AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
                 AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
-        Tx2pcLog.recordParticipantPrepared(dtxId, serverAddress().toString(),
+        Tx2pcLog.recordParticipantPrepared(dtxId, serverAddress().toString(), List.of(serverAddress().toString()),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
 
         final var response = pool.request(serverAddress(), control(ClusterMessageType.ABORT_TX, "gone-session", dtxId),

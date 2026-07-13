@@ -21,6 +21,17 @@ public final class Tx2pcLog {
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String PARTICIPANTS_FIELD = "participants";
+    private static final String PREPARED_AT_FIELD = "preparedAt";
+    private static final String OUTCOME_FIELD = "outcome";
+    private static final String RESOLVED_AT_FIELD = "resolvedAt";
+    private static final String OUTCOME_COMMITTED = "committed";
+    private static final String OUTCOME_ABORTED = "aborted";
+
+    // What a node knows about a distributed transaction, as reported over TX_STATUS for cooperative
+    // termination: COMMITTED/ABORTED are definitive; PREPARED means still in-doubt here; UNKNOWN means no record.
+    public enum Status {
+        COMMITTED, ABORTED, PREPARED, UNKNOWN
+    }
 
     private Tx2pcLog() {
     }
@@ -29,13 +40,64 @@ public final class Tx2pcLog {
         return dtxId + Globals.COLL_IDENTIFIER_SEPARATOR + suffix;
     }
 
-    public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> collections)
-            throws Exception {
+    public static void recordParticipantPrepared(String dtxId, String coordinatorAddress, List<String> participants,
+            List<String> collections) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(COORDINATOR_ADDRESS_FIELD, coordinatorAddress);
+        payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
+        payload.addProperty(PREPARED_AT_FIELD, Long.toString(System.currentTimeMillis()));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
                 AdminTransactionEntry.MARKER_PARTICIPANT, AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
+    }
+
+    // Records a resolved participant's outcome (retained so peers can report it during cooperative termination),
+    // replacing the PREPARED marker.
+    public static void recordOutcome(String dtxId, boolean committed) throws Exception {
+        final var payload = new JsonObject();
+        payload.addProperty(OUTCOME_FIELD, committed ? OUTCOME_COMMITTED : OUTCOME_ABORTED);
+        payload.addProperty(RESOLVED_AT_FIELD, Long.toString(System.currentTimeMillis()));
+        AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_OUTCOME,
+                AdminTransactionEntry.OP_TYPE_TRANSACTION_OUTCOME, payload));
+    }
+
+    public static void deleteOutcomeMarker(String dtxId) throws Exception {
+        AdminOperationHelper.deleteTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
+    }
+
+    // This node's knowledge of a distributed transaction, for TX_STATUS.
+    public static Status status(String dtxId) throws Exception {
+        if (isCommitted(dtxId)) {
+            return Status.COMMITTED;
+        }
+        final var outcome = readOutcome(dtxId);
+        if (outcome != null) {
+            return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
+        }
+        return isPrepared(dtxId) ? Status.PREPARED : Status.UNKNOWN;
+    }
+
+    private static String readOutcome(String dtxId) throws Exception {
+        final var entries = AdminOperationHelper
+                .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
+        return entries.isEmpty() ? null : entries.getFirst().getPayload().get(OUTCOME_FIELD).asJsonString().getValue();
+    }
+
+    // Drops outcome markers older than the retention window (their transactions are long resolved).
+    public static void garbageCollectOutcomes(long retentionMs) throws Exception {
+        final var cutoff = System.currentTimeMillis() - retentionMs;
+        for (final var dtxId : dtxIdsWithSuffix(AdminTransactionEntry.MARKER_OUTCOME)) {
+            final var entries = AdminOperationHelper
+                    .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
+            if (entries.isEmpty()) {
+                continue;
+            }
+            final var resolvedAt = Long
+                    .parseLong(entries.getFirst().getPayload().get(RESOLVED_AT_FIELD).asJsonString().getValue());
+            if (resolvedAt < cutoff) {
+                deleteOutcomeMarker(dtxId);
+            }
+        }
     }
 
     public static void recordCoordinatorCommit(String dtxId, List<String> participants) throws Exception {
@@ -69,6 +131,10 @@ public final class Tx2pcLog {
         return dtxIdsWithSuffix(AdminTransactionEntry.MARKER_COORDINATOR);
     }
 
+    public static List<String> outcomeDtxIds() {
+        return dtxIdsWithSuffix(AdminTransactionEntry.MARKER_OUTCOME);
+    }
+
     public static ParticipantMarker readParticipantMarker(String dtxId) throws Exception {
         final var entries = AdminOperationHelper
                 .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_PARTICIPANT)));
@@ -76,8 +142,11 @@ public final class Tx2pcLog {
             return null;
         }
         final var payload = entries.getFirst().getPayload();
+        final var preparedAt = payload.has(PREPARED_AT_FIELD)
+                ? Long.parseLong(payload.get(PREPARED_AT_FIELD).asJsonString().getValue())
+                : 0L;
         return new ParticipantMarker(payload.get(COORDINATOR_ADDRESS_FIELD).asJsonString().getValue(),
-                readStringArray(payload, COLLECTIONS_FIELD));
+                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt);
     }
 
     public static List<String> readCoordinatorParticipants(String dtxId) throws Exception {
@@ -118,8 +187,10 @@ public final class Tx2pcLog {
 
     private static JsonArray stringArray(List<String> values) {
         final var array = new JsonArray();
-        for (final var value : values) {
-            array.add(new JsonString(value));
+        if (values != null) {
+            for (final var value : values) {
+                array.add(new JsonString(value));
+            }
         }
         return array;
     }
@@ -132,6 +203,7 @@ public final class Tx2pcLog {
         return result;
     }
 
-    public record ParticipantMarker(String coordinatorAddress, List<String> collections) {
+    public record ParticipantMarker(String coordinatorAddress, List<String> participants, List<String> collections,
+            long preparedAt) {
     }
 }

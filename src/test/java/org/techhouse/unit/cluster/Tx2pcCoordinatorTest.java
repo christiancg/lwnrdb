@@ -3,7 +3,9 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.net.InetAddress;
@@ -163,6 +165,65 @@ public class Tx2pcCoordinatorTest {
         when(addr.getHostAddress()).thenReturn("127.0.0.1");
         final var clientId = clientTracker.addClient(socket);
         assertEquals("409-4", coordinator.rollback(clientId).getErrorCode());
+    }
+
+    private String seedDurablePrepared(String id) throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString(id));
+        org.techhouse.ops.AdminOperationHelper.saveTransactionOp(new org.techhouse.data.admin.AdminTransactionEntry(
+                dtxId, "client", 0, org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
+                TestGlobals.COLL, obj));
+        org.techhouse.ops.Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"),
+                List.of(org.techhouse.cache.Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        return dtxId;
+    }
+
+    @Test
+    public void test_force_resolve_commit_applies_locally() throws Exception {
+        final var dtxId = seedDurablePrepared("force-commit");
+        final var response = coordinator.forceResolve(dtxId, true);
+        assertEquals(OperationType.RESOLVE_TRANSACTION, response.getType());
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(OperationStatus.OK, findStatus("force-commit"));
+    }
+
+    @Test
+    public void test_force_resolve_abort_discards() throws Exception {
+        final var dtxId = seedDurablePrepared("force-abort");
+        assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, false).getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("force-abort"));
+    }
+
+    @Test
+    public void test_force_resolve_broadcasts_to_remote_members() throws Exception {
+        final var self = node();
+        final var other = new NodeInfo("other", "127.0.0.1", 59998, NodeState.ALIVE, 1L, 1L);
+        TestUtils.setPrivateField(membershipService, "members",
+                new ConcurrentHashMap<>(java.util.Map.of("self", self, "other", other)));
+        TestUtils.setPrivateField(membershipService, "self", self);
+        ownership.onMembershipChanged(membershipService.membershipView());
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var reply = new ClusterMessage();
+            reply.setType(ClusterMessageType.COMMIT_TX_ACK);
+            return reply;
+        });
+        TestUtils.setPrivateField(coordinator, "pool", pool);
+        final var dtxId = seedDurablePrepared("force-broadcast");
+        assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, true).getStatus());
+        verify(pool, atLeastOnce()).request(any(), any(), anyLong());
+        assertEquals(OperationStatus.OK, findStatus("force-broadcast"));
+    }
+
+    @Test
+    public void test_resolve_transaction_op_commits() throws Exception {
+        final var dtxId = seedDurablePrepared("op-commit");
+        final var request = new org.techhouse.ops.req.ResolveTransactionRequest();
+        request.setDtxId(dtxId);
+        request.setDecision(org.techhouse.ops.req.ResolveTransactionRequest.DECISION_COMMIT);
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+        assertEquals(OperationStatus.OK, findStatus("op-commit"));
     }
 
     @Test

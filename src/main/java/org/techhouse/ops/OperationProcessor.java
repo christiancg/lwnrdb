@@ -36,6 +36,7 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
@@ -65,6 +66,8 @@ public class OperationProcessor {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final org.techhouse.cluster.Tx2pcCoordinator tx2pcCoordinator = IocContainer
+            .get(org.techhouse.cluster.Tx2pcCoordinator.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -116,6 +119,7 @@ public class OperationProcessor {
             case START_TRANSACTION -> TransactionOperationHelper.start(clientId);
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
+            case RESOLVE_TRANSACTION -> processResolveTransaction((ResolveTransactionRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
@@ -563,6 +567,11 @@ public class OperationProcessor {
         } finally {
             locks.releaseReadLocks(readLocks);
         }
+    }
+
+    private OperationResponse processResolveTransaction(ResolveTransactionRequest request) {
+        final var commit = ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision());
+        return tx2pcCoordinator.forceResolve(request.getDtxId(), commit);
     }
 
     private OperationResponse processStopListenOperation(StopListenRequest request) {

@@ -2,6 +2,13 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -10,10 +17,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.MembershipView;
+import org.techhouse.cluster.NodeAddress;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.ClusterMessage;
+import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminTransactionEntry;
@@ -37,6 +48,7 @@ public class Tx2pcRecoveryTest {
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private boolean origEnabled;
+    private PeerConnectionPool origPool;
 
     private static NodeInfo node() {
         return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
@@ -47,6 +59,7 @@ public class Tx2pcRecoveryTest {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         origEnabled = config.isClusterEnabled();
+        origPool = TestUtils.getPrivateField(recovery, "pool", PeerConnectionPool.class);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
         TestUtils.setPrivateField(membershipService, "members",
@@ -58,6 +71,7 @@ public class Tx2pcRecoveryTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        TestUtils.setPrivateField(recovery, "pool", origPool);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
@@ -73,11 +87,16 @@ public class Tx2pcRecoveryTest {
     }
 
     private void seedPreparedSlice(String dtxId, String id, String coordinatorAddress) throws Exception {
+        seedPreparedSlice(dtxId, id, coordinatorAddress, List.of(coordinatorAddress));
+    }
+
+    private void seedPreparedSlice(String dtxId, String id, String coordinatorAddress, List<String> participants)
+            throws Exception {
         final var obj = new JsonObject();
         obj.add("_id", new JsonString(id));
         AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
                 AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
-        Tx2pcLog.recordParticipantPrepared(dtxId, coordinatorAddress,
+        Tx2pcLog.recordParticipantPrepared(dtxId, coordinatorAddress, participants,
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
     }
 
@@ -139,7 +158,7 @@ public class Tx2pcRecoveryTest {
         delPayload.add("_id", new JsonString("mix-del"));
         AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 2,
                 AdminTransactionEntry.OP_TYPE_DELETE, TestGlobals.DB, TestGlobals.COLL, delPayload));
-        Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS,
+        Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
 
@@ -180,6 +199,83 @@ public class Tx2pcRecoveryTest {
         seedPreparedSlice(dtxId, "rec-noop");
         recovery.recover();
         // Untouched: still prepared, not applied.
-        org.junit.jupiter.api.Assertions.assertTrue(Tx2pcLog.isPrepared(dtxId));
+        assertTrue(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    // Injects a pool where the coordinator (port 1) is unreachable and the peer (port 2) reports the given
+    // status — the cooperative-termination scenario.
+    private void injectCooperativePool(Tx2pcLog.Status peerStatus) throws Exception {
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
+            final NodeAddress address = invocation.getArgument(0);
+            if (address.getPort() == 1) {
+                throw new java.io.IOException("coordinator unreachable");
+            }
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.TX_STATUS_ACK);
+            response.setTxStatus(peerStatus.name());
+            return response;
+        });
+        TestUtils.setPrivateField(recovery, "pool", pool);
+    }
+
+    private String seedCrossNodePrepared(String id) throws Exception {
+        final var dtxId = java.util.UUID.randomUUID().toString();
+        seedPreparedSlice(dtxId, id, "127.0.0.1:1", List.of("127.0.0.1:1", "127.0.0.1:2"));
+        return dtxId;
+    }
+
+    @Test
+    public void test_cooperative_termination_commits_when_peer_committed() throws Exception {
+        injectCooperativePool(Tx2pcLog.Status.COMMITTED);
+        final var dtxId = seedCrossNodePrepared("coop-commit");
+        recovery.recover();
+        assertEquals(OperationStatus.OK, findStatus("coop-commit"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
+    public void test_cooperative_termination_aborts_when_peer_aborted() throws Exception {
+        injectCooperativePool(Tx2pcLog.Status.ABORTED);
+        final var dtxId = seedCrossNodePrepared("coop-abort");
+        recovery.recover();
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("coop-abort"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
+    public void test_cooperative_termination_stays_in_doubt_when_peer_prepared() throws Exception {
+        injectCooperativePool(Tx2pcLog.Status.PREPARED);
+        final var dtxId = seedCrossNodePrepared("coop-indoubt");
+        recovery.recover();
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("coop-indoubt"));
+        assertTrue(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
+    public void test_start_runs_periodic_sweep_and_warns() throws Exception {
+        final var origInterval = config.getAntiEntropyIntervalMs();
+        final var origDead = config.getDeadTimeoutMs();
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenThrow(new java.io.IOException("unreachable"));
+        TestUtils.setPrivateField(recovery, "pool", pool);
+        seedPreparedSlice("dtx-sweep", "sweep-doc", "127.0.0.1:1");
+        TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 50L);
+        TestUtils.setPrivateField(config, "deadTimeoutMs", -1L);
+        try {
+            recovery.start();
+            verify(pool, timeout(3000).atLeastOnce()).request(any(), any(), anyLong());
+        } finally {
+            recovery.stop();
+            TestUtils.setPrivateField(config, "antiEntropyIntervalMs", origInterval);
+            TestUtils.setPrivateField(config, "deadTimeoutMs", origDead);
+        }
+    }
+
+    @Test
+    public void test_start_is_noop_when_disabled() throws Exception {
+        TestUtils.setPrivateField(config, "clusterEnabled", false);
+        recovery.start();
+        recovery.stop();
     }
 }

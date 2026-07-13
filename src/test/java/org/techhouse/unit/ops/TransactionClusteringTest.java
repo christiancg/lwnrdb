@@ -131,7 +131,7 @@ public class TransactionClusteringTest {
         configureMembership(1, node("self", 5000));
         final var clientId = startedClientWithWrite("prep-commit");
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
-        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000"));
+        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
         assertTrue(Tx2pcLog.isPrepared(dtxId));
         assertEquals(OperationStatus.OK, TransactionOperationHelper.commitPrepared(clientId).getStatus());
         assertEquals(OperationStatus.OK, findStatus("prep-commit"));
@@ -143,7 +143,7 @@ public class TransactionClusteringTest {
     public void test_prepare_without_quorum_votes_no() throws Exception {
         configureMembership(3, node("self", 5000));
         final var clientId = startedClientWithWrite("prep-nq");
-        assertFalse(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000"));
+        assertFalse(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
     }
 
     @Test
@@ -151,7 +151,7 @@ public class TransactionClusteringTest {
         configureMembership(1, node("self", 5000));
         final var clientId = startedClientWithWrite("prep-abort");
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
-        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000"));
+        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
         TransactionOperationHelper.abort(clientId);
         assertFalse(Tx2pcLog.isPrepared(dtxId));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("prep-abort"));

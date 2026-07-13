@@ -89,14 +89,14 @@ public final class TransactionOperationHelper {
     // Phase 5b participant vote: durably records this node's PREPARED marker (with the collections whose
     // write locks it holds, for recovery) and votes yes, unless the write quorum has been lost. The locks
     // stay held until commit/abort. Returns true for a yes vote.
-    public static boolean prepare(UUID clientId, String coordinatorAddress) {
+    public static boolean prepare(UUID clientId, String coordinatorAddress, List<String> participants) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null || coordinator.hasNotTransactionQuorum()) {
             return false;
         }
         try {
             Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), coordinatorAddress,
-                    new ArrayList<>(transaction.getHeldLocks()));
+                    participants, new ArrayList<>(transaction.getHeldLocks()));
             return true;
         } catch (Exception e) {
             logger.warning("Failed to prepare transaction: " + e.getMessage());
@@ -117,7 +117,7 @@ public final class TransactionOperationHelper {
                 applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-            Tx2pcLog.deleteParticipantMarker(transaction.getTransactionId().toString());
+            resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit — the decision is made and the local commit is
             // durable; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction);
@@ -140,7 +140,7 @@ public final class TransactionOperationHelper {
         }
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-            Tx2pcLog.deleteParticipantMarker(transaction.getTransactionId().toString());
+            resolveMarkers(transaction.getTransactionId().toString(), false);
             return new RollbackTransactionResponse("Transaction aborted");
         } catch (Exception e) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
@@ -169,7 +169,7 @@ public final class TransactionOperationHelper {
                 recordIntoOverlay(reconstructed, op);
             }
             AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
-            Tx2pcLog.deleteParticipantMarker(dtxId);
+            resolveMarkers(dtxId, true);
             coordinator.replicateTransaction(reconstructed);
         } finally {
             for (final var collId : acquired) {
@@ -181,7 +181,29 @@ public final class TransactionOperationHelper {
     // Recovery abort of a prepared slice with no in-memory transaction: discards the durable slice + marker.
     public static void abortFromDurable(String dtxId) throws Exception {
         AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
+        resolveMarkers(dtxId, false);
+    }
+
+    // Resolves a prepared slice from the durable log (no in-memory transaction), used by session-less
+    // COMMIT_TX/ABORT_TX and by force-resolve. A no-op when this node holds no prepared slice for the id, so
+    // a broadcast force-resolve is safely ignored by non-participants and re-drives are idempotent.
+    public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
+        if (!Tx2pcLog.isPrepared(dtxId)) {
+            return;
+        }
+        if (commit) {
+            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
+            commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of());
+        } else {
+            abortFromDurable(dtxId);
+        }
+    }
+
+    // Replaces a resolved transaction's PREPARED marker with a retained OUTCOME marker, so a peer can still
+    // report the decision during another participant's cooperative termination.
+    private static void resolveMarkers(String dtxId, boolean committed) throws Exception {
         Tx2pcLog.deleteParticipantMarker(dtxId);
+        Tx2pcLog.recordOutcome(dtxId, committed);
     }
 
     private static void recordIntoOverlay(Transaction transaction, AdminTransactionEntry op) {
@@ -311,6 +333,8 @@ public final class TransactionOperationHelper {
         final var inDoubt = new HashSet<String>();
         inDoubt.addAll(Tx2pcLog.preparedDtxIds());
         inDoubt.addAll(Tx2pcLog.committedDtxIds());
+        // Retained outcome markers (for cooperative termination) must also survive restart cleanup.
+        inDoubt.addAll(Tx2pcLog.outcomeDtxIds());
         final var orphans = cache.getTransactionPkIndexes().keySet().stream()
                 .filter(id -> !inDoubt.contains(dtxIdOf(id))).toList();
         if (orphans.isEmpty()) {

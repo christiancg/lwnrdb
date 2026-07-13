@@ -20,6 +20,7 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
@@ -60,7 +61,19 @@ public class RequestValidator {
             // Transaction control operations carry no db/coll/payload of their own — the transaction is
             // scoped to the connection. Authentication is still enforced in MessageProcessor.
             case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION -> ValidationResult.ok();
+            case RESOLVE_TRANSACTION -> validateResolveTransaction((ResolveTransactionRequest) request);
         };
+    }
+
+    private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {
+        if (request.getDtxId() == null || request.getDtxId().isBlank()) {
+            return ValidationResult.fail("dtxId is required");
+        }
+        if (!ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision())
+                && !ResolveTransactionRequest.DECISION_ABORT.equals(request.getDecision())) {
+            return ValidationResult.fail("decision must be 'commit' or 'abort'");
+        }
+        return ValidationResult.ok();
     }
 
     private static ValidationResult validateDbOnly(OperationRequest request, boolean rejectAdmin) {

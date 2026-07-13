@@ -16,7 +16,7 @@ public final class AuthorizationChecker {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(OperationType.CREATE_USER,
             OperationType.DELETE_USER, OperationType.CHANGE_PERMISSIONS, OperationType.SET_DATABASE_OWNERS,
-            OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS);
+            OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS, OperationType.RESOLVE_TRANSACTION);
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
             OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
 

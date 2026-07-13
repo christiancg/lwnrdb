@@ -1,5 +1,8 @@
 package org.techhouse.cluster;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
@@ -9,17 +12,19 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 
 /**
- * Crash recovery for Phase 5b two-phase commit. Resolves in-doubt transactions left in the durable log by a
- * coordinator or participant crash: a prepared participant asks its coordinator for the decision (commit if
- * the coordinator marker is present, presumed-abort otherwise); a coordinator that recorded a commit re-drives
- * COMMIT to its participants. Runs once at startup and again on every membership change (to retry participants
- * whose coordinator was unreachable). Idempotent.
+ * Crash recovery for Phase 5b two-phase commit. A prepared participant asks its coordinator for the decision
+ * (present coordinator marker ⇒ commit, otherwise presumed-abort); if the coordinator is unreachable it falls
+ * back to <b>cooperative termination</b> — polling the other participants and adopting any decision one of
+ * them already reached. A coordinator that recorded a commit re-drives COMMIT to its participants. Runs at
+ * startup, on every membership change, and on a periodic sweep (which also GCs old outcome markers and warns
+ * about long in-doubt transactions). Idempotent.
  */
 public class Tx2pcRecovery implements MembershipListener {
     private final Logger logger = Logger.logFor(Tx2pcRecovery.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private ScheduledExecutorService sweeper;
 
     private enum Decision {
         COMMIT, ABORT, UNKNOWN
@@ -28,6 +33,33 @@ public class Tx2pcRecovery implements MembershipListener {
     @Override
     public void onMembershipChanged(MembershipView view) {
         recover();
+    }
+
+    // Starts the periodic recovery/GC sweep (retries in-doubt transactions without waiting for a membership
+    // change, GCs resolved-outcome markers, and warns about long in-doubt transactions).
+    public void start() {
+        if (!clusterConfig.isEnabled() || clusterConfig.antiEntropyIntervalMs() <= 0) {
+            return;
+        }
+        sweeper = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("tx2pc-recovery-", 0).factory());
+        final var interval = clusterConfig.antiEntropyIntervalMs();
+        sweeper.scheduleWithFixedDelay(this::sweep, interval, interval, TimeUnit.MILLISECONDS);
+    }
+
+    public void stop() {
+        if (sweeper != null) {
+            sweeper.shutdownNow();
+        }
+    }
+
+    private void sweep() {
+        try {
+            recover();
+            Tx2pcLog.garbageCollectOutcomes(clusterConfig.tombstoneRetentionMs());
+            warnLongInDoubt();
+        } catch (Exception e) {
+            logger.warning("Transaction recovery sweep failed: " + e.getMessage());
+        }
     }
 
     public void recover() {
@@ -45,7 +77,7 @@ public class Tx2pcRecovery implements MembershipListener {
                 if (marker == null) {
                     continue;
                 }
-                switch (queryDecision(marker.coordinatorAddress(), dtxId)) {
+                switch (resolve(marker.coordinatorAddress(), marker.participants(), dtxId)) {
                     case COMMIT -> TransactionOperationHelper.commitPreparedFromDurable(dtxId, marker.collections());
                     case ABORT -> TransactionOperationHelper.abortFromDurable(dtxId);
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
@@ -77,30 +109,53 @@ public class Tx2pcRecovery implements MembershipListener {
     }
 
     private void resolveLocalCommitted(String dtxId) throws Exception {
-        if (Tx2pcLog.isPrepared(dtxId)) {
-            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-            TransactionOperationHelper.commitPreparedFromDurable(dtxId,
-                    marker != null ? marker.collections() : java.util.List.of());
-        }
+        TransactionOperationHelper.resolveFromDurable(dtxId, true);
     }
 
-    private Decision queryDecision(String coordinatorAddress, String dtxId) {
-        if (isSelf(coordinatorAddress)) {
-            return Tx2pcLog.isCommitted(dtxId) ? Decision.COMMIT : Decision.ABORT;
+    // Determines the outcome for a prepared-but-uncertain transaction. The coordinator is authoritative when
+    // reachable (commit marker ⇒ commit, otherwise presumed-abort); only when it is unreachable do we fall back
+    // to cooperative termination among the other participants.
+    private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {
+        final var fromCoordinator = statusFrom(coordinatorAddress, dtxId);
+        if (fromCoordinator != null) {
+            return fromCoordinator == Tx2pcLog.Status.COMMITTED ? Decision.COMMIT : Decision.ABORT;
+        }
+        for (final var peer : participants) {
+            if (isSelf(peer) || peer.equals(coordinatorAddress)) {
+                continue;
+            }
+            final var peerStatus = statusFrom(peer, dtxId);
+            if (peerStatus == Tx2pcLog.Status.COMMITTED) {
+                return Decision.COMMIT;
+            }
+            if (peerStatus == Tx2pcLog.Status.ABORTED) {
+                return Decision.ABORT;
+            }
+        }
+        return Decision.UNKNOWN;
+    }
+
+    // This node's or a peer's knowledge of the transaction, or null when the peer is unreachable.
+    private Tx2pcLog.Status statusFrom(String address, String dtxId) {
+        if (isSelf(address)) {
+            try {
+                return Tx2pcLog.status(dtxId);
+            } catch (Exception e) {
+                return null;
+            }
         }
         final var message = new ClusterMessage(null, ClusterMessageType.TX_STATUS, clusterConfig.secret(),
                 membershipService.getSelf(), null);
         message.setTxId(dtxId);
         try {
-            final var response = pool.request(NodeAddress.parse(coordinatorAddress), message,
+            final var response = pool.request(NodeAddress.parse(address), message,
                     clusterConfig.replicationAckTimeoutMs());
-            return switch (response.getType()) {
-                case COMMIT_TX_ACK -> Decision.COMMIT;
-                case ABORT_TX_ACK -> Decision.ABORT;
-                default -> Decision.UNKNOWN;
-            };
+            if (response.getType() == ClusterMessageType.TX_STATUS_ACK && response.getTxStatus() != null) {
+                return Tx2pcLog.Status.valueOf(response.getTxStatus());
+            }
+            return null;
         } catch (Exception e) {
-            return Decision.UNKNOWN;
+            return null;
         }
     }
 
@@ -114,6 +169,22 @@ public class Tx2pcRecovery implements MembershipListener {
                     .getType() == ClusterMessageType.COMMIT_TX_ACK;
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    private void warnLongInDoubt() {
+        final var threshold = clusterConfig.deadTimeoutMs();
+        final var now = System.currentTimeMillis();
+        for (final var dtxId : Tx2pcLog.preparedDtxIds()) {
+            try {
+                final var marker = Tx2pcLog.readParticipantMarker(dtxId);
+                if (marker != null && marker.preparedAt() > 0 && now - marker.preparedAt() > threshold) {
+                    logger.warning("Transaction " + dtxId + " has been in-doubt for " + (now - marker.preparedAt())
+                            + "ms; use RESOLVE_TRANSACTION to force a decision if its coordinator is gone");
+                }
+            } catch (Exception e) {
+                logger.warning("Failed to inspect in-doubt transaction " + dtxId + ": " + e.getMessage());
+            }
         }
     }
 

@@ -23,6 +23,11 @@ public class ClusterMessage {
     // The distributed-transaction id (the coordinator's transaction UUID) on 2PC control messages, used as
     // the correlation key for the durable recovery-log markers.
     private String txId;
+    // The full participant-address set on a PREPARE_TX, so a stuck participant can poll its peers during
+    // cooperative termination.
+    private List<String> txParticipants;
+    // A participant's knowledge of a transaction on a TX_STATUS_ACK (COMMITTED/ABORTED/PREPARED/UNKNOWN).
+    private String txStatus;
     // A committed transaction's atomic write batch on a REPLICATE_TX message.
     private TxReplicationPayload txReplication;
     private String errorMessage;
@@ -125,6 +130,22 @@ public class ClusterMessage {
 
     public void setTxId(String txId) {
         this.txId = txId;
+    }
+
+    public List<String> getTxParticipants() {
+        return txParticipants;
+    }
+
+    public void setTxParticipants(List<String> txParticipants) {
+        this.txParticipants = txParticipants;
+    }
+
+    public String getTxStatus() {
+        return txStatus;
+    }
+
+    public void setTxStatus(String txStatus) {
+        this.txStatus = txStatus;
     }
 
     public TxReplicationPayload getTxReplication() {
