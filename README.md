@@ -601,6 +601,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-4` | `ERROR` | No active transaction for this connection |
 | `409-5` | `ERROR` | Could not acquire the collection lock in time; transaction aborted |
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
+| `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -625,7 +626,13 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-22` | `ERROR` | Error while gathering database stats |
 | `500-23` | `ERROR` | Error while processing listen operation |
 | `500-24` | `ERROR` | Error while processing transaction operation |
+| `421-1` | `ERROR` | This node is not the owner of the target collection |
+| `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
+| `503-2` | `ERROR` | Cluster does not have a write quorum |
+| `503-3` | `ERROR` | Timed out waiting for the replication quorum |
+| `503-4` | `ERROR` | The collection's owner node is unreachable |
+| `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 
 ### Bootstrap
 
@@ -718,17 +725,20 @@ before.
 
 ### Clustering (multi-node)
 
-> **Status: Phases 1–3 + 2b/2c (experimental).** Node discovery, membership/gossip,
+> **Status: Phases 1–5 (experimental).** Node discovery, membership/gossip,
 > failure detection, per-collection ownership, **synchronous quorum write
-> replication**, **transparent request routing**, and **admin/DDL + user/permission
-> replication** are implemented: a client can connect to any node; per-collection
+> replication**, **transparent request routing**, **admin/DDL + user/permission
+> replication**, **version-based document anti-entropy**, **admin/DDL anti-entropy**,
+> and **clustered transactions** (single-owner fast path + cross-owner two-phase
+> commit) are implemented: a client can connect to any node; per-collection
 > reads/writes are forwarded to the collection's owner (which replicates writes to a
 > majority before acknowledging), and admin changes (databases, collections, indexes,
 > users, permissions) are serialized by an admin coordinator and replicated to every
-> node. Reads fall back to the local full replica when the owner is unreachable.
-> Failover/anti-entropy and clustered transactions are planned in later phases. With
-> `clusterEnabled=false` (the default) the node behaves exactly as a standalone
-> server. See [docs/clustering.md](docs/clustering.md) for the full design.
+> node. Reads fall back to the local full replica when the owner is unreachable. A node
+> that was down catches up on rejoin — both document contents and structural/admin state
+> reconcile via anti-entropy. With `clusterEnabled=false` (the default) the node behaves
+> exactly as a standalone server. See [docs/clustering.md](docs/clustering.md) for the
+> full design.
 
 LWNRDB can run as a cluster of fully-replicated nodes with a **distributed cache**:
 every collection is consistent-hashed to an **owner node** (there is no single

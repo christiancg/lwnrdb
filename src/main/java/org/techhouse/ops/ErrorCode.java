@@ -107,7 +107,8 @@ public enum ErrorCode {
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",
             "Cluster does not have a write quorum", OperationStatus.ERROR), REPLICATION_TIMEOUT("503-3",
                     "Timed out waiting for the replication quorum", OperationStatus.ERROR), OWNER_UNREACHABLE("503-4",
-                            "The collection's owner node is unreachable", OperationStatus.ERROR);
+                            "The collection's owner node is unreachable", OperationStatus.ERROR), ADMIN_SYNCING("503-5",
+                                    "Admin coordinator is synchronizing, retry shortly", OperationStatus.ERROR);
 
     private final String code;
     private final String defaultMessage;

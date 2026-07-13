@@ -242,6 +242,36 @@ longest expected node downtime, otherwise a delete could be collected before a
 still-down replica has converged on it and would be resurrected on rejoin. Owner cache
 warm-up on handoff is deliberately lazy — a new owner's cache fills on first read.
 
+### Admin/DDL anti-entropy (coordinator-authoritative snapshot)
+
+Document anti-entropy converges the *contents* of collections but not the *structure*: a
+node that was down during a `CREATE`/`DROP DATABASE`/`COLLECTION`/`INDEX`, `REINDEX`,
+`SET_DATABASE_OWNERS` or a user/permission op would otherwise never learn of that change
+on rejoin. Admin records are not version-stamped (they go straight through `FileSystem`
+without a `WriteVersion` or tombstone), so per-record LWW does not apply. Instead a single
+cluster-wide **admin epoch** (`cluster/AdminEpoch`, persisted to `cluster/admin.epoch`)
+orders the whole admin state: the admin coordinator bumps it on each committed admin op,
+ships it on the existing `REPLICATE_ADMIN`/`REPLICATE_USER` messages (so live replicas
+advance), and a node that was absent falls behind.
+
+On a membership change (and on the same `antiEntropyIntervalMs` periodic sweep)
+`cluster/AdminAntiEntropyService` (a `MembershipListener`) pulls each live peer's
+authoritative admin snapshot via an `ADMIN_SNAPSHOT` message — `{epoch, databases,
+collections, users}` — keeps the **highest-epoch** one, and, only when it exceeds this
+node's own epoch, **conforms** local state to it: upsert snapshot users then delete
+absent ones; create missing databases (with owners) and reconcile owners on existing
+ones; create missing collections and reconcile their indexes (create missing, drop
+extras); finally drop local collections and databases absent from the snapshot. Each
+create/drop takes the target collection's write lock, mirroring the `OperationProcessor`
+DDL handlers. It then triggers a document reconciliation pass so freshly-materialized
+collections repopulate. Because authority is decided by the highest epoch, a stale
+rejoining node never overwrites live state — it catches up instead.
+
+To close the window where a stale node becomes the admin coordinator before it has caught
+up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
+until it has completed one admin reconciliation since starting. Fully non-blocking
+coordinator handoff (catch-up before role assignment) remains future work.
+
 ## Transactions under clustering (Phases 5a–5b)
 
 The node the client connects to (the **edge**) coordinates the transaction. Each write
@@ -319,8 +349,8 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
 replication, forwardBody, actingUser, antiEntropy, txSessionId, txId, txParticipants,
-txStatus, txReplication, inDoubtTransactions, errorMessage}`; `correlationId` lets a single
-pooled connection
+txStatus, txReplication, inDoubtTransactions, adminSnapshot, adminEpoch, errorMessage}`;
+`correlationId` lets a single pooled connection
 multiplex many in-flight requests. Message types are
 `JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
 `sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (document writes, carrying a
@@ -332,6 +362,9 @@ DDL, carrying the Base64-wrapped op in `forwardBody` plus the `actingUser`),
 `admin/users` record in a `replication` payload), `DIGEST`/`DIGEST_ACK` and
 `PULL`/`PULL_ACK` (anti-entropy, carrying an `antiEntropy` payload of a collection's
 `{id, version, deleted}` digest or of pulled `documents`/`versions`),
+`ADMIN_SNAPSHOT`/`ADMIN_SNAPSHOT_ACK` (admin/DDL anti-entropy, the reply carrying an
+`adminSnapshot` payload of `{epoch, databases, collections, users}`; `adminEpoch` also
+rides on `REPLICATE_ADMIN`/`REPLICATE_USER` so live replicas advance the admin epoch),
 `FORWARD_TX_REQUEST` (a forwarded transaction operation, carrying the Base64-wrapped
 request in `forwardBody` plus a `txSessionId` and `txId`; the reply reuses
 `FORWARD_RESPONSE`), `REPLICATE_TX`/`REPLICATE_TX_ACK` (a committed transaction's atomic

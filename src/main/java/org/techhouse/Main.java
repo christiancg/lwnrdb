@@ -7,6 +7,8 @@ import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.cluster.AdminAntiEntropyService;
+import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
@@ -41,6 +43,9 @@ public class Main {
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
+    private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
+            .get(AdminAntiEntropyService.class);
+    private static final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private static final TransactionSessionReaper transactionSessionReaper = IocContainer
             .get(TransactionSessionReaper.class);
     private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
@@ -89,12 +94,17 @@ public class Main {
             final var clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(),
                     factory);
             clusterServer.start();
+            adminEpoch.load();
             membershipService.addListener(ownershipManager);
+            // Register the admin listener before the document one so a rejoining node conforms its structure
+            // (databases/collections/indexes/users) before the document reconciliation repopulates them.
+            membershipService.addListener(adminAntiEntropyService);
             membershipService.addListener(antiEntropyService);
             membershipService.addListener(transactionSessionReaper);
             membershipService.addListener(tx2pcRecovery);
             membershipService.start();
             ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
+            adminAntiEntropyService.start();
             antiEntropyService.start();
             tx2pcRecovery.recover();
             tx2pcRecovery.start();

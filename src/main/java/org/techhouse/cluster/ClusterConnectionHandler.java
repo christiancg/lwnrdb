@@ -33,6 +33,8 @@ public class ClusterConnectionHandler implements Runnable {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
+    private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
@@ -92,6 +94,7 @@ public class ClusterConnectionHandler implements Runnable {
             case ABORT_TX -> handleAbortTx(request);
             case TX_STATUS -> handleTxStatus(request);
             case LIST_TX -> handleListTx();
+            case ADMIN_SNAPSHOT -> handleAdminSnapshot();
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
             default -> {
@@ -261,11 +264,26 @@ public class ClusterConnectionHandler implements Runnable {
         return response;
     }
 
+    // Reports this node's authoritative admin snapshot (epoch + databases/collections/users) for a rejoining
+    // or lagging peer to conform to.
+    private ClusterMessage handleAdminSnapshot() {
+        final var response = new ClusterMessage();
+        try {
+            response.setType(ClusterMessageType.ADMIN_SNAPSHOT_ACK);
+            response.setAdminSnapshot(adminAntiEntropyService.buildSnapshot());
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to build admin snapshot: " + e.getMessage());
+        }
+        return response;
+    }
+
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
         final var response = new ClusterMessage();
         try {
             final var result = executeForwarded(request);
             if (result.getStatus() == OperationStatus.OK) {
+                adminEpoch.adopt(request.getAdminEpoch());
                 response.setType(ClusterMessageType.REPLICATE_ADMIN_ACK);
             } else {
                 response.setType(ClusterMessageType.ERROR);
@@ -297,6 +315,7 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleReplicateUser(ClusterMessage request) {
         final var response = new ClusterMessage();
         if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
+            adminEpoch.adopt(request.getAdminEpoch());
             response.setType(ClusterMessageType.REPLICATE_USER_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);

@@ -79,6 +79,15 @@ public class AntiEntropyService implements MembershipListener {
         scheduleReconcile();
     }
 
+    // Triggers a document reconciliation pass without waiting for a membership change or the periodic sweep,
+    // so the admin anti-entropy service can pull documents for collections it just materialized.
+    public void reconcileNow() {
+        if (!clusterConfig.isEnabled()) {
+            return;
+        }
+        scheduleReconcile();
+    }
+
     private void scheduleReconcile() {
         if (scheduled.compareAndSet(false, true)) {
             reconcileExecutor.submit(() -> {

@@ -33,6 +33,11 @@ public class ClusterMessage {
     // This node's in-doubt (PREPARED) distributed transactions on a LIST_TX_ACK, aggregated cluster-wide by
     // the node handling a LIST_TRANSACTIONS request.
     private List<InDoubtTx> inDoubtTransactions;
+    // This node's authoritative admin state (epoch + databases/collections/users) on an ADMIN_SNAPSHOT_ACK.
+    private AdminSnapshotPayload adminSnapshot;
+    // The admin coordinator's current admin epoch, shipped on REPLICATE_ADMIN/REPLICATE_USER so live replicas
+    // advance without pulling a snapshot.
+    private long adminEpoch;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -165,6 +170,22 @@ public class ClusterMessage {
 
     public void setInDoubtTransactions(List<InDoubtTx> inDoubtTransactions) {
         this.inDoubtTransactions = inDoubtTransactions;
+    }
+
+    public AdminSnapshotPayload getAdminSnapshot() {
+        return adminSnapshot;
+    }
+
+    public void setAdminSnapshot(AdminSnapshotPayload adminSnapshot) {
+        this.adminSnapshot = adminSnapshot;
+    }
+
+    public long getAdminEpoch() {
+        return adminEpoch;
+    }
+
+    public void setAdminEpoch(long adminEpoch) {
+        this.adminEpoch = adminEpoch;
     }
 
     public String getErrorMessage() {

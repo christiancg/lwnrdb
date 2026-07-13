@@ -19,6 +19,7 @@ public class Replicator {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
 
     // Replicates a committed document write to a majority of peers.
     public ReplicationOutcome broadcast(ReplicationPayload payload) {
@@ -43,6 +44,7 @@ public class Replicator {
         return awaitQuorum(ClusterMessageType.REPLICATE_USER_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REPLICATE_USER);
             message.setReplication(payload);
+            message.setAdminEpoch(adminEpoch.current());
             return message;
         });
     }
@@ -53,6 +55,7 @@ public class Replicator {
             final var message = replicateMessage(ClusterMessageType.REPLICATE_ADMIN);
             message.setForwardBody(ForwardBody.encode(rawJson));
             message.setActingUser(actingUser);
+            message.setAdminEpoch(adminEpoch.current());
             return message;
         });
     }

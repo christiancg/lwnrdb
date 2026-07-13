@@ -6,9 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cluster.AdminAntiEntropyService;
+import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
@@ -32,6 +35,8 @@ import org.techhouse.test.TestUtils;
 
 public class ClusterAdminHelperTest {
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
+    private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Configuration config = Configuration.getInstance();
     private boolean origEnabled;
     private int origExpected;
@@ -56,6 +61,15 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
+        TestUtils.setPrivateField(adminAntiEntropyService, "started", false);
+        TestUtils.setPrivateField(adminAntiEntropyService, "adminSyncCompleted", new AtomicBoolean(false));
+        TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+    }
+
+    // Arms the sync gate (as start() would in production) with the given completion state.
+    private void armAdminSync(boolean completed) throws Exception {
+        TestUtils.setPrivateField(adminAntiEntropyService, "started", true);
+        TestUtils.setPrivateField(adminAntiEntropyService, "adminSyncCompleted", new AtomicBoolean(completed));
     }
 
     private void enable(int expectedSize) throws Exception {
@@ -112,6 +126,29 @@ public class ClusterAdminHelperTest {
         final var request = new CreateUserRequest();
         request.setUsername("bob");
         assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
+    }
+
+    @Test
+    public void test_guard_rejects_coordinator_still_syncing() throws Exception {
+        enable(1);
+        armAdminSync(false);
+        assertEquals("503-5", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+    }
+
+    @Test
+    public void test_guard_allows_coordinator_after_sync_completed() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        assertNull(ClusterAdminHelper.guard(adminOp()));
+    }
+
+    @Test
+    public void test_after_admin_op_bumps_epoch_on_coordinator() throws Exception {
+        enable(1);
+        final var before = adminEpoch.current();
+        final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
+        ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+        assertEquals(before + 1, adminEpoch.current());
     }
 
     @Test
