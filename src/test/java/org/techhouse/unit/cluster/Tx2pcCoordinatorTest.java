@@ -217,6 +217,16 @@ public class Tx2pcCoordinatorTest {
     }
 
     @Test
+    public void test_list_transactions_op_returns_in_doubt() throws Exception {
+        final var dtxId = seedDurablePrepared("list-doubt");
+        final var response = processor.processMessage(new org.techhouse.ops.req.ListTransactionsRequest());
+        assertEquals(OperationStatus.OK, response.getStatus());
+        final var transactions = ((org.techhouse.ops.resp.ListTransactionsResponse) response).getTransactions();
+        assertEquals(1, transactions.size());
+        assertEquals(dtxId, transactions.getFirst().get("dtxId").asJsonString().getValue());
+    }
+
+    @Test
     public void test_resolve_transaction_op_commits() throws Exception {
         final var dtxId = seedDurablePrepared("op-commit");
         final var request = new org.techhouse.ops.req.ResolveTransactionRequest();

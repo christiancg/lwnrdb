@@ -296,9 +296,14 @@ resolves the common "coordinator died mid-fan-out" case from the peers that comm
 *every* reachable participant is still uncertain, the transaction stays in-doubt (holding
 its locks) — the residual 2PC blocking case; an operator resolves it with the
 `RESOLVE_TRANSACTION` admin op (force-commit or force-abort, broadcast to all members).
-In-doubt transactions are surfaced in `GET_DATABASE_STATS` (`inDoubtTransactions`) and in
-periodic warning logs. An unsafe lock-releasing timeout is deliberately *not* used;
-consensus-durable decisions (fully non-blocking) remain future work.
+To discover which transactions need resolving, the admin-only `LIST_TRANSACTIONS` op fans
+out a `LIST_TX` query to every live member and returns the in-doubt (PREPARED) transactions
+aggregated by distributed-transaction id — each row carrying `{dtxId, coordinator,
+coordinatorReachable, participants, ageMs, perNodeStatus}` so an operator can decide the
+correct outcome before forcing it. In-doubt transactions are also surfaced per-node in
+`GET_DATABASE_STATS` (`inDoubtTransactions`) and in periodic warning logs. An unsafe
+lock-releasing timeout is deliberately *not* used; consensus-durable decisions (fully
+non-blocking) remain future work.
 
 **Liveness before prepare.** If the edge connection closes (or the edge node crashes)
 before commit, the not-yet-prepared session is rolled back — the edge aborts its
@@ -314,7 +319,8 @@ The node-to-node channel reuses the client transport: line-delimited JSON
 keystore for the TLS cluster channel to establish). Every frame is a
 `ClusterMessage` envelope `{correlationId, type, secret, sender, members,
 replication, forwardBody, actingUser, antiEntropy, txSessionId, txId, txParticipants,
-txStatus, txReplication, errorMessage}`; `correlationId` lets a single pooled connection
+txStatus, txReplication, inDoubtTransactions, errorMessage}`; `correlationId` lets a single
+pooled connection
 multiplex many in-flight requests. Message types are
 `JOIN_REQUEST`/`JOIN_RESPONSE` and `GOSSIP`/`GOSSIP_ACK` (membership, carrying
 `sender`/`members`), `REPLICATE`/`REPLICATE_ACK` (document writes, carrying a
@@ -333,8 +339,9 @@ write batch, carrying a `txReplication` payload of per-collection replication en
 and the 2PC control messages `PREPARE_TX`/`PREPARE_TX_ACK` (carrying the participant set for
 cooperative termination), `COMMIT_TX`/`COMMIT_TX_ACK`, `ABORT_TX`/`ABORT_TX_ACK`, and
 `TX_STATUS`/`TX_STATUS_ACK` (reporting `COMMITTED`/`ABORTED`/`PREPARED`/`UNKNOWN`), all
-keyed by `txSessionId`/`txId`. Inbound messages whose `secret` does not match
-`clusterSecret` are rejected.
+keyed by `txSessionId`/`txId`. `LIST_TX`/`LIST_TX_ACK` reports a node's in-doubt (PREPARED)
+transactions in an `inDoubtTransactions` payload for the cluster-wide `LIST_TRANSACTIONS`
+aggregation. Inbound messages whose `secret` does not match `clusterSecret` are rejected.
 
 ## Configuration reference
 

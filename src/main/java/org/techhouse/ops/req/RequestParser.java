@@ -80,6 +80,7 @@ public final class RequestParser {
                 case COMMIT_TRANSACTION -> eJson.fromJson(message, CommitTransactionRequest.class);
                 case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
                 case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
+                case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

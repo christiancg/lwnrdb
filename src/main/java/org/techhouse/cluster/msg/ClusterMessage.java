@@ -30,6 +30,9 @@ public class ClusterMessage {
     private String txStatus;
     // A committed transaction's atomic write batch on a REPLICATE_TX message.
     private TxReplicationPayload txReplication;
+    // This node's in-doubt (PREPARED) distributed transactions on a LIST_TX_ACK, aggregated cluster-wide by
+    // the node handling a LIST_TRANSACTIONS request.
+    private List<InDoubtTx> inDoubtTransactions;
     private String errorMessage;
 
     public ClusterMessage() {
@@ -154,6 +157,14 @@ public class ClusterMessage {
 
     public void setTxReplication(TxReplicationPayload txReplication) {
         this.txReplication = txReplication;
+    }
+
+    public List<InDoubtTx> getInDoubtTransactions() {
+        return inDoubtTransactions;
+    }
+
+    public void setInDoubtTransactions(List<InDoubtTx> inDoubtTransactions) {
+        this.inDoubtTransactions = inDoubtTransactions;
     }
 
     public String getErrorMessage() {

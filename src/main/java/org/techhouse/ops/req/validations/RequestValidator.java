@@ -60,7 +60,8 @@ public class RequestValidator {
             case STOP_LISTEN -> validateStopListen((StopListenRequest) request);
             // Transaction control operations carry no db/coll/payload of their own — the transaction is
             // scoped to the connection. Authentication is still enforced in MessageProcessor.
-            case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION -> ValidationResult.ok();
+            case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, LIST_TRANSACTIONS ->
+                ValidationResult.ok();
             case RESOLVE_TRANSACTION -> validateResolveTransaction((ResolveTransactionRequest) request);
         };
     }

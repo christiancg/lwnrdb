@@ -393,6 +393,36 @@ public class TransactionClusterIntegrationTest {
         assertNull(clientTracker.getActiveTransaction(clientId));
     }
 
+    // ---------- LIST_TX in-doubt discovery ----------
+
+    @Test
+    public void test_list_tx_returns_local_in_doubt() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:7000",
+                List.of("127.0.0.1:7000", serverAddress().toString()),
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        final var message = new ClusterMessage(null, ClusterMessageType.LIST_TX, SECRET, node("self", serverPort),
+                null);
+        final var response = pool.request(serverAddress(), message, 2000);
+        assertEquals(ClusterMessageType.LIST_TX_ACK, response.getType());
+        assertNotNull(response.getInDoubtTransactions());
+        assertEquals(1, response.getInDoubtTransactions().size());
+        final var tx = response.getInDoubtTransactions().getFirst();
+        assertEquals(dtxId, tx.getDtxId());
+        assertEquals("127.0.0.1:7000", tx.getCoordinator());
+        assertEquals("PREPARED", tx.getStatus());
+        assertTrue(tx.getParticipants().contains(serverAddress().toString()));
+    }
+
+    @Test
+    public void test_list_tx_returns_empty_when_none() throws Exception {
+        final var message = new ClusterMessage(null, ClusterMessageType.LIST_TX, SECRET, node("self", serverPort),
+                null);
+        final var response = pool.request(serverAddress(), message, 2000);
+        assertEquals(ClusterMessageType.LIST_TX_ACK, response.getType());
+        assertTrue(response.getInDoubtTransactions().isEmpty());
+    }
+
     // ---------- owner-side durable resolution & no-session paths ----------
 
     @Test

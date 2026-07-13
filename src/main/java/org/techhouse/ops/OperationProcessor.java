@@ -53,6 +53,7 @@ import org.techhouse.ops.resp.DropIndexResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
+import org.techhouse.ops.resp.ListTransactionsResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -68,6 +69,8 @@ public class OperationProcessor {
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final org.techhouse.cluster.Tx2pcCoordinator tx2pcCoordinator = IocContainer
             .get(org.techhouse.cluster.Tx2pcCoordinator.class);
+    private final org.techhouse.cluster.Tx2pcDirectory tx2pcDirectory = IocContainer
+            .get(org.techhouse.cluster.Tx2pcDirectory.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -120,6 +123,7 @@ public class OperationProcessor {
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
             case RESOLVE_TRANSACTION -> processResolveTransaction((ResolveTransactionRequest) operationRequest);
+            case LIST_TRANSACTIONS -> processListTransactions();
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
@@ -572,6 +576,14 @@ public class OperationProcessor {
     private OperationResponse processResolveTransaction(ResolveTransactionRequest request) {
         final var commit = ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision());
         return tx2pcCoordinator.forceResolve(request.getDtxId(), commit);
+    }
+
+    private OperationResponse processListTransactions() {
+        try {
+            return new ListTransactionsResponse("Ok", tx2pcDirectory.listInDoubtClusterWide());
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LIST_TRANSACTIONS, ErrorCode.ERROR_TRANSACTION);
+        }
     }
 
     private OperationResponse processStopListenOperation(StopListenRequest request) {

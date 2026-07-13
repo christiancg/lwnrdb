@@ -60,6 +60,11 @@ public class RequestValidatorTest {
     }
 
     @Test
+    public void validate_listTransactions_returnsOk() {
+        assertTrue(RequestValidator.validate(new org.techhouse.ops.req.ListTransactionsRequest()).isValid());
+    }
+
+    @Test
     public void validate_listDatabases_returnsOk() {
         assertTrue(RequestValidator.validate(new ListDatabasesRequest()).isValid());
     }

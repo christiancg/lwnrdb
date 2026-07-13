@@ -33,6 +33,7 @@ public class ClusterConnectionHandler implements Runnable {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
+    private final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
@@ -90,6 +91,7 @@ public class ClusterConnectionHandler implements Runnable {
             case COMMIT_TX -> handleCommitTx(request);
             case ABORT_TX -> handleAbortTx(request);
             case TX_STATUS -> handleTxStatus(request);
+            case LIST_TX -> handleListTx();
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
             default -> {
@@ -241,6 +243,20 @@ public class ClusterConnectionHandler implements Runnable {
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to read transaction status: " + e.getMessage());
+        }
+        return response;
+    }
+
+    // Reports this node's own in-doubt (PREPARED) distributed transactions for a cluster-wide
+    // LIST_TRANSACTIONS aggregation.
+    private ClusterMessage handleListTx() {
+        final var response = new ClusterMessage();
+        try {
+            response.setType(ClusterMessageType.LIST_TX_ACK);
+            response.setInDoubtTransactions(tx2pcDirectory.localInDoubt());
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to list in-doubt transactions: " + e.getMessage());
         }
         return response;
     }
