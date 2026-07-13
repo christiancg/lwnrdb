@@ -769,6 +769,132 @@
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
       "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.IndexKind",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.Transaction",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.data.WriteVersion",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ListTransactionsRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.ResolveTransactionRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ListTransactionsResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.ResolveTransactionResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.NodeInfo",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.NodeState",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ClusterMessage",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ClusterMessageType",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ReplicationPayload",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.ReplicationOp",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.AntiEntropyPayload",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.DigestEntry",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.TxReplicationPayload",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.InDoubtTx",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.cluster.msg.AdminSnapshotPayload",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
     }
   ]
 }
