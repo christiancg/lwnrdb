@@ -941,6 +941,10 @@
       "allDeclaredConstructors": true
     },
     {
+      "type": "org.techhouse.cluster.TransactionSessionReaper",
+      "allDeclaredConstructors": true
+    },
+    {
       "type": "org.techhouse.cluster.membership.MembershipService",
       "allDeclaredConstructors": true
     },
