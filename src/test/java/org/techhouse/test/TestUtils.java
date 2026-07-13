@@ -145,6 +145,7 @@ public class TestUtils {
     public static void resetClients() throws NoSuchFieldException, IllegalAccessException {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
+        setPrivateField(clientTracker, "txSessions", new ConcurrentHashMap<>());
     }
 
     public static void releaseAllLocks() throws NoSuchFieldException, IllegalAccessException {

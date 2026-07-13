@@ -21,6 +21,7 @@ public final class DatabaseStatsHelper {
         try {
             final var stats = new JsonObject();
             stats.add("memory", buildMemoryStats());
+            stats.add("inDoubtTransactions", buildInDoubtTransactions());
 
             final var dbNames = cache.getUserDatabaseNames();
             final var dbArray = new JsonArray();
@@ -35,6 +36,20 @@ public final class DatabaseStatsHelper {
         } catch (Exception e) {
             return new OperationResponse(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS);
         }
+    }
+
+    // In-doubt distributed transactions still holding this node's write locks (a prepared 2PC participant
+    // whose coordinator has not yet delivered a decision), so an operator can spot them and, if needed,
+    // force a resolution with RESOLVE_TRANSACTION.
+    private static JsonObject buildInDoubtTransactions() {
+        final var inDoubt = new JsonObject();
+        final var ids = new JsonArray();
+        for (final var dtxId : Tx2pcLog.preparedDtxIds()) {
+            ids.add(new org.techhouse.ejson.elements.JsonString(dtxId));
+        }
+        inDoubt.addProperty("count", (long) ids.size());
+        inDoubt.add("ids", ids);
+        return inDoubt;
     }
 
     private static JsonObject buildMemoryStats() {

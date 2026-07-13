@@ -57,6 +57,42 @@ public class EJsonTest {
         public Integer nullableNumber;
     }
 
+    // A null collection field must deserialize as null rather than failing the whole object
+    @Test
+    public void test_null_collection_field_deserializes_as_null() {
+        EJson eJson = new EJson();
+
+        TestWithList obj = new TestWithList();
+        obj.name = "n";
+        obj.items = null;
+
+        String json = eJson.toJson(obj);
+        TestWithList result = eJson.fromJson(json, TestWithList.class);
+
+        assertNotNull(result);
+        assertEquals("n", result.name);
+        assertNull(result.items);
+    }
+
+    // A populated collection field still round-trips
+    @Test
+    public void test_populated_collection_field_round_trips() {
+        EJson eJson = new EJson();
+
+        TestWithList obj = new TestWithList();
+        obj.name = "n";
+        obj.items = java.util.List.of("a", "b");
+
+        TestWithList result = eJson.fromJson(eJson.toJson(obj), TestWithList.class);
+
+        assertEquals(java.util.List.of("a", "b"), result.items);
+    }
+
+    private static final class TestWithList {
+        public String name;
+        public java.util.List<String> items;
+    }
+
     // Serialize basic Java objects to JSON strings using toJson()
     @Test
     public void test_serialize_basic_java_objects() {

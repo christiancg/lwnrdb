@@ -83,6 +83,11 @@ public class Transaction {
         return overlay.get(collId);
     }
 
+    // The collection identifiers the transaction has buffered writes for.
+    public Set<String> touchedCollections() {
+        return overlay.keySet();
+    }
+
     public static boolean isTombstone(JsonObject doc) {
         return doc == TOMBSTONE;
     }

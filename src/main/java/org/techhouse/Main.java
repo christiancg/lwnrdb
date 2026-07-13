@@ -7,6 +7,15 @@ import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.cluster.AdminAntiEntropyService;
+import org.techhouse.cluster.AdminEpoch;
+import org.techhouse.cluster.AntiEntropyService;
+import org.techhouse.cluster.ClusterConfig;
+import org.techhouse.cluster.ClusterServer;
+import org.techhouse.cluster.TransactionSessionReaper;
+import org.techhouse.cluster.Tx2pcRecovery;
+import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.SocketServer;
@@ -30,6 +39,16 @@ public class Main {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
+    private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
+    private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
+    private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
+            .get(AdminAntiEntropyService.class);
+    private static final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
+    private static final TransactionSessionReaper transactionSessionReaper = IocContainer
+            .get(TransactionSessionReaper.class);
+    private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -58,11 +77,41 @@ public class Main {
         memoryManagement.startSweepThread();
         warnIfXmxExceedsMaxMemory();
         warnIfDefaultAdminPassword();
+        startClusterIfEnabled();
         // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
         // not lazily on the first client connection.
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
         server.serve();
+    }
+
+    private static void startClusterIfEnabled() {
+        if (!clusterConfig.isEnabled()) {
+            return;
+        }
+        try {
+            final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
+            final var clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(),
+                    factory);
+            clusterServer.start();
+            adminEpoch.load();
+            membershipService.addListener(ownershipManager);
+            // Register the admin listener before the document one so a rejoining node conforms its structure
+            // (databases/collections/indexes/users) before the document reconciliation repopulates them.
+            membershipService.addListener(adminAntiEntropyService);
+            membershipService.addListener(antiEntropyService);
+            membershipService.addListener(transactionSessionReaper);
+            membershipService.addListener(tx2pcRecovery);
+            membershipService.start();
+            ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
+            adminAntiEntropyService.start();
+            antiEntropyService.start();
+            tx2pcRecovery.recover();
+            tx2pcRecovery.start();
+        } catch (IOException e) {
+            logger.fatal("Failed to start the cluster server", e);
+            throw new RuntimeException("Failed to start the cluster server", e);
+        }
     }
 
     // A transaction only lives while its connection is open, so any operation records still in

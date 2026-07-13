@@ -36,6 +36,7 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
@@ -52,6 +53,7 @@ import org.techhouse.ops.resp.DropIndexResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
+import org.techhouse.ops.resp.ListTransactionsResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -65,6 +67,10 @@ public class OperationProcessor {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final org.techhouse.cluster.Tx2pcCoordinator tx2pcCoordinator = IocContainer
+            .get(org.techhouse.cluster.Tx2pcCoordinator.class);
+    private final org.techhouse.cluster.Tx2pcDirectory tx2pcDirectory = IocContainer
+            .get(org.techhouse.cluster.Tx2pcDirectory.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -79,7 +85,12 @@ public class OperationProcessor {
                 && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
         }
-        return switch (operationRequest.getType()) {
+        final var adminGuard = ClusterAdminHelper.guard(operationRequest);
+        if (adminGuard != null) {
+            return adminGuard;
+        }
+        final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
+        final var response = switch (operationRequest.getType()) {
             case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction);
             case SAVE -> processSaveOperation((SaveRequest) operationRequest, activeTransaction);
             case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest, activeTransaction);
@@ -111,7 +122,10 @@ public class OperationProcessor {
             case START_TRANSACTION -> TransactionOperationHelper.start(clientId);
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
+            case RESOLVE_TRANSACTION -> processResolveTransaction((ResolveTransactionRequest) operationRequest);
+            case LIST_TRANSACTIONS -> processListTransactions();
         };
+        return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
 
     private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction) {
@@ -120,9 +134,14 @@ public class OperationProcessor {
         if (activeTransaction != null) {
             return TransactionOperationHelper.bufferBulkSave(bulkSaveRequest, activeTransaction);
         }
+        final var guardError = ClusterWriteHelper.guard(OperationType.BULK_SAVE, dbName, collName);
+        if (guardError != null) {
+            return guardError;
+        }
         try {
             locks.lock(dbName, collName);
-            return SaveOperationHelper.executeBulkSave(bulkSaveRequest);
+            return ClusterWriteHelper.afterBulkSave(dbName, collName,
+                    SaveOperationHelper.executeBulkSave(bulkSaveRequest));
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
         } finally {
@@ -136,9 +155,13 @@ public class OperationProcessor {
         if (activeTransaction != null) {
             return TransactionOperationHelper.bufferSave(saveRequest, activeTransaction);
         }
+        final var guardError = ClusterWriteHelper.guard(OperationType.SAVE, dbName, collName);
+        if (guardError != null) {
+            return guardError;
+        }
         try {
             locks.lock(dbName, collName);
-            return SaveOperationHelper.executeSave(saveRequest);
+            return ClusterWriteHelper.afterSave(dbName, collName, SaveOperationHelper.executeSave(saveRequest));
         } catch (Exception exception) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
         } finally {
@@ -241,9 +264,14 @@ public class OperationProcessor {
         if (activeTransaction != null) {
             return TransactionOperationHelper.bufferDelete(deleteRequest, activeTransaction);
         }
+        final var guardError = ClusterWriteHelper.guard(OperationType.DELETE, dbName, collName);
+        if (guardError != null) {
+            return guardError;
+        }
         try {
             locks.lock(dbName, collName);
-            return DeleteOperationHelper.executeDelete(deleteRequest);
+            return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                    DeleteOperationHelper.executeDelete(deleteRequest));
         } catch (Exception exception) {
             return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         } finally {
@@ -542,6 +570,19 @@ public class OperationProcessor {
             return new OperationResponse(OperationType.LISTEN, ErrorCode.ERROR_LISTEN);
         } finally {
             locks.releaseReadLocks(readLocks);
+        }
+    }
+
+    private OperationResponse processResolveTransaction(ResolveTransactionRequest request) {
+        final var commit = ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision());
+        return tx2pcCoordinator.forceResolve(request.getDtxId(), commit);
+    }
+
+    private OperationResponse processListTransactions() {
+        try {
+            return new ListTransactionsResponse("Ok", tx2pcDirectory.listInDoubtClusterWide());
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LIST_TRANSACTIONS, ErrorCode.ERROR_TRANSACTION);
         }
     }
 

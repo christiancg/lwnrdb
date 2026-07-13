@@ -63,6 +63,23 @@ public class ConfigReaderTest {
         expectedConfig.put("tlsEnabled", "false");
         expectedConfig.put("tlsKeystorePath", "certs/lwnrdb.p12");
         expectedConfig.put("tlsKeystorePassword", "change_it");
+        expectedConfig.put("clusterEnabled", "false");
+        expectedConfig.put("clusterPort", "9990");
+        expectedConfig.put("clusterBindAddress", "0.0.0.0");
+        expectedConfig.put("clusterAdvertisedAddress", "127.0.0.1");
+        expectedConfig.put("clusterSeeds", "");
+        expectedConfig.put("nodeId", "");
+        expectedConfig.put("clusterExpectedSize", "1");
+        expectedConfig.put("gossipIntervalMs", "1000");
+        expectedConfig.put("suspectTimeoutMs", "5000");
+        expectedConfig.put("deadTimeoutMs", "15000");
+        expectedConfig.put("replicationAckTimeoutMs", "5000");
+        expectedConfig.put("virtualNodesPerNode", "128");
+        expectedConfig.put("readFallbackToLocal", "true");
+        expectedConfig.put("clusterTlsEnabled", "false");
+        expectedConfig.put("clusterSecret", "");
+        expectedConfig.put("antiEntropyIntervalMs", "60000");
+        expectedConfig.put("tombstoneRetentionMs", "86400000");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

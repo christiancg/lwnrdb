@@ -35,12 +35,13 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 ## Pending tasks
 
-- [ ] Replication between nodes (no master-slave arch; all nodes are equal; no sharding)
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
+- [ ] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant 
 - [x] Use GraalVM to generate native executable
+- [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
 - [x] Transactions
 - [x] Vector type support
@@ -295,6 +296,19 @@ Returned even when there are no results: in analyze mode an empty result set sti
 {"type":"DROP_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
 ```
 
+#### `REINDEX`
+Rebuilds field indexes from the authoritative document store (recovers from a background-processing failure that left an index stale).
+`fieldNames` is optional; omit it to rebuild every registered index on the collection, or pass a subset to rebuild only those.
+Requires `READ_WRITE`.
+```json
+{"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","fieldNames":["email"]}
+```
+The response lists the fields that were rebuilt:
+```json
+{"type":"REINDEX","status":"OK","message":"Rebuilt 1 index(es)","rebuiltFields":["email"]}
+```
+Returns `404-6` if a named field has no registered index.
+
 #### `LISTEN`
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
@@ -381,6 +395,41 @@ Discards the buffered operations (nothing is written to the real collections), r
 {"type":"ROLLBACK_TRANSACTION"}
 ```
 `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` return `409-4` if no transaction is open.
+
+##### `LIST_TRANSACTIONS` (admin only)
+Discovers in-doubt distributed (2PC) transactions **cluster-wide** — the ones that have prepared but not yet resolved because their coordinator was lost.
+Runs only when clustering is enabled (standalone returns this node's local view). It fans a query out to every live member and aggregates the results by distributed-transaction id.
+This is the diagnostic input to `RESOLVE_TRANSACTION`.
+```json
+{"type":"LIST_TRANSACTIONS"}
+```
+Response (`transactions` is the aggregated list; each row describes one stuck transaction):
+```json
+{
+  "type": "LIST_TRANSACTIONS",
+  "status": "OK",
+  "transactions": [
+    {
+      "dtxId": "<uuid>",
+      "coordinator": "10.0.0.11:9990",
+      "coordinatorReachable": false,
+      "participants": ["10.0.0.12:9990", "10.0.0.13:9990"],
+      "ageMs": 42000,
+      "perNodeStatus": {"10.0.0.12:9990": "PREPARED", "10.0.0.13:9990": "PREPARED"}
+    }
+  ]
+}
+```
+
+##### `RESOLVE_TRANSACTION` (admin only)
+Manually forces the outcome of an in-doubt distributed transaction identified by `dtxId` (from `LIST_TRANSACTIONS`). `decision` must be `"commit"` or `"abort"`; the decision is broadcast to all members so every participant applies it. Use only after confirming the correct outcome — see [docs/clustering.md](docs/clustering.md).
+```json
+{"type":"RESOLVE_TRANSACTION","dtxId":"<uuid>","decision":"commit"}
+```
+```json
+{"type":"RESOLVE_TRANSACTION","status":"OK","message":"Transaction committed"}
+```
+Returns `400-1` if `dtxId` is missing or `decision` is not `commit`/`abort`.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -601,6 +650,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-4` | `ERROR` | No active transaction for this connection |
 | `409-5` | `ERROR` | Could not acquire the collection lock in time; transaction aborted |
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
+| `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -625,7 +675,13 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-22` | `ERROR` | Error while gathering database stats |
 | `500-23` | `ERROR` | Error while processing listen operation |
 | `500-24` | `ERROR` | Error while processing transaction operation |
+| `421-1` | `ERROR` | This node is not the owner of the target collection |
+| `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
+| `503-2` | `ERROR` | Cluster does not have a write quorum |
+| `503-3` | `ERROR` | Timed out waiting for the replication quorum |
+| `503-4` | `ERROR` | The collection's owner node is unreachable |
+| `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 
 ### Bootstrap
 
@@ -656,6 +712,23 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
 | `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true` |
+| `clusterEnabled` | `true` or `false`. Master switch for multi-node clustering. When `false` the node runs standalone (default) |
+| `clusterPort` | Valid number 1–65535, different from `port`. Node-to-node channel |
+| `clusterBindAddress` | Interface the cluster server binds to |
+| `clusterAdvertisedAddress` | Non-blank address other nodes use to reach this node |
+| `clusterSeeds` | Comma-separated `host:port` seeds to join through (empty on the first node) |
+| `nodeId` | Stable node id; empty = auto-generate and persist under `filePath/cluster/node.id` |
+| `clusterExpectedSize` | Valid number ≥ 1. Baseline for the write-quorum majority until membership stabilizes |
+| `gossipIntervalMs` | Valid number ≥ 1. Gossip/heartbeat cadence |
+| `suspectTimeoutMs` | Valid number ≥ 1. Silence before a node is marked SUSPECT |
+| `deadTimeoutMs` | Valid number ≥ 1, greater than `suspectTimeoutMs`. Silence before a node is marked DEAD |
+| `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
+| `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
+| `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
+| `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
+| `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
+| `antiEntropyIntervalMs` | Valid number ≥ 1. How often each node runs a background anti-entropy sweep reconciling its collections against live peers |
+| `tombstoneRetentionMs` | Valid number ≥ 1. How long delete tombstones are kept before anti-entropy GC; must exceed the longest expected node downtime |
 
 ```
 # the port the server listens on
@@ -698,6 +771,35 @@ it. Replace it with a proper keystore before running in production.
 
 When `tlsEnabled=false` (the default) the server listens in plaintext exactly as
 before.
+
+### Clustering (multi-node)
+
+> **Experimental.** Full design, implementation details, and the operations runbook
+> live in [docs/clustering.md](docs/clustering.md). With `clusterEnabled=false` (the
+> default) the node behaves exactly as a standalone server.
+
+LWNRDB can run as a cluster of fully-replicated nodes with a **distributed cache**:
+every collection is consistent-hashed to an **owner node** (there is no single
+master — ownership is spread across all nodes), and a client may connect to any
+node. Nodes discover each other from a **seed list** and then **gossip** full
+membership and heartbeats over a dedicated `clusterPort`, detecting failures by
+missed heartbeats.
+
+To form a cluster, enable it on each node and point new nodes at one or more
+seeds:
+
+```
+clusterEnabled=true
+clusterPort=9990
+clusterAdvertisedAddress=10.0.0.11      # this node's reachable address
+clusterSeeds=10.0.0.10:9990             # an existing node (empty on the first node)
+clusterSecret=change_this_shared_secret
+```
+
+The node-to-node channel uses the same line-delimited JSON transport as clients,
+authenticated with `clusterSecret` and optionally encrypted with
+`clusterTlsEnabled` (which reuses the PKCS12 keystore machinery — all nodes must
+share the same keystore for the TLS cluster channel to establish).
 
 ### Memory management
 

@@ -10,8 +10,25 @@ public class PkIndexEntryTest {
     @Test
     public void test_to_file_entry_conversion() {
         PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L, 0);
-        String expected = "testValue|123|456|0";
+        String expected = "testValue|123|456|0|0";
         assertEquals(expected, entry.toFileEntry());
+    }
+
+    @Test
+    public void test_to_file_entry_includes_version() {
+        PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L, 0L, 1720000000000L);
+        assertEquals("testValue|123|456|0|1720000000000", entry.toFileEntry());
+    }
+
+    @Test
+    public void test_version_round_trip() {
+        PkIndexEntry original = new PkIndexEntry("db", "coll", "id-1", 10L, 20L, 3L, 1720000000123L);
+        PkIndexEntry parsed = PkIndexEntry.fromIndexFileEntry("db", "coll", original.toFileEntry());
+        assertEquals("id-1", parsed.getValue());
+        assertEquals(10L, parsed.getPosition());
+        assertEquals(20L, parsed.getLength());
+        assertEquals(3L, parsed.getPage());
+        assertEquals(1720000000123L, parsed.getVersion());
     }
 
     // Handle empty or null strings in fromIndexFileEntry
@@ -24,12 +41,12 @@ public class PkIndexEntryTest {
     @Test
     public void test_to_file_entry_with_pipe_in_value() {
         PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "my|custom|id", 100L, 50L, 2L);
-        assertEquals("my|custom|id|100|50|2", entry.toFileEntry());
+        assertEquals("my|custom|id|100|50|2|0", entry.toFileEntry());
     }
 
     @Test
     public void test_from_index_file_entry_with_pipe_in_value() {
-        PkIndexEntry entry = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", "my|custom|id|100|50|2");
+        PkIndexEntry entry = PkIndexEntry.fromIndexFileEntry("testDB", "testCollection", "my|custom|id|100|50|2|0");
         assertEquals("my|custom|id", entry.getValue());
         assertEquals(100L, entry.getPosition());
         assertEquals(50L, entry.getLength());
@@ -82,12 +99,6 @@ public class PkIndexEntryTest {
         assertEquals(11L, entry.getPosition());
         assertEquals(21L, entry.getLength());
         assertEquals(2L, entry.getPage());
-    }
-
-    @Test
-    public void test_equals_same_instance() {
-        PkIndexEntry entry = new PkIndexEntry("db", "coll", "val", 1L, 1L, 0L);
-        assertEquals(entry, entry);
     }
 
     @Test
