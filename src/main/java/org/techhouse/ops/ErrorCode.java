@@ -8,7 +8,12 @@ public enum ErrorCode {
                             "Cannot delete the last admin user", OperationStatus.ERROR), CANNOT_DEMOTE_LAST_ADMIN(
                                     "400-5", "Cannot demote the last admin user",
                                     OperationStatus.ERROR), CURRENT_PASSWORD_INCORRECT("400-6",
-                                            "Current password is incorrect", OperationStatus.ERROR),
+                                            "Current password is incorrect",
+                                            OperationStatus.ERROR), SCHEMA_VALIDATION_FAILED("400-7",
+                                                    "Document does not comply with the collection schema",
+                                                    OperationStatus.ERROR), INVALID_SCHEMA("400-8",
+                                                            "The provided JSON schema is not valid",
+                                                            OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(
@@ -30,7 +35,21 @@ public enum ErrorCode {
 
     // ── 409 Conflict ──────────────────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",
-            "Database already exists", OperationStatus.ERROR),
+            "Database already exists", OperationStatus.ERROR), TRANSACTION_ALREADY_ACTIVE("409-3",
+                    "A transaction is already in progress for this connection",
+                    OperationStatus.ERROR), NO_ACTIVE_TRANSACTION("409-4", "No active transaction for this connection",
+                            OperationStatus.ERROR), TRANSACTION_LOCK_TIMEOUT("409-5",
+                                    "Could not acquire the collection lock in time; transaction aborted",
+                                    OperationStatus.ERROR), OPERATION_NOT_ALLOWED_IN_TRANSACTION("409-6",
+                                            "Operation not allowed while a transaction is open",
+                                            OperationStatus.ERROR), TRANSACTION_ABORTED("409-7",
+                                                    "Transaction aborted: a participant could not prepare",
+                                                    OperationStatus.ERROR),
+
+    // ── 421 Misdirected (cluster routing) ─────────────────────────────────
+    NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection",
+            OperationStatus.ERROR), CROSS_OWNER_TRANSACTION("421-2",
+                    "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
 
     // ── 500 Internal Server Error ─────────────────────────────────────────
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR), ERROR_CREATING_USER("500-2",
@@ -84,10 +103,23 @@ public enum ErrorCode {
                                                                                                                                                                             OperationStatus.ERROR), ERROR_LISTEN(
                                                                                                                                                                                     "500-23",
                                                                                                                                                                                     "Error while processing listen operation",
-                                                                                                                                                                                    OperationStatus.ERROR),
+                                                                                                                                                                                    OperationStatus.ERROR), ERROR_TRANSACTION(
+                                                                                                                                                                                            "500-24",
+                                                                                                                                                                                            "Error while processing transaction operation",
+                                                                                                                                                                                            OperationStatus.ERROR), ERROR_SAVING_SCHEMA(
+                                                                                                                                                                                                    "500-25",
+                                                                                                                                                                                                    "Error while saving collection schema",
+                                                                                                                                                                                                    OperationStatus.ERROR), ERROR_DELETING_SCHEMA(
+                                                                                                                                                                                                            "500-26",
+                                                                                                                                                                                                            "Error while deleting collection schema",
+                                                                                                                                                                                                            OperationStatus.ERROR),
 
     // ── 503 Service Unavailable ───────────────────────────────────────────
-    MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR);
+    MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",
+            "Cluster does not have a write quorum", OperationStatus.ERROR), REPLICATION_TIMEOUT("503-3",
+                    "Timed out waiting for the replication quorum", OperationStatus.ERROR), OWNER_UNREACHABLE("503-4",
+                            "The collection's owner node is unreachable", OperationStatus.ERROR), ADMIN_SYNCING("503-5",
+                                    "Admin coordinator is synchronizing, retry shortly", OperationStatus.ERROR);
 
     private final String code;
     private final String defaultMessage;

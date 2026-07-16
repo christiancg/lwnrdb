@@ -18,7 +18,7 @@ public class AdminPageEntry extends DbEntry {
     }
 
     public AdminPageEntry(String dbName, String collectionName, long page) {
-        setDatabaseName(Globals.ADMIN_DB_NAME);
+        setDatabaseName(Globals.ADMIN_PAGES_DB_NAME);
         setCollectionName(String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collectionName));
         this.page = page;
         set_id(buildId(dbName, collectionName, page));

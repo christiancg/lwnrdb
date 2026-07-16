@@ -20,7 +20,9 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
@@ -43,11 +45,12 @@ public class RequestValidator {
             case AGGREGATE -> validateAggregate((AggregateRequest) request);
             case CREATE_DATABASE, DROP_DATABASE -> validateDbOnly(request, true);
             case LIST_DATABASES, CLOSE_CONNECTION, GET_DATABASE_STATS -> ValidationResult.ok();
-            case CREATE_COLLECTION, DROP_COLLECTION -> validateDbAndColl(request, true);
+            case CREATE_COLLECTION, DROP_COLLECTION, DELETE_SCHEMA -> validateDbAndColl(request, true);
             case LIST_COLLECTIONS -> validateDbOnly(request, false);
             case CREATE_INDEX -> validateCreateIndex((CreateIndexRequest) request);
             case DROP_INDEX -> validateDropIndex((DropIndexRequest) request);
             case REINDEX -> validateReindex((ReindexRequest) request);
+            case SAVE_SCHEMA -> validateSaveSchema((SaveSchemaRequest) request);
             case AUTHENTICATE -> validateAuthenticate((AuthenticateRequest) request);
             case CREATE_USER -> validateCreateUser((CreateUserRequest) request);
             case DELETE_USER -> validateDeleteUser((DeleteUserRequest) request);
@@ -57,7 +60,23 @@ public class RequestValidator {
             case SET_PASSWORD -> validateSetPassword((SetPasswordRequest) request);
             case LISTEN -> validateListen((ListenRequest) request);
             case STOP_LISTEN -> validateStopListen((StopListenRequest) request);
+            // Transaction control operations carry no db/coll/payload of their own — the transaction is
+            // scoped to the connection. Authentication is still enforced in MessageProcessor.
+            case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, LIST_TRANSACTIONS ->
+                ValidationResult.ok();
+            case RESOLVE_TRANSACTION -> validateResolveTransaction((ResolveTransactionRequest) request);
         };
+    }
+
+    private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {
+        if (request.getDtxId() == null || request.getDtxId().isBlank()) {
+            return ValidationResult.fail("dtxId is required");
+        }
+        if (!ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision())
+                && !ResolveTransactionRequest.DECISION_ABORT.equals(request.getDecision())) {
+            return ValidationResult.fail("decision must be 'commit' or 'abort'");
+        }
+        return ValidationResult.ok();
     }
 
     private static ValidationResult validateDbOnly(OperationRequest request, boolean rejectAdmin) {
@@ -172,6 +191,17 @@ public class RequestValidator {
         return ValidationResult.ok();
     }
 
+    private static ValidationResult validateSaveSchema(SaveSchemaRequest request) {
+        final var base = validateDbAndColl(request, true);
+        if (!base.isValid()) {
+            return base;
+        }
+        if (request.getSchema() == null || request.getSchema().isEmpty()) {
+            return ValidationResult.fail("SAVE_SCHEMA request requires a non-empty schema object");
+        }
+        return ValidationResult.ok();
+    }
+
     private static ValidationResult validateDropIndex(DropIndexRequest request) {
         final var base = validateDbAndColl(request, true);
         if (!base.isValid()) {
@@ -196,6 +226,10 @@ public class RequestValidator {
         return ValidationResult.ok();
     }
 
+    private static boolean isReservedDbName(String dbName) {
+        return Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
+    }
+
     private static ValidationResult validateDbName(String dbName, boolean rejectAdmin) {
         if (dbName == null || dbName.isBlank()) {
             return ValidationResult.fail("databaseName is required");
@@ -203,8 +237,8 @@ public class RequestValidator {
         if (!dbName.matches(NAME_PATTERN)) {
             return ValidationResult.fail("databaseName must be 3-64 alphanumeric characters, underscores, or hyphens");
         }
-        if (rejectAdmin && Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+        if (rejectAdmin && isReservedDbName(dbName)) {
+            return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
         }
         return ValidationResult.ok();
     }
@@ -338,8 +372,8 @@ public class RequestValidator {
         if (databasePermissions != null) {
             for (var entry : databasePermissions.entrySet()) {
                 final var dbName = entry.getKey();
-                if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-                    return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+                if (isReservedDbName(dbName)) {
+                    return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
                     return ValidationResult.fail(
@@ -361,8 +395,8 @@ public class RequestValidator {
                 }
                 final var dbName = parts[0];
                 final var collName = parts[1];
-                if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-                    return ValidationResult.fail("databaseName '" + Globals.ADMIN_DB_NAME + "' is reserved");
+                if (isReservedDbName(dbName)) {
+                    return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
                 }
                 if (!dbName.matches(NAME_PATTERN)) {
                     return ValidationResult.fail(

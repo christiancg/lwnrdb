@@ -18,6 +18,10 @@ public class DbEntry {
     // Pre-update byte size for the corresponding file entry. Only set for updates,
     // so that page-size accounting can compute the size delta after an update.
     private long previousByteSize;
+    // Last-write-wins version (epoch millis), assigned by the coordinating owner and persisted in the PK
+    // index. Not part of the document data or of equality; threaded through the write path for replication
+    // and anti-entropy.
+    private long version;
 
     public static DbEntry fromJsonObject(String databaseName, String collectionName, JsonObject jsonObject) {
         final var entry = new DbEntry();
@@ -100,6 +104,14 @@ public class DbEntry {
 
     public void setPreviousByteSize(long previousByteSize) {
         this.previousByteSize = previousByteSize;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
     }
 
     @Override

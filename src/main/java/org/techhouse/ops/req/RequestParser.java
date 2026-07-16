@@ -65,6 +65,8 @@ public final class RequestParser {
                 case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
                 case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
                 case REINDEX -> eJson.fromJson(message, ReindexRequest.class);
+                case SAVE_SCHEMA -> eJson.fromJson(message, SaveSchemaRequest.class);
+                case DELETE_SCHEMA -> eJson.fromJson(message, DeleteSchemaRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
                 case AUTHENTICATE -> eJson.fromJson(message, AuthenticateRequest.class);
                 case CREATE_USER -> eJson.fromJson(message, CreateUserRequest.class);
@@ -76,6 +78,11 @@ public final class RequestParser {
                 case GET_DATABASE_STATS -> eJson.fromJson(message, GetDatabaseStatsRequest.class);
                 case LISTEN -> parseListenRequest(message);
                 case STOP_LISTEN -> eJson.fromJson(message, StopListenRequest.class);
+                case START_TRANSACTION -> eJson.fromJson(message, StartTransactionRequest.class);
+                case COMMIT_TRANSACTION -> eJson.fromJson(message, CommitTransactionRequest.class);
+                case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
+                case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
+                case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

@@ -9,6 +9,7 @@ import java.net.Socket;
 import java.util.UUID;
 import javax.net.ssl.SSLException;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
@@ -17,8 +18,10 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
@@ -30,6 +33,7 @@ public class MessageProcessor implements Runnable {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private final Logger logger = Logger.logFor(MessageProcessor.class);
     private final Socket socket;
     private final UUID clientId;
@@ -51,6 +55,7 @@ public class MessageProcessor implements Runnable {
                 while (!close) {
                     final var message = reader.readLine();
                     if (message == null) {
+                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
                         listenManager.unregisterAllForClient(clientId);
                         clientTracker.removeById(clientId);
                         break;
@@ -73,6 +78,7 @@ public class MessageProcessor implements Runnable {
                                     final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
                                     if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                         close = true;
+                                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
                                         listenManager.unregisterAllForClient(clientId);
                                         clientTracker.removeById(clientId);
                                     }
@@ -93,29 +99,14 @@ public class MessageProcessor implements Runnable {
                                                 response = eJson
                                                         .toJson(new OperationResponse(type, ErrorCode.NO_PERMISSIONS));
                                             } else {
-                                                // The query timer brackets only processing: it starts after
-                                                // parsing/validation/authorization and stops right after the
-                                                // operation returns. Only AGGREGATE with analyze=true is timed.
-                                                final var analyze = parsedMessage instanceof AggregateRequest aggReq
-                                                        && aggReq.isAnalyze();
-                                                final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;
-                                                final var responseObj = operationProcessor.processMessage(parsedMessage,
-                                                        clientId);
-                                                if (analyze
-                                                        && responseObj instanceof AggregateAnalyzeResponse analyzeResp
-                                                        && analyzeResp.getAnalyzeResult() != null) {
-                                                    final var analyzeEnd = System.currentTimeMillis();
-                                                    final var analyzeResult = analyzeResp.getAnalyzeResult();
-                                                    analyzeResult.setStartTime(analyzeStart);
-                                                    analyzeResult.setEndTime(analyzeEnd);
-                                                    analyzeResult.setDurationMillis(analyzeEnd - analyzeStart);
-                                                }
-                                                if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
+                                                final var handled = handleAuthorized(parsedMessage, message, clientId);
+                                                response = handled.response();
+                                                if (handled.close()) {
                                                     close = true;
+                                                    TransactionOperationHelper.cleanupOnDisconnect(clientId);
                                                     listenManager.unregisterAllForClient(clientId);
                                                     clientTracker.removeById(clientId);
                                                 }
-                                                response = eJson.toJson(responseObj);
                                             }
                                         }
                                     }
@@ -151,15 +142,51 @@ public class MessageProcessor implements Runnable {
         } catch (SSLException e) {
             // A plaintext or otherwise incompatible client failed the TLS handshake; drop it quietly.
             if (clientId != null) {
+                TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 clientTracker.removeById(clientId);
             }
             logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
             if (clientId != null) {
+                TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 listenManager.unregisterAllForClient(clientId);
                 clientTracker.removeById(clientId);
             }
             logger.error("General error in MessageProcessor", e);
         }
+    }
+
+    private record Handled(String response, boolean close) {
+    }
+
+    // Runs an authenticated+authorized operation: forwards it to the collection's owner when clustering
+    // routes it elsewhere (relaying the owner's response JSON), otherwise executes it locally. The query
+    // timer brackets only local processing (parse/validate/authorize already done); only AGGREGATE with
+    // analyze=true is timed.
+    private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
+        // Enforce the collection schema before the write is committed or forwarded, so a non-compliant
+        // document never reaches any node's collection (schemas are replicated to every node).
+        final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
+        if (schemaError != null) {
+            return new Handled(eJson.toJson(schemaError), false);
+        }
+        final var forwarded = clusterRouter.forward(parsedMessage, rawMessage,
+                clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
+                clientId);
+        if (forwarded != null) {
+            return new Handled(forwarded, false);
+        }
+        final var analyze = parsedMessage instanceof AggregateRequest aggReq && aggReq.isAnalyze();
+        final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;
+        final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
+        if (analyze && responseObj instanceof AggregateAnalyzeResponse analyzeResp
+                && analyzeResp.getAnalyzeResult() != null) {
+            final var analyzeEnd = System.currentTimeMillis();
+            final var analyzeResult = analyzeResp.getAnalyzeResult();
+            analyzeResult.setStartTime(analyzeStart);
+            analyzeResult.setEndTime(analyzeEnd);
+            analyzeResult.setDurationMillis(analyzeEnd - analyzeStart);
+        }
+        return new Handled(eJson.toJson(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION);
     }
 }

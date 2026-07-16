@@ -114,6 +114,9 @@ public class ReflectionUtils {
 
     public static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue, Type genericType) throws Exception {
         final var jsonType = fieldValue.getJsonType();
+        if (jsonType == JsonBaseElement.JsonType.NULL) {
+            return null;
+        }
         final var jsonValue = switch (jsonType) {
             case ARRAY -> fieldValue.asJsonArray();
             case OBJECT -> fieldValue.asJsonObject();

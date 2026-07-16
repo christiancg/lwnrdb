@@ -942,11 +942,11 @@ public class FileSystemTest {
 
         List<String> fileLines = Arrays.asList(
                 "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0",
                 "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0",
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0",
                 "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0");
+                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0");
         Files.write(path, fileLines);
 
         // Act
@@ -1018,6 +1018,35 @@ public class FileSystemTest {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
         assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
+    }
+
+    // The reserved ADMIN_PAGES_DB_NAME namespace resolves physically to the admin/pages subfolder,
+    // and its data/index files live inside it (and NOT flat under admin/).
+    @Test
+    public void test_pages_namespace_resolves_under_admin_pages_folder() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createAdminDatabase();
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "rdb", "coll");
+        fileSystem.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+
+        DbEntry entry = new DbEntry();
+        entry.set_id("1");
+        entry.setDatabaseName(Globals.ADMIN_PAGES_DB_NAME);
+        entry.setCollectionName(pagesCollName);
+        entry.setData(new JsonObject());
+        entry.setPage(0);
+        fileSystem.insertIntoCollection(entry);
+
+        final var nestedFolder = new File(TestGlobals.PATH + File.separator + Globals.ADMIN_DB_NAME + File.separator
+                + Globals.ADMIN_PAGES_FOLDER + File.separator + pagesCollName);
+        assertTrue(nestedFolder.isDirectory(), "page collection must live under admin/pages/<db>_<coll>");
+        assertTrue(new File(nestedFolder, pagesCollName + "-0" + Globals.DB_FILE_EXTENSION).exists());
+        final var flatFolder = new File(
+                TestGlobals.PATH + File.separator + Globals.ADMIN_DB_NAME + File.separator + pagesCollName);
+        assertFalse(flatFolder.exists(), "no flat admin/<db>_<coll> folder should exist");
+        assertEquals(1L, fileSystem.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)
+                .flatMap(m -> m.keySet().stream()).filter("1"::equals).count());
     }
 
     // findPkIndexEntry returns matching entry from configured path
@@ -1128,7 +1157,7 @@ public class FileSystemTest {
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
                 + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
         // Append a second line for the same id with a different (later) position.
-        Files.writeString(indexFile.toPath(), "\ndup|172|172|0", StandardCharsets.UTF_8,
+        Files.writeString(indexFile.toPath(), "\ndup|172|172|0|0", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
 
         final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
@@ -1664,5 +1693,27 @@ public class FileSystemTest {
         assertEquals("short", readValueFromDisk(fs, "c"));
         final var disk = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(disk.stream().noneMatch(p -> p.getValue().equals("b")), "'b' must be removed from the index");
+    }
+
+    @Test
+    public void test_compactTombstones_dedups_and_drops_old() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "keep", 1000L);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "keep", 2000L);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", 100L);
+        fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 500L);
+        final var tombstones = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(1, tombstones.size());
+        assertEquals(2000L, tombstones.get("keep"));
+        assertNull(tombstones.get("old"));
+    }
+
+    @Test
+    public void test_compactTombstones_missing_file_is_noop() throws Exception {
+        final var fs = new FileSystem();
+        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        fs.compactTombstones(TestGlobals.DB, "noSuchColl", 0L);
+        assertTrue(fs.readTombstones(TestGlobals.DB, "noSuchColl").isEmpty());
     }
 }

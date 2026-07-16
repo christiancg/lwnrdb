@@ -130,7 +130,25 @@ public class ConfigurationTest {
         map.put("defaultAdminUsername", "admin");
         map.put("defaultAdminPassword", "administrator");
         map.put("maxMemory", "512mb");
+        map.put("transactionLockTimeoutMs", "5000");
         map.put("tlsEnabled", "false");
+        map.put("clusterEnabled", "false");
+        map.put("clusterPort", "9990");
+        map.put("clusterBindAddress", "0.0.0.0");
+        map.put("clusterAdvertisedAddress", "127.0.0.1");
+        map.put("clusterSeeds", "");
+        map.put("nodeId", "");
+        map.put("clusterExpectedSize", "1");
+        map.put("gossipIntervalMs", "1000");
+        map.put("suspectTimeoutMs", "5000");
+        map.put("deadTimeoutMs", "15000");
+        map.put("replicationAckTimeoutMs", "5000");
+        map.put("virtualNodesPerNode", "128");
+        map.put("readFallbackToLocal", "true");
+        map.put("clusterTlsEnabled", "false");
+        map.put("clusterSecret", "");
+        map.put("antiEntropyIntervalMs", "60000");
+        map.put("tombstoneRetentionMs", "86400000");
         return map;
     }
 
@@ -148,6 +166,7 @@ public class ConfigurationTest {
             assertEquals(7, config.getMaxLogFiles());
             assertEquals(2L * 1024L * 1024L, config.getMaxPageSize());
             assertEquals(1024L * 1024L, config.getMaxEntrySize());
+            assertEquals(5000L, config.getTransactionLockTimeoutMs());
         }
     }
 

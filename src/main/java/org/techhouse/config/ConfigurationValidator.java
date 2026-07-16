@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.IntPredicate;
+import java.util.function.LongPredicate;
 
 public final class ConfigurationValidator {
 
@@ -30,13 +31,110 @@ public final class ConfigurationValidator {
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateMaxMemory(configs, errors);
+        validateLong(configs, "transactionLockTimeoutMs", 1, errors);
         validateTls(configs, errors);
+        validateCluster(configs, errors);
         return errors;
+    }
+
+    private static void validateCluster(Map<String, String> configs, List<String> errors) {
+        validateBoolean(configs, "clusterEnabled", errors);
+        validateBoolean(configs, "clusterTlsEnabled", errors);
+        validateBoolean(configs, "readFallbackToLocal", errors);
+        if (notAnInt(configs.get("clusterPort"), port -> port >= 1 && port <= 65535)) {
+            errors.add(
+                    "clusterPort must be a valid number between 1 and 65535, but was: " + configs.get("clusterPort"));
+        }
+        validateInt(configs, "clusterExpectedSize", 1, errors);
+        validateInt(configs, "virtualNodesPerNode", 1, errors);
+        validateLong(configs, "gossipIntervalMs", 1, errors);
+        validateLong(configs, "suspectTimeoutMs", 1, errors);
+        validateLong(configs, "deadTimeoutMs", 1, errors);
+        validateLong(configs, "replicationAckTimeoutMs", 1, errors);
+        validateLong(configs, "antiEntropyIntervalMs", 1, errors);
+        validateLong(configs, "tombstoneRetentionMs", 1, errors);
+        final var enabledValue = configs.get("clusterEnabled");
+        if (enabledValue == null || isNotBoolean(enabledValue) || !Boolean.parseBoolean(enabledValue.trim())) {
+            return;
+        }
+        validateEnabledClusterConstraints(configs, errors);
+    }
+
+    private static void validateEnabledClusterConstraints(Map<String, String> configs, List<String> errors) {
+        final var suspect = parseLongOrNull(configs.get("suspectTimeoutMs"));
+        final var dead = parseLongOrNull(configs.get("deadTimeoutMs"));
+        if (suspect != null && dead != null && dead <= suspect) {
+            errors.add("deadTimeoutMs (" + dead + ") must be greater than suspectTimeoutMs (" + suspect + ")");
+        }
+        final var port = parseIntOrNull(configs.get("port"));
+        final var clusterPort = parseIntOrNull(configs.get("clusterPort"));
+        if (port != null && clusterPort != null && port.intValue() == clusterPort.intValue()) {
+            errors.add("clusterPort (" + clusterPort + ") must be different from port (" + port + ")");
+        }
+        if (isBlank(configs.get("clusterBindAddress"))) {
+            errors.add("clusterBindAddress must be a non-blank address when clusterEnabled is true");
+        }
+        if (isBlank(configs.get("clusterAdvertisedAddress"))) {
+            errors.add("clusterAdvertisedAddress must be a non-blank address when clusterEnabled is true");
+        }
+        if (isBlank(configs.get("clusterSecret"))) {
+            errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
+        }
+        validateSeeds(configs.get("clusterSeeds"), errors);
+    }
+
+    private static void validateSeeds(String seeds, List<String> errors) {
+        if (seeds == null || seeds.isBlank()) {
+            return;
+        }
+        for (var seed : seeds.split(Globals.CLUSTER_SEED_SEPARATOR)) {
+            final var trimmed = seed.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            final var parts = trimmed.split(Globals.CLUSTER_ADDRESS_SEPARATOR, 2);
+            if (parts.length != 2 || parts[0].isBlank() || notAnInt(parts[1], p -> p >= 1 && p <= 65535)) {
+                errors.add("clusterSeeds entry must be host:port with a port between 1 and 65535, but was: " + trimmed);
+            }
+        }
+    }
+
+    private static void validateBoolean(Map<String, String> configs, String key, List<String> errors) {
+        final var value = configs.get(key);
+        if (value == null || isNotBoolean(value)) {
+            errors.add(key + " must be true or false, but was: " + value);
+        }
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
+    }
+
+    private static Integer parseIntOrNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static Long parseLongOrNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static void validateTls(Map<String, String> configs, List<String> errors) {
         final var enabledValue = configs.get("tlsEnabled");
-        if (enabledValue == null || !isBoolean(enabledValue)) {
+        if (enabledValue == null || isNotBoolean(enabledValue)) {
             errors.add("tlsEnabled must be true or false, but was: " + enabledValue);
             return;
         }
@@ -69,9 +167,9 @@ public final class ConfigurationValidator {
         }
     }
 
-    private static boolean isBoolean(String value) {
+    private static boolean isNotBoolean(String value) {
         final var trimmed = value.trim();
-        return trimmed.equalsIgnoreCase("true") || trimmed.equalsIgnoreCase("false");
+        return !trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false");
     }
 
     private static void validatePort(Map<String, String> configs, List<String> errors) {
@@ -94,6 +192,24 @@ public final class ConfigurationValidator {
         }
         try {
             return !predicate.test(Integer.parseInt(value.trim()));
+        } catch (NumberFormatException e) {
+            return true;
+        }
+    }
+
+    private static void validateLong(Map<String, String> configs, String key, long min, List<String> errors) {
+        final var value = configs.get(key);
+        if (notALong(value, parsed -> parsed >= min)) {
+            errors.add(key + " must be a valid number greater than or equal to " + min + ", but was: " + value);
+        }
+    }
+
+    private static boolean notALong(String value, LongPredicate predicate) {
+        if (value == null) {
+            return true;
+        }
+        try {
+            return !predicate.test(Long.parseLong(value.trim()));
         } catch (NumberFormatException e) {
             return true;
         }

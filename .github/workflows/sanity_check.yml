@@ -96,11 +96,35 @@ jobs:
             run: |
               python3 test_utils/test_listen.py
 
+          # Per-collection JSON Schema validation: SAVE_SCHEMA / DELETE_SCHEMA + write enforcement.
+          - name: schema-validation
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              python3 test_utils/test_schema_validation.py
+
+          # Transactions: START/COMMIT/ROLLBACK, read-your-writes, the table lock
+          # held for the transaction's duration, and auto-rollback on disconnect.
+          - name: transactions
+            start_server: true
+            max_memory: 512mb
+            xmx: 1g
+            run: |
+              python3 test_utils/test_transactions.py
+
           # Self-contained: starts/stops its own TLS server on 9443.
           - name: tls
             start_server: false
             run: |
               python3 test_utils/test_tls.py
+
+          # Self-contained: starts/stops its own 3-node cluster (client ports
+          # 8991-8993, cluster ports 9991-9993), each node in its own work dir.
+          - name: clustering
+            start_server: false
+            run: |
+              python3 test_utils/test_clustering.py
 
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).

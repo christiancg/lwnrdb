@@ -37,6 +37,34 @@ public class RequestValidatorTest {
     }
 
     @Test
+    public void validate_resolveTransaction_valid() {
+        final var request = new org.techhouse.ops.req.ResolveTransactionRequest();
+        request.setDtxId("11111111-1111-1111-1111-111111111111");
+        request.setDecision(org.techhouse.ops.req.ResolveTransactionRequest.DECISION_COMMIT);
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_resolveTransaction_blankDtxId_fails() {
+        final var request = new org.techhouse.ops.req.ResolveTransactionRequest();
+        request.setDecision(org.techhouse.ops.req.ResolveTransactionRequest.DECISION_ABORT);
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_resolveTransaction_badDecision_fails() {
+        final var request = new org.techhouse.ops.req.ResolveTransactionRequest();
+        request.setDtxId("11111111-1111-1111-1111-111111111111");
+        request.setDecision("maybe");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_listTransactions_returnsOk() {
+        assertTrue(RequestValidator.validate(new org.techhouse.ops.req.ListTransactionsRequest()).isValid());
+    }
+
+    @Test
     public void validate_listDatabases_returnsOk() {
         assertTrue(RequestValidator.validate(new ListDatabasesRequest()).isValid());
     }
@@ -75,6 +103,14 @@ public class RequestValidatorTest {
     @Test
     public void validate_createDatabase_adminName_returnsFail() {
         final var result = RequestValidator.validate(new CreateDatabaseRequest("admin"));
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("reserved"));
+    }
+
+    @Test
+    public void validate_createDatabase_adminPagesName_returnsFail() {
+        final var result = RequestValidator
+                .validate(new CreateDatabaseRequest(org.techhouse.config.Globals.ADMIN_PAGES_DB_NAME));
         assertFalse(result.isValid());
         assertTrue(result.getErrorMessage().contains("reserved"));
     }

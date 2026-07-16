@@ -46,6 +46,13 @@ public class AuthorizationCheckerTest {
     }
 
     @Test
+    public void test_list_transactions_admin_only() {
+        final var request = new org.techhouse.ops.req.ListTransactionsRequest();
+        assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
+        assertFalse(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+    }
+
+    @Test
     public void test_create_database_requires_global_permission_allow() {
         final var perms = new HashSet<GlobalPermissionType>();
         perms.add(GlobalPermissionType.CREATE_DATABASE);

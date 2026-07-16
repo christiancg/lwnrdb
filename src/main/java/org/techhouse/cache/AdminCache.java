@@ -18,6 +18,7 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -32,8 +33,14 @@ import org.techhouse.log.Logger;
  */
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
+    // Sentinel meaning "this collection has been checked and has no schema" — lets the schema cache
+    // negatively cache absence (ConcurrentHashMap forbids null values), so an unconstrained collection
+    // costs at most one disk check. An empty schema object can never be stored (SAVE_SCHEMA rejects it),
+    // so reference-identity against this instance is unambiguous.
+    private static final JsonObject NO_SCHEMA = new JsonObject();
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
     private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
     private final Map<String, AdminUserEntry> users = new ConcurrentHashMap<>();
@@ -43,17 +50,25 @@ public class AdminCache {
     private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
+    private final Map<String, JsonObject> collectionSchemas = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         final var pkIndexCollectionUsageEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
         final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         collectionUsagePkIndex.putAll(pkIndexCollectionUsageEntriesMap);
+        final var pkIndexTransactionEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        final var pkIndexTransactionEntriesMap = pkIndexTransactionEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
+        transactionsPkIndex.putAll(pkIndexTransactionEntriesMap);
         final var pkIndexAdminDbEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -107,13 +122,14 @@ public class AdminCache {
     private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, pagesCollName);
+        final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         // The PK index loaded here belongs to pagesCollName (the file on disk that holds the
-        // AdminPageEntries for `collName`). It must be keyed by (admin, pagesCollName) because
+        // AdminPageEntries for `collName`). It must be keyed by (admin_pages, pagesCollName) because
         // that's where insertAdminPages / updateTouchedPagesInFileSystem look it up.
-        pagesPkIndexes.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, pagesCollName), new ArrayList<>(pkIdx));
+        pagesPkIndexes.put(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
+                new ArrayList<>(pkIdx));
         final var pageEntries = new ArrayList<AdminPageEntry>();
-        try (var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, pagesCollName)) {
+        try (var pagesStream = fs.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)) {
             pagesStream.forEach(map -> map.values().stream()
                     .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
         }
@@ -127,12 +143,12 @@ public class AdminCache {
         for (var e : byPage.entrySet()) {
             final var pageNum = e.getKey();
             final var pkList = e.getValue();
-            final var entry = new AdminPageEntry(Globals.ADMIN_DB_NAME, collName, pageNum);
+            final var entry = new AdminPageEntry(Globals.ADMIN_PAGES_DB_NAME, collName, pageNum);
             entry.setEntryCount(pkList.size());
             entry.setPageSize(pkList.stream().mapToLong(PkIndexEntry::getLength).sum());
             entries.add(entry);
         }
-        pages.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, collName), entries);
+        pages.put(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName), entries);
     }
 
     private Map<String, DbEntry> readWholeAdminCollection(String collName) throws IOException {
@@ -223,7 +239,7 @@ public class AdminCache {
     /**
      * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
      * the given admin collection, dispatching to the matching PK structure (databases, collections,
-     * users, collection_usage, or a {@code pages_*} collection). Every cached entry on {@code page}
+     * users, collection_usage, or a page-metadata collection). Every cached entry on {@code page}
      * whose position is greater than {@code removedPosition} shifted toward the start of the file by
      * {@code removedLength}; entries are mutated in place.
      */
@@ -234,8 +250,10 @@ public class AdminCache {
             case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> entries = collectionsPkIndex.values();
             case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
             case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
+            case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> entries = transactionsPkIndex.values();
             case null, default -> {
-                final var list = pagesPkIndexes.get(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, collName));
+                final var list = pagesPkIndexes
+                        .get(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName));
                 entries = list != null ? list : List.of();
             }
         }
@@ -316,6 +334,46 @@ public class AdminCache {
         return collection.getIndexes();
     }
 
+    // Returns the collection's cached JSON Schema, or null when the collection has none. Loads lazily
+    // from disk on first access and negatively caches absence (NO_SCHEMA), so an unconstrained
+    // collection is only read from disk once.
+    public JsonObject getCollectionSchema(String dbName, String collName) {
+        final var id = Cache.getCollectionIdentifier(dbName, collName);
+        var cached = collectionSchemas.get(id);
+        if (cached == null) {
+            cached = loadSchemaFromDisk(dbName, collName);
+            collectionSchemas.put(id, cached);
+        }
+        return cached == NO_SCHEMA ? null : cached;
+    }
+
+    private JsonObject loadSchemaFromDisk(String dbName, String collName) {
+        try {
+            final var raw = fs.readCollectionSchema(dbName, collName);
+            if (raw == null || raw.isBlank()) {
+                return NO_SCHEMA;
+            }
+            return eJson.fromJson(raw, JsonObject.class);
+        } catch (Exception e) {
+            logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
+                    + e.getMessage());
+            return NO_SCHEMA;
+        }
+    }
+
+    public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
+        collectionSchemas.put(Cache.getCollectionIdentifier(dbName, collName), schema);
+    }
+
+    public void removeCollectionSchema(String dbName, String collName) {
+        collectionSchemas.remove(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public void removeCollectionSchemasForDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        collectionSchemas.keySet().removeIf(id -> id.startsWith(prefix));
+    }
+
     public AdminUserEntry getAdminUserEntry(String username) {
         return users.get(username);
     }
@@ -352,5 +410,21 @@ public class AdminCache {
 
     public Map<String, PkIndexEntry> getCollectionUsagePkIndexes() {
         return collectionUsagePkIndex;
+    }
+
+    public PkIndexEntry getPkIndexTransaction(String opId) {
+        return transactionsPkIndex.get(opId);
+    }
+
+    public void putPkIndexTransaction(PkIndexEntry indexEntry) {
+        transactionsPkIndex.put(indexEntry.getValue(), indexEntry);
+    }
+
+    public void removePkIndexTransaction(String opId) {
+        transactionsPkIndex.remove(opId);
+    }
+
+    public Map<String, PkIndexEntry> getTransactionPkIndexes() {
+        return transactionsPkIndex;
     }
 }

@@ -67,10 +67,12 @@ public class FileSystem {
 
     public void createAdminDatabase() throws IOException {
         createDatabaseFolder(Globals.ADMIN_DB_NAME);
+        createAdminPagesFolder();
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
+        createCollectionFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         final var pagesDatabases = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pagesCollections = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
@@ -79,10 +81,22 @@ public class FileSystem {
                 Globals.ADMIN_USERS_COLLECTION_NAME);
         final var pagesCollectionUsage = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesDatabases);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollections);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesUsers);
-        createCollectionFile(Globals.ADMIN_DB_NAME, pagesCollectionUsage);
+        final var pagesTransactions = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesDatabases);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollections);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesUsers);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollectionUsage);
+        createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTransactions);
+    }
+
+    // Create the nested admin/pages parent up front (per-collection folders below are mkdir'd one level deep).
+    private void createAdminPagesFolder() {
+        final var pagesFolder = new File(dbPath + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME
+                + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER);
+        if (!pagesFolder.exists() && !pagesFolder.mkdirs()) {
+            throw new DirectoryNotFoundException(pagesFolder.getAbsolutePath());
+        }
     }
 
     public boolean createDatabaseFolder(String dbName) {
@@ -115,13 +129,23 @@ public class FileSystem {
         return false;
     }
 
+    // The reserved logical db name ADMIN_PAGES_DB_NAME maps to the physical admin/pages subfolder;
+    // all physical paths funnel through the three builders below, so this is the only translation point.
+    private String resolveDbPathSegment(String dbName) {
+        if (Globals.ADMIN_PAGES_DB_NAME.equals(dbName)) {
+            return Globals.ADMIN_DB_NAME + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER;
+        }
+        return dbName;
+    }
+
     private File getCollectionFolder(String dbName, String collectionName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName);
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName);
     }
 
     private File getCollectionFile(String dbName, String collectionName, long page) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName
-                + Globals.FILE_SEPARATOR + collectionName + Globals.FILE_PAGE_SEPARATOR + page
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.FILE_PAGE_SEPARATOR + page
                 + Globals.DB_FILE_EXTENSION);
     }
 
@@ -157,9 +181,140 @@ public class FileSystem {
     }
 
     private File getIndexFile(String dbName, String collectionName, String indexName, String indexType) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + dbName + Globals.FILE_SEPARATOR + collectionName
-                + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR + indexName
-                + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + indexName + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
+    }
+
+    private File getTombstoneFile(String dbName, String collectionName) {
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.TOMBSTONE_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
+    }
+
+    private File getSchemaFile(String dbName, String collectionName) {
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.SCHEMA_FILE_NAME + Globals.SCHEMA_FILE_EXTENSION);
+    }
+
+    // Writes (create-or-replace) the collection's single JSON Schema file atomically.
+    public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
+        final var file = getSchemaFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            rewriteFileAtomically(file.toPath(), List.of(schemaJson));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Reads the collection's JSON Schema, or null when the collection has no schema.
+    public String readCollectionSchema(String dbName, String collName) throws IOException {
+        final var file = getSchemaFile(dbName, collName);
+        if (!file.exists()) {
+            return null;
+        }
+        final var lock = fileLock(file).readLock();
+        lock.lock();
+        try {
+            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Deletes the collection's schema file. Returns true when a file was actually removed.
+    public boolean deleteCollectionSchema(String dbName, String collName) {
+        final var file = getSchemaFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            return file.exists() && file.delete();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Appends a delete tombstone (id|version). The file is append-only and deduplicated on read (keeping the
+    // highest version per id); compaction/GC of old tombstones is a later-phase concern.
+    public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {
+        final var file = getTombstoneFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+            writer.append(id).append(Globals.INDEX_ENTRY_SEPARATOR).append(String.valueOf(version));
+            writer.newLine();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Reads the collection's tombstones as id -> highest deleted version. A malformed line is skipped rather
+    // than failing the whole read (mirroring the self-healing index loaders).
+    public Map<String, Long> readTombstones(String dbName, String collName) throws IOException {
+        final var result = new HashMap<String, Long>();
+        final var file = getTombstoneFile(dbName, collName);
+        if (!file.exists()) {
+            return result;
+        }
+        final var lock = fileLock(file).readLock();
+        lock.lock();
+        try {
+            for (final var line : Files.readAllLines(file.toPath())) {
+                final var cleaned = line.trim();
+                final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+                if (sep <= 0) {
+                    continue;
+                }
+                try {
+                    result.merge(cleaned.substring(0, sep), Long.parseLong(cleaned.substring(sep + 1)), Math::max);
+                } catch (NumberFormatException ignored) {
+                    // Skip a torn/malformed tombstone line rather than failing the read.
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+        return result;
+    }
+
+    // Garbage-collects the tombstone file: keeps only the highest version per id and drops any tombstone
+    // older than minVersionToKeep (an epoch-millis cutoff). This both deduplicates the append-only file and
+    // removes fully-converged deletes. A missing/empty file is left untouched.
+    public void compactTombstones(String dbName, String collName, long minVersionToKeep) throws IOException {
+        final var file = getTombstoneFile(dbName, collName);
+        if (!file.exists()) {
+            return;
+        }
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            final var kept = new LinkedHashMap<String, Long>();
+            for (final var line : Files.readAllLines(file.toPath())) {
+                final var cleaned = line.trim();
+                final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+                if (sep <= 0) {
+                    continue;
+                }
+                try {
+                    final var version = Long.parseLong(cleaned.substring(sep + 1));
+                    if (version >= minVersionToKeep) {
+                        kept.merge(cleaned.substring(0, sep), version, Math::max);
+                    }
+                } catch (NumberFormatException ignored) {
+                    // Drop a torn/malformed tombstone line.
+                }
+            }
+            final var lines = new ArrayList<String>(kept.size());
+            for (final var entry : kept.entrySet()) {
+                lines.add(entry.getKey() + Globals.INDEX_ENTRY_SEPARATOR + entry.getValue());
+            }
+            rewriteFileAtomically(file.toPath(), lines);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
@@ -232,7 +387,8 @@ public class FileSystem {
                     final var bytes = strData.getBytes(StandardCharsets.UTF_8);
                     final var length = bytes.length;
                     writer.append(strData);
-                    final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length, page);
+                    final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length, page,
+                            entry.getVersion());
                     pkEntriesToIndex.add(pkEntry);
                     final var indexedEntry = new IndexedDbEntry();
                     indexedEntry.setIndex(pkEntry);
@@ -280,19 +436,19 @@ public class FileSystem {
             writer.append(strData);
             final var entryId = entry.get_id();
             return indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId, totalFileLength, length,
-                    page);
+                    page, entry.getVersion());
         } finally {
             lock.unlock();
         }
     }
 
     private PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length,
-            long page) throws IOException {
+            long page, long version) throws IOException {
         final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
         final var lock = fileLock(indexFile).writeLock();
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-            final var indexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page);
+            final var indexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page, version);
             writer.append(indexEntry.toFileEntry());
             writer.newLine();
             return indexEntry;
@@ -382,7 +538,7 @@ public class FileSystem {
         for (final var entry : entries) {
             final var idx = entry.getIndex();
             working.add(new PkIndexEntry(idx.getDatabaseName(), idx.getCollectionName(), idx.getValue(),
-                    idx.getPosition(), idx.getLength(), idx.getPage()));
+                    idx.getPosition(), idx.getLength(), idx.getPage(), idx.getVersion()));
         }
         for (int i = 0; i < entries.size(); i++) {
             final var entry = entries.get(i);
@@ -438,7 +594,7 @@ public class FileSystem {
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
             entry.setPreviousByteSize(pkIndexEntry.getLength());
             final var updated = updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(),
-                    totalFileLength, length, page);
+                    totalFileLength, length, page, entry.getVersion());
             return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
         } finally {
             lock.unlock();
@@ -446,8 +602,8 @@ public class FileSystem {
     }
 
     private PkIndexEntry updateIndexValues(String dbName, String collectionName, String value, long position,
-            int length, long page) throws IOException {
-        final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page);
+            int length, long page, long version) throws IOException {
+        final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page, version);
         internalUpdatePKIndex(dbName, collectionName, value, newIndexEntry);
         return newIndexEntry;
     }
