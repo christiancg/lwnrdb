@@ -19,6 +19,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -43,6 +44,7 @@ public class AdminAntiEntropyService implements MembershipListener {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
@@ -150,6 +152,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             databases.add(dbEntry.getData());
         }
         final var collections = new ArrayList<JsonObject>();
+        final var schemas = new JsonObject();
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
                 final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
@@ -157,6 +160,10 @@ public class AdminAntiEntropyService implements MembershipListener {
                     final var json = collEntry.getData().deepCopy();
                     json.addProperty(Globals.PK_FIELD, collEntry.get_id());
                     collections.add(json);
+                    final var schema = cache.getCollectionSchema(dbName, collName);
+                    if (schema != null) {
+                        schemas.add(collEntry.get_id(), schema);
+                    }
                 }
             }
         }
@@ -164,7 +171,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         for (final var userEntry : cache.getAllAdminUserEntries()) {
             users.add(userEntry.getData());
         }
-        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users);
+        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas);
     }
 
     private void conform(AdminSnapshotPayload snapshot) throws Exception {
@@ -224,13 +231,15 @@ public class AdminAntiEntropyService implements MembershipListener {
                 continue;
             }
             snapshotColls.add(coll.get_id());
-            conformCollection(dbName, collName, coll.getIndexes());
+            final var schemaEl = snapshot.getSchemas().get(coll.get_id());
+            final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
+            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema);
         }
         return snapshotColls;
     }
 
-    private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes)
-            throws Exception {
+    private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
+            JsonObject desiredSchema) throws Exception {
         locks.lock(dbName, collName);
         try {
             if (cache.getAdminCollectionEntry(dbName, collName) == null) {
@@ -251,8 +260,24 @@ public class AdminAntiEntropyService implements MembershipListener {
                     AdminOperationHelper.deleteIndex(dbName, collName, field);
                 }
             }
+            conformSchema(dbName, collName, desiredSchema);
         } finally {
             locks.release(dbName, collName);
+        }
+    }
+
+    // Converges the collection's schema file/cache to the snapshot: write when different, delete when the
+    // snapshot has none. Idempotent, so the periodic sweep does not rewrite an already-matching schema.
+    private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {
+        final var current = cache.getCollectionSchema(dbName, collName);
+        if (desiredSchema != null) {
+            if (!desiredSchema.equals(current)) {
+                fs.writeCollectionSchema(dbName, collName, eJson.toJson(desiredSchema));
+                cache.putCollectionSchema(dbName, collName, desiredSchema);
+            }
+        } else if (current != null) {
+            fs.deleteCollectionSchema(dbName, collName);
+            cache.removeCollectionSchema(dbName, collName);
         }
     }
 

@@ -65,6 +65,8 @@ public final class RequestParser {
                 case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
                 case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
                 case REINDEX -> eJson.fromJson(message, ReindexRequest.class);
+                case SAVE_SCHEMA -> eJson.fromJson(message, SaveSchemaRequest.class);
+                case DELETE_SCHEMA -> eJson.fromJson(message, DeleteSchemaRequest.class);
                 case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
                 case AUTHENTICATE -> eJson.fromJson(message, AuthenticateRequest.class);
                 case CREATE_USER -> eJson.fromJson(message, CreateUserRequest.class);

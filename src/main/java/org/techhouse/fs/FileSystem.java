@@ -192,6 +192,51 @@ public class FileSystem {
                 + Globals.TOMBSTONE_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
     }
 
+    private File getSchemaFile(String dbName, String collectionName) {
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.SCHEMA_FILE_NAME + Globals.SCHEMA_FILE_EXTENSION);
+    }
+
+    // Writes (create-or-replace) the collection's single JSON Schema file atomically.
+    public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
+        final var file = getSchemaFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            rewriteFileAtomically(file.toPath(), List.of(schemaJson));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Reads the collection's JSON Schema, or null when the collection has no schema.
+    public String readCollectionSchema(String dbName, String collName) throws IOException {
+        final var file = getSchemaFile(dbName, collName);
+        if (!file.exists()) {
+            return null;
+        }
+        final var lock = fileLock(file).readLock();
+        lock.lock();
+        try {
+            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Deletes the collection's schema file. Returns true when a file was actually removed.
+    public boolean deleteCollectionSchema(String dbName, String collName) {
+        final var file = getSchemaFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            return file.exists() && file.delete();
+        } finally {
+            lock.unlock();
+        }
+    }
+
     // Appends a delete tombstone (id|version). The file is append-only and deduplicated on read (keeping the
     // highest version per id); compaction/GC of old tombstones is a later-phase concern.
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {

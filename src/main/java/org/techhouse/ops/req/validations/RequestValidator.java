@@ -22,6 +22,7 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
@@ -44,11 +45,12 @@ public class RequestValidator {
             case AGGREGATE -> validateAggregate((AggregateRequest) request);
             case CREATE_DATABASE, DROP_DATABASE -> validateDbOnly(request, true);
             case LIST_DATABASES, CLOSE_CONNECTION, GET_DATABASE_STATS -> ValidationResult.ok();
-            case CREATE_COLLECTION, DROP_COLLECTION -> validateDbAndColl(request, true);
+            case CREATE_COLLECTION, DROP_COLLECTION, DELETE_SCHEMA -> validateDbAndColl(request, true);
             case LIST_COLLECTIONS -> validateDbOnly(request, false);
             case CREATE_INDEX -> validateCreateIndex((CreateIndexRequest) request);
             case DROP_INDEX -> validateDropIndex((DropIndexRequest) request);
             case REINDEX -> validateReindex((ReindexRequest) request);
+            case SAVE_SCHEMA -> validateSaveSchema((SaveSchemaRequest) request);
             case AUTHENTICATE -> validateAuthenticate((AuthenticateRequest) request);
             case CREATE_USER -> validateCreateUser((CreateUserRequest) request);
             case DELETE_USER -> validateDeleteUser((DeleteUserRequest) request);
@@ -185,6 +187,17 @@ public class RequestValidator {
         }
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateSaveSchema(SaveSchemaRequest request) {
+        final var base = validateDbAndColl(request, true);
+        if (!base.isValid()) {
+            return base;
+        }
+        if (request.getSchema() == null || request.getSchema().isEmpty()) {
+            return ValidationResult.fail("SAVE_SCHEMA request requires a non-empty schema object");
         }
         return ValidationResult.ok();
     }
