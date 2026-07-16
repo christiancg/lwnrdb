@@ -1,107 +1,405 @@
 package org.techhouse.simplejs.internal;
 
-import org.techhouse.simplejs.elements.*;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import org.techhouse.simplejs.elements.JsBaseElement;
+import org.techhouse.simplejs.elements.JsBoolean;
+import org.techhouse.simplejs.elements.JsEOF;
+import org.techhouse.simplejs.elements.JsIdentifier;
+import org.techhouse.simplejs.elements.JsKeyword;
+import org.techhouse.simplejs.elements.JsNull;
+import org.techhouse.simplejs.elements.JsNumber;
+import org.techhouse.simplejs.elements.JsOperator;
+import org.techhouse.simplejs.elements.JsRegex;
+import org.techhouse.simplejs.elements.JsSeparator;
+import org.techhouse.simplejs.elements.JsString;
+import org.techhouse.simplejs.elements.JsTemplateString;
+import org.techhouse.simplejs.elements.JsUndefined;
+import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
+import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
+import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
+import org.techhouse.simplejs.exceptions.UnterminatedStringException;
+import org.techhouse.simplejs.exceptions.UnterminatedTemplateException;
 
 public final class Lexer {
-    private Lexer() {}
-
-    private static final Set<String> JS_KEYWORD = Set.of("if", "do", "while", "for", "in", "of", "switch", "case", "default", "var", "let", "const", "break", "continue", "return", "try", "catch", "finally", "throw", "async", "await", "yield", "function", "import", "export", "this", "constructor", "new", "class");
-    private static final Set<Character> JS_OPERATOR = Set.of('=', '<', '>', '*', '/', '%', '!');
-    private static final Set<Character> JS_SYNTAX = Set.of(',', ';', '.' , '(', ')', '[', ']', '{', '}');
-
-    private Character peek(String sourceCode, int pos) {
-        if (pos >= sourceCode.length()) return null;
-        return sourceCode.charAt(pos);
+    private Lexer() {
     }
 
-    private Character advance(String sourceCode, int pos) {
-        if (pos >= sourceCode.length()) return null;
-        return sourceCode.charAt(pos+1);
+    private static final Set<String> JS_KEYWORD = Set.of("if", "do", "while", "for", "in", "of", "switch", "case",
+            "default", "var", "let", "const", "break", "continue", "return", "try", "catch", "finally", "throw",
+            "async", "await", "yield", "function", "import", "export", "this", "constructor", "new", "class", "else",
+            "typeof", "instanceof", "void", "delete", "extends", "super");
+
+    private static final Set<String> EXPRESSION_END_KEYWORDS = Set.of("this", "super");
+
+    private static final Set<Character> SEPARATORS = Set.of('(', ')', '{', '}', '[', ']', ';', ',');
+
+    private static final List<String> OPERATORS = List.of(">>>=", "...", "===", "!==", ">>>", "**=", "<<=", ">>=",
+            "&&=", "||=", "??=", "=>", "?.", "==", "!=", "<=", ">=", "&&", "||", "??", "**", "++", "--", "+=", "-=",
+            "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "=", "+", "-", "*", "/", "%", "<", ">", "!", "&", "|", "^",
+            "~", "?", ":", ".");
+
+    private record Lexed(JsBaseElement token, int next) {
     }
 
-    public List<JsBaseElement> lex(String sourceCode) {
-        int pos = 0;
-        List<JsBaseElement> tokens = new ArrayList<>();
-
-        while (pos < sourceCode.length()) {
-            Character current = peek(sourceCode, pos);
-
-            // Skip Whitespace
-            if (current != null && Character.isWhitespace(current)) {
-                advance(sourceCode, pos);
-                pos++;
-                continue;
-            } else if (current == null) {
-                break;
-            }
-
-            // Handle Numeric Literals
-            if (Character.isDigit(current)) {
-                StringBuilder sb = new StringBuilder();
-                Character nextChar = peek(sourceCode, pos);
-                if (nextChar != null) {
-                    while (Character.isDigit(nextChar)) {
-                        final var next = advance(sourceCode, pos);
-                        if (next != null) {
-                            sb.append(next);
-                        }
-                        pos++;
-                    }
-                    tokens.add(new JsNumber(Double.parseDouble(sb.toString())));
-                    continue;
-                } else {
-                    break;
-                }
-            }
-
-            // Handle Identifiers & Keywords
-            if (Character.isLetter(current) || current == '_' || current == '$') {
-                StringBuilder sb = new StringBuilder();
-                Character nextChar = peek(sourceCode, pos);
-                if (nextChar != null) {
-                    while (Character.isLetterOrDigit(nextChar) || nextChar == '_' || nextChar == '$') {
-                        final var next = advance(sourceCode, pos);
-                        if (next != null) {
-                            sb.append(next);
-                        }
-                        pos++;
-                    }
-                    String val = sb.toString();
-                    if (JS_KEYWORD.contains(val)) {
-                        tokens.add(new JsKeyword(val));
-                    } else {
-                        tokens.add(new JsIdentifier(val));
-                    }
-                    continue;
-                } else {
-                    break;
-                }
-            }
-
-            // Handle Simple Operators / Separators
-            if (current == '=' || current == '+' || current == '-' || current == '*') {
-                final var next = advance(sourceCode, pos);
-                if (next != null) {
-                    tokens.add(new JsOperator(String.valueOf(next)));
-                }
+    public static List<JsBaseElement> lex(String sourceCode) {
+        final var tokens = new ArrayList<JsBaseElement>();
+        final var n = sourceCode.length();
+        var pos = 0;
+        JsBaseElement last = null;
+        while (pos < n) {
+            final var c = sourceCode.charAt(pos);
+            if (Character.isWhitespace(c)) {
                 pos++;
                 continue;
             }
-            if (current == ';' || current == '(' || current == ')' || current == '{' || current == '}') {
-                final var next = advance(sourceCode, pos);
-                if (next != null) {
-                    pos++;
-                    tokens.add(new JsSeparator(next));
-                }
+            if (c == '/' && pos + 1 < n && (sourceCode.charAt(pos + 1) == '/' || sourceCode.charAt(pos + 1) == '*')) {
+                pos = skipComment(sourceCode, pos);
                 continue;
             }
-            throw new RuntimeException("Unknown character: " + current);
+            final Lexed lexed;
+            if (c == '"' || c == '\'') {
+                lexed = lexString(sourceCode, pos);
+            } else if (c == '`') {
+                lexed = lexTemplate(sourceCode, pos);
+            } else if (Character.isDigit(c)
+                    || (c == '.' && pos + 1 < n && Character.isDigit(sourceCode.charAt(pos + 1)))) {
+                lexed = lexNumber(sourceCode, pos);
+            } else if (Character.isLetter(c) || c == '_' || c == '$') {
+                lexed = lexWord(sourceCode, pos);
+            } else if (c == '/' && startsRegex(last)) {
+                lexed = lexRegex(sourceCode, pos);
+            } else {
+                final var op = lexOperator(sourceCode, pos);
+                if (op != null) {
+                    lexed = op;
+                } else if (SEPARATORS.contains(c)) {
+                    lexed = new Lexed(new JsSeparator(c), pos + 1);
+                } else {
+                    throw new UnexpectedCharacterException(c, pos);
+                }
+            }
+            tokens.add(lexed.token());
+            last = lexed.token();
+            pos = lexed.next();
         }
         tokens.add(JsEOF.getInstance());
         return tokens;
+    }
+
+    private static int skipComment(String src, int start) {
+        final var n = src.length();
+        if (src.charAt(start + 1) == '/') {
+            var i = start + 2;
+            while (i < n && src.charAt(i) != '\n') {
+                i++;
+            }
+            return i;
+        }
+        var i = start + 2;
+        while (i + 1 < n) {
+            if (src.charAt(i) == '*' && src.charAt(i + 1) == '/') {
+                return i + 2;
+            }
+            i++;
+        }
+        throw new UnterminatedCommentException(start);
+    }
+
+    private static Lexed lexString(String src, int start) {
+        final var quote = src.charAt(start);
+        final var n = src.length();
+        final var builder = new StringBuilder();
+        var i = start + 1;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (c == '\\') {
+                if (i + 1 >= n) {
+                    break;
+                }
+                i = appendEscape(src, i + 1, builder);
+            } else if (c == quote) {
+                return new Lexed(new JsString(builder.toString()), i + 1);
+            } else {
+                builder.append(c);
+                i++;
+            }
+        }
+        throw new UnterminatedStringException(start);
+    }
+
+    private static int appendEscape(String src, int i, StringBuilder builder) {
+        final var e = src.charAt(i);
+        switch (e) {
+            case 'n' -> builder.append('\n');
+            case 't' -> builder.append('\t');
+            case 'r' -> builder.append('\r');
+            case 'b' -> builder.append('\b');
+            case 'f' -> builder.append('\f');
+            case 'v' -> builder.append('\u000B');
+            case '0' -> builder.append('\0');
+            case '\n' -> {
+                return i + 1;
+            }
+            case '\r' -> {
+                return i + 1 < src.length() && src.charAt(i + 1) == '\n' ? i + 2 : i + 1;
+            }
+            case 'x' -> {
+                if (i + 2 < src.length()) {
+                    builder.append((char) Integer.parseInt(src.substring(i + 1, i + 3), 16));
+                    return i + 3;
+                }
+                builder.append(e);
+            }
+            case 'u' -> {
+                return appendUnicodeEscape(src, i, builder);
+            }
+            default -> builder.append(e);
+        }
+        return i + 1;
+    }
+
+    private static int appendUnicodeEscape(String src, int i, StringBuilder builder) {
+        final var n = src.length();
+        if (i + 1 < n && src.charAt(i + 1) == '{') {
+            final var end = src.indexOf('}', i + 2);
+            if (end > 0) {
+                builder.appendCodePoint(Integer.parseInt(src.substring(i + 2, end), 16));
+                return end + 1;
+            }
+        } else if (i + 4 < n) {
+            builder.append((char) Integer.parseInt(src.substring(i + 1, i + 5), 16));
+            return i + 5;
+        }
+        builder.append('u');
+        return i + 1;
+    }
+
+    private static Lexed lexNumber(String src, int start) {
+        final var n = src.length();
+        if (src.charAt(start) == '0' && start + 1 < n) {
+            final var radix = switch (Character.toLowerCase(src.charAt(start + 1))) {
+                case 'x' -> 16;
+                case 'o' -> 8;
+                case 'b' -> 2;
+                default -> 0;
+            };
+            if (radix != 0) {
+                var j = start + 2;
+                while (j < n && isRadixDigit(src.charAt(j), radix)) {
+                    j++;
+                }
+                final var value = (double) Long.parseLong(src.substring(start + 2, j), radix);
+                return new Lexed(new JsNumber(value), j);
+            }
+        }
+        var j = start;
+        while (j < n && Character.isDigit(src.charAt(j))) {
+            j++;
+        }
+        if (j < n && src.charAt(j) == '.') {
+            j++;
+            while (j < n && Character.isDigit(src.charAt(j))) {
+                j++;
+            }
+        }
+        if (j < n && (src.charAt(j) == 'e' || src.charAt(j) == 'E')) {
+            var k = j + 1;
+            if (k < n && (src.charAt(k) == '+' || src.charAt(k) == '-')) {
+                k++;
+            }
+            if (k < n && Character.isDigit(src.charAt(k))) {
+                k++;
+                while (k < n && Character.isDigit(src.charAt(k))) {
+                    k++;
+                }
+                j = k;
+            }
+        }
+        return new Lexed(new JsNumber(Double.parseDouble(src.substring(start, j))), j);
+    }
+
+    private static boolean isRadixDigit(char c, int radix) {
+        return Character.digit(c, radix) >= 0;
+    }
+
+    private static Lexed lexWord(String src, int start) {
+        final var n = src.length();
+        var i = start;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '_' || c == '$') {
+                i++;
+            } else {
+                break;
+            }
+        }
+        final var word = src.substring(start, i);
+        final JsBaseElement token = switch (word) {
+            case "true" -> new JsBoolean(true);
+            case "false" -> new JsBoolean(false);
+            case "null" -> JsNull.getInstance();
+            case "undefined" -> JsUndefined.getInstance();
+            default -> JS_KEYWORD.contains(word) ? new JsKeyword(word) : new JsIdentifier(word);
+        };
+        return new Lexed(token, i);
+    }
+
+    // A slash begins a regex only when the previous significant token cannot end an
+    // expression; otherwise it is the division operator. This is the standard JS lexer
+    // heuristic for the regex/division ambiguity.
+    private static boolean startsRegex(JsBaseElement last) {
+        if (last == null) {
+            return true;
+        }
+        return switch (last.getType()) {
+            case OPERATOR -> true;
+            case KEYWORD -> !EXPRESSION_END_KEYWORDS.contains(((JsKeyword) last).getValue());
+            case SEPARATOR -> {
+                final var c = ((JsSeparator) last).getValue();
+                yield c != ')' && c != ']' && c != '}';
+            }
+            default -> false;
+        };
+    }
+
+    private static Lexed lexRegex(String src, int start) {
+        final var n = src.length();
+        final var pattern = new StringBuilder();
+        var i = start + 1;
+        var inClass = false;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (c == '\\') {
+                if (i + 1 >= n) {
+                    break;
+                }
+                pattern.append(c).append(src.charAt(i + 1));
+                i += 2;
+            } else if (c == '\n') {
+                break;
+            } else if (c == '[') {
+                inClass = true;
+                pattern.append(c);
+                i++;
+            } else if (c == ']') {
+                inClass = false;
+                pattern.append(c);
+                i++;
+            } else if (c == '/' && !inClass) {
+                i++;
+                final var flags = new StringBuilder();
+                while (i < n && Character.isLetter(src.charAt(i))) {
+                    flags.append(src.charAt(i));
+                    i++;
+                }
+                return new Lexed(new JsRegex(pattern.toString(), flags.toString()), i);
+            } else {
+                pattern.append(c);
+                i++;
+            }
+        }
+        throw new UnterminatedRegexException(start);
+    }
+
+    private static Lexed lexTemplate(String src, int start) {
+        final var n = src.length();
+        final var quasis = new ArrayList<String>();
+        final var expressions = new ArrayList<List<JsBaseElement>>();
+        final var builder = new StringBuilder();
+        var i = start + 1;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (c == '\\') {
+                if (i + 1 >= n) {
+                    break;
+                }
+                i = appendEscape(src, i + 1, builder);
+            } else if (c == '`') {
+                quasis.add(builder.toString());
+                return new Lexed(new JsTemplateString(quasis, expressions), i + 1);
+            } else if (c == '$' && i + 1 < n && src.charAt(i + 1) == '{') {
+                quasis.add(builder.toString());
+                builder.setLength(0);
+                final var close = scanBalancedBraces(src, i + 2, start);
+                expressions.add(lex(src.substring(i + 2, close)));
+                i = close + 1;
+            } else {
+                builder.append(c);
+                i++;
+            }
+        }
+        throw new UnterminatedTemplateException(start);
+    }
+
+    // Finds the closing brace of a `${ ... }` interpolation, skipping over string and
+    // nested template literals so their braces are not miscounted.
+    private static int scanBalancedBraces(String src, int from, int templateStart) {
+        final var n = src.length();
+        var depth = 1;
+        var j = from;
+        while (j < n) {
+            final var c = src.charAt(j);
+            switch (c) {
+                case '{' -> depth++;
+                case '}' -> {
+                    depth--;
+                    if (depth == 0) {
+                        return j;
+                    }
+                }
+                case '\'', '"' -> j = skipStringLiteral(src, j);
+                case '`' -> j = skipTemplateLiteral(src, j, templateStart);
+                default -> {
+                }
+            }
+            j++;
+        }
+        throw new UnterminatedTemplateException(templateStart);
+    }
+
+    private static int skipStringLiteral(String src, int start) {
+        final var quote = src.charAt(start);
+        final var n = src.length();
+        var i = start + 1;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (c == '\\') {
+                i += 2;
+            } else if (c == quote) {
+                return i;
+            } else {
+                i++;
+            }
+        }
+        throw new UnterminatedStringException(start);
+    }
+
+    private static int skipTemplateLiteral(String src, int start, int templateStart) {
+        final var n = src.length();
+        var i = start + 1;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (c == '\\') {
+                i += 2;
+            } else if (c == '`') {
+                return i;
+            } else if (c == '$' && i + 1 < n && src.charAt(i + 1) == '{') {
+                i = scanBalancedBraces(src, i + 2, templateStart) + 1;
+            } else {
+                i++;
+            }
+        }
+        throw new UnterminatedTemplateException(templateStart);
+    }
+
+    private static Lexed lexOperator(String src, int start) {
+        for (final var op : OPERATORS) {
+            if (src.regionMatches(start, op, 0, op.length())) {
+                return new Lexed(new JsOperator(op), start + op.length());
+            }
+        }
+        return null;
     }
 }
