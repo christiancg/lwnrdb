@@ -98,9 +98,14 @@ public class AdminAntiEntropyServiceTest {
     }
 
     private void stubSnapshot(List<JsonObject> dbs, List<JsonObject> colls, List<JsonObject> users) throws Exception {
+        stubSnapshot(dbs, colls, users, new JsonObject());
+    }
+
+    private void stubSnapshot(List<JsonObject> dbs, List<JsonObject> colls, List<JsonObject> users, JsonObject schemas)
+            throws Exception {
         final var ack = new ClusterMessage();
         ack.setType(ClusterMessageType.ADMIN_SNAPSHOT_ACK);
-        ack.setAdminSnapshot(new AdminSnapshotPayload(5L, dbs, colls, users));
+        ack.setAdminSnapshot(new AdminSnapshotPayload(5L, dbs, colls, users, schemas));
         when(mockPool.request(any(), any(), anyLong())).thenReturn(ack);
     }
 
@@ -149,6 +154,41 @@ public class AdminAntiEntropyServiceTest {
                 org.techhouse.test.TestGlobals.COLL);
         assertTrue(indexes.contains("wanted"));
         assertFalse(indexes.contains("stale"));
+    }
+
+    @Test
+    public void test_conform_installs_schema_from_snapshot() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        final var schema = new JsonObject();
+        schema.add("type", new org.techhouse.ejson.elements.JsonString("object"));
+        final var schemas = new JsonObject();
+        schemas.add(
+                Cache.getCollectionIdentifier(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL),
+                schema);
+        stubSnapshot(List.of(dbJson(org.techhouse.test.TestGlobals.DB, List.of())),
+                List.of(collJson(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, Set.of())),
+                List.of(), schemas);
+
+        service.reconcile();
+
+        assertEquals(schema,
+                cache.getCollectionSchema(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL));
+    }
+
+    @Test
+    public void test_conform_removes_schema_absent_from_snapshot() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        final var schema = new JsonObject();
+        schema.add("type", new org.techhouse.ejson.elements.JsonString("object"));
+        cache.putCollectionSchema(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, schema);
+
+        stubSnapshot(List.of(dbJson(org.techhouse.test.TestGlobals.DB, List.of())),
+                List.of(collJson(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, Set.of())),
+                List.of());
+
+        service.reconcile();
+
+        assertNull(cache.getCollectionSchema(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL));
     }
 
     @Test

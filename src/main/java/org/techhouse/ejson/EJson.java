@@ -15,6 +15,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.exceptions.InvalidSchemaException;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
@@ -25,10 +26,16 @@ import org.techhouse.ejson.type_adapters.impl.JsonObjectTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.JsonPrimitiveTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.StringTypeAdapter;
+import org.techhouse.ejson.validate.JsonSchema;
+import org.techhouse.ejson.validate.MetaSchemaValidator;
+import org.techhouse.ejson.validate.SchemaValidationResult;
+import org.techhouse.ejson.validate.SchemaValidator;
 
 public class EJson {
     private final JsonReader reader = new JsonReader();
     private final JsonWriter writer = new JsonWriter();
+    private final MetaSchemaValidator metaSchemaValidator = new MetaSchemaValidator();
+    private final SchemaValidator schemaValidator = new SchemaValidator();
 
     public EJson() {
         registerTypeAdapters();
@@ -95,5 +102,28 @@ public class EJson {
     public <T> String toJson(T obj) {
         final Class<T> clazz = (Class<T>) obj.getClass();
         return writer.toJson(obj, clazz);
+    }
+
+    public SchemaValidationResult validateSchema(JsonObject schema) {
+        return metaSchemaValidator.validate(schema);
+    }
+
+    public SchemaValidationResult validateSchema(String schemaJson) {
+        final JsonObject parsed;
+        try {
+            parsed = reader.fromJson(schemaJson, JsonObject.class);
+        } catch (RuntimeException e) {
+            return SchemaValidationResult.invalid("Schema is not a valid JSON object: " + e.getMessage());
+        }
+        return metaSchemaValidator.validate(parsed);
+    }
+
+    public SchemaValidationResult validateWithSchema(JsonBaseElement instance, JsonObject schema) {
+        final var schemaResult = metaSchemaValidator.validate(schema);
+        if (!schemaResult.isValid()) {
+            throw new InvalidSchemaException(
+                    "Cannot validate against an invalid schema: " + String.join("; ", schemaResult.getErrors()));
+        }
+        return schemaValidator.validate(instance, new JsonSchema(schema));
     }
 }

@@ -164,6 +164,12 @@ public class MessageProcessor implements Runnable {
     // timer brackets only local processing (parse/validate/authorize already done); only AGGREGATE with
     // analyze=true is timed.
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
+        // Enforce the collection schema before the write is committed or forwarded, so a non-compliant
+        // document never reaches any node's collection (schemas are replicated to every node).
+        final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
+        if (schemaError != null) {
+            return new Handled(eJson.toJson(schemaError), false);
+        }
         final var forwarded = clusterRouter.forward(parsedMessage, rawMessage,
                 clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
                 clientId);

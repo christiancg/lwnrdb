@@ -26,6 +26,7 @@ import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
@@ -38,6 +39,7 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
@@ -105,6 +107,8 @@ public class OperationProcessor {
             case CREATE_INDEX -> processCreateIndex((CreateIndexRequest) operationRequest);
             case DROP_INDEX -> processDropIndex((DropIndexRequest) operationRequest);
             case REINDEX -> processReindex((ReindexRequest) operationRequest);
+            case SAVE_SCHEMA -> processSaveSchema((SaveSchemaRequest) operationRequest);
+            case DELETE_SCHEMA -> processDeleteSchema((DeleteSchemaRequest) operationRequest);
             case CLOSE_CONNECTION -> new CloseConnectionResponse();
             case AUTHENTICATE ->
                 UserOperationHelper.processAuthenticate((AuthenticateRequest) operationRequest, clientId);
@@ -542,6 +546,34 @@ public class OperationProcessor {
             return new ReindexResponse("Rebuilt " + targets.size() + " index(es)", targets);
         } catch (Exception e) {
             return new OperationResponse(OperationType.REINDEX, ErrorCode.ERROR_REINDEXING);
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
+    private OperationResponse processSaveSchema(SaveSchemaRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        try {
+            // Hold the collection write lock so the schema file write, cache update and any concurrent
+            // save are serialized (mirrors processCreateIndex); the work itself lives in the helper.
+            locks.lock(dbName, collName);
+            return SchemaOperationHelper.executeSaveSchema(request);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.SAVE_SCHEMA, ErrorCode.ERROR_SAVING_SCHEMA);
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
+    private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        try {
+            locks.lock(dbName, collName);
+            return SchemaOperationHelper.executeDeleteSchema(request);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.DELETE_SCHEMA, ErrorCode.ERROR_DELETING_SCHEMA);
         } finally {
             locks.release(dbName, collName);
         }
