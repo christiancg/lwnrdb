@@ -38,7 +38,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
-  - [ ] Triggers
+  - [ ] Triggers 
+- [x] Use GraalVM to generate native executable
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
 - [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
