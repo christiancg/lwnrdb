@@ -309,6 +309,20 @@
       "unsafeAllocated": true
     },
     {
+      "type": "org.techhouse.ops.req.SaveSchemaRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.req.DeleteSchemaRequest",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
       "type": "org.techhouse.ops.req.SetDatabaseOwnersRequest",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
@@ -751,6 +765,20 @@
     },
     {
       "type": "org.techhouse.ops.resp.SaveResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.SaveSchemaResponse",
+      "allDeclaredFields": true,
+      "allDeclaredMethods": true,
+      "allDeclaredConstructors": true,
+      "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.ops.resp.DeleteSchemaResponse",
       "allDeclaredFields": true,
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
