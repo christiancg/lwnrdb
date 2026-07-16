@@ -146,10 +146,12 @@ public class Cache {
 
     public void evictDatabase(String dbName) {
         userCache.evictDatabase(dbName);
+        adminCache.removeCollectionSchemasForDatabase(dbName);
     }
 
     public void evictCollection(String dbName, String collName) {
         userCache.evictCollection(dbName, collName);
+        adminCache.removeCollectionSchema(dbName, collName);
     }
 
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
@@ -352,6 +354,18 @@ public class Cache {
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {
         return adminCache.getIndexesForCollection(dbName, collName);
+    }
+
+    public JsonObject getCollectionSchema(String dbName, String collName) {
+        return adminCache.getCollectionSchema(dbName, collName);
+    }
+
+    public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
+        adminCache.putCollectionSchema(dbName, collName, schema);
+    }
+
+    public void removeCollectionSchema(String dbName, String collName) {
+        adminCache.removeCollectionSchema(dbName, collName);
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {

@@ -38,9 +38,9 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - [ ] Javascript engine to support additional features 
   - [ ] Stored procedures
   - [ ] Jobs
-  - [ ] Triggers
-- [ ] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant 
+  - [ ] Triggers 
 - [x] Use GraalVM to generate native executable
+- [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
 - [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
 - [x] Transactions
@@ -188,7 +188,9 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 | `SORT` | `fieldName`, `ascending` | |
 
 `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. These steps use only the scalar/custom/null indexes, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)). 
-Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`). Ordering/containment operators (`GREATER_THAN*`, `SMALLER_THAN*`, `CONTAINS`) and the reconstructing steps above cannot use these hash indexes because a hash cannot be ordered or turned back into a value.
+Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`).
+
+A collection may also carry a single JSON Schema stored alongside its data files as `{collection}-schema.json` (see [Schema validation](#schema-validation)). Ordering/containment operators (`GREATER_THAN*`, `SMALLER_THAN*`, `CONTAINS`) and the reconstructing steps above cannot use these hash indexes because a hash cannot be ordered or turned back into a value.
 
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
@@ -256,7 +258,7 @@ Response (the `analyzeResult` object):
 {
   "type": "AGGREGATE",
   "status": "OK",
-  "results": [ ... ],
+  "results": [ "..." ],
   "analyzeResult": {
     "startTime": 1750000000000,
     "endTime": 1750000000012,
@@ -309,6 +311,37 @@ The response lists the fields that were rebuilt:
 ```
 Returns `404-6` if a named field has no registered index.
 
+#### `SAVE_SCHEMA`
+Attaches (create-or-replace) a **JSON Schema (draft 2020-12)** to a collection so that every subsequent `SAVE`/`BULK_SAVE` document must comply (see [Schema validation](#schema-validation)). A collection has **at most one** schema. Requires admin privileges or database ownership.
+```json
+{
+  "type": "SAVE_SCHEMA",
+  "databaseName": "my_db",
+  "collectionName": "my_coll",
+  "schema": {
+    "type": "object",
+    "required": ["name", "age"],
+    "properties": {
+      "name": {"type": "string", "minLength": 1},
+      "age": {"type": "integer", "minimum": 0},
+      "location": {"customType": "geo"}
+    },
+    "additionalProperties": false
+  }
+}
+```
+The response echoes any non-fatal `warnings` (e.g. unrecognized keywords that were ignored):
+```json
+{"type":"SAVE_SCHEMA","status":"OK","message":"Collection schema saved successfully","warnings":[]}
+```
+Returns `400-8` if the supplied schema is not a valid 2020-12 schema.
+
+#### `DELETE_SCHEMA`
+Removes the collection's schema, so writes are no longer validated. Idempotent — returns `OK` whether or not a schema existed. Requires admin privileges or database ownership.
+```json
+{"type":"DELETE_SCHEMA","databaseName":"my_db","collectionName":"my_coll"}
+```
+
 #### `LISTEN`
 
 Subscribe to live query results. The server runs the aggregation once and returns the initial results with a UUID listen ID and a SHA-256 hash of the result set. Whenever documents in the collection change, the server re-runs the query in the background; if the new hash differs from the last sent hash, a push message is sent to the same connection with the updated results.
@@ -332,7 +365,7 @@ Initial response:
   "type": "LISTEN",
   "status": "OK",
   "listenId": "550e8400-e29b-41d4-a716-446655440000",
-  "results": [ ... ],
+  "results": [ "..." ],
   "resultHash": "a3f5...64-hex-chars...d91e"
 }
 ```
@@ -344,7 +377,7 @@ Push message (sent asynchronously when results change):
   "status": "OK",
   "message": "Query results updated",
   "listenId": "550e8400-e29b-41d4-a716-446655440000",
-  "results": [ ... ],
+  "results": [ "..." ],
   "resultHash": "b7c2...64-hex-chars...f308"
 }
 ```
@@ -435,6 +468,22 @@ Returns `400-1` if `dtxId` is missing or `decision` is not `commit`/`abort`.
 ```json
 {"type":"CLOSE_CONNECTION"}
 ```
+
+### Schema validation
+
+A collection can carry a single **JSON Schema (draft 2020-12)** that every write must satisfy. Attach one with [`SAVE_SCHEMA`](#save_schema) and remove it with [`DELETE_SCHEMA`](#delete_schema) (both require admin privileges or database ownership). While a schema is in force, every `SAVE` and `BULK_SAVE` document is validated **before it is committed**, so a non-compliant document never reaches the collection:
+
+- A non-compliant `SAVE` is rejected with `400-7` and the document is not written.
+- A `BULK_SAVE` is **all-or-nothing**: if any document violates the schema the whole batch is rejected with `400-7` (the message names the offending `_id`), and nothing is written.
+- Collections without a schema are unconstrained (existing behaviour is unchanged).
+
+The reserved `_id` field is **excluded** from validation (it is a system-assigned primary key, already format-checked), so a schema with `"additionalProperties": false` does not need to declare it.
+
+**Supported keywords** (a pragmatic subset of 2020-12): `type` (incl. `integer` vs `number`), `enum`, `const`; object — `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`/`maxProperties`, `dependentRequired`, `dependentSchemas`; array — `prefixItems`, `items`, `minItems`/`maxItems`, `uniqueItems`, `contains`/`minContains`/`maxContains`; string — `minLength`/`maxLength`/`pattern`; number — `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`/`multipleOf`; applicators — `allOf`/`anyOf`/`oneOf`/`not`/`if`/`then`/`else`; and local `$ref` (JSON-Pointer references within the same schema, e.g. `#/$defs/foo`) with `$defs`. `format` is accepted but **non-asserting** (annotation only). Metadata keywords (`$schema`, `$id`, `title`, `description`, …) are accepted; any **unrecognized** keyword is ignored but surfaced as a non-fatal `warning` on the `SAVE_SCHEMA` response. Known-but-unimplemented keywords (`unevaluatedProperties`/`unevaluatedItems`, `$dynamicRef`, remote `$ref`, `$vocabulary`) are **rejected** by `SAVE_SCHEMA` (`400-8`) so a schema author is never misled into believing an unenforced constraint applies.
+
+**Custom (EJson) types.** Beyond the standard `type`, a dedicated `customType` keyword asserts one of the extended types (`geo`, `vector`, `datetime`, `time`), e.g. `{"customType":"geo"}` requires a `#geo(lat,lng)` value. Custom-typed values also satisfy `"type":"string"` (they are stored as strings), but only `customType` distinguishes a geo from an arbitrary string.
+
+Schemas are **user data**: each is stored as `{collection}-schema.json` in the collection's folder and cached in memory so validation adds negligible per-write cost. Under clustering they are replicated to every node (the schema op is coordinator-serialized DDL, re-executed on peers) and reconciled by admin anti-entropy, so a node that was down during a `SAVE_SCHEMA`/`DELETE_SCHEMA` catches up on rejoin.
 
 ### Users & Permissions
 
@@ -610,7 +659,7 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
 Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
-Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`.
+Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
 
 ### Authentication errors
 
@@ -633,6 +682,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-4` | `ERROR` | Cannot delete the last admin user |
 | `400-5` | `ERROR` | Cannot demote the last admin user |
 | `400-6` | `ERROR` | Current password is incorrect |
+| `400-7` | `ERROR` | Document does not comply with the collection schema |
+| `400-8` | `ERROR` | The provided JSON schema is not valid |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -675,6 +726,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-22` | `ERROR` | Error while gathering database stats |
 | `500-23` | `ERROR` | Error while processing listen operation |
 | `500-24` | `ERROR` | Error while processing transaction operation |
+| `500-25` | `ERROR` | Error while saving collection schema |
+| `500-26` | `ERROR` | Error while deleting collection schema |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |

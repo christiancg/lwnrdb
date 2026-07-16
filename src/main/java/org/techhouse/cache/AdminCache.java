@@ -18,6 +18,7 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -32,8 +33,14 @@ import org.techhouse.log.Logger;
  */
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
+    // Sentinel meaning "this collection has been checked and has no schema" — lets the schema cache
+    // negatively cache absence (ConcurrentHashMap forbids null values), so an unconstrained collection
+    // costs at most one disk check. An empty schema object can never be stored (SAVE_SCHEMA rejects it),
+    // so reference-identity against this instance is unambiguous.
+    private static final JsonObject NO_SCHEMA = new JsonObject();
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
     private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
     private final Map<String, AdminUserEntry> users = new ConcurrentHashMap<>();
@@ -44,6 +51,7 @@ public class AdminCache {
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
+    private final Map<String, JsonObject> collectionSchemas = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -324,6 +332,46 @@ public class AdminCache {
             return Set.of();
         }
         return collection.getIndexes();
+    }
+
+    // Returns the collection's cached JSON Schema, or null when the collection has none. Loads lazily
+    // from disk on first access and negatively caches absence (NO_SCHEMA), so an unconstrained
+    // collection is only read from disk once.
+    public JsonObject getCollectionSchema(String dbName, String collName) {
+        final var id = Cache.getCollectionIdentifier(dbName, collName);
+        var cached = collectionSchemas.get(id);
+        if (cached == null) {
+            cached = loadSchemaFromDisk(dbName, collName);
+            collectionSchemas.put(id, cached);
+        }
+        return cached == NO_SCHEMA ? null : cached;
+    }
+
+    private JsonObject loadSchemaFromDisk(String dbName, String collName) {
+        try {
+            final var raw = fs.readCollectionSchema(dbName, collName);
+            if (raw == null || raw.isBlank()) {
+                return NO_SCHEMA;
+            }
+            return eJson.fromJson(raw, JsonObject.class);
+        } catch (Exception e) {
+            logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
+                    + e.getMessage());
+            return NO_SCHEMA;
+        }
+    }
+
+    public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
+        collectionSchemas.put(Cache.getCollectionIdentifier(dbName, collName), schema);
+    }
+
+    public void removeCollectionSchema(String dbName, String collName) {
+        collectionSchemas.remove(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public void removeCollectionSchemasForDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        collectionSchemas.keySet().removeIf(id -> id.startsWith(prefix));
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {

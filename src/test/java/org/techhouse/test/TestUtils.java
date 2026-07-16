@@ -55,6 +55,7 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "transactionsPkIndex", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "collectionSchemas", new ConcurrentHashMap<>());
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
         // Drop any tracked clients so leaked test connections can't fill the connection limit and make

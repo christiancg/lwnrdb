@@ -8,7 +8,12 @@ public enum ErrorCode {
                             "Cannot delete the last admin user", OperationStatus.ERROR), CANNOT_DEMOTE_LAST_ADMIN(
                                     "400-5", "Cannot demote the last admin user",
                                     OperationStatus.ERROR), CURRENT_PASSWORD_INCORRECT("400-6",
-                                            "Current password is incorrect", OperationStatus.ERROR),
+                                            "Current password is incorrect",
+                                            OperationStatus.ERROR), SCHEMA_VALIDATION_FAILED("400-7",
+                                                    "Document does not comply with the collection schema",
+                                                    OperationStatus.ERROR), INVALID_SCHEMA("400-8",
+                                                            "The provided JSON schema is not valid",
+                                                            OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(
@@ -101,7 +106,13 @@ public enum ErrorCode {
                                                                                                                                                                                     OperationStatus.ERROR), ERROR_TRANSACTION(
                                                                                                                                                                                             "500-24",
                                                                                                                                                                                             "Error while processing transaction operation",
-                                                                                                                                                                                            OperationStatus.ERROR),
+                                                                                                                                                                                            OperationStatus.ERROR), ERROR_SAVING_SCHEMA(
+                                                                                                                                                                                                    "500-25",
+                                                                                                                                                                                                    "Error while saving collection schema",
+                                                                                                                                                                                                    OperationStatus.ERROR), ERROR_DELETING_SCHEMA(
+                                                                                                                                                                                                            "500-26",
+                                                                                                                                                                                                            "Error while deleting collection schema",
+                                                                                                                                                                                                            OperationStatus.ERROR),
 
     // ── 503 Service Unavailable ───────────────────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",

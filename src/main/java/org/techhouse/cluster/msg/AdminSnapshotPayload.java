@@ -13,16 +13,22 @@ public class AdminSnapshotPayload {
     private List<JsonObject> databases = List.of();
     private List<JsonObject> collections = List.of();
     private List<JsonObject> users = List.of();
+    // Per-collection JSON Schemas, keyed by "db|coll" -> schema object. Only constrained collections
+    // appear; an absent key means the collection has no schema. Defaulted (never null) so a peer on an
+    // older version that omits the field still deserializes to an empty map rather than null.
+    private JsonObject schemas;
 
     public AdminSnapshotPayload() {
+        this.schemas = new JsonObject();
     }
 
     public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
-            List<JsonObject> users) {
+            List<JsonObject> users, JsonObject schemas) {
         this.epoch = epoch;
         this.databases = databases == null ? List.of() : databases;
         this.collections = collections == null ? List.of() : collections;
         this.users = users == null ? List.of() : users;
+        this.schemas = schemas == null ? new JsonObject() : schemas;
     }
 
     public long getEpoch() {
@@ -55,5 +61,13 @@ public class AdminSnapshotPayload {
 
     public void setUsers(List<JsonObject> users) {
         this.users = users == null ? List.of() : users;
+    }
+
+    public JsonObject getSchemas() {
+        return schemas;
+    }
+
+    public void setSchemas(JsonObject schemas) {
+        this.schemas = schemas == null ? new JsonObject() : schemas;
     }
 }
