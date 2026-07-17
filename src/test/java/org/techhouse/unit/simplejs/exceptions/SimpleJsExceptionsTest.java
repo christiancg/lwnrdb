@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
+import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
+import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
 import org.techhouse.simplejs.exceptions.UnterminatedStringException;
@@ -40,5 +42,17 @@ public class SimpleJsExceptionsTest {
     public void test_unterminated_template_message() {
         assertEquals("Unterminated template literal starting at position: 0",
                 new UnterminatedTemplateException(0).getMessage());
+    }
+
+    // Unexpected token message includes the token and index
+    @Test
+    public void test_unexpected_token_message() {
+        assertEquals("Unexpected token } at index: 4", new UnexpectedTokenException("}", 4).getMessage());
+    }
+
+    // Unexpected end of input carries a fixed message
+    @Test
+    public void test_unexpected_end_of_input_message() {
+        assertEquals("Unexpected end of input", new UnexpectedEndOfInputException().getMessage());
     }
 }
