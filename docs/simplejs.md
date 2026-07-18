@@ -190,21 +190,25 @@ expression statements, function declarations, and empty statements.
 `MemberExpression`, `NewExpression`, `FunctionExpression`,
 `ArrowFunctionExpression`.
 
-**Known Phase-1 gaps (closed later):** no newline-based ASI (lexer constraint);
-`in` is treated purely as a binary operator, so a `for (x in y)` header is an
-accepted misparse until Phase 2 adds `for-in`/`for-of`.
+**Known Phase-1 gaps:** no newline-based ASI (lexer constraint). The `for (x in
+y)` header misparse is closed in Phase 2 (the no-in production); newline-based ASI
+remains a lexer constraint.
 
-### Phase 2 — remaining control flow ⬜
+### Phase 2 — remaining control flow ✅
 
-- **`for-in` / `for-of`** — detect `in`/`of` after the loop binding in the `for`
-  header; add `ForInStatement` and `ForOfStatement`. Requires the **"no-in"
-  grammar production** (suppress `in`-as-operator while parsing the header's
-  left-hand side) so `for (a in b)` disambiguates cleanly. This closes the Phase-1
-  `for`-header gap.
+- **`for-in` / `for-of`** — `in`/`of` after the loop binding in the `for` header is
+  detected and produces `ForInStatement` / `ForOfStatement`. The header's
+  left-hand side is parsed under the **"no-in" grammar production** (a `noIn` flag
+  on the parser suppresses `in`-as-operator, cleared again inside any bracketed
+  sub-expression via `withInAllowed`) so `for (a in b)` disambiguates cleanly. The
+  target is validated: a declaration must be a single declarator with no
+  initializer, an expression target must be an `Identifier` or `MemberExpression`.
+  This closes the Phase-1 `for`-header gap.
 - **`try` / `catch` / `finally` / `throw`** — `TryStatement` (block + optional
-  catch clause with optional binding + optional finalizer), `ThrowStatement`,
-  `CatchClause`.
-- **`switch` / `case` / `default`** — `SwitchStatement`, `SwitchCase`.
+  catch clause with optional binding + optional finalizer; at least one of catch /
+  finally is required), `ThrowStatement`, `CatchClause`.
+- **`switch` / `case` / `default`** — `SwitchStatement`, `SwitchCase` (a `null`
+  test marks the `default` clause).
 
 ### Phase 3 — classes ⬜
 

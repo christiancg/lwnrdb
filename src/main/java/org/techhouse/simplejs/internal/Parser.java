@@ -1,9 +1,12 @@
 package org.techhouse.simplejs.internal;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.techhouse.simplejs.elements.JsBaseElement;
 import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsBoolean;
@@ -26,11 +29,14 @@ import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
+import org.techhouse.simplejs.nodes.CatchClause;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.ForInStatement;
+import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
@@ -49,8 +55,12 @@ import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SwitchCase;
+import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThisExpression;
+import org.techhouse.simplejs.nodes.ThrowStatement;
+import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UndefinedLiteral;
 import org.techhouse.simplejs.nodes.UpdateExpression;
@@ -90,6 +100,7 @@ public final class Parser {
     private static final class State {
         private final List<JsBaseElement> tokens;
         private final List<SourcePosition> positions;
+        private final Deque<Boolean> noInStack = new ArrayDeque<>();
         private int pos;
 
         private State(List<JsBaseElement> tokens, List<SourcePosition> positions) {
@@ -125,6 +136,15 @@ public final class Parser {
                     }
                     case "for" -> {
                         return parseFor();
+                    }
+                    case "try" -> {
+                        return parseTry();
+                    }
+                    case "throw" -> {
+                        return parseThrow();
+                    }
+                    case "switch" -> {
+                        return parseSwitch();
                     }
                     case "return" -> {
                         return parseReturn();
@@ -192,10 +212,67 @@ public final class Parser {
             return new WhileStatement(test, body);
         }
 
-        private ForStatement parseFor() {
+        private Statement parseFor() {
             expectKeyword("for");
             expectSeparator('(');
-            final var init = parseForInit();
+            if (isSeparator(';')) {
+                return parseClassicForRest(null);
+            }
+            final var init = parseForHeaderLeft();
+            if (isKeyword("in") || isKeyword("of")) {
+                return parseForInOf(init);
+            }
+            return parseClassicForRest(init);
+        }
+
+        private JsNode parseForHeaderLeft() {
+            if (isKeyword("var") || isKeyword("let") || isKeyword("const")) {
+                return parseForVariableDeclaration();
+            }
+            return withNoIn(this::parseExpression);
+        }
+
+        private VariableDeclaration parseForVariableDeclaration() {
+            final var kind = ((JsKeyword) advance()).getValue();
+            return withNoIn(() -> {
+                final var declarations = new ArrayList<VariableDeclarator>();
+                do {
+                    final var id = parseIdentifier();
+                    Expression init = null;
+                    if (matchOperator("=")) {
+                        init = parseAssignment();
+                    }
+                    declarations.add(new VariableDeclarator(id, init));
+                } while (matchSeparator(','));
+                return new VariableDeclaration(kind, declarations);
+            });
+        }
+
+        private Statement parseForInOf(JsNode left) {
+            validateForInOfTarget(left);
+            final var isOf = "of".equals(((JsKeyword) current()).getValue());
+            advance();
+            final var right = isOf ? parseAssignment() : parseExpression();
+            expectSeparator(')');
+            final var body = parseStatement();
+            return isOf ? new ForOfStatement(left, right, body) : new ForInStatement(left, right, body);
+        }
+
+        private void validateForInOfTarget(JsNode left) {
+            if (left instanceof VariableDeclaration declaration) {
+                final var declarations = declaration.getDeclarations();
+                if (declarations.size() != 1 || declarations.getFirst().getInit() != null) {
+                    throw error();
+                }
+                return;
+            }
+            if (!(left instanceof Identifier) && !(left instanceof MemberExpression)) {
+                throw error();
+            }
+        }
+
+        private ForStatement parseClassicForRest(JsNode init) {
+            expectSeparator(';');
             Expression test = null;
             if (!isSeparator(';')) {
                 test = parseExpression();
@@ -210,16 +287,68 @@ public final class Parser {
             return new ForStatement(init, test, update, body);
         }
 
-        private JsNode parseForInit() {
-            if (matchSeparator(';')) {
-                return null;
+        private TryStatement parseTry() {
+            expectKeyword("try");
+            final var block = parseBlock();
+            CatchClause handler = null;
+            if (isKeyword("catch")) {
+                handler = parseCatch();
             }
-            if (isKeyword("var") || isKeyword("let") || isKeyword("const")) {
-                return parseVariableDeclaration();
+            BlockStatement finalizer = null;
+            if (matchKeyword("finally")) {
+                finalizer = parseBlock();
             }
-            final var expr = parseExpression();
-            expectSeparator(';');
-            return expr;
+            if (handler == null && finalizer == null) {
+                throw error();
+            }
+            return new TryStatement(block, handler, finalizer);
+        }
+
+        private CatchClause parseCatch() {
+            expectKeyword("catch");
+            Identifier param = null;
+            if (matchSeparator('(')) {
+                param = parseIdentifier();
+                expectSeparator(')');
+            }
+            final var body = parseBlock();
+            return new CatchClause(param, body);
+        }
+
+        private ThrowStatement parseThrow() {
+            expectKeyword("throw");
+            final var argument = parseExpression();
+            consumeOptionalSemicolon();
+            return new ThrowStatement(argument);
+        }
+
+        private SwitchStatement parseSwitch() {
+            expectKeyword("switch");
+            expectSeparator('(');
+            final var discriminant = parseExpression();
+            expectSeparator(')');
+            expectSeparator('{');
+            final var cases = new ArrayList<SwitchCase>();
+            while (!isSeparator('}') && !atEnd()) {
+                cases.add(parseSwitchCase());
+            }
+            expectSeparator('}');
+            return new SwitchStatement(discriminant, cases);
+        }
+
+        private SwitchCase parseSwitchCase() {
+            Expression test = null;
+            if (matchKeyword("case")) {
+                test = parseExpression();
+            } else {
+                expectKeyword("default");
+            }
+            expectOperator(":");
+            final var consequent = new ArrayList<Statement>();
+            while (!isKeyword("case") && !isKeyword("default") && !isSeparator('}') && !atEnd()) {
+                consequent.add(parseStatement());
+            }
+            return new SwitchCase(test, consequent);
         }
 
         private ReturnStatement parseReturn() {
@@ -337,7 +466,10 @@ public final class Parser {
             }
             if (t.getType() == JsType.KEYWORD) {
                 final var kw = ((JsKeyword) t).getValue();
-                return "instanceof".equals(kw) || "in".equals(kw) ? kw : null;
+                if ("in".equals(kw)) {
+                    return Boolean.TRUE.equals(noInStack.peek()) ? null : "in";
+                }
+                return "instanceof".equals(kw) ? kw : null;
             }
             return null;
         }
@@ -407,7 +539,7 @@ public final class Parser {
             }
             if (isSeparator('[')) {
                 advance();
-                final var property = parseExpression();
+                final var property = withInAllowed(this::parseExpression);
                 expectSeparator(']');
                 return new MemberExpression(object, property, true, true);
             }
@@ -464,7 +596,7 @@ public final class Parser {
                     if (isSeparator(')')) {
                         break;
                     }
-                    arguments.add(parseAssignment());
+                    arguments.add(withInAllowed(this::parseAssignment));
                 } while (matchSeparator(','));
             }
             expectSeparator(')');
@@ -566,7 +698,7 @@ public final class Parser {
                 return parseArrowBody(params);
             }
             expectSeparator('(');
-            final var expr = parseExpression();
+            final var expr = withInAllowed(this::parseExpression);
             expectSeparator(')');
             return expr;
         }
@@ -608,7 +740,7 @@ public final class Parser {
                     if (isSeparator(']')) {
                         break;
                     }
-                    elements.add(parseAssignment());
+                    elements.add(withInAllowed(this::parseAssignment));
                 } while (matchSeparator(','));
             }
             expectSeparator(']');
@@ -623,7 +755,7 @@ public final class Parser {
                     if (isSeparator('}')) {
                         break;
                     }
-                    properties.add(parseProperty());
+                    properties.add(withInAllowed(this::parseProperty));
                 } while (matchSeparator(','));
             }
             expectSeparator('}');
@@ -694,6 +826,27 @@ public final class Parser {
 
         private void consumeOptionalSemicolon() {
             matchSeparator(';');
+        }
+
+        // The for-header left-hand side is parsed under the no-in production: `in` is not a
+        // binary operator there, so `for (a in b)` reads `in` as the loop keyword. A bracketed
+        // sub-expression re-enters the [+In] grammar (innermost context wins via the stack),
+        // so the `in` in `for ((a in b); ;)` is still a binary operator.
+        private <T> T withNoIn(Supplier<T> parse) {
+            return withInContext(Boolean.TRUE, parse);
+        }
+
+        private <T> T withInAllowed(Supplier<T> parse) {
+            return withInContext(Boolean.FALSE, parse);
+        }
+
+        private <T> T withInContext(Boolean suppressIn, Supplier<T> parse) {
+            noInStack.push(suppressIn);
+            try {
+                return parse.get();
+            } finally {
+                noInStack.pop();
+            }
         }
 
         private boolean isSeparator(char c) {

@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
@@ -10,6 +11,7 @@ import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.IfStatement;
@@ -17,7 +19,10 @@ import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
+import org.techhouse.simplejs.nodes.ThrowStatement;
+import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 
@@ -96,5 +101,66 @@ public class ParserProgramTest {
         assertEquals(3, program.getBody().size());
         assertInstanceOf(BlockStatement.class, ((IfStatement) program.getBody().get(1)).getConsequent());
         assertInstanceOf(WhileStatement.class, program.getBody().get(2));
+    }
+
+    // A for-of accumulation loop inside a function parses to the expected shape
+    @Test
+    public void test_function_with_for_of_loop() {
+        final var source = """
+                function total(items) {
+                    let sum = 0;
+                    for (const item of items) {
+                        sum += item;
+                    }
+                    return sum;
+                }
+                """;
+        final var program = parse(source);
+        final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
+        final var body = fn.getBody().getBody();
+        assertEquals(3, body.size());
+        assertInstanceOf(ForOfStatement.class, body.get(1));
+    }
+
+    // A try/catch/finally wrapping a throw parses end-to-end
+    @Test
+    public void test_try_catch_finally_with_throw() {
+        final var source = """
+                function run() {
+                    try {
+                        throw new Error("bad");
+                    } catch (e) {
+                        return e;
+                    } finally {
+                        cleanup();
+                    }
+                }
+                """;
+        final var program = parse(source);
+        final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
+        final var tryStatement = assertInstanceOf(TryStatement.class, fn.getBody().getBody().getFirst());
+        assertInstanceOf(ThrowStatement.class, tryStatement.getBlock().getBody().getFirst());
+        assertEquals("e", tryStatement.getHandler().getParam().getName());
+        assertInstanceOf(BlockStatement.class, tryStatement.getFinalizer());
+    }
+
+    // A switch with multiple cases and a default parses to the expected shape
+    @Test
+    public void test_switch_with_multiple_cases() {
+        final var source = """
+                switch (kind) {
+                    case 1:
+                        a();
+                        break;
+                    case 2:
+                        b();
+                        break;
+                    default:
+                        c();
+                }
+                """;
+        final var switchStatement = assertInstanceOf(SwitchStatement.class, parse(source).getBody().getFirst());
+        assertEquals(3, switchStatement.getCases().size());
+        assertNull(switchStatement.getCases().get(2).getTest());
     }
 }

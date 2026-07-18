@@ -20,6 +20,8 @@ import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.ForInStatement;
+import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
@@ -37,8 +39,11 @@ import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThisExpression;
+import org.techhouse.simplejs.nodes.ThrowStatement;
+import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UndefinedLiteral;
 import org.techhouse.simplejs.nodes.UpdateExpression;
@@ -367,6 +372,90 @@ public class ParserTest {
     }
 
     @Test
+    public void test_for_of_statement() {
+        final var loop = assertInstanceOf(ForOfStatement.class, firstStatement("for (const x of arr) {}"));
+        assertInstanceOf(VariableDeclaration.class, loop.getLeft());
+        assertInstanceOf(Identifier.class, loop.getRight());
+        assertInstanceOf(BlockStatement.class, loop.getBody());
+    }
+
+    @Test
+    public void test_for_in_statement() {
+        final var loop = assertInstanceOf(ForInStatement.class, firstStatement("for (let k in obj) {}"));
+        assertInstanceOf(VariableDeclaration.class, loop.getLeft());
+        assertInstanceOf(Identifier.class, loop.getRight());
+    }
+
+    @Test
+    public void test_for_in_expression_target() {
+        final var loop = assertInstanceOf(ForInStatement.class, firstStatement("for (a in b);"));
+        assertInstanceOf(Identifier.class, loop.getLeft());
+    }
+
+    @Test
+    public void test_for_in_member_target() {
+        final var loop = assertInstanceOf(ForInStatement.class, firstStatement("for (o.p in b);"));
+        assertInstanceOf(MemberExpression.class, loop.getLeft());
+    }
+
+    @Test
+    public void test_for_no_in_inside_parens() {
+        final var loop = assertInstanceOf(ForStatement.class, firstStatement("for (i = (a in b); ; );"));
+        assertInstanceOf(AssignmentExpression.class, loop.getInit());
+    }
+
+    @Test
+    public void test_try_catch() {
+        final var stmt = assertInstanceOf(TryStatement.class, firstStatement("try { x; } catch (e) { y; }"));
+        assertInstanceOf(BlockStatement.class, stmt.getBlock());
+        assertEquals("e", stmt.getHandler().getParam().getName());
+        assertNull(stmt.getFinalizer());
+    }
+
+    @Test
+    public void test_try_catch_finally() {
+        final var stmt = assertInstanceOf(TryStatement.class,
+                firstStatement("try { x; } catch (e) { y; } finally { z; }"));
+        assertNotNull(stmt.getHandler());
+        assertInstanceOf(BlockStatement.class, stmt.getFinalizer());
+    }
+
+    @Test
+    public void test_try_finally_without_catch() {
+        final var stmt = assertInstanceOf(TryStatement.class, firstStatement("try { x; } finally { z; }"));
+        assertNull(stmt.getHandler());
+        assertInstanceOf(BlockStatement.class, stmt.getFinalizer());
+    }
+
+    @Test
+    public void test_catch_optional_binding() {
+        final var stmt = assertInstanceOf(TryStatement.class, firstStatement("try { x; } catch { y; }"));
+        assertNull(stmt.getHandler().getParam());
+    }
+
+    @Test
+    public void test_throw_statement() {
+        final var stmt = assertInstanceOf(ThrowStatement.class, firstStatement("throw new Error(\"boom\");"));
+        assertInstanceOf(NewExpression.class, stmt.getArgument());
+    }
+
+    @Test
+    public void test_switch_with_default() {
+        final var stmt = assertInstanceOf(SwitchStatement.class,
+                firstStatement("switch (x) { case 1: a; b; case 2: break; default: c; }"));
+        assertInstanceOf(Identifier.class, stmt.getDiscriminant());
+        assertEquals(3, stmt.getCases().size());
+        assertEquals(2, stmt.getCases().get(0).getConsequent().size());
+        assertNull(stmt.getCases().get(2).getTest());
+    }
+
+    @Test
+    public void test_switch_empty_body() {
+        final var stmt = assertInstanceOf(SwitchStatement.class, firstStatement("switch (x) {}"));
+        assertTrue(stmt.getCases().isEmpty());
+    }
+
+    @Test
     public void test_return_with_and_without_argument() {
         final var body = assertInstanceOf(FunctionDeclaration.class, firstStatement("function f() { return 1; }"))
                 .getBody();
@@ -454,6 +543,36 @@ public class ParserTest {
     @Test
     public void test_bad_template_expression_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("`a${1 2}b`"));
+    }
+
+    @Test
+    public void test_try_without_catch_or_finally_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("try { x; } y;"));
+    }
+
+    @Test
+    public void test_for_in_with_initializer_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("for (let x = 1 in y);"));
+    }
+
+    @Test
+    public void test_for_in_non_assignable_target_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("for (1 in y);"));
+    }
+
+    @Test
+    public void test_for_of_multiple_declarators_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("for (let a, b of y);"));
+    }
+
+    @Test
+    public void test_switch_missing_colon_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("switch (x) { case 1 a; }"));
+    }
+
+    @Test
+    public void test_unterminated_switch_throws_end_of_input() {
+        assertThrows(UnexpectedEndOfInputException.class, () -> parse("switch (x) { case 1:"));
     }
 
     // Parsing from a LexResult reports the offending token's line and column
