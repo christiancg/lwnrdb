@@ -1,5 +1,7 @@
 package org.techhouse.unit.simplejs.nodes;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.nodes.ArrayExpression;
@@ -39,8 +41,6 @@ import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.VariableDeclarator;
 import org.techhouse.simplejs.nodes.WhileStatement;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsNodeTest {
     // Each node subclass reports the matching NodeType

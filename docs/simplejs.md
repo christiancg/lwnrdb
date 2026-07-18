@@ -25,10 +25,10 @@ Only the **lexer** exists today. This document describes the full engine and the
 
 | Package | Responsibility |
 |---|---|
-| `simplejs/elements/` | ✅ Token types produced by the lexer. `JsBaseElement` is the abstract base with a `JsType` enum resolved by a centralized `internalGetType` switch; each concrete token (`JsKeyword`, `JsIdentifier`, `JsNumber`, `JsString`, `JsBoolean`, `JsNull`, `JsUndefined`, `JsOperator`, `JsSeparator`, `JsRegex`, `JsTemplateString`, `JsEOF`) is a small immutable class with `getX()` getters. Singletons (`JsNull`/`JsUndefined`/`JsEOF`) use `getInstance()`. |
+| `simplejs/elements/` | ✅ Token types produced by the lexer. `JsBaseElement` is the abstract base with a `JsType` enum resolved by a centralized `internalGetType` switch; each concrete token (`JsKeyword`, `JsIdentifier`, `JsNumber`, `JsString`, `JsBoolean`, `JsNull`, `JsUndefined`, `JsOperator`, `JsSeparator`, `JsRegex`, `JsTemplateString`, `JsEOF`) is a small immutable class with `getX()` getters. Singletons (`JsNull`/`JsUndefined`/`JsEOF`) use `getInstance()`. `SourcePosition` (offset/length/line/column) is a token-location value held **parallel** to the token stream rather than on the tokens, so the singletons keep their identity. |
 | `simplejs/nodes/` | 🚧 AST node types produced by the parser. Mirrors the `elements/` convention exactly: an abstract `JsNode` base with a `NodeType` enum resolved by a centralized `internalGetType` switch, plus `Expression`/`Statement` marker abstract subclasses for parser type-safety. |
-| `simplejs/internal/` | `Lexer` (✅) and `Parser` (🚧), later `Interpreter` (⬜). Each is a `final` class with a public `static` entry point wrapping encapsulated state. |
-| `simplejs/exceptions/` | Dedicated `RuntimeException` subclasses. Lexer errors (✅): `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors (🚧): `UnexpectedTokenException`, `UnexpectedEndOfInputException`. |
+| `simplejs/internal/` | `Lexer` (✅) and `Parser` (🚧), later `Interpreter` (⬜). Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). |
+| `simplejs/exceptions/` | Dedicated `RuntimeException` subclasses. Lexer errors (✅): `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors (🚧): `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). |
 
 ## The lexer (implemented)
 
@@ -48,24 +48,26 @@ delete extends super` — which defines the grammar the parser and interpreter g
 toward across the phases below.
 
 > **Lexer constraint that shapes the parser:** the lexer **discards newlines**
-> (all whitespace is skipped). Two consequences ripple into the parser: (1)
-> newline-sensitive Automatic Semicolon Insertion (ASI) is impossible from the
-> token stream, so the parser uses a pragmatic termination rule instead (see Phase
-> 1); (2) tokens carry **no source positions**, so parser error messages reference
-> the offending token and its index in the token list, not a line/column. Adding
-> newline offsets to tokens is a possible future lexer enhancement that would
-> improve both ASI fidelity and diagnostics.
+> (all whitespace is skipped as token boundaries). This makes newline-sensitive
+> Automatic Semicolon Insertion (ASI) impossible from the token stream, so the
+> parser uses a pragmatic termination rule instead (see Phase 1).
 
-> **TODO (lexer): attach source positions to tokens.** The parser can already
-> detect where the grammar breaks, but it cannot tell the user *where in their
-> source* the mistake is — `JsBaseElement` carries no position, so
-> `UnexpectedTokenException`/`UnexpectedEndOfInputException` can only report the
-> token and its index in the token stream. To forward actionable, user-facing
-> errors from the parser phase (line and column, ideally with the offending
-> source snippet), the **lexer must record each token's start position** (and
-> ideally its length) as it scans, and the parser must surface it in the
-> exception messages. This is a prerequisite for good parser diagnostics and
-> should land before the grammar grows much further.
+> **Source positions.** The lexer records each token's location — 0-based
+> `offset` and `length`, plus the 1-based `line` and `column` of its start
+> (`elements/SourcePosition`). Because `JsNull`/`JsUndefined`/`JsEOF` are shared
+> singletons, positions cannot live on the token objects; instead
+> `Lexer.lexWithPositions(source)` returns a `LexResult(source, tokens,
+> positions)` whose `positions` list runs **parallel to `tokens`** (one entry per
+> token, EOF included), keyed by the same index the parser's cursor uses.
+> `Lexer.lex(source)` remains and simply returns `lexWithPositions(source)
+> .tokens()`. Parsing via `Parser.parse(LexResult)` surfaces the line and column
+> of the offending token in `UnexpectedTokenException` /
+> `UnexpectedEndOfInputException`; the legacy `Parser.parse(List<JsBaseElement>)`
+> overload has no positions and falls back to reporting the token and its index.
+> Line/column are derived from `\n` offsets in the source, so they are accurate
+> even though newlines are not themselves emitted as tokens. Nested template
+> interpolations are still lexed position-less, so an error inside a `${...}`
+> uses the index-based fallback.
 
 ## The AST (`nodes/`)
 

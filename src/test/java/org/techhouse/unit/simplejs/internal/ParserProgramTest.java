@@ -6,7 +6,20 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
-import org.techhouse.simplejs.nodes.*;
+import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
+import org.techhouse.simplejs.nodes.BlockStatement;
+import org.techhouse.simplejs.nodes.CallExpression;
+import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.ForStatement;
+import org.techhouse.simplejs.nodes.FunctionDeclaration;
+import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.ObjectExpression;
+import org.techhouse.simplejs.nodes.Program;
+import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.TemplateLiteral;
+import org.techhouse.simplejs.nodes.VariableDeclaration;
+import org.techhouse.simplejs.nodes.WhileStatement;
 
 public class ParserProgramTest {
     private static Program parse(String source) {
@@ -51,8 +64,7 @@ public class ParserProgramTest {
     public void test_nested_objects_and_arrays() {
         final var program = parse("const data = { items: [1, 2, { k: [true, null] }], name: \"x\" };");
         final var decl = assertInstanceOf(VariableDeclaration.class, program.getBody().getFirst());
-        assertInstanceOf(org.techhouse.simplejs.nodes.ObjectExpression.class,
-                decl.getDeclarations().getFirst().getInit());
+        assertInstanceOf(ObjectExpression.class, decl.getDeclarations().getFirst().getInit());
     }
 
     // A template literal driving a member/call chain parses end-to-end
@@ -82,8 +94,7 @@ public class ParserProgramTest {
                 """;
         final var program = parse(source);
         assertEquals(3, program.getBody().size());
-        assertInstanceOf(BlockStatement.class,
-                ((org.techhouse.simplejs.nodes.IfStatement) program.getBody().get(1)).getConsequent());
+        assertInstanceOf(BlockStatement.class, ((IfStatement) program.getBody().get(1)).getConsequent());
         assertInstanceOf(WhileStatement.class, program.getBody().get(2));
     }
 }

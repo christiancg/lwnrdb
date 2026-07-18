@@ -1,5 +1,7 @@
 package org.techhouse.unit.simplejs.internal;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
@@ -42,8 +44,6 @@ import org.techhouse.simplejs.nodes.UndefinedLiteral;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class ParserTest {
     private static Program parse(String source) {
@@ -454,5 +454,43 @@ public class ParserTest {
     @Test
     public void test_bad_template_expression_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("`a${1 2}b`"));
+    }
+
+    // Parsing from a LexResult reports the offending token's line and column
+    @Test
+    public void test_parse_with_positions_reports_line_and_column() {
+        final var ex = assertThrows(UnexpectedTokenException.class,
+                () -> Parser.parse(Lexer.lexWithPositions("let x = ;")));
+        assertTrue(ex.getMessage().contains("line: 1, column: 9"), ex.getMessage());
+    }
+
+    // A syntax error on a later line reports that line, not line 1
+    @Test
+    public void test_parse_with_positions_reports_later_line() {
+        final var ex = assertThrows(UnexpectedTokenException.class,
+                () -> Parser.parse(Lexer.lexWithPositions("var a = 1;\nvar = 2;")));
+        assertTrue(ex.getMessage().contains("line: 2"), ex.getMessage());
+    }
+
+    // End-of-input errors also carry a line and column when positions are present
+    @Test
+    public void test_parse_with_positions_reports_end_of_input_location() {
+        final var ex = assertThrows(UnexpectedEndOfInputException.class,
+                () -> Parser.parse(Lexer.lexWithPositions("1 +")));
+        assertTrue(ex.getMessage().contains("Unexpected end of input at line: 1, column: 4"), ex.getMessage());
+    }
+
+    // Without positions the parser falls back to the token-index message
+    @Test
+    public void test_parse_without_positions_uses_index_message() {
+        final var ex = assertThrows(UnexpectedTokenException.class, () -> Parser.parse(Lexer.lex("let x = ;")));
+        assertTrue(ex.getMessage().contains("at index:"), ex.getMessage());
+    }
+
+    // Without positions an end-of-input error carries the plain message
+    @Test
+    public void test_parse_without_positions_end_of_input_plain_message() {
+        final var ex = assertThrows(UnexpectedEndOfInputException.class, () -> Parser.parse(Lexer.lex("1 +")));
+        assertEquals("Unexpected end of input", ex.getMessage());
     }
 }

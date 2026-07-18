@@ -17,6 +17,7 @@ import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.JsUndefined;
+import org.techhouse.simplejs.elements.SourcePosition;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
@@ -338,5 +339,52 @@ public class LexerTest {
     @Test
     public void test_lex_unexpected_character_throws() {
         assertThrows(UnexpectedCharacterException.class, () -> Lexer.lex("@"));
+    }
+
+    // lex yields the same token sequence (by type) as lexWithPositions
+    @Test
+    public void test_lex_matches_lex_with_positions_tokens() {
+        final String source = "let x = 42;";
+        final List<JsBaseElement> plain = Lexer.lex(source);
+        final List<JsBaseElement> withPositions = Lexer.lexWithPositions(source).tokens();
+        assertEquals(withPositions.size(), plain.size());
+        for (var i = 0; i < plain.size(); i++) {
+            assertEquals(withPositions.get(i).getType(), plain.get(i).getType());
+        }
+    }
+
+    // lexWithPositions records a parallel position per token, EOF included
+    @Test
+    public void test_lex_with_positions_parallel_to_tokens() {
+        final Lexer.LexResult result = Lexer.lexWithPositions("a + b");
+        assertEquals("a + b", result.source());
+        assertEquals(result.tokens().size(), result.positions().size());
+    }
+
+    // lexWithPositions records offset, length and 1-based line/column, spanning newlines
+    @Test
+    public void test_lex_with_positions_offsets_and_line_column() {
+        // offsets: l0 e1 t2 ' '3 x4 ' '5 =6 \n7 ' '8 ' '9 4:10 2:11 ;12
+        final Lexer.LexResult result = Lexer.lexWithPositions("let x =\n  42;");
+        final List<SourcePosition> positions = result.positions();
+        // 'let' keyword: offset 0, length 3, line 1, column 1
+        assertEquals(0, positions.getFirst().getOffset());
+        assertEquals(3, positions.getFirst().getLength());
+        assertEquals(1, positions.get(0).getLine());
+        assertEquals(1, positions.get(0).getColumn());
+        // '=' operator: offset 6, line 1, column 7
+        assertEquals(6, positions.get(2).getOffset());
+        assertEquals(1, positions.get(2).getLine());
+        assertEquals(7, positions.get(2).getColumn());
+        // '42' number on the second line: offset 10, length 2, line 2, column 3
+        assertEquals(10, positions.get(3).getOffset());
+        assertEquals(2, positions.get(3).getLength());
+        assertEquals(2, positions.get(3).getLine());
+        assertEquals(3, positions.get(3).getColumn());
+        // trailing EOF: zero length at the end of the source
+        final SourcePosition eof = positions.getLast();
+        assertEquals(13, eof.getOffset());
+        assertEquals(0, eof.getLength());
+        assertEquals(2, eof.getLine());
     }
 }

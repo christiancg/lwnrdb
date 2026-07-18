@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.simplejs.elements.JsBaseElement;
@@ -16,6 +17,7 @@ import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.JsUndefined;
+import org.techhouse.simplejs.elements.SourcePosition;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
@@ -43,8 +45,20 @@ public final class Lexer {
     private record Lexed(JsBaseElement token, int next) {
     }
 
+    // Tokens plus the parallel list of source positions (one per token, EOF included) and the
+    // original source. Positions live here rather than on the tokens so the shared
+    // JsNull/JsUndefined/JsEOF singletons stay singletons.
+    public record LexResult(String source, List<JsBaseElement> tokens, List<SourcePosition> positions) {
+    }
+
     public static List<JsBaseElement> lex(String sourceCode) {
+        return lexWithPositions(sourceCode).tokens();
+    }
+
+    public static LexResult lexWithPositions(String sourceCode) {
         final var tokens = new ArrayList<JsBaseElement>();
+        final var positions = new ArrayList<SourcePosition>();
+        final var lineStarts = computeLineStarts(sourceCode);
         final var n = sourceCode.length();
         var pos = 0;
         JsBaseElement last = null;
@@ -81,11 +95,32 @@ public final class Lexer {
                 }
             }
             tokens.add(lexed.token());
+            positions.add(positionOf(pos, lexed.next() - pos, lineStarts));
             last = lexed.token();
             pos = lexed.next();
         }
         tokens.add(JsEOF.getInstance());
-        return tokens;
+        positions.add(positionOf(n, 0, lineStarts));
+        return new LexResult(sourceCode, tokens, positions);
+    }
+
+    private static int[] computeLineStarts(String src) {
+        final var starts = new ArrayList<Integer>();
+        starts.add(0);
+        for (var i = 0; i < src.length(); i++) {
+            if (src.charAt(i) == '\n') {
+                starts.add(i + 1);
+            }
+        }
+        return starts.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static SourcePosition positionOf(int offset, int length, int[] lineStarts) {
+        var idx = Arrays.binarySearch(lineStarts, offset);
+        if (idx < 0) {
+            idx = -idx - 2;
+        }
+        return new SourcePosition(offset, length, idx + 1, offset - lineStarts[idx] + 1);
     }
 
     private static int skipComment(String src, int start) {

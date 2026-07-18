@@ -15,6 +15,7 @@ import org.techhouse.simplejs.elements.JsRegex;
 import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
+import org.techhouse.simplejs.elements.SourcePosition;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.nodes.ArrayExpression;
@@ -73,14 +74,24 @@ public final class Parser {
             Map.entry("/", 11), Map.entry("%", 11), Map.entry("**", 12));
 
     private final List<JsBaseElement> tokens;
+    private final List<SourcePosition> positions;
     private int pos;
 
     private Parser(List<JsBaseElement> tokens) {
+        this(tokens, null);
+    }
+
+    private Parser(List<JsBaseElement> tokens, List<SourcePosition> positions) {
         this.tokens = tokens;
+        this.positions = positions;
     }
 
     public static Program parse(List<JsBaseElement> tokens) {
         return new Parser(tokens).parseProgram();
+    }
+
+    public static Program parse(Lexer.LexResult lexed) {
+        return new Parser(lexed.tokens(), lexed.positions()).parseProgram();
     }
 
     private Program parseProgram() {
@@ -740,10 +751,15 @@ public final class Parser {
     }
 
     private RuntimeException error() {
+        final var position = positions != null ? positions.get(pos) : null;
         if (atEnd()) {
-            return new UnexpectedEndOfInputException();
+            return position != null
+                    ? new UnexpectedEndOfInputException(position.getLine(), position.getColumn())
+                    : new UnexpectedEndOfInputException();
         }
-        return new UnexpectedTokenException(describe(current()), pos);
+        return position != null
+                ? new UnexpectedTokenException(describe(current()), position.getLine(), position.getColumn())
+                : new UnexpectedTokenException(describe(current()), pos);
     }
 
     private String describe(JsBaseElement t) {

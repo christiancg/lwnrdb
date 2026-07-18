@@ -55,4 +55,17 @@ public class SimpleJsExceptionsTest {
     public void test_unexpected_end_of_input_message() {
         assertEquals("Unexpected end of input", new UnexpectedEndOfInputException().getMessage());
     }
+
+    // Unexpected token message includes the line and column
+    @Test
+    public void test_unexpected_token_line_column_message() {
+        assertEquals("Unexpected token } at line: 2, column: 5", new UnexpectedTokenException("}", 2, 5).getMessage());
+    }
+
+    // Unexpected end of input message includes the line and column
+    @Test
+    public void test_unexpected_end_of_input_line_column_message() {
+        assertEquals("Unexpected end of input at line: 3, column: 1",
+                new UnexpectedEndOfInputException(3, 1).getMessage());
+    }
 }
