@@ -1,6 +1,7 @@
 package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
+import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.ClassDeclaration;
@@ -30,6 +32,7 @@ import org.techhouse.simplejs.nodes.ThrowStatement;
 import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
+import org.techhouse.simplejs.nodes.YieldExpression;
 
 public class ParserProgramTest {
     private static Program parse(String source) {
@@ -196,5 +199,86 @@ public class ParserProgramTest {
         assertEquals("constructor", ((MethodDefinition) members.get(1)).getKind());
         assertTrue(((MethodDefinition) members.get(2)).isStatic());
         assertEquals("get", ((MethodDefinition) members.get(3)).getKind());
+    }
+
+    // An async function awaiting calls inside a try/catch parses end-to-end
+    @Test
+    public void test_async_function_with_await_in_try() {
+        final var source = """
+                async function load(url) {
+                    try {
+                        const res = await fetch(url);
+                        return await res.json();
+                    } catch (e) {
+                        return null;
+                    }
+                }
+                """;
+        final var program = parse(source);
+        final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
+        assertTrue(fn.isAsync());
+        final var tryStatement = assertInstanceOf(TryStatement.class, fn.getBody().getBody().getFirst());
+        final var decl = assertInstanceOf(VariableDeclaration.class, tryStatement.getBlock().getBody().getFirst());
+        assertInstanceOf(AwaitExpression.class, decl.getDeclarations().getFirst().getInit());
+        final var ret = assertInstanceOf(ReturnStatement.class, tryStatement.getBlock().getBody().get(1));
+        assertInstanceOf(AwaitExpression.class, ret.getArgument());
+    }
+
+    // A generator yielding in a loop with a trailing yield* delegation parses end-to-end
+    @Test
+    public void test_generator_with_yield_in_loop() {
+        final var source = """
+                function* walk(items) {
+                    for (const item of items) {
+                        yield item;
+                    }
+                    yield* rest;
+                }
+                """;
+        final var program = parse(source);
+        final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
+        assertTrue(fn.isGenerator());
+        final var body = fn.getBody().getBody();
+        final var loop = assertInstanceOf(ForOfStatement.class, body.getFirst());
+        final var loopBody = assertInstanceOf(BlockStatement.class, loop.getBody());
+        final var yieldStmt = assertInstanceOf(ExpressionStatement.class, loopBody.getBody().getFirst());
+        assertFalse(assertInstanceOf(YieldExpression.class, yieldStmt.getExpression()).isDelegate());
+        final var delegateStmt = assertInstanceOf(ExpressionStatement.class, body.get(1));
+        assertTrue(assertInstanceOf(YieldExpression.class, delegateStmt.getExpression()).isDelegate());
+    }
+
+    // A class mixing plain, async, generator, static async generator and getter members
+    @Test
+    public void test_class_with_async_and_generator_members() {
+        final var source = """
+                class Service {
+                    plain() {}
+                    async fetchData() {
+                        return await this.load();
+                    }
+                    *items() {
+                        yield 1;
+                    }
+                    static async *stream() {
+                        yield* source;
+                    }
+                    get ready() {
+                        return true;
+                    }
+                }
+                """;
+        final var clazz = assertInstanceOf(ClassDeclaration.class, parse(source).getBody().getFirst());
+        final var members = clazz.getBody().getMembers();
+        assertEquals(5, members.size());
+        final var plain = (MethodDefinition) members.getFirst();
+        assertFalse(plain.getValue().isAsync());
+        assertFalse(plain.getValue().isGenerator());
+        assertTrue(((MethodDefinition) members.get(1)).getValue().isAsync());
+        assertTrue(((MethodDefinition) members.get(2)).getValue().isGenerator());
+        final var asyncGen = (MethodDefinition) members.get(3);
+        assertTrue(asyncGen.isStatic());
+        assertTrue(asyncGen.getValue().isAsync());
+        assertTrue(asyncGen.getValue().isGenerator());
+        assertEquals("get", ((MethodDefinition) members.get(4)).getKind());
     }
 }

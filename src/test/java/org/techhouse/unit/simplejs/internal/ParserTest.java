@@ -10,6 +10,7 @@ import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
@@ -54,6 +55,7 @@ import org.techhouse.simplejs.nodes.UndefinedLiteral;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
+import org.techhouse.simplejs.nodes.YieldExpression;
 
 public class ParserTest {
     private static Program parse(String source) {
@@ -788,5 +790,217 @@ public class ParserTest {
     @Test
     public void test_getter_cannot_be_field() {
         assertThrows(UnexpectedTokenException.class, () -> parse("class C { get x = 1 }"));
+    }
+
+    // Phase 4 — async & generators
+
+    // await parses to an AwaitExpression inside an async function
+    @Test
+    public void test_await_unary() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("async function f() { await g(); }"));
+        assertTrue(fn.isAsync());
+        final var stmt = assertInstanceOf(ExpressionStatement.class, fn.getBody().getBody().getFirst());
+        assertInstanceOf(AwaitExpression.class, stmt.getExpression());
+    }
+
+    // await binds tighter than binary: await a + b is (await a) + b
+    @Test
+    public void test_await_binds_tighter_than_binary() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class,
+                firstStatement("async function f() { await a + b; }"));
+        final var stmt = assertInstanceOf(ExpressionStatement.class, fn.getBody().getBody().getFirst());
+        final var add = assertInstanceOf(BinaryExpression.class, stmt.getExpression());
+        assertInstanceOf(AwaitExpression.class, add.getLeft());
+    }
+
+    // yield with an argument in a generator
+    @Test
+    public void test_yield_with_argument() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { yield 1; }"));
+        assertTrue(fn.isGenerator());
+        final var stmt = assertInstanceOf(ExpressionStatement.class, fn.getBody().getBody().getFirst());
+        final var yieldExpr = assertInstanceOf(YieldExpression.class, stmt.getExpression());
+        assertInstanceOf(NumberLiteral.class, yieldExpr.getArgument());
+        assertFalse(yieldExpr.isDelegate());
+    }
+
+    // yield* delegates to another iterable
+    @Test
+    public void test_yield_delegate() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { yield* xs; }"));
+        final var stmt = assertInstanceOf(ExpressionStatement.class, fn.getBody().getBody().getFirst());
+        final var yieldExpr = assertInstanceOf(YieldExpression.class, stmt.getExpression());
+        assertTrue(yieldExpr.isDelegate());
+        assertInstanceOf(Identifier.class, yieldExpr.getArgument());
+    }
+
+    // A bare yield has no argument
+    @Test
+    public void test_yield_no_argument() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { yield; }"));
+        final var stmt = assertInstanceOf(ExpressionStatement.class, fn.getBody().getBody().getFirst());
+        final var yieldExpr = assertInstanceOf(YieldExpression.class, stmt.getExpression());
+        assertNull(yieldExpr.getArgument());
+        assertFalse(yieldExpr.isDelegate());
+    }
+
+    // yield appears at the assignment right-hand side
+    @Test
+    public void test_yield_as_assignment_rhs() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { x = yield 2; }"));
+        final var stmt = assertInstanceOf(ExpressionStatement.class, fn.getBody().getBody().getFirst());
+        final var assign = assertInstanceOf(AssignmentExpression.class, stmt.getExpression());
+        assertInstanceOf(YieldExpression.class, assign.getValue());
+    }
+
+    // async function declaration carries the async flag only
+    @Test
+    public void test_async_function_declaration() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("async function f() {}"));
+        assertTrue(fn.isAsync());
+        assertFalse(fn.isGenerator());
+    }
+
+    // async function expression carries the async flag
+    @Test
+    public void test_async_function_expression() {
+        final var expr = assertInstanceOf(FunctionExpression.class, firstExpression("(async function () {})"));
+        assertTrue(expr.isAsync());
+        assertFalse(expr.isGenerator());
+    }
+
+    // generator function declaration carries the generator flag only
+    @Test
+    public void test_generator_function_declaration() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* f() {}"));
+        assertTrue(fn.isGenerator());
+        assertFalse(fn.isAsync());
+    }
+
+    // generator function expression carries the generator flag
+    @Test
+    public void test_generator_function_expression() {
+        final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("const g = function*() {};"));
+        final var expr = assertInstanceOf(FunctionExpression.class, decl.getDeclarations().getFirst().getInit());
+        assertTrue(expr.isGenerator());
+    }
+
+    // async generator function carries both flags
+    @Test
+    public void test_async_generator_function() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("async function* f() {}"));
+        assertTrue(fn.isAsync());
+        assertTrue(fn.isGenerator());
+    }
+
+    // async single-parameter arrow
+    @Test
+    public void test_async_arrow_single_param() {
+        final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("async x => x"));
+        assertTrue(arrow.isAsync());
+        assertEquals(1, arrow.getParams().size());
+        assertTrue(arrow.isExpressionBody());
+    }
+
+    // async parenthesized arrow
+    @Test
+    public void test_async_arrow_paren_params() {
+        final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("async (a, b) => a"));
+        assertTrue(arrow.isAsync());
+        assertEquals(2, arrow.getParams().size());
+    }
+
+    // async arrow with a block body
+    @Test
+    public void test_async_arrow_block_body() {
+        final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("async () => {}"));
+        assertTrue(arrow.isAsync());
+        assertFalse(arrow.isExpressionBody());
+    }
+
+    // async class method sets async on its function value
+    @Test
+    public void test_async_class_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(method.getValue().isAsync());
+        assertFalse(method.getValue().isGenerator());
+        assertEquals("method", method.getKind());
+    }
+
+    // generator class method sets generator on its function value
+    @Test
+    public void test_generator_class_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { *m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(method.getValue().isGenerator());
+    }
+
+    // async generator class method sets both flags
+    @Test
+    public void test_async_generator_class_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async *m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(method.getValue().isAsync());
+        assertTrue(method.getValue().isGenerator());
+    }
+
+    // static async method carries the static flag and async on its value
+    @Test
+    public void test_static_async_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static async m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(method.isStatic());
+        assertTrue(method.getValue().isAsync());
+    }
+
+    // A member literally named "async" is a method, not a modifier
+    @Test
+    public void test_member_named_async() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertFalse(method.getValue().isAsync());
+        assertEquals("async", ((Identifier) method.getKey()).getName());
+    }
+
+    // A field literally named "async" is a field, not a modifier
+    @Test
+    public void test_field_named_async() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async = 1 }"));
+        final var field = assertInstanceOf(FieldDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("async", ((Identifier) field.getKey()).getName());
+    }
+
+    // An async member named constructor is a plain method, not the constructor
+    @Test
+    public void test_async_constructor_is_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async constructor() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("method", method.getKind());
+    }
+
+    // async not followed by function/arrow is an error
+    @Test
+    public void test_async_without_function_or_arrow_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("async 1"));
+        assertThrows(UnexpectedTokenException.class, () -> parse("async +"));
+    }
+
+    // yield* requires an argument
+    @Test
+    public void test_yield_delegate_without_argument_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("function* g() { yield*; }"));
+    }
+
+    // An async getter is invalid
+    @Test
+    public void test_async_getter_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("class C { async get x() {} }"));
+    }
+
+    // get before an async member is invalid
+    @Test
+    public void test_get_before_async_member_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("class C { get async foo() {} }"));
     }
 }

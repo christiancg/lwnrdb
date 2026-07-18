@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
@@ -54,6 +55,7 @@ import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.VariableDeclarator;
 import org.techhouse.simplejs.nodes.WhileStatement;
+import org.techhouse.simplejs.nodes.YieldExpression;
 
 public class JsNodeTest {
     // Each node subclass reports the matching NodeType
@@ -81,7 +83,7 @@ public class JsNodeTest {
         assertEquals(NodeType.CONTINUE_STATEMENT, new ContinueStatement().getType());
         assertEquals(NodeType.EXPRESSION_STATEMENT, new ExpressionStatement(id).getType());
         assertEquals(NodeType.FUNCTION_DECLARATION,
-                new FunctionDeclaration(new Identifier("f"), List.of(), block).getType());
+                new FunctionDeclaration(new Identifier("f"), List.of(), block, false, false).getType());
         assertEquals(NodeType.EMPTY_STATEMENT, new EmptyStatement().getType());
         assertEquals(NodeType.NUMBER_LITERAL, num.getType());
         assertEquals(NodeType.STRING_LITERAL, new StringLiteral("s").getType());
@@ -104,10 +106,14 @@ public class JsNodeTest {
         assertEquals(NodeType.CALL_EXPRESSION, new CallExpression(id, List.of()).getType());
         assertEquals(NodeType.MEMBER_EXPRESSION, new MemberExpression(id, id, false, false).getType());
         assertEquals(NodeType.NEW_EXPRESSION, new NewExpression(id, List.of()).getType());
-        assertEquals(NodeType.FUNCTION_EXPRESSION, new FunctionExpression(null, List.of(), block).getType());
-        assertEquals(NodeType.ARROW_FUNCTION_EXPRESSION, new ArrowFunctionExpression(List.of(), num, true).getType());
+        assertEquals(NodeType.FUNCTION_EXPRESSION,
+                new FunctionExpression(null, List.of(), block, false, false).getType());
+        assertEquals(NodeType.ARROW_FUNCTION_EXPRESSION,
+                new ArrowFunctionExpression(List.of(), num, true, false).getType());
+        assertEquals(NodeType.AWAIT_EXPRESSION, new AwaitExpression(id).getType());
+        assertEquals(NodeType.YIELD_EXPRESSION, new YieldExpression(id, false).getType());
         final var classBody = new ClassBody(List.of());
-        final var method = new FunctionExpression(null, List.of(), block);
+        final var method = new FunctionExpression(null, List.of(), block, false, false);
         assertEquals(NodeType.CLASS_DECLARATION, new ClassDeclaration(id, null, classBody).getType());
         assertEquals(NodeType.CLASS_EXPRESSION, new ClassExpression(null, null, classBody).getType());
         assertEquals(NodeType.CLASS_BODY, classBody.getType());
@@ -128,8 +134,9 @@ public class JsNodeTest {
         final var prop = new Property(id, id, false, true);
         assertTrue(prop.isShorthand());
         assertFalse(prop.isComputed());
-        final var arrow = new ArrowFunctionExpression(List.of(id), new NumberLiteral(1.0), true);
+        final var arrow = new ArrowFunctionExpression(List.of(id), new NumberLiteral(1.0), true, true);
         assertTrue(arrow.isExpressionBody());
+        assertTrue(arrow.isAsync());
         assertEquals(1, arrow.getParams().size());
         final var regex = new RegexLiteral("a", "gi");
         assertEquals("a", regex.getPattern());
@@ -154,13 +161,23 @@ public class JsNodeTest {
         final var switchStatement = new SwitchStatement(id, List.of(defaultCase));
         assertEquals(id, switchStatement.getDiscriminant());
         assertEquals(1, switchStatement.getCases().size());
-        final var methodValue = new FunctionExpression(null, List.of(), block);
+        final var methodValue = new FunctionExpression(null, List.of(), block, true, true);
+        assertTrue(methodValue.isAsync());
+        assertTrue(methodValue.isGenerator());
         final var method = new MethodDefinition(id, methodValue, "get", true, false);
         assertEquals(id, method.getKey());
         assertEquals(methodValue, method.getValue());
         assertEquals("get", method.getKind());
         assertTrue(method.isStatic());
         assertFalse(method.isComputed());
+        final var declaration = new FunctionDeclaration(id, List.of(), block, true, true);
+        assertTrue(declaration.isAsync());
+        assertTrue(declaration.isGenerator());
+        final var awaitExpression = new AwaitExpression(num);
+        assertEquals(num, awaitExpression.getArgument());
+        final var yieldExpression = new YieldExpression(num, true);
+        assertEquals(num, yieldExpression.getArgument());
+        assertTrue(yieldExpression.isDelegate());
         final var field = new FieldDefinition(id, num, false, true);
         assertEquals(id, field.getKey());
         assertEquals(num, field.getValue());

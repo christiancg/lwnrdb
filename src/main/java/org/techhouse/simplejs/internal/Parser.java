@@ -24,6 +24,7 @@ import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
@@ -73,6 +74,7 @@ import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.VariableDeclarator;
 import org.techhouse.simplejs.nodes.WhileStatement;
+import org.techhouse.simplejs.nodes.YieldExpression;
 
 public final class Parser {
     private static final Set<String> ASSIGNMENT_OPERATORS = Set.of("=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=",
@@ -162,7 +164,13 @@ public final class Parser {
                         return parseContinue();
                     }
                     case "function" -> {
-                        return parseFunctionDeclaration();
+                        return parseFunctionDeclaration(false);
+                    }
+                    case "async" -> {
+                        if (peek().getType() == JsType.KEYWORD && "function".equals(((JsKeyword) peek()).getValue())) {
+                            advance();
+                            return parseFunctionDeclaration(true);
+                        }
                     }
                     case "class" -> {
                         return parseClassDeclaration();
@@ -382,12 +390,13 @@ public final class Parser {
             return new ContinueStatement();
         }
 
-        private FunctionDeclaration parseFunctionDeclaration() {
+        private FunctionDeclaration parseFunctionDeclaration(boolean async) {
             expectKeyword("function");
+            final var generator = matchOperator("*");
             final var name = parseIdentifier();
             final var params = parseParams();
             final var body = parseBlock();
-            return new FunctionDeclaration(name, params, body);
+            return new FunctionDeclaration(name, params, body, async, generator);
         }
 
         private ExpressionStatement parseExpressionStatement() {
@@ -425,6 +434,9 @@ public final class Parser {
         }
 
         private Expression parseAssignment() {
+            if (isKeyword("yield")) {
+                return parseYield();
+            }
             final var left = parseConditional();
             if (current().getType() == JsType.OPERATOR) {
                 final var op = ((JsOperator) current()).getValue();
@@ -437,6 +449,31 @@ public final class Parser {
                 }
             }
             return left;
+        }
+
+        private Expression parseYield() {
+            expectKeyword("yield");
+            final var delegate = matchOperator("*");
+            Expression argument = null;
+            if (delegate) {
+                argument = parseAssignment();
+            } else if (hasYieldArgument()) {
+                argument = parseAssignment();
+            }
+            return new YieldExpression(argument, delegate);
+        }
+
+        // A bare `yield` has no argument when the next token terminates the expression.
+        private boolean hasYieldArgument() {
+            final var t = current();
+            if (t.getType() == JsType.EOF) {
+                return false;
+            }
+            if (t.getType() == JsType.SEPARATOR) {
+                final char c = ((JsSeparator) t).getValue();
+                return c != ')' && c != ']' && c != '}' && c != ',' && c != ';';
+            }
+            return !(t.getType() == JsType.OPERATOR && ":".equals(((JsOperator) t).getValue()));
         }
 
         private Expression parseConditional() {
@@ -501,6 +538,10 @@ public final class Parser {
                 if ("typeof".equals(kw) || "void".equals(kw) || "delete".equals(kw)) {
                     advance();
                     return new UnaryExpression(kw, parseUnary(), true);
+                }
+                if ("await".equals(kw)) {
+                    advance();
+                    return new AwaitExpression(parseUnary());
                 }
             }
             return parsePostfix();
@@ -661,7 +702,7 @@ public final class Parser {
             if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
                 advance();
                 advance();
-                return parseArrowBody(List.of(new Identifier(t.getValue())));
+                return parseArrowBody(List.of(new Identifier(t.getValue())), false);
             }
             advance();
             return new Identifier(t.getValue());
@@ -674,7 +715,8 @@ public final class Parser {
                     advance();
                     yield new ThisExpression();
                 }
-                case "function" -> parseFunctionExpression();
+                case "function" -> parseFunctionExpression(false);
+                case "async" -> parseAsyncPrimary();
                 case "class" -> parseClassExpression();
                 case "super" -> {
                     advance();
@@ -684,15 +726,35 @@ public final class Parser {
             };
         }
 
-        private FunctionExpression parseFunctionExpression() {
+        private Expression parseAsyncPrimary() {
+            expectKeyword("async");
+            if (isKeyword("function")) {
+                return parseFunctionExpression(true);
+            }
+            if (current().getType() == JsType.IDENTIFIER && peek().getType() == JsType.OPERATOR
+                    && "=>".equals(((JsOperator) peek()).getValue())) {
+                final var param = parseIdentifier();
+                expectOperator("=>");
+                return parseArrowBody(List.of(param), true);
+            }
+            if (isSeparator('(') && matchingParenFollowedByArrow()) {
+                final var params = parseParams();
+                expectOperator("=>");
+                return parseArrowBody(params, true);
+            }
+            throw error();
+        }
+
+        private FunctionExpression parseFunctionExpression(boolean async) {
             expectKeyword("function");
+            final var generator = matchOperator("*");
             Identifier name = null;
             if (current().getType() == JsType.IDENTIFIER) {
                 name = parseIdentifier();
             }
             final var params = parseParams();
             final var body = parseBlock();
-            return new FunctionExpression(name, params, body);
+            return new FunctionExpression(name, params, body, async, generator);
         }
 
         private ClassDeclaration parseClassDeclaration() {
@@ -731,19 +793,23 @@ public final class Parser {
 
         private JsNode parseClassMember() {
             final var isStatic = matchContextualModifier("static");
+            final var async = matchAsyncMethodModifier();
+            final var generator = matchOperator("*");
             var kind = "method";
-            if (matchContextualModifier("get")) {
-                kind = "get";
-            } else if (matchContextualModifier("set")) {
-                kind = "set";
+            if (!async && !generator) {
+                if (matchContextualModifier("get")) {
+                    kind = "get";
+                } else if (matchContextualModifier("set")) {
+                    kind = "set";
+                }
             }
             final var memberKey = parseClassMemberKey();
             if (isSeparator('(')) {
-                final var value = new FunctionExpression(null, parseParams(), parseBlock());
-                final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic);
+                final var value = new FunctionExpression(null, parseParams(), parseBlock(), async, generator);
+                final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic, async, generator);
                 return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
             }
-            if (!"method".equals(kind)) {
+            if (!"method".equals(kind) || async || generator) {
                 throw error();
             }
             Expression value = null;
@@ -754,11 +820,12 @@ public final class Parser {
             return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
         }
 
-        private String resolveMethodKind(String kind, MemberKey memberKey, boolean isStatic) {
+        private String resolveMethodKind(String kind, MemberKey memberKey, boolean isStatic, boolean async,
+                boolean generator) {
             if (!"method".equals(kind)) {
                 return kind;
             }
-            if (!isStatic && !memberKey.computed() && memberKey.key() instanceof Identifier id
+            if (!async && !generator && !isStatic && !memberKey.computed() && memberKey.key() instanceof Identifier id
                     && "constructor".equals(id.getName())) {
                 return "constructor";
             }
@@ -805,6 +872,27 @@ public final class Parser {
             return true;
         }
 
+        // async is a keyword, contextual here: it modifies a member only when a member key (or `*`)
+        // follows. Followed by '(', '=', ';' or '}' the word is the member name itself.
+        private boolean matchAsyncMethodModifier() {
+            final var t = current();
+            if (t.getType() != JsType.KEYWORD || !"async".equals(((JsKeyword) t).getValue())) {
+                return false;
+            }
+            final var next = peek();
+            if (next.getType() == JsType.OPERATOR && "=".equals(((JsOperator) next).getValue())) {
+                return false;
+            }
+            if (next.getType() == JsType.SEPARATOR) {
+                final char c = ((JsSeparator) next).getValue();
+                if (c == '(' || c == ';' || c == '}') {
+                    return false;
+                }
+            }
+            advance();
+            return true;
+        }
+
         private record MemberKey(Expression key, boolean computed) {
         }
 
@@ -822,7 +910,7 @@ public final class Parser {
             if (matchingParenFollowedByArrow()) {
                 final var params = parseParams();
                 expectOperator("=>");
-                return parseArrowBody(params);
+                return parseArrowBody(params, false);
             }
             expectSeparator('(');
             final var expr = withInAllowed(this::parseExpression);
@@ -852,11 +940,11 @@ public final class Parser {
             return false;
         }
 
-        private ArrowFunctionExpression parseArrowBody(List<Identifier> params) {
+        private ArrowFunctionExpression parseArrowBody(List<Identifier> params, boolean async) {
             if (isSeparator('{')) {
-                return new ArrowFunctionExpression(params, parseBlock(), false);
+                return new ArrowFunctionExpression(params, parseBlock(), false, async);
             }
-            return new ArrowFunctionExpression(params, parseAssignment(), true);
+            return new ArrowFunctionExpression(params, parseAssignment(), true, async);
         }
 
         private ArrayExpression parseArray() {

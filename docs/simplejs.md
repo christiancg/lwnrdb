@@ -231,12 +231,31 @@ remains a lexer constraint.
   produces `super(...)` calls and `super.x` / `super[k]` access with no extra
   handling. `super`/`this` context validity is left to the interpreter.
 
-### Phase 4 — async & generators ⬜
+### Phase 4 — async & generators ✅
 
-- **`async` / `await`** — `async` function declarations/expressions/arrows and the
-  `await` unary; `AwaitExpression` plus an `async` flag on the function nodes.
-- **Generators** — `function*` and `yield`/`yield*`; `YieldExpression` plus a
-  `generator` flag on the function nodes.
+- **`async` / `await`** — `async` function declarations (`async function f(){}`),
+  function expressions (`async function(){}`) and arrows (`async x => x`,
+  `async (a,b) => {}`); the `await` unary produces `AwaitExpression` (parsed in
+  `parseUnary`, so it binds tighter than binary operators). Function nodes carry an
+  `async` flag (`FunctionDeclaration`/`FunctionExpression`/`ArrowFunctionExpression`
+  gain `isAsync()`).
+- **Generators** — `function*` declarations/expressions and `yield`/`yield*`.
+  `YieldExpression` (`argument` nullable for a bare `yield`, `delegate` for
+  `yield*`) is parsed at the assignment level in `parseAssignment`; `yield*`
+  requires an argument. `FunctionDeclaration`/`FunctionExpression` gain an
+  `isGenerator()` flag (arrows cannot be generators).
+- **Class members** — class methods may be `async`, generator (`*foo(){}`) or async
+  generator (`async *foo(){}`); the flags live on the method's `FunctionExpression`
+  value, so `MethodDefinition` is unchanged. `async` is treated as a contextual
+  modifier (like `static`/`get`/`set`): `async(){}` / `async = 1` are still a member
+  named `async`. Getters/setters cannot be async or generators, and an
+  async/generator member named `constructor` stays a plain method.
+- **Deliberate limitations.** Because the lexer makes `async`, `await` and `yield`
+  *keywords* (not contextual identifiers), `async(x)` is never a call and `async`
+  cannot be a bare identifier — so `async (…)` is always parsed as arrow params, and
+  `await`/`yield` are always parsed as their expressions wherever the keyword
+  appears. As in Phase 3 for `super`/`this`, generator/async **context** validity
+  (e.g. `yield` only inside a generator) is left to the interpreter.
 
 ### Phase 5 — modules & patterns ⬜
 
