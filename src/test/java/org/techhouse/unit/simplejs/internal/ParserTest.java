@@ -8,14 +8,17 @@ import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ArrayExpression;
+import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
+import org.techhouse.simplejs.nodes.CatchClause;
 import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
@@ -38,6 +41,7 @@ import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
+import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
@@ -56,6 +60,7 @@ import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UndefinedLiteral;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
+import org.techhouse.simplejs.nodes.VariableDeclarator;
 import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.nodes.YieldExpression;
 
@@ -417,7 +422,7 @@ public class ParserTest {
     public void test_try_catch() {
         final var stmt = assertInstanceOf(TryStatement.class, firstStatement("try { x; } catch (e) { y; }"));
         assertInstanceOf(BlockStatement.class, stmt.getBlock());
-        assertEquals("e", stmt.getHandler().getParam().getName());
+        assertEquals("e", assertInstanceOf(Identifier.class, stmt.getHandler().getParam()).getName());
         assertNull(stmt.getFinalizer());
     }
 
@@ -1073,5 +1078,163 @@ public class ParserTest {
     @Test
     public void test_spread_without_argument_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("f(...)"));
+    }
+
+    private static VariableDeclarator firstDeclarator(String source) {
+        return ((VariableDeclaration) firstStatement(source)).getDeclarations().getFirst();
+    }
+
+    // An array pattern binds the declarator id
+    @Test
+    public void test_array_pattern_declaration() {
+        final var pattern = assertInstanceOf(ArrayPattern.class, firstDeclarator("const [a, b] = arr").getId());
+        assertEquals(2, pattern.getElements().size());
+        assertEquals("a", assertInstanceOf(Identifier.class, pattern.getElements().getFirst()).getName());
+    }
+
+    // An array pattern keeps holes and a trailing rest element
+    @Test
+    public void test_array_pattern_hole_and_rest() {
+        final var pattern = assertInstanceOf(ArrayPattern.class, firstDeclarator("const [a, , ...r] = arr").getId());
+        assertEquals(3, pattern.getElements().size());
+        assertNull(pattern.getElements().get(1));
+        final var rest = assertInstanceOf(RestElement.class, pattern.getElements().get(2));
+        assertEquals("r", assertInstanceOf(Identifier.class, rest.getArgument()).getName());
+    }
+
+    // An object pattern binds two shorthand properties
+    @Test
+    public void test_object_pattern_declaration() {
+        final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a, b} = o").getId());
+        assertEquals(2, pattern.getProperties().size());
+        assertTrue(assertInstanceOf(Property.class, pattern.getProperties().getFirst()).isShorthand());
+    }
+
+    // An object pattern supports renamed keys and defaults
+    @Test
+    public void test_object_pattern_renamed_and_default() {
+        final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a: x, b = 2} = o").getId());
+        final var renamed = assertInstanceOf(Property.class, pattern.getProperties().getFirst());
+        assertEquals("x", assertInstanceOf(Identifier.class, renamed.getValue()).getName());
+        final var defaulted = assertInstanceOf(Property.class, pattern.getProperties().get(1));
+        final var assignment = assertInstanceOf(AssignmentPattern.class, defaulted.getValue());
+        assertEquals(2.0, assertInstanceOf(NumberLiteral.class, assignment.getRight()).getValue());
+    }
+
+    // An object pattern keeps a trailing rest element
+    @Test
+    public void test_object_pattern_rest() {
+        final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a, ...r} = o").getId());
+        final var rest = assertInstanceOf(RestElement.class, pattern.getProperties().get(1));
+        assertEquals("r", assertInstanceOf(Identifier.class, rest.getArgument()).getName());
+    }
+
+    // Patterns nest inside each other
+    @Test
+    public void test_nested_pattern() {
+        final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a: [b, {c}]} = o").getId());
+        final var outer = assertInstanceOf(Property.class, pattern.getProperties().getFirst());
+        final var inner = assertInstanceOf(ArrayPattern.class, outer.getValue());
+        assertInstanceOf(Identifier.class, inner.getElements().getFirst());
+        assertInstanceOf(ObjectPattern.class, inner.getElements().get(1));
+    }
+
+    // Function parameters accept defaults and patterns
+    @Test
+    public void test_pattern_and_default_params() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function f(a = 1, {b}, [c]) {}"));
+        assertEquals(3, fn.getParams().size());
+        final var defaulted = assertInstanceOf(AssignmentPattern.class, fn.getParams().getFirst());
+        assertEquals("a", assertInstanceOf(Identifier.class, defaulted.getLeft()).getName());
+        assertInstanceOf(ObjectPattern.class, fn.getParams().get(1));
+        assertInstanceOf(ArrayPattern.class, fn.getParams().get(2));
+    }
+
+    // Arrow parameters accept patterns
+    @Test
+    public void test_arrow_pattern_params() {
+        final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("({a}, [b]) => a"));
+        assertInstanceOf(ObjectPattern.class, arrow.getParams().getFirst());
+        assertInstanceOf(ArrayPattern.class, arrow.getParams().get(1));
+    }
+
+    // An array destructuring assignment reinterprets the LHS into a pattern
+    @Test
+    public void test_array_assignment_pattern() {
+        final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("[a, b] = arr"));
+        final var pattern = assertInstanceOf(ArrayPattern.class, assign.getTarget());
+        assertEquals(2, pattern.getElements().size());
+    }
+
+    // A member expression is a valid leaf inside an assignment pattern
+    @Test
+    public void test_assignment_pattern_member_leaf() {
+        final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("[obj.x] = arr"));
+        final var pattern = assertInstanceOf(ArrayPattern.class, assign.getTarget());
+        assertInstanceOf(MemberExpression.class, pattern.getElements().getFirst());
+    }
+
+    // An object destructuring assignment reinterprets the LHS into a pattern
+    @Test
+    public void test_object_assignment_pattern() {
+        final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("({a, b} = o)"));
+        assertInstanceOf(ObjectPattern.class, assign.getTarget());
+    }
+
+    // A cover-initialized name in a destructuring assignment becomes an assignment pattern
+    @Test
+    public void test_assignment_pattern_with_default() {
+        final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("({a = 1} = o)"));
+        final var pattern = assertInstanceOf(ObjectPattern.class, assign.getTarget());
+        final var property = assertInstanceOf(Property.class, pattern.getProperties().getFirst());
+        assertInstanceOf(AssignmentPattern.class, property.getValue());
+    }
+
+    // A catch clause binds a pattern
+    @Test
+    public void test_catch_pattern() {
+        final var tryStatement = assertInstanceOf(TryStatement.class, firstStatement("try {} catch ({message}) {}"));
+        final var handler = assertInstanceOf(CatchClause.class, tryStatement.getHandler());
+        assertInstanceOf(ObjectPattern.class, handler.getParam());
+    }
+
+    // A for-of loop declares a pattern binding
+    @Test
+    public void test_for_of_pattern_declaration() {
+        final var forOf = assertInstanceOf(ForOfStatement.class, firstStatement("for (const [a, b] of x) {}"));
+        final var declaration = assertInstanceOf(VariableDeclaration.class, forOf.getLeft());
+        assertInstanceOf(ArrayPattern.class, declaration.getDeclarations().getFirst().getId());
+    }
+
+    // A for-of loop reinterprets an expression LHS into a pattern
+    @Test
+    public void test_for_of_pattern_assignment() {
+        final var forOf = assertInstanceOf(ForOfStatement.class, firstStatement("for ([a] of x) {}"));
+        assertInstanceOf(ArrayPattern.class, forOf.getLeft());
+    }
+
+    // Empty patterns parse
+    @Test
+    public void test_empty_patterns() {
+        assertInstanceOf(ObjectPattern.class, firstDeclarator("const {} = o").getId());
+        assertInstanceOf(ArrayPattern.class, firstDeclarator("const [] = a").getId());
+    }
+
+    // A rest element before the end of an array pattern is invalid
+    @Test
+    public void test_rest_before_end_array_pattern_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("const [...r, a] = x"));
+    }
+
+    // A non-target expression cannot be an assignment LHS
+    @Test
+    public void test_invalid_assignment_target_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("1 = a"));
+    }
+
+    // A compound assignment cannot target a pattern
+    @Test
+    public void test_compound_assign_pattern_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("[a] += b"));
     }
 }

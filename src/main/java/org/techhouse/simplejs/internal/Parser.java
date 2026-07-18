@@ -22,8 +22,10 @@ import org.techhouse.simplejs.elements.SourcePosition;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.nodes.ArrayExpression;
+import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
@@ -55,6 +57,7 @@ import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
+import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
@@ -198,7 +201,7 @@ public final class Parser {
             final var kind = ((JsKeyword) advance()).getValue();
             final var declarations = new ArrayList<VariableDeclarator>();
             do {
-                final var id = parseIdentifier();
+                final var id = parseBindingTarget();
                 Expression init = null;
                 if (matchOperator("=")) {
                     init = parseAssignment();
@@ -256,7 +259,7 @@ public final class Parser {
             return withNoIn(() -> {
                 final var declarations = new ArrayList<VariableDeclarator>();
                 do {
-                    final var id = parseIdentifier();
+                    final var id = parseBindingTarget();
                     Expression init = null;
                     if (matchOperator("=")) {
                         init = parseAssignment();
@@ -268,13 +271,16 @@ public final class Parser {
         }
 
         private Statement parseForInOf(JsNode left) {
-            validateForInOfTarget(left);
+            final var target = left instanceof ArrayExpression || left instanceof ObjectExpression
+                    ? toAssignmentPattern((Expression) left)
+                    : left;
+            validateForInOfTarget(target);
             final var isOf = "of".equals(((JsKeyword) current()).getValue());
             advance();
             final var right = isOf ? parseAssignment() : parseExpression();
             expectSeparator(')');
             final var body = parseStatement();
-            return isOf ? new ForOfStatement(left, right, body) : new ForInStatement(left, right, body);
+            return isOf ? new ForOfStatement(target, right, body) : new ForInStatement(target, right, body);
         }
 
         private void validateForInOfTarget(JsNode left) {
@@ -285,7 +291,8 @@ public final class Parser {
                 }
                 return;
             }
-            if (!(left instanceof Identifier) && !(left instanceof MemberExpression)) {
+            if (!(left instanceof Identifier) && !(left instanceof MemberExpression) && !(left instanceof ArrayPattern)
+                    && !(left instanceof ObjectPattern)) {
                 throw error();
             }
         }
@@ -325,9 +332,9 @@ public final class Parser {
 
         private CatchClause parseCatch() {
             expectKeyword("catch");
-            Identifier param = null;
+            JsNode param = null;
             if (matchSeparator('(')) {
-                param = parseIdentifier();
+                param = parseBindingTarget();
                 expectSeparator(')');
             }
             final var body = parseBlock();
@@ -416,10 +423,10 @@ public final class Parser {
                         break;
                     }
                     if (matchOperator("...")) {
-                        params.add(new RestElement(parseIdentifier()));
+                        params.add(new RestElement(parseBindingTarget()));
                         break;
                     }
-                    params.add(parseIdentifier());
+                    params.add(parseBindingElement());
                 } while (matchSeparator(','));
             }
             expectSeparator(')');
@@ -435,6 +442,164 @@ public final class Parser {
             return new Identifier(((JsIdentifier) t).getValue());
         }
 
+        private JsNode parseBindingTarget() {
+            if (isSeparator('[')) {
+                return parseArrayPattern();
+            }
+            if (isSeparator('{')) {
+                return parseObjectPattern();
+            }
+            return parseIdentifier();
+        }
+
+        // A binding target with an optional default (`x`, `x = 1`, `{a} = {}`), used for pattern
+        // elements and function parameters.
+        private JsNode parseBindingElement() {
+            final var target = parseBindingTarget();
+            if (matchOperator("=")) {
+                return new AssignmentPattern(target, parseAssignment());
+            }
+            return target;
+        }
+
+        private ArrayPattern parseArrayPattern() {
+            expectSeparator('[');
+            final var elements = new ArrayList<JsNode>();
+            while (!isSeparator(']')) {
+                if (matchSeparator(',')) {
+                    elements.add(null);
+                    continue;
+                }
+                if (matchOperator("...")) {
+                    elements.add(new RestElement(parseBindingTarget()));
+                    break;
+                }
+                elements.add(parseBindingElement());
+                if (!isSeparator(']')) {
+                    expectSeparator(',');
+                }
+            }
+            expectSeparator(']');
+            return new ArrayPattern(elements);
+        }
+
+        private ObjectPattern parseObjectPattern() {
+            expectSeparator('{');
+            final var properties = new ArrayList<JsNode>();
+            while (!isSeparator('}')) {
+                if (matchOperator("...")) {
+                    properties.add(new RestElement(parseBindingTarget()));
+                    break;
+                }
+                properties.add(parseObjectPatternProperty());
+                if (!isSeparator('}')) {
+                    expectSeparator(',');
+                }
+            }
+            expectSeparator('}');
+            return new ObjectPattern(properties);
+        }
+
+        private Property parseObjectPatternProperty() {
+            if (isSeparator('[')) {
+                advance();
+                final var key = withInAllowed(this::parseAssignment);
+                expectSeparator(']');
+                expectOperator(":");
+                return new Property(key, parseBindingElement(), true, false);
+            }
+            final var t = current();
+            final Expression key = switch (t.getType()) {
+                case IDENTIFIER -> new Identifier(((JsIdentifier) t).getValue());
+                case STRING -> new StringLiteral(((JsString) t).getValue());
+                case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
+                case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
+                default -> throw error();
+            };
+            advance();
+            if (matchOperator(":")) {
+                return new Property(key, parseBindingElement(), false, false);
+            }
+            if (t.getType() != JsType.IDENTIFIER) {
+                throw error();
+            }
+            if (matchOperator("=")) {
+                return new Property(key, new AssignmentPattern(key, parseAssignment()), false, true);
+            }
+            return new Property(key, key, false, true);
+        }
+
+        private JsNode resolveAssignmentTarget(Expression left, String op) {
+            if (left instanceof Identifier || left instanceof MemberExpression) {
+                return left;
+            }
+            if ("=".equals(op) && (left instanceof ArrayExpression || left instanceof ObjectExpression)) {
+                return toAssignmentPattern(left);
+            }
+            throw error();
+        }
+
+        // Cover grammar: an array/object expression parsed on an assignment LHS is reinterpreted into
+        // the equivalent binding pattern once the `=` proves the intent.
+        private JsNode toAssignmentPattern(Expression expr) {
+            if (expr instanceof Identifier || expr instanceof MemberExpression) {
+                return expr;
+            }
+            if (expr instanceof ArrayExpression array) {
+                final var elements = new ArrayList<JsNode>();
+                for (final var element : array.getElements()) {
+                    elements.add(toPatternElement(element));
+                }
+                return new ArrayPattern(elements);
+            }
+            if (expr instanceof ObjectExpression object) {
+                final var properties = new ArrayList<JsNode>();
+                for (final var property : object.getProperties()) {
+                    properties.add(toPatternProperty(property));
+                }
+                return new ObjectPattern(properties);
+            }
+            throw error();
+        }
+
+        private JsNode toPatternElement(Expression element) {
+            if (element == null) {
+                return null;
+            }
+            if (element instanceof SpreadElement spread) {
+                return new RestElement(toAssignmentPattern(spread.getArgument()));
+            }
+            return toPatternDefault(element);
+        }
+
+        private JsNode toPatternProperty(JsNode property) {
+            if (property instanceof SpreadElement spread) {
+                return new RestElement(toAssignmentPattern(spread.getArgument()));
+            }
+            final var prop = (Property) property;
+            final var value = prop.getValue();
+            if (!(value instanceof Expression valueExpr)) {
+                throw error();
+            }
+            return new Property(prop.getKey(), toPatternDefault(valueExpr), prop.isComputed(), prop.isShorthand());
+        }
+
+        private JsNode toPatternDefault(Expression expr) {
+            if (expr instanceof AssignmentExpression assignment && "=".equals(assignment.getOperator())) {
+                return new AssignmentPattern(toBindingTarget(assignment.getTarget()), assignment.getValue());
+            }
+            return toAssignmentPattern(expr);
+        }
+
+        // An assignment LHS may already be a reinterpreted pattern (e.g. `{a: [x] = d}`); only a raw
+        // array/object expression still needs converting.
+        private JsNode toBindingTarget(JsNode node) {
+            if (node instanceof Expression expr) {
+                return toAssignmentPattern(expr);
+            }
+            return node;
+        }
+
         private Expression parseExpression() {
             return parseAssignment();
         }
@@ -447,11 +612,9 @@ public final class Parser {
             if (current().getType() == JsType.OPERATOR) {
                 final var op = ((JsOperator) current()).getValue();
                 if (ASSIGNMENT_OPERATORS.contains(op)) {
-                    if (!(left instanceof Identifier) && !(left instanceof MemberExpression)) {
-                        throw error();
-                    }
+                    final var target = resolveAssignmentTarget(left, op);
                     advance();
-                    return new AssignmentExpression(op, left, parseAssignment());
+                    return new AssignmentExpression(op, target, parseAssignment());
                 }
             }
             return left;
@@ -1020,6 +1183,12 @@ public final class Parser {
                 return new Property(key, parseAssignment(), false, false);
             }
             if (t.getType() == JsType.IDENTIFIER) {
+                // CoverInitializedName: `{a = 1}` is only valid as a destructuring pattern, but a
+                // single-token lookahead cannot tell it apart from an object literal, so keep it as
+                // an assignment-valued shorthand and let toAssignmentPattern reinterpret it.
+                if (matchOperator("=")) {
+                    return new Property(key, new AssignmentExpression("=", key, parseAssignment()), false, true);
+                }
                 return new Property(key, key, false, true);
             }
             throw error();

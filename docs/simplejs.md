@@ -260,7 +260,7 @@ remains a lexer constraint.
 ### Phase 5 — modules & patterns 🚧
 
 Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
-**5b destructuring ⬜**, **5c modules ⬜**.
+**5b destructuring ✅**, **5c modules ⬜**.
 
 #### Phase 5a — spread & rest ✅
 
@@ -280,14 +280,33 @@ Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
   `REST_ELEMENT`): spread is the expression side, rest the binding side. Both `...`
   productions share the `parseSpreadableExpression` helper on the spread side.
 
-#### Phase 5b — destructuring ⬜
+#### Phase 5b — destructuring ✅
 
 - **Destructuring** — array/object binding and assignment patterns
   (`ArrayPattern`, `ObjectPattern`, `AssignmentPattern`, all extending `JsNode`)
-  wherever a binding target appears (declarations, params, assignment LHS, `for-in`/
-  `for-of`, catch). Binding positions parse patterns directly; assignment-LHS
-  positions parse as an expression and are reinterpreted into a pattern on `=`
-  (cover grammar). `RestElement` also appears inside patterns here.
+  wherever a binding target appears: `var`/`let`/`const` declarations, function/arrow
+  parameters (including default params like `f(a = 1)`), assignment LHS, `for-in`/
+  `for-of` headers, and `catch` bindings. `RestElement` (from 5a) is reused inside
+  patterns (`[a, ...r]`, `{a, ...r}`).
+- **Two parsing paths.** *Binding positions* parse patterns directly via
+  `parseBindingTarget` (`[` → `ArrayPattern`, `{` → `ObjectPattern`, else
+  `Identifier`) and `parseBindingElement` (target + optional `= default` →
+  `AssignmentPattern`). *Assignment-LHS positions* use a **cover grammar**: the LHS is
+  first parsed as an ordinary `ArrayExpression`/`ObjectExpression` and reinterpreted
+  into the matching pattern by `toAssignmentPattern` once a plain `=` proves the intent
+  (`[a, b] = arr`, `({a} = o)`); `for-in`/`for-of` expression targets reuse the same
+  converter. Only `=` (not compound assignment) reinterprets, and only
+  `Identifier`/`MemberExpression` are valid pattern leaves.
+- **Widened node fields** (each getter now returns `JsNode`, mirroring the 5a widening
+  of `ObjectExpression.properties`): `VariableDeclarator.id`, `CatchClause.param`,
+  `AssignmentExpression.target`, and `Property.value` (so an object-pattern property can
+  hold a nested pattern or `AssignmentPattern`).
+- **CoverInitializedName leniency.** `{a = 1}` is legal only as a destructuring
+  pattern, but a one-token lookahead cannot distinguish it from an object literal, so
+  `parseProperty` accepts the shorthand-with-initializer and records the value as an
+  `AssignmentExpression`; `toAssignmentPattern` converts it to an `AssignmentPattern`. A
+  `{a = 1}` not followed by `=` therefore parses as an object expression — validity is
+  left to the interpreter, as with `yield`/`super` context in earlier phases.
 
 #### Phase 5c — modules ⬜
 

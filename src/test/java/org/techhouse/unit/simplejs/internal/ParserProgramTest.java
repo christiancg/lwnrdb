@@ -10,7 +10,10 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ArrayExpression;
+import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
+import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
@@ -25,7 +28,9 @@ import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.ObjectExpression;
+import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.Program;
+import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
@@ -151,7 +156,7 @@ public class ParserProgramTest {
         final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
         final var tryStatement = assertInstanceOf(TryStatement.class, fn.getBody().getBody().getFirst());
         assertInstanceOf(ThrowStatement.class, tryStatement.getBlock().getBody().getFirst());
-        assertEquals("e", tryStatement.getHandler().getParam().getName());
+        assertEquals("e", assertInstanceOf(Identifier.class, tryStatement.getHandler().getParam()).getName());
         assertInstanceOf(BlockStatement.class, tryStatement.getFinalizer());
     }
 
@@ -307,5 +312,34 @@ public class ParserProgramTest {
         final var ret = assertInstanceOf(ReturnStatement.class, body.get(1));
         final var call = assertInstanceOf(CallExpression.class, ret.getArgument());
         assertInstanceOf(SpreadElement.class, call.getArguments().getFirst());
+    }
+
+    // Destructuring appears across a declaration, a defaulted pattern parameter, and an assignment
+    @Test
+    public void test_destructuring_program() {
+        final var source = """
+                function unpack({ id, tags = [] }, [first, ...others]) {
+                    const { name: label } = lookup(id);
+                    [first] = others;
+                    return label;
+                }
+                """;
+        final var program = parse(source);
+        assertEquals(1, program.getBody().size());
+        final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
+        assertEquals(2, fn.getParams().size());
+        final var objectParam = assertInstanceOf(ObjectPattern.class, fn.getParams().getFirst());
+        assertInstanceOf(AssignmentPattern.class,
+                assertInstanceOf(Property.class, objectParam.getProperties().get(1)).getValue());
+        final var arrayParam = assertInstanceOf(ArrayPattern.class, fn.getParams().get(1));
+        assertInstanceOf(RestElement.class, arrayParam.getElements().get(1));
+        final var body = fn.getBody().getBody();
+        final var decl = assertInstanceOf(VariableDeclaration.class, body.getFirst());
+        final var declPattern = assertInstanceOf(ObjectPattern.class, decl.getDeclarations().getFirst().getId());
+        assertEquals("label", assertInstanceOf(Identifier.class,
+                assertInstanceOf(Property.class, declPattern.getProperties().getFirst()).getValue()).getName());
+        final var assignStatement = assertInstanceOf(ExpressionStatement.class, body.get(1));
+        final var assign = assertInstanceOf(AssignmentExpression.class, assignStatement.getExpression());
+        assertInstanceOf(ArrayPattern.class, assign.getTarget());
     }
 }

@@ -1,15 +1,15 @@
 package org.techhouse.simplejs.nodes;
 
 public class CatchClause extends JsNode {
-    private final Identifier param;
+    private final JsNode param;
     private final BlockStatement body;
 
-    public CatchClause(Identifier param, BlockStatement body) {
+    public CatchClause(JsNode param, BlockStatement body) {
         this.param = param;
         this.body = body;
     }
 
-    public Identifier getParam() {
+    public JsNode getParam() {
         return param;
     }
 

@@ -5,8 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.nodes.ArrayExpression;
+import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
@@ -37,6 +39,7 @@ import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
+import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
@@ -124,6 +127,9 @@ public class JsNodeTest {
         assertEquals(NodeType.SUPER_EXPRESSION, new SuperExpression().getType());
         assertEquals(NodeType.SPREAD_ELEMENT, new SpreadElement(id).getType());
         assertEquals(NodeType.REST_ELEMENT, new RestElement(id).getType());
+        assertEquals(NodeType.ARRAY_PATTERN, new ArrayPattern(List.of(id)).getType());
+        assertEquals(NodeType.OBJECT_PATTERN, new ObjectPattern(List.of(id)).getType());
+        assertEquals(NodeType.ASSIGNMENT_PATTERN, new AssignmentPattern(id, num).getType());
     }
 
     // Node getters expose the values passed to the constructor
@@ -201,5 +207,12 @@ public class JsNodeTest {
         assertEquals(num, spread.getArgument());
         final var rest = new RestElement(id);
         assertEquals(id, rest.getArgument());
+        final var arrayPattern = new ArrayPattern(List.of(id));
+        assertEquals(1, arrayPattern.getElements().size());
+        final var objectPattern = new ObjectPattern(List.of(id));
+        assertEquals(1, objectPattern.getProperties().size());
+        final var assignmentPattern = new AssignmentPattern(id, num);
+        assertEquals(id, assignmentPattern.getLeft());
+        assertEquals(num, assignmentPattern.getRight());
     }
 }

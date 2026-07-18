@@ -2,11 +2,11 @@ package org.techhouse.simplejs.nodes;
 
 public class Property extends JsNode {
     private final Expression key;
-    private final Expression value;
+    private final JsNode value;
     private final boolean computed;
     private final boolean shorthand;
 
-    public Property(Expression key, Expression value, boolean computed, boolean shorthand) {
+    public Property(Expression key, JsNode value, boolean computed, boolean shorthand) {
         this.key = key;
         this.value = value;
         this.computed = computed;
@@ -17,7 +17,7 @@ public class Property extends JsNode {
         return key;
     }
 
-    public Expression getValue() {
+    public JsNode getValue() {
         return value;
     }
 
