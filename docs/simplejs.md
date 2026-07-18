@@ -210,11 +210,26 @@ remains a lexer constraint.
 - **`switch` / `case` / `default`** — `SwitchStatement`, `SwitchCase` (a `null`
   test marks the `default` clause).
 
-### Phase 3 — classes ⬜
+### Phase 3 — classes ✅
 
-`class` declarations and expressions: `ClassDeclaration`, `ClassExpression`,
-`ClassBody`, `MethodDefinition` (incl. `constructor`, getters/setters, `static`
-members), field definitions, `extends`, and `super` calls/member access.
+- **`class` declarations and expressions** — `ClassDeclaration` (statement, named)
+  and `ClassExpression` (primary, name optional), each with an optional `extends`
+  heritage (parsed as a left-hand-side expression via the call/member path) and a
+  `ClassBody`.
+- **`ClassBody`** holds a heterogeneous `List<JsNode>` of members; stray `;`
+  between members are skipped.
+- **`MethodDefinition`** (`key`, `value` `FunctionExpression`, `kind`, `isStatic`,
+  `computed`) covers plain methods, the `constructor` (`kind == "constructor"`,
+  detected only for a non-static, non-computed `constructor`-named key), and
+  getters/setters (`kind == "get"`/`"set"`). **`FieldDefinition`** (`key`,
+  optional `value`, `isStatic`, `computed`) covers class fields.
+- **Contextual modifiers.** `static`, `get`, and `set` are **not** keywords — they
+  lex as identifiers, so `matchContextualModifier` treats them as modifiers only
+  when the following token begins a member key; when followed by `(`, `=`, `;` or
+  `}` the word is the member name itself (`static() {}`, `get = 1`).
+- **`super`** parses to a `SuperExpression` primary; the existing call/member tail
+  produces `super(...)` calls and `super.x` / `super[k]` access with no extra
+  handling. `super`/`this` context validity is left to the interpreter.
 
 ### Phase 4 — async & generators ⬜
 

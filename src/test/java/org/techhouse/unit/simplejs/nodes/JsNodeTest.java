@@ -13,10 +13,14 @@ import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.CatchClause;
+import org.techhouse.simplejs.nodes.ClassBody;
+import org.techhouse.simplejs.nodes.ClassDeclaration;
+import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.ForInStatement;
 import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
@@ -27,6 +31,7 @@ import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.JsNode.NodeType;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
@@ -36,6 +41,7 @@ import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchCase;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
@@ -100,6 +106,14 @@ public class JsNodeTest {
         assertEquals(NodeType.NEW_EXPRESSION, new NewExpression(id, List.of()).getType());
         assertEquals(NodeType.FUNCTION_EXPRESSION, new FunctionExpression(null, List.of(), block).getType());
         assertEquals(NodeType.ARROW_FUNCTION_EXPRESSION, new ArrowFunctionExpression(List.of(), num, true).getType());
+        final var classBody = new ClassBody(List.of());
+        final var method = new FunctionExpression(null, List.of(), block);
+        assertEquals(NodeType.CLASS_DECLARATION, new ClassDeclaration(id, null, classBody).getType());
+        assertEquals(NodeType.CLASS_EXPRESSION, new ClassExpression(null, null, classBody).getType());
+        assertEquals(NodeType.CLASS_BODY, classBody.getType());
+        assertEquals(NodeType.METHOD_DEFINITION, new MethodDefinition(id, method, "method", false, false).getType());
+        assertEquals(NodeType.FIELD_DEFINITION, new FieldDefinition(id, num, false, false).getType());
+        assertEquals(NodeType.SUPER_EXPRESSION, new SuperExpression().getType());
     }
 
     // Node getters expose the values passed to the constructor
@@ -140,5 +154,27 @@ public class JsNodeTest {
         final var switchStatement = new SwitchStatement(id, List.of(defaultCase));
         assertEquals(id, switchStatement.getDiscriminant());
         assertEquals(1, switchStatement.getCases().size());
+        final var methodValue = new FunctionExpression(null, List.of(), block);
+        final var method = new MethodDefinition(id, methodValue, "get", true, false);
+        assertEquals(id, method.getKey());
+        assertEquals(methodValue, method.getValue());
+        assertEquals("get", method.getKind());
+        assertTrue(method.isStatic());
+        assertFalse(method.isComputed());
+        final var field = new FieldDefinition(id, num, false, true);
+        assertEquals(id, field.getKey());
+        assertEquals(num, field.getValue());
+        assertFalse(field.isStatic());
+        assertTrue(field.isComputed());
+        final var classBody = new ClassBody(List.of(method, field));
+        assertEquals(2, classBody.getMembers().size());
+        final var classDeclaration = new ClassDeclaration(id, num, classBody);
+        assertEquals(id, classDeclaration.getId());
+        assertEquals(num, classDeclaration.getSuperClass());
+        assertEquals(classBody, classDeclaration.getBody());
+        final var classExpression = new ClassExpression(id, num, classBody);
+        assertEquals(id, classExpression.getId());
+        assertEquals(num, classExpression.getSuperClass());
+        assertEquals(classBody, classExpression.getBody());
     }
 }

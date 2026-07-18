@@ -3,6 +3,7 @@ package org.techhouse.unit.simplejs.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
@@ -10,12 +11,16 @@ import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
+import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
+import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.ReturnStatement;
@@ -162,5 +167,34 @@ public class ParserProgramTest {
         final var switchStatement = assertInstanceOf(SwitchStatement.class, parse(source).getBody().getFirst());
         assertEquals(3, switchStatement.getCases().size());
         assertNull(switchStatement.getCases().get(2).getTest());
+    }
+
+    // A class with extends, a super-calling constructor, a static method, a getter and a field
+    @Test
+    public void test_full_class() {
+        final var source = """
+                class Point extends Base {
+                    count = 0;
+                    constructor(x, y) {
+                        super(x);
+                        this.y = y;
+                    }
+                    static origin() {
+                        return new Point(0, 0);
+                    }
+                    get first() {
+                        return this.x;
+                    }
+                }
+                """;
+        final var clazz = assertInstanceOf(ClassDeclaration.class, parse(source).getBody().getFirst());
+        assertEquals("Point", clazz.getId().getName());
+        assertEquals("Base", ((Identifier) clazz.getSuperClass()).getName());
+        final var members = clazz.getBody().getMembers();
+        assertEquals(4, members.size());
+        assertInstanceOf(FieldDefinition.class, members.get(0));
+        assertEquals("constructor", ((MethodDefinition) members.get(1)).getKind());
+        assertTrue(((MethodDefinition) members.get(2)).isStatic());
+        assertEquals("get", ((MethodDefinition) members.get(3)).getKind());
     }
 }

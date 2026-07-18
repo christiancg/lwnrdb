@@ -15,11 +15,14 @@ import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
+import org.techhouse.simplejs.nodes.ClassDeclaration;
+import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.ForInStatement;
 import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
@@ -29,6 +32,7 @@ import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
@@ -39,6 +43,7 @@ import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThisExpression;
@@ -611,5 +616,177 @@ public class ParserTest {
     public void test_parse_without_positions_end_of_input_plain_message() {
         final var ex = assertThrows(UnexpectedEndOfInputException.class, () -> Parser.parse(Lexer.lex("1 +")));
         assertEquals("Unexpected end of input", ex.getMessage());
+    }
+
+    // An empty class declaration has a name, no superclass and no members
+    @Test
+    public void test_empty_class() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C {}"));
+        assertEquals("C", decl.getId().getName());
+        assertNull(decl.getSuperClass());
+        assertTrue(decl.getBody().getMembers().isEmpty());
+    }
+
+    // extends with a plain identifier heritage
+    @Test
+    public void test_class_extends() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C extends B {}"));
+        final var superClass = assertInstanceOf(Identifier.class, decl.getSuperClass());
+        assertEquals("B", superClass.getName());
+    }
+
+    // extends accepts a member expression heritage
+    @Test
+    public void test_class_extends_member() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C extends a.B {}"));
+        assertInstanceOf(MemberExpression.class, decl.getSuperClass());
+    }
+
+    // A plain method is a non-static method with a function value
+    @Test
+    public void test_class_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("m", ((Identifier) method.getKey()).getName());
+        assertEquals("method", method.getKind());
+        assertFalse(method.isStatic());
+        assertInstanceOf(FunctionExpression.class, method.getValue());
+    }
+
+    // A constructor member resolves to the constructor kind
+    @Test
+    public void test_class_constructor() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { constructor(x) {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("constructor", method.getKind());
+        assertEquals(1, method.getValue().getParams().size());
+    }
+
+    // A static method carries the static flag
+    @Test
+    public void test_static_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(method.isStatic());
+        assertEquals("method", method.getKind());
+    }
+
+    // Getters and setters resolve to get/set kinds
+    @Test
+    public void test_getter_setter() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { get x() {} set x(v) {} }"));
+        final var members = decl.getBody().getMembers();
+        assertEquals("get", ((MethodDefinition) members.get(0)).getKind());
+        assertEquals("set", ((MethodDefinition) members.get(1)).getKind());
+    }
+
+    // A computed method key sets the computed flag
+    @Test
+    public void test_computed_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { [a + b]() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(method.isComputed());
+        assertInstanceOf(BinaryExpression.class, method.getKey());
+    }
+
+    // A class field with an initializer
+    @Test
+    public void test_class_field() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { x = 1; }"));
+        final var field = assertInstanceOf(FieldDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("x", ((Identifier) field.getKey()).getName());
+        assertInstanceOf(NumberLiteral.class, field.getValue());
+        assertFalse(field.isStatic());
+    }
+
+    // A class field without an initializer has a null value
+    @Test
+    public void test_class_field_no_init() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { x }"));
+        final var field = assertInstanceOf(FieldDefinition.class, decl.getBody().getMembers().getFirst());
+        assertNull(field.getValue());
+    }
+
+    // A static field carries the static flag
+    @Test
+    public void test_static_field() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static x = 1; }"));
+        final var field = assertInstanceOf(FieldDefinition.class, decl.getBody().getMembers().getFirst());
+        assertTrue(field.isStatic());
+        assertInstanceOf(NumberLiteral.class, field.getValue());
+    }
+
+    // A member literally named "static" is a method, not a static modifier
+    @Test
+    public void test_member_named_static() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertFalse(method.isStatic());
+        assertEquals("static", ((Identifier) method.getKey()).getName());
+    }
+
+    // A member literally named "get" is a plain method, not an accessor
+    @Test
+    public void test_member_named_get() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { get() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("method", method.getKind());
+        assertEquals("get", ((Identifier) method.getKey()).getName());
+    }
+
+    // An anonymous class expression has a null id
+    @Test
+    public void test_class_expression_anonymous() {
+        final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("const C = class {};"));
+        final var expr = assertInstanceOf(ClassExpression.class, decl.getDeclarations().getFirst().getInit());
+        assertNull(expr.getId());
+    }
+
+    // A named class expression carries its name
+    @Test
+    public void test_class_expression_named() {
+        final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("const C = class Named {};"));
+        final var expr = assertInstanceOf(ClassExpression.class, decl.getDeclarations().getFirst().getInit());
+        assertEquals("Named", expr.getId().getName());
+    }
+
+    // super(...) parses to a call over a super expression
+    @Test
+    public void test_super_call() {
+        final var call = assertInstanceOf(CallExpression.class, firstExpression("super(x)"));
+        assertInstanceOf(SuperExpression.class, call.getCallee());
+    }
+
+    // super.m() parses to a call over a member access on super
+    @Test
+    public void test_super_member() {
+        final var call = assertInstanceOf(CallExpression.class, firstExpression("super.m()"));
+        final var member = assertInstanceOf(MemberExpression.class, call.getCallee());
+        assertInstanceOf(SuperExpression.class, member.getObject());
+    }
+
+    // Stray semicolons between members are skipped
+    @Test
+    public void test_stray_semicolons_in_body() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { ; m() {}; }"));
+        assertEquals(1, decl.getBody().getMembers().size());
+    }
+
+    // A class declaration requires a name
+    @Test
+    public void test_class_declaration_requires_name() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("class {}"));
+    }
+
+    // An unterminated class body reports end of input
+    @Test
+    public void test_unterminated_class_body() {
+        assertThrows(UnexpectedEndOfInputException.class, () -> parse("class C {"));
+    }
+
+    // A getter cannot be a field
+    @Test
+    public void test_getter_cannot_be_field() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("class C { get x = 1 }"));
     }
 }

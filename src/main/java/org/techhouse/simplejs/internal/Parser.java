@@ -30,11 +30,15 @@ import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.CatchClause;
+import org.techhouse.simplejs.nodes.ClassBody;
+import org.techhouse.simplejs.nodes.ClassDeclaration;
+import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.ForInStatement;
 import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
@@ -45,6 +49,7 @@ import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
@@ -55,6 +60,7 @@ import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchCase;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
@@ -157,6 +163,9 @@ public final class Parser {
                     }
                     case "function" -> {
                         return parseFunctionDeclaration();
+                    }
+                    case "class" -> {
+                        return parseClassDeclaration();
                     }
                     default -> {
                     }
@@ -666,6 +675,11 @@ public final class Parser {
                     yield new ThisExpression();
                 }
                 case "function" -> parseFunctionExpression();
+                case "class" -> parseClassExpression();
+                case "super" -> {
+                    advance();
+                    yield new SuperExpression();
+                }
                 default -> throw error();
             };
         }
@@ -679,6 +693,119 @@ public final class Parser {
             final var params = parseParams();
             final var body = parseBlock();
             return new FunctionExpression(name, params, body);
+        }
+
+        private ClassDeclaration parseClassDeclaration() {
+            expectKeyword("class");
+            final var id = parseIdentifier();
+            final var superClass = parseClassHeritage();
+            return new ClassDeclaration(id, superClass, parseClassBody());
+        }
+
+        private ClassExpression parseClassExpression() {
+            expectKeyword("class");
+            Identifier id = null;
+            if (current().getType() == JsType.IDENTIFIER) {
+                id = parseIdentifier();
+            }
+            final var superClass = parseClassHeritage();
+            return new ClassExpression(id, superClass, parseClassBody());
+        }
+
+        private Expression parseClassHeritage() {
+            return matchKeyword("extends") ? parseCallMember() : null;
+        }
+
+        private ClassBody parseClassBody() {
+            expectSeparator('{');
+            final var members = new ArrayList<JsNode>();
+            while (!isSeparator('}') && !atEnd()) {
+                if (matchSeparator(';')) {
+                    continue;
+                }
+                members.add(parseClassMember());
+            }
+            expectSeparator('}');
+            return new ClassBody(members);
+        }
+
+        private JsNode parseClassMember() {
+            final var isStatic = matchContextualModifier("static");
+            var kind = "method";
+            if (matchContextualModifier("get")) {
+                kind = "get";
+            } else if (matchContextualModifier("set")) {
+                kind = "set";
+            }
+            final var memberKey = parseClassMemberKey();
+            if (isSeparator('(')) {
+                final var value = new FunctionExpression(null, parseParams(), parseBlock());
+                final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic);
+                return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
+            }
+            if (!"method".equals(kind)) {
+                throw error();
+            }
+            Expression value = null;
+            if (matchOperator("=")) {
+                value = parseAssignment();
+            }
+            consumeOptionalSemicolon();
+            return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
+        }
+
+        private String resolveMethodKind(String kind, MemberKey memberKey, boolean isStatic) {
+            if (!"method".equals(kind)) {
+                return kind;
+            }
+            if (!isStatic && !memberKey.computed() && memberKey.key() instanceof Identifier id
+                    && "constructor".equals(id.getName())) {
+                return "constructor";
+            }
+            return "method";
+        }
+
+        private MemberKey parseClassMemberKey() {
+            if (isSeparator('[')) {
+                advance();
+                final var key = withInAllowed(this::parseAssignment);
+                expectSeparator(']');
+                return new MemberKey(key, true);
+            }
+            final var t = current();
+            final Expression key = switch (t.getType()) {
+                case IDENTIFIER -> new Identifier(((JsIdentifier) t).getValue());
+                case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
+                case STRING -> new StringLiteral(((JsString) t).getValue());
+                case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
+                default -> throw error();
+            };
+            advance();
+            return new MemberKey(key, false);
+        }
+
+        // static/get/set are contextual: they modify a member only when the next token begins a
+        // member key. When followed by '(', '=', ';' or '}' the word is itself the member name.
+        private boolean matchContextualModifier(String name) {
+            final var t = current();
+            if (t.getType() != JsType.IDENTIFIER || !((JsIdentifier) t).getValue().equals(name)) {
+                return false;
+            }
+            final var next = peek();
+            if (next.getType() == JsType.OPERATOR && "=".equals(((JsOperator) next).getValue())) {
+                return false;
+            }
+            if (next.getType() == JsType.SEPARATOR) {
+                final char c = ((JsSeparator) next).getValue();
+                if (c == '(' || c == ';' || c == '}') {
+                    return false;
+                }
+            }
+            advance();
+            return true;
+        }
+
+        private record MemberKey(Expression key, boolean computed) {
         }
 
         private Expression parseSeparatorPrimary() {
