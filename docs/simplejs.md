@@ -257,10 +257,14 @@ remains a lexer constraint.
   appears. As in Phase 3 for `super`/`this`, generator/async **context** validity
   (e.g. `yield` only inside a generator) is left to the interpreter.
 
-### Phase 5 — modules & patterns 🚧
+### Phase 5 — modules, patterns & modern-syntax catch-up 🚧
 
-Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
-**5b destructuring ✅**, **5c modules ✅**.
+Delivered in seven independently reviewable sub-phases. The first three complete
+the module/pattern grammar; the last four close the remaining ES2020–ES2026
+lexer/parser gaps (everything the broad keyword set and modern editions imply but
+earlier phases skipped): **5a spread/rest ✅**, **5b destructuring ✅**,
+**5c modules ✅**, **5d lexer literals & trivia 🚧**, **5e labels & do-while 🚧**,
+**5f class enhancements 🚧**, **5g attributes & resource management 🚧**.
 
 #### Phase 5a — spread & rest ✅
 
@@ -339,6 +343,106 @@ Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
   distinction is deferred to the interpreter, as with `yield`/`super` context in
   earlier phases. Module *placement* validity (top-level only) and *resolution*
   semantics are likewise interpreter concerns; this phase covers parsing only.
+
+#### Phase 5d — lexer literals & trivia 🚧
+
+Pure-lexer additions (plus the two AST leaves they feed), independent of every
+other sub-phase.
+
+- **Numeric separators** — a single `_` between digits is accepted in every base
+  and position (`1_000`, `0xFF_FF`, `1_000.000_5`, `1_0e1_0`). `lexNumber`
+  consumes a `_` only when it sits *between* two valid digits; a leading, trailing,
+  doubled, or base-prefix-adjacent `_` simply ends the number (an acceptable parse
+  error downstream) rather than being validated in the lexer. The separators are
+  stripped (`replace("_", "")`) before `Long.parseLong` / `Double.parseDouble`.
+- **BigInt literals** — the `n` suffix on an integer or radix form (`123n`,
+  `0xFFn`, `0b1010n`, `1_000n`) produces a new **`JsBigInt`** token
+  (`JsType.BIGINT`) carrying a `java.math.BigInteger` — the one place the "all
+  numbers are `double`" convention must not truncate, so `JsNumber`/`NumberLiteral`
+  are left untouched and a separate **`BigIntLiteral`** node (an `Expression`,
+  parsed in `parsePrimary`) holds the exact value. A `.`/exponent form followed by
+  `n` is invalid JS and is deliberately *not* recognized (it lexes as a stray
+  identifier).
+- **Hashbang** — a `#!` at **offset 0** only is skipped to end-of-line as trivia
+  (like a comment), emitting no token. Because it is anchored at the start of the
+  source it never collides with the private-field `#` of Phase 5f (always inside a
+  class body at a non-zero offset).
+- **Exhaustive-switch guardrail.** Adding `BIGINT` (and, in 5f, `PRIVATE_IDENTIFIER`)
+  to `JsType` forces a new arm in `JsBaseElement.internalGetType` and in the
+  parser's exhaustive `describe` switch — the compiler flags any omission, so a new
+  token can never be silently undescribed.
+
+#### Phase 5e — labels & do-while 🚧
+
+Pure parser/node additions; no lexer change (`do` is already a keyword).
+
+- **`do…while`** — `DoWhileStatement` (`body`, `test`); a `case "do"` in the
+  statement dispatch parses `do <stmt> while ( <expr> )` with an optional trailing
+  `;`. This closes a base-grammar (ES1) gap that every earlier phase skipped.
+- **Labeled statements** — `LabeledStatement` (`label` `Identifier`, `body`). At
+  statement position — after the keyword switch, before the expression-statement
+  fallthrough — an `Identifier` immediately followed by a `:` operator is parsed as
+  a label wrapping the statement that follows. Ternary `:` is unaffected because it
+  is reached only inside expressions.
+- **Labeled `break` / `continue`** — `BreakStatement` and `ContinueStatement`
+  (previously empty) gain a nullable `label` `Identifier`; `parseBreak`/
+  `parseContinue` consume a following identifier as the label. As with every prior
+  phase, the newline restriction (`break` and its label must share a line) is
+  unenforceable because the lexer discards newlines, so `break\nlabel` is accepted
+  — a documented ASI limitation, not a bug.
+
+#### Phase 5f — class enhancements 🚧
+
+- **Private members** — the lexer emits a **`JsPrivateIdentifier`** token
+  (`JsType.PRIVATE_IDENTIFIER`, name stored *without* the `#`) for a `#` directly
+  followed by an identifier start; a lone `#` stays an
+  `UnexpectedCharacterException`. A single **`PrivateIdentifier`** node (an
+  `Expression`) then flows through three existing paths with no structural change:
+  a member **key** (`parseClassMemberKey` → `#x = 1`, `#m(){}`, `static #s(){}`,
+  `get #g(){}`), a member **access** (`parseMemberProperty` → `this.#x`,
+  `obj.#m()`, since `MemberExpression.property` is already an `Expression`), and a
+  **`#x in obj`** primary (`parsePrimary`, evaluated by the existing `in` binary
+  operator). Private-name *validity* (only legal as an `in` LHS or a real member
+  reference) is left to the interpreter, mirroring `super`/`this` context handling.
+- **Static initialization blocks** — `StaticBlock` (a `List<Statement>` body,
+  extending `JsNode` as a class-body member alongside `MethodDefinition`/
+  `FieldDefinition`). `matchContextualModifier("static")` already consumes `static`
+  when a `{` follows (only `(`/`=`/`;`/`}` exclude it), so `parseClassMember` adds a
+  single `static`-then-`{` branch before it tries to read a member key. `static {}`
+  (empty) is valid.
+
+#### Phase 5g — attributes & resource management 🚧
+
+The ES2025 import-attribute and ES2026 explicit-resource-management syntax, both
+handled through **contextual keywords** (like `from`/`as`/`static`) so no new lexer
+keyword is introduced and existing identifier uses keep parsing.
+
+- **Import / export attributes** — a trailing `with { type: "json" }` clause on
+  `import def from "mod"`, bare `import "mod"`, `export * from "mod"`, and
+  `export { a } from "mod"`. A new **`ImportAttribute`** node (`key`, `value`) holds
+  each `IdentifierName`/string **key** paired with a **string-literal** value;
+  `ImportDeclaration`, `ExportAllDeclaration`, and `ExportNamedDeclaration` are
+  widened with an `attributes` `List` (empty when the `with` clause is absent — the
+  only cross-cutting constructor change in the four sub-phases). `with` is matched
+  via `matchContextualKeyword`, so `let with = 1` still parses. The legacy `assert`
+  spelling is not accepted (`with` is the standardized form).
+- **`using` / `await using`** — block-scoped resource declarations
+  (`using x = getResource()`, `await using r = f()`) reuse the existing
+  **`VariableDeclaration`** node with `kind` = `"using"` / `"await using"` rather
+  than introducing a new node — the interpreter branches on `getKind()`. `using` is
+  a **contextual identifier**: a statement is a `using` declaration only when
+  `using` is directly followed by a binding `Identifier` (so `using;`,
+  `using.foo()`, `using = 1`, and `let using = 1` still parse as expressions/
+  declarations); `await using` is detected by a three-token lookahead
+  (`await` · contextual `using` · identifier), falling back to the ordinary
+  `AwaitExpression` path otherwise. Only single-identifier bindings **with** an
+  initializer are accepted (destructuring targets and a missing initializer are
+  parse errors); the `for (using x of y)` head and full disposal semantics are
+  deferred to the interpreter.
+- **Deliberate limitations.** As throughout Phase 5, this is parsing only:
+  resource-disposal ordering, `Symbol.dispose`/`Symbol.asyncDispose` wiring, the
+  legality of `await using` outside an async context, and import-attribute
+  *resolution* are all interpreter concerns.
 
 ### Phase 6+ — the interpreter ⬜
 
