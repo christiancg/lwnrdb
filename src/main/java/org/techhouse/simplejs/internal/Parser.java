@@ -40,6 +40,7 @@ import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
+import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.ExportAllDeclaration;
 import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
@@ -60,6 +61,7 @@ import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode;
+import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
@@ -157,6 +159,9 @@ public final class Parser {
                     case "while" -> {
                         return parseWhile();
                     }
+                    case "do" -> {
+                        return parseDoWhile();
+                    }
                     case "for" -> {
                         return parseFor();
                     }
@@ -200,7 +205,17 @@ public final class Parser {
                     }
                 }
             }
+            if (current().getType() == JsType.IDENTIFIER && peek().getType() == JsType.OPERATOR
+                    && ":".equals(((JsOperator) peek()).getValue())) {
+                return parseLabeledStatement();
+            }
             return parseExpressionStatement();
+        }
+
+        private LabeledStatement parseLabeledStatement() {
+            final var label = parseIdentifier();
+            expectOperator(":");
+            return new LabeledStatement(label, parseStatement());
         }
 
         private BlockStatement parseBlock() {
@@ -248,6 +263,17 @@ public final class Parser {
             expectSeparator(')');
             final var body = parseStatement();
             return new WhileStatement(test, body);
+        }
+
+        private DoWhileStatement parseDoWhile() {
+            expectKeyword("do");
+            final var body = parseStatement();
+            expectKeyword("while");
+            expectSeparator('(');
+            final var test = parseExpression();
+            expectSeparator(')');
+            consumeOptionalSemicolon();
+            return new DoWhileStatement(body, test);
         }
 
         private Statement parseFor() {
@@ -405,14 +431,16 @@ public final class Parser {
 
         private BreakStatement parseBreak() {
             expectKeyword("break");
+            final var label = current().getType() == JsType.IDENTIFIER ? parseIdentifier() : null;
             consumeOptionalSemicolon();
-            return new BreakStatement();
+            return new BreakStatement(label);
         }
 
         private ContinueStatement parseContinue() {
             expectKeyword("continue");
+            final var label = current().getType() == JsType.IDENTIFIER ? parseIdentifier() : null;
             consumeOptionalSemicolon();
-            return new ContinueStatement();
+            return new ContinueStatement(label);
         }
 
         private FunctionDeclaration parseFunctionDeclaration(boolean async) {

@@ -25,6 +25,7 @@ import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
+import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.ExportAllDeclaration;
 import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
@@ -44,6 +45,7 @@ import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
+import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
@@ -380,6 +382,19 @@ public class ParserTest {
     }
 
     @Test
+    public void test_do_while_statement() {
+        final var loop = assertInstanceOf(DoWhileStatement.class, firstStatement("do x++; while (x < 10);"));
+        assertInstanceOf(ExpressionStatement.class, loop.getBody());
+        assertInstanceOf(BinaryExpression.class, loop.getTest());
+    }
+
+    // A do-while whose while clause is missing is a parse error
+    @Test
+    public void test_do_while_missing_while_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("do x; y;"));
+    }
+
+    @Test
     public void test_for_statement() {
         final var loop = assertInstanceOf(ForStatement.class, firstStatement("for (let i = 0; i < 3; i++) x;"));
         assertInstanceOf(VariableDeclaration.class, loop.getInit());
@@ -500,8 +515,21 @@ public class ParserTest {
     public void test_break_and_continue() {
         final var loop = assertInstanceOf(WhileStatement.class, firstStatement("while (x) { break; continue; }"));
         final var block = assertInstanceOf(BlockStatement.class, loop.getBody());
-        assertInstanceOf(BreakStatement.class, block.getBody().get(0));
-        assertInstanceOf(ContinueStatement.class, block.getBody().get(1));
+        final var brk = assertInstanceOf(BreakStatement.class, block.getBody().get(0));
+        final var cont = assertInstanceOf(ContinueStatement.class, block.getBody().get(1));
+        assertNull(brk.getLabel());
+        assertNull(cont.getLabel());
+    }
+
+    @Test
+    public void test_labeled_statement_with_labeled_break_continue() {
+        final var labeled = assertInstanceOf(LabeledStatement.class,
+                firstStatement("outer: while (x) { break outer; continue outer; }"));
+        assertEquals("outer", labeled.getLabel().getName());
+        final var loop = assertInstanceOf(WhileStatement.class, labeled.getBody());
+        final var block = assertInstanceOf(BlockStatement.class, loop.getBody());
+        assertEquals("outer", ((BreakStatement) block.getBody().get(0)).getLabel().getName());
+        assertEquals("outer", ((ContinueStatement) block.getBody().get(1)).getLabel().getName());
     }
 
     @Test

@@ -23,6 +23,7 @@ import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
+import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
 import org.techhouse.simplejs.nodes.ExportAllDeclaration;
 import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
@@ -42,6 +43,7 @@ import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode.NodeType;
+import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
@@ -94,8 +96,10 @@ public class JsNodeTest {
         assertEquals(NodeType.SWITCH_STATEMENT, new SwitchStatement(id, List.of()).getType());
         assertEquals(NodeType.SWITCH_CASE, new SwitchCase(null, List.of()).getType());
         assertEquals(NodeType.RETURN_STATEMENT, new ReturnStatement(null).getType());
-        assertEquals(NodeType.BREAK_STATEMENT, new BreakStatement().getType());
-        assertEquals(NodeType.CONTINUE_STATEMENT, new ContinueStatement().getType());
+        assertEquals(NodeType.BREAK_STATEMENT, new BreakStatement(null).getType());
+        assertEquals(NodeType.CONTINUE_STATEMENT, new ContinueStatement(null).getType());
+        assertEquals(NodeType.LABELED_STATEMENT, new LabeledStatement(id, new EmptyStatement()).getType());
+        assertEquals(NodeType.DO_WHILE_STATEMENT, new DoWhileStatement(new EmptyStatement(), num).getType());
         assertEquals(NodeType.EXPRESSION_STATEMENT, new ExpressionStatement(id).getType());
         assertEquals(NodeType.FUNCTION_DECLARATION,
                 new FunctionDeclaration(new Identifier("f"), List.of(), block, false, false).getType());

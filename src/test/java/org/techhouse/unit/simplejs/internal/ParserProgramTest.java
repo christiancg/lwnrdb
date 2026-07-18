@@ -20,6 +20,7 @@ import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.ClassDeclaration;
+import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.ExportAllDeclaration;
 import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
 import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
@@ -31,6 +32,7 @@ import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
+import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NumberLiteral;
@@ -389,6 +391,27 @@ public class ParserProgramTest {
         final var all = assertInstanceOf(ExportAllDeclaration.class, body.get(1));
         assertEquals("b", all.getSource().getValue());
         assertInstanceOf(ExportDefaultDeclaration.class, body.get(2));
+    }
+
+    // Phase 5e: a labeled outer loop with a nested do-while and a labeled break parses end-to-end
+    @Test
+    public void test_phase5e_labeled_do_while_program() {
+        final var source = """
+                outer: for (let i = 0; i < 3; i++) {
+                    let j = 0;
+                    do {
+                        if (j === i) break outer;
+                        j++;
+                    } while (j < 3);
+                }
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(1, body.size());
+        final var labeled = assertInstanceOf(LabeledStatement.class, body.getFirst());
+        assertEquals("outer", labeled.getLabel().getName());
+        final var forLoop = assertInstanceOf(ForStatement.class, labeled.getBody());
+        final var forBody = assertInstanceOf(BlockStatement.class, forLoop.getBody()).getBody();
+        assertInstanceOf(DoWhileStatement.class, forBody.get(1));
     }
 
     // Phase 5d literals flow end-to-end: a leading hashbang is skipped, separators stripped, n makes a BigInt

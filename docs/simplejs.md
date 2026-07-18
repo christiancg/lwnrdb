@@ -263,7 +263,7 @@ Delivered in seven independently reviewable sub-phases. The first three complete
 the module/pattern grammar; the last four close the remaining ES2020–ES2026
 lexer/parser gaps (everything the broad keyword set and modern editions imply but
 earlier phases skipped): **5a spread/rest ✅**, **5b destructuring ✅**,
-**5c modules ✅**, **5d lexer literals & trivia ✅**, **5e labels & do-while 🚧**,
+**5c modules ✅**, **5d lexer literals & trivia ✅**, **5e labels & do-while ✅**,
 **5f class enhancements 🚧**, **5g attributes & resource management 🚧**.
 
 #### Phase 5a — spread & rest ✅
@@ -372,7 +372,7 @@ other sub-phase.
   parser's exhaustive `describe` switch — the compiler flags any omission, so a new
   token can never be silently undescribed.
 
-#### Phase 5e — labels & do-while 🚧
+#### Phase 5e — labels & do-while ✅
 
 Pure parser/node additions; no lexer change (`do` is already a keyword).
 
