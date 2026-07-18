@@ -18,6 +18,9 @@ import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.ClassDeclaration;
+import org.techhouse.simplejs.nodes.ExportAllDeclaration;
+import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
+import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.ForOfStatement;
@@ -25,6 +28,7 @@ import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.ObjectExpression;
@@ -341,5 +345,46 @@ public class ParserProgramTest {
         final var assignStatement = assertInstanceOf(ExpressionStatement.class, body.get(1));
         final var assign = assertInstanceOf(AssignmentExpression.class, assignStatement.getExpression());
         assertInstanceOf(ArrayPattern.class, assign.getTarget());
+    }
+
+    // A module head of imports followed by declarations and a trailing named export
+    @Test
+    public void test_module_imports_and_exports() {
+        final var source = """
+                import defaults, { a, b as c } from "lib";
+                import * as ns from "other";
+                function helper() {}
+                class Widget {}
+                export { helper, Widget as Thing };
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(5, body.size());
+        final var first = assertInstanceOf(ImportDeclaration.class, body.getFirst());
+        assertEquals(3, first.getSpecifiers().size());
+        assertEquals("lib", first.getSource().getValue());
+        final var second = assertInstanceOf(ImportDeclaration.class, body.get(1));
+        assertEquals("other", second.getSource().getValue());
+        assertInstanceOf(FunctionDeclaration.class, body.get(2));
+        assertInstanceOf(ClassDeclaration.class, body.get(3));
+        final var export = assertInstanceOf(ExportNamedDeclaration.class, body.get(4));
+        assertEquals(2, export.getSpecifiers().size());
+        assertNull(export.getSource());
+    }
+
+    // A re-export module mixes named re-export, wildcard re-export and default export
+    @Test
+    public void test_module_reexports_and_default() {
+        final var source = """
+                export { x } from "a";
+                export * from "b";
+                export default function () {}
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(3, body.size());
+        final var named = assertInstanceOf(ExportNamedDeclaration.class, body.getFirst());
+        assertEquals("a", named.getSource().getValue());
+        final var all = assertInstanceOf(ExportAllDeclaration.class, body.get(1));
+        assertEquals("b", all.getSource().getValue());
+        assertInstanceOf(ExportDefaultDeclaration.class, body.get(2));
     }
 }

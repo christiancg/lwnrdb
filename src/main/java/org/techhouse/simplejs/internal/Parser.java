@@ -39,6 +39,10 @@ import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.EmptyStatement;
+import org.techhouse.simplejs.nodes.ExportAllDeclaration;
+import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
+import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
+import org.techhouse.simplejs.nodes.ExportSpecifier;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.FieldDefinition;
@@ -49,6 +53,10 @@ import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.ImportDeclaration;
+import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
+import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
+import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
@@ -179,6 +187,12 @@ public final class Parser {
                     }
                     case "class" -> {
                         return parseClassDeclaration();
+                    }
+                    case "import" -> {
+                        return parseImportDeclaration();
+                    }
+                    case "export" -> {
+                        return parseExportDeclaration();
                     }
                     default -> {
                     }
@@ -406,6 +420,167 @@ public final class Parser {
             final var params = parseParams();
             final var body = parseBlock();
             return new FunctionDeclaration(name, params, body, async, generator);
+        }
+
+        private ImportDeclaration parseImportDeclaration() {
+            // `import` is a keyword, so import(...) dynamic imports and import.meta are not parsed here.
+            expectKeyword("import");
+            if (current().getType() == JsType.STRING) {
+                final var source = parseModuleSource();
+                consumeOptionalSemicolon();
+                return new ImportDeclaration(List.of(), source);
+            }
+            final var specifiers = new ArrayList<JsNode>();
+            if (matchOperator("*")) {
+                specifiers.add(parseImportNamespaceSpecifier());
+            } else if (isSeparator('{')) {
+                parseNamedImportSpecifiers(specifiers);
+            } else {
+                specifiers.add(new ImportDefaultSpecifier(parseIdentifier()));
+                if (matchSeparator(',')) {
+                    if (matchOperator("*")) {
+                        specifiers.add(parseImportNamespaceSpecifier());
+                    } else {
+                        parseNamedImportSpecifiers(specifiers);
+                    }
+                }
+            }
+            expectContextualKeyword("from");
+            final var source = parseModuleSource();
+            consumeOptionalSemicolon();
+            return new ImportDeclaration(specifiers, source);
+        }
+
+        private ImportNamespaceSpecifier parseImportNamespaceSpecifier() {
+            expectContextualKeyword("as");
+            return new ImportNamespaceSpecifier(parseIdentifier());
+        }
+
+        private void parseNamedImportSpecifiers(List<JsNode> specifiers) {
+            expectSeparator('{');
+            while (!isSeparator('}')) {
+                final var imported = parseModuleExportName();
+                final var local = matchContextualKeyword("as") ? parseIdentifier() : asBindingIdentifier(imported);
+                specifiers.add(new ImportSpecifier(imported, local));
+                if (!isSeparator('}')) {
+                    expectSeparator(',');
+                }
+            }
+            expectSeparator('}');
+        }
+
+        private Statement parseExportDeclaration() {
+            expectKeyword("export");
+            if (matchKeyword("default")) {
+                final var declaration = parseAssignment();
+                consumeOptionalSemicolon();
+                return new ExportDefaultDeclaration(declaration);
+            }
+            if (matchOperator("*")) {
+                return parseExportAll();
+            }
+            if (isSeparator('{')) {
+                return parseExportNamed();
+            }
+            return new ExportNamedDeclaration(parseExportedDeclaration(), List.of(), null);
+        }
+
+        private ExportAllDeclaration parseExportAll() {
+            Identifier exported = null;
+            if (matchContextualKeyword("as")) {
+                exported = asBindingIdentifier(parseModuleExportName());
+            }
+            expectContextualKeyword("from");
+            final var source = parseModuleSource();
+            consumeOptionalSemicolon();
+            return new ExportAllDeclaration(exported, source);
+        }
+
+        private ExportNamedDeclaration parseExportNamed() {
+            expectSeparator('{');
+            final var specifiers = new ArrayList<ExportSpecifier>();
+            while (!isSeparator('}')) {
+                final var local = parseModuleExportName();
+                final var exported = matchContextualKeyword("as") ? parseModuleExportName() : local;
+                specifiers.add(new ExportSpecifier(local, exported));
+                if (!isSeparator('}')) {
+                    expectSeparator(',');
+                }
+            }
+            expectSeparator('}');
+            StringLiteral source = null;
+            if (matchContextualKeyword("from")) {
+                source = parseModuleSource();
+            }
+            consumeOptionalSemicolon();
+            return new ExportNamedDeclaration(null, specifiers, source);
+        }
+
+        private Statement parseExportedDeclaration() {
+            if (isKeyword("var") || isKeyword("let") || isKeyword("const")) {
+                return parseVariableDeclaration();
+            }
+            if (isKeyword("function")) {
+                return parseFunctionDeclaration(false);
+            }
+            if (isKeyword("async") && peek().getType() == JsType.KEYWORD
+                    && "function".equals(((JsKeyword) peek()).getValue())) {
+                advance();
+                return parseFunctionDeclaration(true);
+            }
+            if (isKeyword("class")) {
+                return parseClassDeclaration();
+            }
+            throw error();
+        }
+
+        private StringLiteral parseModuleSource() {
+            final var t = current();
+            if (t.getType() != JsType.STRING) {
+                throw error();
+            }
+            advance();
+            return new StringLiteral(((JsString) t).getValue());
+        }
+
+        // A module name position accepts an identifier, a keyword-as-name (e.g. `default`), or a
+        // string-literal name (`{ a as "x" }`).
+        private Expression parseModuleExportName() {
+            final var t = current();
+            final Expression name = switch (t.getType()) {
+                case IDENTIFIER -> new Identifier(((JsIdentifier) t).getValue());
+                case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
+                case STRING -> new StringLiteral(((JsString) t).getValue());
+                default -> throw error();
+            };
+            advance();
+            return name;
+        }
+
+        private Identifier asBindingIdentifier(Expression name) {
+            if (name instanceof Identifier id) {
+                return id;
+            }
+            throw error();
+        }
+
+        private boolean isContextualKeyword(String word) {
+            final var t = current();
+            return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(word);
+        }
+
+        private boolean matchContextualKeyword(String word) {
+            if (isContextualKeyword(word)) {
+                advance();
+                return true;
+            }
+            return false;
+        }
+
+        private void expectContextualKeyword(String word) {
+            if (!matchContextualKeyword(word)) {
+                throw error();
+            }
         }
 
         private ExpressionStatement parseExpressionStatement() {

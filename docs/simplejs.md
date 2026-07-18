@@ -260,7 +260,7 @@ remains a lexer constraint.
 ### Phase 5 — modules & patterns 🚧
 
 Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
-**5b destructuring ✅**, **5c modules ⬜**.
+**5b destructuring ✅**, **5c modules ✅**.
 
 #### Phase 5a — spread & rest ✅
 
@@ -308,13 +308,37 @@ Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
   `{a = 1}` not followed by `=` therefore parses as an object expression — validity is
   left to the interpreter, as with `yield`/`super` context in earlier phases.
 
-#### Phase 5c — modules ⬜
+#### Phase 5c — modules ✅
 
-- **Modules** — `import`/`export` in their several forms: `ImportDeclaration`,
-  `ExportNamedDeclaration`, `ExportDefaultDeclaration`, `ExportAllDeclaration`,
-  and the specifier nodes (`from`/`as` are contextual identifiers, not keywords).
-  (Module *resolution* semantics are an interpreter concern; this phase covers
-  parsing only.)
+- **Imports** — `ImportDeclaration` (`specifiers`, `source`) covers bare
+  side-effect imports (`import "mod"`), default (`import def from "mod"`),
+  namespace (`import * as ns from "mod"`), named (`import { a, b as c } from "mod"`)
+  and the combined default-plus-group forms (`import def, { a } from "mod"`,
+  `import def, * as ns from "mod"`). The specifier nodes are `ImportSpecifier`
+  (`imported`, `local`), `ImportDefaultSpecifier` (`local`) and
+  `ImportNamespaceSpecifier` (`local`).
+- **Exports** — `ExportNamedDeclaration` (`declaration`, `specifiers`, `source`)
+  covers named exports (`export { a, b as c }`), re-exports (`export { a } from
+  "mod"`) and declaration exports (`export const/function/async function/class …`,
+  where `declaration` is set and `specifiers`/`source` are empty/null);
+  `ExportAllDeclaration` (`exported`, `source`) covers `export * from "mod"` and
+  `export * as ns from "mod"`; `ExportDefaultDeclaration` (`declaration`) covers
+  `export default …`. The named-export specifier is `ExportSpecifier`
+  (`local`, `exported`).
+- **Contextual `from`/`as`** — both lex as identifiers (not keywords), matched via
+  `matchContextualKeyword`/`expectContextualKeyword`, so `let from = 1` and
+  `const as = 2` still parse as ordinary declarations. A module name position
+  (`parseModuleExportName`) accepts an identifier, a keyword-as-name
+  (`{ default as x }`) or a string-literal name (`{ a as "x" }`).
+- **Deliberate limitations.** Because the lexer makes `import` a *keyword*, dynamic
+  `import(...)` and `import.meta` are not parsed (every `import` begins a
+  declaration), mirroring the Phase-4 `async(x)` limitation. `export default
+  function f(){}` / `export default class C {}` parse the value through the
+  assignment grammar, so a named default export yields a
+  `FunctionExpression`/`ClassExpression` rather than a hoisted declaration — the
+  distinction is deferred to the interpreter, as with `yield`/`super` context in
+  earlier phases. Module *placement* validity (top-level only) and *resolution*
+  semantics are likewise interpreter concerns; this phase covers parsing only.
 
 ### Phase 6+ — the interpreter ⬜
 
