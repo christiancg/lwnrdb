@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.nodes;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigInteger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.nodes.ArrayExpression;
@@ -10,6 +11,7 @@ import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
+import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
@@ -99,6 +101,7 @@ public class JsNodeTest {
                 new FunctionDeclaration(new Identifier("f"), List.of(), block, false, false).getType());
         assertEquals(NodeType.EMPTY_STATEMENT, new EmptyStatement().getType());
         assertEquals(NodeType.NUMBER_LITERAL, num.getType());
+        assertEquals(NodeType.BIGINT_LITERAL, new BigIntLiteral(BigInteger.ONE).getType());
         assertEquals(NodeType.STRING_LITERAL, new StringLiteral("s").getType());
         assertEquals(NodeType.BOOLEAN_LITERAL, new BooleanLiteral(true).getType());
         assertEquals(NodeType.NULL_LITERAL, new NullLiteral().getType());

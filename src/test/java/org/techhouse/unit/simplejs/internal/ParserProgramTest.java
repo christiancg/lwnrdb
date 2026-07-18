@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
@@ -15,6 +16,7 @@ import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
+import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.ClassDeclaration;
@@ -31,6 +33,7 @@ import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
+import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.Program;
@@ -386,5 +389,23 @@ public class ParserProgramTest {
         final var all = assertInstanceOf(ExportAllDeclaration.class, body.get(1));
         assertEquals("b", all.getSource().getValue());
         assertInstanceOf(ExportDefaultDeclaration.class, body.get(2));
+    }
+
+    // Phase 5d literals flow end-to-end: a leading hashbang is skipped, separators stripped, n makes a BigInt
+    @Test
+    public void test_phase5d_literals_program() {
+        final var source = """
+                #!/usr/bin/env node
+                const million = 1_000_000;
+                const big = 0xFF_FFn;
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(2, body.size());
+        final var million = assertInstanceOf(VariableDeclaration.class, body.getFirst());
+        final var millionInit = assertInstanceOf(NumberLiteral.class, million.getDeclarations().getFirst().getInit());
+        assertEquals(1000000.0, millionInit.getValue());
+        final var big = assertInstanceOf(VariableDeclaration.class, body.get(1));
+        final var bigInit = assertInstanceOf(BigIntLiteral.class, big.getDeclarations().getFirst().getInit());
+        assertEquals(new BigInteger("65535"), bigInit.getValue());
     }
 }

@@ -2,9 +2,11 @@ package org.techhouse.unit.simplejs.elements;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.math.BigInteger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.elements.JsBaseElement.JsType;
+import org.techhouse.simplejs.elements.JsBigInt;
 import org.techhouse.simplejs.elements.JsBoolean;
 import org.techhouse.simplejs.elements.JsEOF;
 import org.techhouse.simplejs.elements.JsIdentifier;
@@ -25,6 +27,7 @@ public class JsBaseElementTest {
         assertEquals(JsType.KEYWORD, new JsKeyword("if").getType());
         assertEquals(JsType.IDENTIFIER, new JsIdentifier("x").getType());
         assertEquals(JsType.NUMBER, new JsNumber(1.0).getType());
+        assertEquals(JsType.BIGINT, new JsBigInt(BigInteger.ONE).getType());
         assertEquals(JsType.STRING, new JsString("s").getType());
         assertEquals(JsType.BOOLEAN, new JsBoolean(true).getType());
         assertEquals(JsType.NULL, JsNull.getInstance().getType());

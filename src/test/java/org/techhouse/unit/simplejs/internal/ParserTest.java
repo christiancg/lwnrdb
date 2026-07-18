@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
@@ -13,6 +14,7 @@ import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
+import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
@@ -108,6 +110,12 @@ public class ParserTest {
     public void test_string_literal() {
         final var str = assertInstanceOf(StringLiteral.class, firstExpression("\"hi\""));
         assertEquals("hi", str.getValue());
+    }
+
+    @Test
+    public void test_bigint_literal() {
+        final var big = assertInstanceOf(BigIntLiteral.class, firstExpression("0xFFn"));
+        assertEquals(new BigInteger("255"), big.getValue());
     }
 
     @Test

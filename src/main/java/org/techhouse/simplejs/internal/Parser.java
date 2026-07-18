@@ -9,6 +9,7 @@ import java.util.Set;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.elements.JsBaseElement;
 import org.techhouse.simplejs.elements.JsBaseElement.JsType;
+import org.techhouse.simplejs.elements.JsBigInt;
 import org.techhouse.simplejs.elements.JsBoolean;
 import org.techhouse.simplejs.elements.JsIdentifier;
 import org.techhouse.simplejs.elements.JsKeyword;
@@ -27,6 +28,7 @@ import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.AwaitExpression;
+import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
@@ -1011,6 +1013,10 @@ public final class Parser {
                     advance();
                     return new NumberLiteral(((JsNumber) t).getValue());
                 }
+                case BIGINT -> {
+                    advance();
+                    return new BigIntLiteral(((JsBigInt) t).getValue());
+                }
                 case STRING -> {
                     advance();
                     return new StringLiteral(((JsString) t).getValue());
@@ -1504,6 +1510,7 @@ public final class Parser {
                 case KEYWORD -> ((JsKeyword) t).getValue();
                 case IDENTIFIER -> ((JsIdentifier) t).getValue();
                 case NUMBER -> String.valueOf(((JsNumber) t).getValue());
+                case BIGINT -> ((JsBigInt) t).getValue() + "n";
                 case STRING -> '"' + ((JsString) t).getValue() + '"';
                 case BOOLEAN -> String.valueOf(((JsBoolean) t).getValue());
                 case NULL -> "null";

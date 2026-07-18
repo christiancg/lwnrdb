@@ -2,9 +2,11 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.math.BigInteger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.elements.JsBaseElement;
+import org.techhouse.simplejs.elements.JsBigInt;
 import org.techhouse.simplejs.elements.JsBoolean;
 import org.techhouse.simplejs.elements.JsEOF;
 import org.techhouse.simplejs.elements.JsIdentifier;
@@ -131,6 +133,51 @@ public class LexerTest {
         final List<JsBaseElement> tokens = Lexer.lex("3in");
         assertInstanceOf(JsNumber.class, tokens.get(0));
         assertInstanceOf(JsKeyword.class, tokens.get(1));
+    }
+
+    // Numeric separators are allowed between digits (decimal, fraction, exponent, radix) and stripped
+    @Test
+    public void test_lex_numeric_separators() {
+        assertEquals(1000000.0, ((JsNumber) Lexer.lex("1_000_000").getFirst()).getValue());
+        assertEquals(1000.0005, ((JsNumber) Lexer.lex("1_000.000_5").getFirst()).getValue());
+        assertEquals(1e11, ((JsNumber) Lexer.lex("1_0e1_0").getFirst()).getValue());
+        assertEquals(65535.0, ((JsNumber) Lexer.lex("0xFF_FF").getFirst()).getValue());
+        assertEquals(170.0, ((JsNumber) Lexer.lex("0b1010_1010").getFirst()).getValue());
+    }
+
+    // A misplaced separator ends the number rather than being consumed
+    @Test
+    public void test_lex_misplaced_separator_stops_number() {
+        final var doubled = Lexer.lex("1__0");
+        assertEquals(1.0, ((JsNumber) doubled.get(0)).getValue());
+        assertInstanceOf(JsIdentifier.class, doubled.get(1));
+        final var trailing = Lexer.lex("1_");
+        assertEquals(1.0, ((JsNumber) trailing.get(0)).getValue());
+        assertInstanceOf(JsIdentifier.class, trailing.get(1));
+    }
+
+    // A trailing n suffix produces a BigInt token in every integer form
+    @Test
+    public void test_lex_bigint() {
+        assertEquals(new BigInteger("123"), ((JsBigInt) Lexer.lex("123n").getFirst()).getValue());
+        assertEquals(new BigInteger("255"), ((JsBigInt) Lexer.lex("0xFFn").getFirst()).getValue());
+        assertEquals(BigInteger.TEN, ((JsBigInt) Lexer.lex("0b1010n").getFirst()).getValue());
+        assertEquals(new BigInteger("1000"), ((JsBigInt) Lexer.lex("1_000n").getFirst()).getValue());
+    }
+
+    // A hashbang at offset 0 is skipped as trivia
+    @Test
+    public void test_lex_hashbang_skipped_at_start() {
+        final List<JsBaseElement> tokens = Lexer.lex("#!/usr/bin/env node\nfoo");
+        assertEquals(2, tokens.size());
+        assertInstanceOf(JsIdentifier.class, tokens.getFirst());
+        assertEquals("foo", ((JsIdentifier) tokens.getFirst()).getValue());
+    }
+
+    // A # anywhere other than a leading hashbang is an unexpected character
+    @Test
+    public void test_lex_hash_not_at_start_throws() {
+        assertThrows(UnexpectedCharacterException.class, () -> Lexer.lex("foo\n#!bar"));
     }
 
     // Double-quoted string

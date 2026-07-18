@@ -1,10 +1,12 @@
 package org.techhouse.simplejs.internal;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.simplejs.elements.JsBaseElement;
+import org.techhouse.simplejs.elements.JsBigInt;
 import org.techhouse.simplejs.elements.JsBoolean;
 import org.techhouse.simplejs.elements.JsEOF;
 import org.techhouse.simplejs.elements.JsIdentifier;
@@ -60,7 +62,7 @@ public final class Lexer {
         final var positions = new ArrayList<SourcePosition>();
         final var lineStarts = computeLineStarts(sourceCode);
         final var n = sourceCode.length();
-        var pos = 0;
+        var pos = skipHashbang(sourceCode, n);
         JsBaseElement last = null;
         while (pos < n) {
             final var c = sourceCode.charAt(pos);
@@ -121,6 +123,19 @@ public final class Lexer {
             idx = -idx - 2;
         }
         return new SourcePosition(offset, length, idx + 1, offset - lineStarts[idx] + 1);
+    }
+
+    // A `#!` hashbang is only recognised at the very start of the source and is skipped to
+    // end-of-line as trivia (no token emitted), like a comment.
+    private static int skipHashbang(String src, int n) {
+        if (!src.startsWith("#!")) {
+            return 0;
+        }
+        var i = 2;
+        while (i < n && src.charAt(i) != '\n') {
+            i++;
+        }
+        return i;
     }
 
     private static int skipComment(String src, int start) {
@@ -221,23 +236,21 @@ public final class Lexer {
                 default -> 0;
             };
             if (radix != 0) {
-                var j = start + 2;
-                while (j < n && isRadixDigit(src.charAt(j), radix)) {
-                    j++;
+                final var end = scanDigits(src, start + 2, n, radix);
+                final var digits = src.substring(start + 2, end).replace("_", "");
+                if (end < n && src.charAt(end) == 'n') {
+                    return new Lexed(new JsBigInt(new BigInteger(digits, radix)), end + 1);
                 }
-                final var value = (double) Long.parseLong(src.substring(start + 2, j), radix);
-                return new Lexed(new JsNumber(value), j);
+                return new Lexed(new JsNumber((double) Long.parseLong(digits, radix)), end);
             }
         }
-        var j = start;
-        while (j < n && Character.isDigit(src.charAt(j))) {
-            j++;
+        var j = scanDigits(src, start, n, 10);
+        final var fractional = j < n && (src.charAt(j) == '.' || src.charAt(j) == 'e' || src.charAt(j) == 'E');
+        if (!fractional && j < n && src.charAt(j) == 'n') {
+            return new Lexed(new JsBigInt(new BigInteger(src.substring(start, j).replace("_", ""))), j + 1);
         }
         if (j < n && src.charAt(j) == '.') {
-            j++;
-            while (j < n && Character.isDigit(src.charAt(j))) {
-                j++;
-            }
+            j = scanDigits(src, j + 1, n, 10);
         }
         if (j < n && (src.charAt(j) == 'e' || src.charAt(j) == 'E')) {
             var k = j + 1;
@@ -245,14 +258,27 @@ public final class Lexer {
                 k++;
             }
             if (k < n && Character.isDigit(src.charAt(k))) {
-                k++;
-                while (k < n && Character.isDigit(src.charAt(k))) {
-                    k++;
-                }
-                j = k;
+                j = scanDigits(src, k, n, 10);
             }
         }
-        return new Lexed(new JsNumber(Double.parseDouble(src.substring(start, j))), j);
+        return new Lexed(new JsNumber(Double.parseDouble(src.substring(start, j).replace("_", ""))), j);
+    }
+
+    // Consumes a run of radix digits, allowing a single '_' separator only between two digits.
+    private static int scanDigits(String src, int start, int n, int radix) {
+        var j = start;
+        while (j < n) {
+            final var c = src.charAt(j);
+            if (isRadixDigit(c, radix)) {
+                j++;
+            } else if (c == '_' && j > start && j + 1 < n && isRadixDigit(src.charAt(j + 1), radix)
+                    && isRadixDigit(src.charAt(j - 1), radix)) {
+                j++;
+            } else {
+                break;
+            }
+        }
+        return j;
     }
 
     private static boolean isRadixDigit(char c, int radix) {
