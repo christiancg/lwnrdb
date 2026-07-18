@@ -3,19 +3,19 @@ package org.techhouse.simplejs.nodes;
 import java.util.List;
 
 public class ArrowFunctionExpression extends Expression {
-    private final List<Identifier> params;
+    private final List<JsNode> params;
     private final JsNode body;
     private final boolean expressionBody;
     private final boolean async;
 
-    public ArrowFunctionExpression(List<Identifier> params, JsNode body, boolean expressionBody, boolean async) {
+    public ArrowFunctionExpression(List<JsNode> params, JsNode body, boolean expressionBody, boolean async) {
         this.params = params;
         this.body = body;
         this.expressionBody = expressionBody;
         this.async = async;
     }
 
-    public List<Identifier> getParams() {
+    public List<JsNode> getParams() {
         return params;
     }
 

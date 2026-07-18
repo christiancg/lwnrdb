@@ -58,7 +58,9 @@ import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
+import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
@@ -405,12 +407,16 @@ public final class Parser {
             return new ExpressionStatement(expr);
         }
 
-        private List<Identifier> parseParams() {
+        private List<JsNode> parseParams() {
             expectSeparator('(');
-            final var params = new ArrayList<Identifier>();
+            final var params = new ArrayList<JsNode>();
             if (!isSeparator(')')) {
                 do {
                     if (isSeparator(')')) {
+                        break;
+                    }
+                    if (matchOperator("...")) {
+                        params.add(new RestElement(parseIdentifier()));
                         break;
                     }
                     params.add(parseIdentifier());
@@ -646,11 +652,18 @@ public final class Parser {
                     if (isSeparator(')')) {
                         break;
                     }
-                    arguments.add(withInAllowed(this::parseAssignment));
+                    arguments.add(parseSpreadableExpression());
                 } while (matchSeparator(','));
             }
             expectSeparator(')');
             return arguments;
+        }
+
+        private Expression parseSpreadableExpression() {
+            if (matchOperator("...")) {
+                return new SpreadElement(withInAllowed(this::parseAssignment));
+            }
+            return withInAllowed(this::parseAssignment);
         }
 
         private Expression parsePrimary() {
@@ -940,7 +953,7 @@ public final class Parser {
             return false;
         }
 
-        private ArrowFunctionExpression parseArrowBody(List<Identifier> params, boolean async) {
+        private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
             if (isSeparator('{')) {
                 return new ArrowFunctionExpression(params, parseBlock(), false, async);
             }
@@ -950,13 +963,15 @@ public final class Parser {
         private ArrayExpression parseArray() {
             expectSeparator('[');
             final var elements = new ArrayList<Expression>();
-            if (!isSeparator(']')) {
-                do {
-                    if (isSeparator(']')) {
-                        break;
-                    }
-                    elements.add(withInAllowed(this::parseAssignment));
-                } while (matchSeparator(','));
+            while (!isSeparator(']')) {
+                if (matchSeparator(',')) {
+                    elements.add(null);
+                    continue;
+                }
+                elements.add(parseSpreadableExpression());
+                if (!isSeparator(']')) {
+                    expectSeparator(',');
+                }
             }
             expectSeparator(']');
             return new ArrayExpression(elements);
@@ -964,17 +979,24 @@ public final class Parser {
 
         private ObjectExpression parseObject() {
             expectSeparator('{');
-            final var properties = new ArrayList<Property>();
+            final var properties = new ArrayList<JsNode>();
             if (!isSeparator('}')) {
                 do {
                     if (isSeparator('}')) {
                         break;
                     }
-                    properties.add(withInAllowed(this::parseProperty));
+                    properties.add(parseObjectMember());
                 } while (matchSeparator(','));
             }
             expectSeparator('}');
             return new ObjectExpression(properties);
+        }
+
+        private JsNode parseObjectMember() {
+            if (matchOperator("...")) {
+                return new SpreadElement(withInAllowed(this::parseAssignment));
+            }
+            return withInAllowed(this::parseProperty);
         }
 
         private Property parseProperty() {

@@ -40,7 +40,9 @@ import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
+import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchCase;
@@ -120,6 +122,8 @@ public class JsNodeTest {
         assertEquals(NodeType.METHOD_DEFINITION, new MethodDefinition(id, method, "method", false, false).getType());
         assertEquals(NodeType.FIELD_DEFINITION, new FieldDefinition(id, num, false, false).getType());
         assertEquals(NodeType.SUPER_EXPRESSION, new SuperExpression().getType());
+        assertEquals(NodeType.SPREAD_ELEMENT, new SpreadElement(id).getType());
+        assertEquals(NodeType.REST_ELEMENT, new RestElement(id).getType());
     }
 
     // Node getters expose the values passed to the constructor
@@ -193,5 +197,9 @@ public class JsNodeTest {
         assertEquals(id, classExpression.getId());
         assertEquals(num, classExpression.getSuperClass());
         assertEquals(classBody, classExpression.getBody());
+        final var spread = new SpreadElement(num);
+        assertEquals(num, spread.getArgument());
+        final var rest = new RestElement(id);
+        assertEquals(id, rest.getArgument());
     }
 }

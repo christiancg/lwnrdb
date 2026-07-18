@@ -4,12 +4,12 @@ import java.util.List;
 
 public class FunctionDeclaration extends Statement {
     private final Identifier name;
-    private final List<Identifier> params;
+    private final List<JsNode> params;
     private final BlockStatement body;
     private final boolean async;
     private final boolean generator;
 
-    public FunctionDeclaration(Identifier name, List<Identifier> params, BlockStatement body, boolean async,
+    public FunctionDeclaration(Identifier name, List<JsNode> params, BlockStatement body, boolean async,
             boolean generator) {
         this.name = name;
         this.params = params;
@@ -22,7 +22,7 @@ public class FunctionDeclaration extends Statement {
         return name;
     }
 
-    public List<Identifier> getParams() {
+    public List<JsNode> getParams() {
         return params;
     }
 

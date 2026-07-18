@@ -3,13 +3,13 @@ package org.techhouse.simplejs.nodes;
 import java.util.List;
 
 public class ObjectExpression extends Expression {
-    private final List<Property> properties;
+    private final List<JsNode> properties;
 
-    public ObjectExpression(List<Property> properties) {
+    public ObjectExpression(List<JsNode> properties) {
         this.properties = properties;
     }
 
-    public List<Property> getProperties() {
+    public List<JsNode> getProperties() {
         return properties;
     }
 }

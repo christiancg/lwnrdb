@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
+import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
@@ -25,7 +26,9 @@ import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
+import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThrowStatement;
@@ -280,5 +283,29 @@ public class ParserProgramTest {
         assertTrue(asyncGen.getValue().isAsync());
         assertTrue(asyncGen.getValue().isGenerator());
         assertEquals("get", ((MethodDefinition) members.get(4)).getKind());
+    }
+
+    // Spread and rest appear together across a realistic function
+    @Test
+    public void test_spread_and_rest_program() {
+        final var source = """
+                function merge(first, ...others) {
+                    const all = [first, ...others];
+                    return combine(...all);
+                }
+                """;
+        final var program = parse(source);
+        assertEquals(1, program.getBody().size());
+        final var fn = assertInstanceOf(FunctionDeclaration.class, program.getBody().getFirst());
+        assertEquals(2, fn.getParams().size());
+        assertInstanceOf(RestElement.class, fn.getParams().get(1));
+        final var body = fn.getBody().getBody();
+        final var decl = assertInstanceOf(VariableDeclaration.class, body.getFirst());
+        final var array = assertInstanceOf(ArrayExpression.class, decl.getDeclarations().getFirst().getInit());
+        assertEquals(2, array.getElements().size());
+        assertInstanceOf(SpreadElement.class, array.getElements().get(1));
+        final var ret = assertInstanceOf(ReturnStatement.class, body.get(1));
+        final var call = assertInstanceOf(CallExpression.class, ret.getArgument());
+        assertInstanceOf(SpreadElement.class, call.getArguments().getFirst());
     }
 }

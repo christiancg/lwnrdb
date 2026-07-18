@@ -257,17 +257,45 @@ remains a lexer constraint.
   appears. As in Phase 3 for `super`/`this`, generator/async **context** validity
   (e.g. `yield` only inside a generator) is left to the interpreter.
 
-### Phase 5 — modules & patterns ⬜
+### Phase 5 — modules & patterns 🚧
+
+Delivered in three independently reviewable sub-phases: **5a spread/rest ✅**,
+**5b destructuring ⬜**, **5c modules ⬜**.
+
+#### Phase 5a — spread & rest ✅
+
+- **Spread** — `SpreadElement` (an `Expression`, `argument`) in array literals
+  (`[1, ...rest]`), call arguments (`f(...xs)`) and object literals
+  (`{...o, a: 1}`). Array/call element lists stay `List<Expression>`;
+  `ObjectExpression.properties` is widened to `List<JsNode>` to hold a
+  `SpreadElement` alongside `Property` entries, mirroring `ClassBody`.
+- **Rest** — `RestElement` (extends `JsNode`, `argument`) as the last function
+  parameter (`function f(a, ...rest){}`, `(a, ...rest) => a`); a parameter after a
+  rest element, or a `...` with no argument, is a parse error. Function/arrow
+  `params` are widened from `List<Identifier>` to `List<JsNode>` (rest elements now,
+  full binding patterns in 5b).
+- **Array holes** — array-literal elisions (`[a, , b]`, `[,]`) parse to `null`
+  elements; a trailing comma (`[a,]`) is not a hole.
+- `SpreadElement` and `RestElement` are distinct nodes (`SPREAD_ELEMENT` /
+  `REST_ELEMENT`): spread is the expression side, rest the binding side. Both `...`
+  productions share the `parseSpreadableExpression` helper on the spread side.
+
+#### Phase 5b — destructuring ⬜
+
+- **Destructuring** — array/object binding and assignment patterns
+  (`ArrayPattern`, `ObjectPattern`, `AssignmentPattern`, all extending `JsNode`)
+  wherever a binding target appears (declarations, params, assignment LHS, `for-in`/
+  `for-of`, catch). Binding positions parse patterns directly; assignment-LHS
+  positions parse as an expression and are reinterpreted into a pattern on `=`
+  (cover grammar). `RestElement` also appears inside patterns here.
+
+#### Phase 5c — modules ⬜
 
 - **Modules** — `import`/`export` in their several forms: `ImportDeclaration`,
   `ExportNamedDeclaration`, `ExportDefaultDeclaration`, `ExportAllDeclaration`,
-  and the specifier nodes. (Module *resolution* semantics are an interpreter
-  concern; this phase covers parsing only.)
-- **Destructuring** — array/object binding and assignment patterns
-  (`ArrayPattern`, `ObjectPattern`, `AssignmentPattern`) wherever a binding target
-  appears (declarations, params, assignment LHS).
-- **Spread / rest** — `SpreadElement` in array/call/object literals and
-  `RestElement` in params and patterns.
+  and the specifier nodes (`from`/`as` are contextual identifiers, not keywords).
+  (Module *resolution* semantics are an interpreter concern; this phase covers
+  parsing only.)
 
 ### Phase 6+ — the interpreter ⬜
 

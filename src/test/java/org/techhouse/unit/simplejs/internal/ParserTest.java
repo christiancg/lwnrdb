@@ -41,7 +41,9 @@ import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
+import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
@@ -276,16 +278,16 @@ public class ParserTest {
         assertEquals(2, obj.getProperties().size());
         assertTrue(assertInstanceOf(ObjectExpression.class, firstExpression("({})")).getProperties().isEmpty());
         final var shorthand = assertInstanceOf(ObjectExpression.class, firstExpression("({ x })"));
-        final Property prop = shorthand.getProperties().getFirst();
+        final var prop = assertInstanceOf(Property.class, shorthand.getProperties().getFirst());
         assertTrue(prop.isShorthand());
     }
 
     @Test
     public void test_object_computed_string_and_number_keys() {
         final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ [k]: 1, \"s\": 2, 3: 4 })"));
-        assertTrue(obj.getProperties().getFirst().isComputed());
-        assertInstanceOf(StringLiteral.class, obj.getProperties().get(1).getKey());
-        assertInstanceOf(NumberLiteral.class, obj.getProperties().get(2).getKey());
+        assertTrue(assertInstanceOf(Property.class, obj.getProperties().getFirst()).isComputed());
+        assertInstanceOf(StringLiteral.class, assertInstanceOf(Property.class, obj.getProperties().get(1)).getKey());
+        assertInstanceOf(NumberLiteral.class, assertInstanceOf(Property.class, obj.getProperties().get(2)).getKey());
     }
 
     @Test
@@ -1002,5 +1004,74 @@ public class ParserTest {
     @Test
     public void test_get_before_async_member_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("class C { get async foo() {} }"));
+    }
+
+    // A spread element in an array literal wraps its argument
+    @Test
+    public void test_array_spread() {
+        final var array = assertInstanceOf(ArrayExpression.class, firstExpression("[1, ...rest]"));
+        assertEquals(2, array.getElements().size());
+        final var spread = assertInstanceOf(SpreadElement.class, array.getElements().get(1));
+        assertEquals("rest", assertInstanceOf(Identifier.class, spread.getArgument()).getName());
+    }
+
+    // Array elisions produce null elements, but a trailing comma does not
+    @Test
+    public void test_array_holes_and_trailing_comma() {
+        final var holed = assertInstanceOf(ArrayExpression.class, firstExpression("[a, , b]"));
+        assertEquals(3, holed.getElements().size());
+        assertNull(holed.getElements().get(1));
+        assertEquals(1, assertInstanceOf(ArrayExpression.class, firstExpression("[a,]")).getElements().size());
+        final var leading = assertInstanceOf(ArrayExpression.class, firstExpression("[,]"));
+        assertEquals(1, leading.getElements().size());
+        assertNull(leading.getElements().getFirst());
+    }
+
+    // A spread argument in a call wraps its argument
+    @Test
+    public void test_call_spread_argument() {
+        final var call = assertInstanceOf(CallExpression.class, firstExpression("f(a, ...xs)"));
+        assertEquals(2, call.getArguments().size());
+        final var spread = assertInstanceOf(SpreadElement.class, call.getArguments().get(1));
+        assertEquals("xs", assertInstanceOf(Identifier.class, spread.getArgument()).getName());
+    }
+
+    // A spread element in an object literal is kept alongside properties
+    @Test
+    public void test_object_spread() {
+        final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ ...o, a: 1 })"));
+        assertEquals(2, obj.getProperties().size());
+        final var spread = assertInstanceOf(SpreadElement.class, obj.getProperties().getFirst());
+        assertEquals("o", assertInstanceOf(Identifier.class, spread.getArgument()).getName());
+        assertInstanceOf(Property.class, obj.getProperties().get(1));
+    }
+
+    // A rest parameter is the last parameter of a function declaration
+    @Test
+    public void test_rest_param_function() {
+        final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function f(a, ...rest) {}"));
+        assertEquals(2, fn.getParams().size());
+        final var rest = assertInstanceOf(RestElement.class, fn.getParams().get(1));
+        assertEquals("rest", assertInstanceOf(Identifier.class, rest.getArgument()).getName());
+    }
+
+    // A rest parameter works in an arrow function
+    @Test
+    public void test_rest_param_arrow() {
+        final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("(a, ...rest) => a"));
+        assertEquals(2, arrow.getParams().size());
+        assertInstanceOf(RestElement.class, arrow.getParams().get(1));
+    }
+
+    // A parameter after a rest parameter is invalid
+    @Test
+    public void test_param_after_rest_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("function f(...rest, a) {}"));
+    }
+
+    // A spread with no argument is invalid
+    @Test
+    public void test_spread_without_argument_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("f(...)"));
     }
 }
