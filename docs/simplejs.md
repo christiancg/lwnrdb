@@ -167,6 +167,13 @@ non-goals of the front end:
   similar newline-sensitive rules are not enforced.
 - **`import` is a keyword** — dynamic `import(...)` and `import.meta` are not parsed;
   every `import` begins a declaration.
+- **No tagged template literals** — a template following an expression (`` tag`x${y}` ``)
+  is not parsed as a tag call; `parseCallMemberTail` handles `.`/`?.`/`[]`/`()` but has
+  no template arm, so the template is left as a separate primary.
+- **No `with` statement** — `with` is only a contextual keyword for import attributes
+  (`with { type: "json" }`); the legacy `with (obj) { … }` statement is not parsed.
+- **No `debugger` statement** — `debugger` is not a keyword, so `debugger;` parses as an
+  ordinary expression statement rather than a dedicated node.
 - **`async`/`await`/`yield` are keywords** — `async(x)` is never a call (`async (…)`
   is always arrow params), and `await`/`yield` are always parsed as their
   expressions wherever the keyword appears.
