@@ -395,6 +395,27 @@ public class ParserProgramTest {
         assertInstanceOf(ExportDefaultDeclaration.class, body.get(2));
     }
 
+    // Phase 5g: import attributes and using/await using declarations flow end-to-end
+    @Test
+    public void test_phase5g_attributes_and_using_program() {
+        final var source = """
+                import config from "config.json" with { type: "json" };
+                async function load() {
+                    using handle = open(config);
+                    await using stream = handle.read();
+                    return stream;
+                }
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(2, body.size());
+        final var imp = assertInstanceOf(ImportDeclaration.class, body.getFirst());
+        assertEquals(1, imp.getAttributes().size());
+        final var fn = assertInstanceOf(FunctionDeclaration.class, body.get(1));
+        final var fnBody = fn.getBody().getBody();
+        assertEquals("using", ((VariableDeclaration) fnBody.get(0)).getKind());
+        assertEquals("await using", ((VariableDeclaration) fnBody.get(1)).getKind());
+    }
+
     // Phase 5f: a class with private members (field, static field, this.#x access) and a static block parses
     @Test
     public void test_phase5f_private_and_static_block_program() {

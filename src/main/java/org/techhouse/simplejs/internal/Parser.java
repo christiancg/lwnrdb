@@ -57,6 +57,7 @@ import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.ImportAttribute;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
@@ -208,11 +209,52 @@ public final class Parser {
                     }
                 }
             }
+            if (isUsingDeclarationStart()) {
+                return parseUsingDeclaration();
+            }
+            if (isAwaitUsingDeclarationStart()) {
+                return parseAwaitUsingDeclaration();
+            }
             if (current().getType() == JsType.IDENTIFIER && peek().getType() == JsType.OPERATOR
                     && ":".equals(((JsOperator) peek()).getValue())) {
                 return parseLabeledStatement();
             }
             return parseExpressionStatement();
+        }
+
+        // `using x = e` — contextual: a declaration only when `using` is directly followed by a binding
+        // identifier (so `using`, `using.foo()`, `using = 1`, `let using = 1` still parse as expressions).
+        private boolean isUsingDeclarationStart() {
+            return isContextualKeyword("using") && peek().getType() == JsType.IDENTIFIER;
+        }
+
+        // `await using x = e` — three-token lookahead; otherwise `await` stays an AwaitExpression.
+        private boolean isAwaitUsingDeclarationStart() {
+            return isKeyword("await") && peek().getType() == JsType.IDENTIFIER
+                    && "using".equals(((JsIdentifier) peek()).getValue()) && peekAt(2).getType() == JsType.IDENTIFIER;
+        }
+
+        private VariableDeclaration parseUsingDeclaration() {
+            expectContextualKeyword("using");
+            return new VariableDeclaration("using", parseUsingDeclarators());
+        }
+
+        private VariableDeclaration parseAwaitUsingDeclaration() {
+            expectKeyword("await");
+            expectContextualKeyword("using");
+            return new VariableDeclaration("await using", parseUsingDeclarators());
+        }
+
+        // A using declaration binds only plain identifiers and requires an initializer on each.
+        private List<VariableDeclarator> parseUsingDeclarators() {
+            final var declarations = new ArrayList<VariableDeclarator>();
+            do {
+                final var id = parseIdentifier();
+                expectOperator("=");
+                declarations.add(new VariableDeclarator(id, parseAssignment()));
+            } while (matchSeparator(','));
+            consumeOptionalSemicolon();
+            return declarations;
         }
 
         private LabeledStatement parseLabeledStatement() {
@@ -460,8 +502,9 @@ public final class Parser {
             expectKeyword("import");
             if (current().getType() == JsType.STRING) {
                 final var source = parseModuleSource();
+                final var attributes = parseImportAttributes();
                 consumeOptionalSemicolon();
-                return new ImportDeclaration(List.of(), source);
+                return new ImportDeclaration(List.of(), source, attributes);
             }
             final var specifiers = new ArrayList<JsNode>();
             if (matchOperator("*")) {
@@ -480,8 +523,29 @@ public final class Parser {
             }
             expectContextualKeyword("from");
             final var source = parseModuleSource();
+            final var attributes = parseImportAttributes();
             consumeOptionalSemicolon();
-            return new ImportDeclaration(specifiers, source);
+            return new ImportDeclaration(specifiers, source, attributes);
+        }
+
+        // ES2025 import attributes: an optional `with { key: "value", ... }` clause after the source.
+        // Keys are identifier/keyword/string names; values must be string literals. `with` is contextual.
+        private List<ImportAttribute> parseImportAttributes() {
+            if (!matchContextualKeyword("with")) {
+                return List.of();
+            }
+            expectSeparator('{');
+            final var attributes = new ArrayList<ImportAttribute>();
+            while (!isSeparator('}')) {
+                final var key = parseModuleExportName();
+                expectOperator(":");
+                attributes.add(new ImportAttribute(key, parseModuleSource()));
+                if (!isSeparator('}')) {
+                    expectSeparator(',');
+                }
+            }
+            expectSeparator('}');
+            return attributes;
         }
 
         private ImportNamespaceSpecifier parseImportNamespaceSpecifier() {
@@ -515,7 +579,7 @@ public final class Parser {
             if (isSeparator('{')) {
                 return parseExportNamed();
             }
-            return new ExportNamedDeclaration(parseExportedDeclaration(), List.of(), null);
+            return new ExportNamedDeclaration(parseExportedDeclaration(), List.of(), null, List.of());
         }
 
         private ExportAllDeclaration parseExportAll() {
@@ -525,8 +589,9 @@ public final class Parser {
             }
             expectContextualKeyword("from");
             final var source = parseModuleSource();
+            final var attributes = parseImportAttributes();
             consumeOptionalSemicolon();
-            return new ExportAllDeclaration(exported, source);
+            return new ExportAllDeclaration(exported, source, attributes);
         }
 
         private ExportNamedDeclaration parseExportNamed() {
@@ -542,11 +607,13 @@ public final class Parser {
             }
             expectSeparator('}');
             StringLiteral source = null;
+            var attributes = List.<ImportAttribute>of();
             if (matchContextualKeyword("from")) {
                 source = parseModuleSource();
+                attributes = parseImportAttributes();
             }
             consumeOptionalSemicolon();
-            return new ExportNamedDeclaration(null, specifiers, source);
+            return new ExportNamedDeclaration(null, specifiers, source, attributes);
         }
 
         private Statement parseExportedDeclaration() {
@@ -1449,7 +1516,11 @@ public final class Parser {
         }
 
         private JsBaseElement peek() {
-            return tokens.get(Math.min(pos + 1, tokens.size() - 1));
+            return peekAt(1);
+        }
+
+        private JsBaseElement peekAt(int offset) {
+            return tokens.get(Math.min(pos + offset, tokens.size() - 1));
         }
 
         private JsBaseElement advance() {

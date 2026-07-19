@@ -257,14 +257,14 @@ remains a lexer constraint.
   appears. As in Phase 3 for `super`/`this`, generator/async **context** validity
   (e.g. `yield` only inside a generator) is left to the interpreter.
 
-### Phase 5 — modules, patterns & modern-syntax catch-up 🚧
+### Phase 5 — modules, patterns & modern-syntax catch-up ✅
 
 Delivered in seven independently reviewable sub-phases. The first three complete
 the module/pattern grammar; the last four close the remaining ES2020–ES2026
 lexer/parser gaps (everything the broad keyword set and modern editions imply but
 earlier phases skipped): **5a spread/rest ✅**, **5b destructuring ✅**,
 **5c modules ✅**, **5d lexer literals & trivia ✅**, **5e labels & do-while ✅**,
-**5f class enhancements ✅**, **5g attributes & resource management 🚧**.
+**5f class enhancements ✅**, **5g attributes & resource management ✅**.
 
 #### Phase 5a — spread & rest ✅
 
@@ -411,7 +411,7 @@ Pure parser/node additions; no lexer change (`do` is already a keyword).
   single `static`-then-`{` branch before it tries to read a member key. `static {}`
   (empty) is valid.
 
-#### Phase 5g — attributes & resource management 🚧
+#### Phase 5g — attributes & resource management ✅
 
 The ES2025 import-attribute and ES2026 explicit-resource-management syntax, both
 handled through **contextual keywords** (like `from`/`as`/`static`) so no new lexer

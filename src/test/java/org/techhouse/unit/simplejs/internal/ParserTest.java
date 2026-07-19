@@ -363,6 +363,35 @@ public class ParserTest {
                 .getInit());
     }
 
+    // using / await using declarations reuse VariableDeclaration with a distinct kind
+    @Test
+    public void test_using_declaration() {
+        final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("using r = getResource();"));
+        assertEquals("using", decl.getKind());
+        assertEquals("r", ((Identifier) decl.getDeclarations().getFirst().getId()).getName());
+        assertNotNull(decl.getDeclarations().getFirst().getInit());
+    }
+
+    @Test
+    public void test_await_using_declaration() {
+        final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("await using r = f();"));
+        assertEquals("await using", decl.getKind());
+    }
+
+    // A using declaration without an initializer is a parse error
+    @Test
+    public void test_using_missing_initializer_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("using r;"));
+    }
+
+    // `using` stays a plain identifier when not directly followed by a binding identifier
+    @Test
+    public void test_using_as_identifier() {
+        assertInstanceOf(ExpressionStatement.class, firstStatement("using;"));
+        assertInstanceOf(ExpressionStatement.class, firstStatement("using = 1;"));
+        assertInstanceOf(ExpressionStatement.class, firstStatement("using[a] = arr;"));
+    }
+
     @Test
     public void test_block_statement() {
         final var block = assertInstanceOf(BlockStatement.class, firstStatement("{ let x = 1; x; }"));
@@ -1349,6 +1378,58 @@ public class ParserTest {
         final var spec = assertInstanceOf(ImportDefaultSpecifier.class, decl.getSpecifiers().getFirst());
         assertEquals("def", spec.getLocal().getName());
         assertEquals("mod", decl.getSource().getValue());
+    }
+
+    // An import with attributes carries them; without a with clause the list is empty
+    @Test
+    public void test_import_with_attributes() {
+        final var decl = assertInstanceOf(ImportDeclaration.class,
+                firstStatement("import data from \"data.json\" with { type: \"json\" };"));
+        assertEquals(1, decl.getAttributes().size());
+        final var attr = decl.getAttributes().getFirst();
+        assertEquals("type", ((Identifier) attr.getKey()).getName());
+        assertEquals("json", attr.getValue().getValue());
+    }
+
+    @Test
+    public void test_import_without_attributes_is_empty() {
+        final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import def from \"mod\";"));
+        assertTrue(decl.getAttributes().isEmpty());
+    }
+
+    // A bare side-effect import may also carry attributes
+    @Test
+    public void test_bare_import_with_attributes() {
+        final var decl = assertInstanceOf(ImportDeclaration.class,
+                firstStatement("import \"mod\" with { type: \"json\", lazy: \"true\" };"));
+        assertEquals(2, decl.getAttributes().size());
+    }
+
+    // Wildcard and named re-exports carry attributes too
+    @Test
+    public void test_export_all_with_attributes() {
+        final var decl = assertInstanceOf(ExportAllDeclaration.class,
+                firstStatement("export * from \"mod\" with { type: \"json\" };"));
+        assertEquals(1, decl.getAttributes().size());
+    }
+
+    @Test
+    public void test_export_named_reexport_with_attributes() {
+        final var decl = assertInstanceOf(ExportNamedDeclaration.class,
+                firstStatement("export { a } from \"mod\" with { type: \"json\" };"));
+        assertEquals(1, decl.getAttributes().size());
+    }
+
+    // A non-string attribute value is a parse error
+    @Test
+    public void test_import_attribute_non_string_value_throws() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("import x from \"m\" with { type: json };"));
+    }
+
+    // `with` remains a valid identifier outside a module clause
+    @Test
+    public void test_with_is_contextual_identifier() {
+        assertEquals("let", assertInstanceOf(VariableDeclaration.class, firstStatement("let with = 1;")).getKind());
     }
 
     // A namespace import binds `* as name`

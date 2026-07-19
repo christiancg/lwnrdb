@@ -38,6 +38,7 @@ import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.ImportAttribute;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
@@ -150,14 +151,16 @@ public class JsNodeTest {
         assertEquals(NodeType.OBJECT_PATTERN, new ObjectPattern(List.of(id)).getType());
         assertEquals(NodeType.ASSIGNMENT_PATTERN, new AssignmentPattern(id, num).getType());
         final var src = new StringLiteral("mod");
-        assertEquals(NodeType.IMPORT_DECLARATION, new ImportDeclaration(List.of(), src).getType());
+        assertEquals(NodeType.IMPORT_DECLARATION, new ImportDeclaration(List.of(), src, List.of()).getType());
+        assertEquals(NodeType.IMPORT_ATTRIBUTE, new ImportAttribute(id, src).getType());
         assertEquals(NodeType.IMPORT_SPECIFIER, new ImportSpecifier(id, id).getType());
         assertEquals(NodeType.IMPORT_DEFAULT_SPECIFIER, new ImportDefaultSpecifier(id).getType());
         assertEquals(NodeType.IMPORT_NAMESPACE_SPECIFIER, new ImportNamespaceSpecifier(id).getType());
-        assertEquals(NodeType.EXPORT_NAMED_DECLARATION, new ExportNamedDeclaration(null, List.of(), null).getType());
+        assertEquals(NodeType.EXPORT_NAMED_DECLARATION,
+                new ExportNamedDeclaration(null, List.of(), null, List.of()).getType());
         assertEquals(NodeType.EXPORT_SPECIFIER, new ExportSpecifier(id, id).getType());
         assertEquals(NodeType.EXPORT_DEFAULT_DECLARATION, new ExportDefaultDeclaration(id).getType());
-        assertEquals(NodeType.EXPORT_ALL_DECLARATION, new ExportAllDeclaration(id, src).getType());
+        assertEquals(NodeType.EXPORT_ALL_DECLARATION, new ExportAllDeclaration(id, src, List.of()).getType());
     }
 
     // Node getters expose the values passed to the constructor
@@ -250,19 +253,25 @@ public class JsNodeTest {
         final var importSpecifier = new ImportSpecifier(id, id);
         assertEquals(id, importSpecifier.getImported());
         assertEquals(id, importSpecifier.getLocal());
-        final var importDeclaration = new ImportDeclaration(List.of(importDefault), src);
+        final var attribute = new ImportAttribute(id, src);
+        final var importDeclaration = new ImportDeclaration(List.of(importDefault), src, List.of(attribute));
         assertEquals(1, importDeclaration.getSpecifiers().size());
         assertEquals(src, importDeclaration.getSource());
+        assertEquals(1, importDeclaration.getAttributes().size());
+        assertEquals(id, attribute.getKey());
+        assertEquals(src, attribute.getValue());
         final var exportSpecifier = new ExportSpecifier(id, num);
         assertEquals(id, exportSpecifier.getLocal());
         assertEquals(num, exportSpecifier.getExported());
-        final var exportNamed = new ExportNamedDeclaration(declaration, List.of(exportSpecifier), src);
+        final var exportNamed = new ExportNamedDeclaration(declaration, List.of(exportSpecifier), src, List.of());
         assertEquals(declaration, exportNamed.getDeclaration());
         assertEquals(1, exportNamed.getSpecifiers().size());
         assertEquals(src, exportNamed.getSource());
+        assertTrue(exportNamed.getAttributes().isEmpty());
         assertEquals(num, new ExportDefaultDeclaration(num).getDeclaration());
-        final var exportAll = new ExportAllDeclaration(id, src);
+        final var exportAll = new ExportAllDeclaration(id, src, List.of());
         assertEquals(id, exportAll.getExported());
         assertEquals(src, exportAll.getSource());
+        assertTrue(exportAll.getAttributes().isEmpty());
     }
 }
