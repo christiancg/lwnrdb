@@ -14,6 +14,7 @@ import org.techhouse.simplejs.elements.JsKeyword;
 import org.techhouse.simplejs.elements.JsNull;
 import org.techhouse.simplejs.elements.JsNumber;
 import org.techhouse.simplejs.elements.JsOperator;
+import org.techhouse.simplejs.elements.JsPrivateIdentifier;
 import org.techhouse.simplejs.elements.JsRegex;
 import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
@@ -178,6 +179,20 @@ public class LexerTest {
     @Test
     public void test_lex_hash_not_at_start_throws() {
         assertThrows(UnexpectedCharacterException.class, () -> Lexer.lex("foo\n#!bar"));
+    }
+
+    // A # followed by an identifier lexes as a private identifier (name without the #)
+    @Test
+    public void test_lex_private_identifier() {
+        final List<JsBaseElement> tokens = Lexer.lex("#field");
+        assertInstanceOf(JsPrivateIdentifier.class, tokens.getFirst());
+        assertEquals("field", ((JsPrivateIdentifier) tokens.getFirst()).getValue());
+    }
+
+    // A # not followed by an identifier is an unexpected character
+    @Test
+    public void test_lex_lone_hash_throws() {
+        assertThrows(UnexpectedCharacterException.class, () -> Lexer.lex("a # b"));
     }
 
     // Double-quoted string

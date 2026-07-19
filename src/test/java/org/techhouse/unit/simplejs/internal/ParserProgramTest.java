@@ -38,11 +38,13 @@ import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
+import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
+import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThrowStatement;
@@ -391,6 +393,31 @@ public class ParserProgramTest {
         final var all = assertInstanceOf(ExportAllDeclaration.class, body.get(1));
         assertEquals("b", all.getSource().getValue());
         assertInstanceOf(ExportDefaultDeclaration.class, body.get(2));
+    }
+
+    // Phase 5f: a class with private members (field, static field, this.#x access) and a static block parses
+    @Test
+    public void test_phase5f_private_and_static_block_program() {
+        final var source = """
+                class Counter {
+                    #count = 0;
+                    static #instances = 0;
+                    static {
+                        Counter.#instances = 0;
+                    }
+                    increment() {
+                        this.#count++;
+                        return this.#count;
+                    }
+                }
+                """;
+        final var decl = assertInstanceOf(ClassDeclaration.class, parse(source).getBody().getFirst());
+        final var members = decl.getBody().getMembers();
+        assertEquals(4, members.size());
+        assertEquals("count", ((PrivateIdentifier) ((FieldDefinition) members.get(0)).getKey()).getName());
+        assertTrue(((FieldDefinition) members.get(1)).isStatic());
+        assertInstanceOf(StaticBlock.class, members.get(2));
+        assertInstanceOf(MethodDefinition.class, members.get(3));
     }
 
     // Phase 5e: a labeled outer loop with a nested do-while and a labeled break parses end-to-end

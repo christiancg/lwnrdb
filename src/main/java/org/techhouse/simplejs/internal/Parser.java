@@ -15,6 +15,7 @@ import org.techhouse.simplejs.elements.JsIdentifier;
 import org.techhouse.simplejs.elements.JsKeyword;
 import org.techhouse.simplejs.elements.JsNumber;
 import org.techhouse.simplejs.elements.JsOperator;
+import org.techhouse.simplejs.elements.JsPrivateIdentifier;
 import org.techhouse.simplejs.elements.JsRegex;
 import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
@@ -70,6 +71,7 @@ import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
+import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
@@ -77,6 +79,7 @@ import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
+import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchCase;
@@ -970,7 +973,7 @@ public final class Parser {
             return new MemberExpression(object, parseMemberProperty(), false, true);
         }
 
-        private Identifier parseMemberProperty() {
+        private Expression parseMemberProperty() {
             final var t = current();
             if (t.getType() == JsType.IDENTIFIER) {
                 advance();
@@ -979,6 +982,10 @@ public final class Parser {
             if (t.getType() == JsType.KEYWORD) {
                 advance();
                 return new Identifier(((JsKeyword) t).getValue());
+            }
+            if (t.getType() == JsType.PRIVATE_IDENTIFIER) {
+                advance();
+                return new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
             }
             throw error();
         }
@@ -1071,6 +1078,10 @@ public final class Parser {
                 }
                 case IDENTIFIER -> {
                     return parseIdentifierOrArrow();
+                }
+                case PRIVATE_IDENTIFIER -> {
+                    advance();
+                    return new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
                 }
                 case KEYWORD -> {
                     return parseKeywordPrimary();
@@ -1178,6 +1189,9 @@ public final class Parser {
 
         private JsNode parseClassMember() {
             final var isStatic = matchContextualModifier("static");
+            if (isStatic && isSeparator('{')) {
+                return parseStaticBlock();
+            }
             final var async = matchAsyncMethodModifier();
             final var generator = matchOperator("*");
             var kind = "method";
@@ -1205,6 +1219,16 @@ public final class Parser {
             return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
         }
 
+        private StaticBlock parseStaticBlock() {
+            expectSeparator('{');
+            final var body = new ArrayList<Statement>();
+            while (!isSeparator('}') && !atEnd()) {
+                body.add(parseStatement());
+            }
+            expectSeparator('}');
+            return new StaticBlock(body);
+        }
+
         private String resolveMethodKind(String kind, MemberKey memberKey, boolean isStatic, boolean async,
                 boolean generator) {
             if (!"method".equals(kind)) {
@@ -1230,6 +1254,7 @@ public final class Parser {
                 case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
+                case PRIVATE_IDENTIFIER -> new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
                 default -> throw error();
             };
             advance();
@@ -1537,6 +1562,7 @@ public final class Parser {
             return switch (t.getType()) {
                 case KEYWORD -> ((JsKeyword) t).getValue();
                 case IDENTIFIER -> ((JsIdentifier) t).getValue();
+                case PRIVATE_IDENTIFIER -> "#" + ((JsPrivateIdentifier) t).getValue();
                 case NUMBER -> String.valueOf(((JsNumber) t).getValue());
                 case BIGINT -> ((JsBigInt) t).getValue() + "n";
                 case STRING -> '"' + ((JsString) t).getValue() + '"';

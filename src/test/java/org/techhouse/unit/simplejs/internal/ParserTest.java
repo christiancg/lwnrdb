@@ -54,6 +54,7 @@ import org.techhouse.simplejs.nodes.NullLiteral;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
+import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
@@ -61,6 +62,7 @@ import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
+import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchStatement;
@@ -767,6 +769,55 @@ public class ParserTest {
         final var field = assertInstanceOf(FieldDefinition.class, decl.getBody().getMembers().getFirst());
         assertTrue(field.isStatic());
         assertInstanceOf(NumberLiteral.class, field.getValue());
+    }
+
+    // A private field carries a PrivateIdentifier key
+    @Test
+    public void test_class_private_field() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { #x = 1; }"));
+        final var field = assertInstanceOf(FieldDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("x", ((PrivateIdentifier) field.getKey()).getName());
+        assertInstanceOf(NumberLiteral.class, field.getValue());
+    }
+
+    // A private method carries a PrivateIdentifier key
+    @Test
+    public void test_class_private_method() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { #m() {} }"));
+        final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
+        assertEquals("m", ((PrivateIdentifier) method.getKey()).getName());
+    }
+
+    // A static initialization block parses to a StaticBlock member
+    @Test
+    public void test_static_block() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static { x = 1; } }"));
+        final var block = assertInstanceOf(StaticBlock.class, decl.getBody().getMembers().getFirst());
+        assertEquals(1, block.getBody().size());
+    }
+
+    // An empty static block is valid
+    @Test
+    public void test_static_block_empty() {
+        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static {} }"));
+        final var block = assertInstanceOf(StaticBlock.class, decl.getBody().getMembers().getFirst());
+        assertTrue(block.getBody().isEmpty());
+    }
+
+    // Private member access via this.#x resolves the property to a PrivateIdentifier
+    @Test
+    public void test_private_member_access() {
+        final var member = assertInstanceOf(MemberExpression.class, firstExpression("this.#x"));
+        assertInstanceOf(ThisExpression.class, member.getObject());
+        assertEquals("x", ((PrivateIdentifier) member.getProperty()).getName());
+    }
+
+    // A #x in obj brand check parses to a BinaryExpression with a PrivateIdentifier left side
+    @Test
+    public void test_private_in_expression() {
+        final var binary = assertInstanceOf(BinaryExpression.class, firstExpression("#x in obj"));
+        assertEquals("in", binary.getOperator());
+        assertEquals("x", ((PrivateIdentifier) binary.getLeft()).getName());
     }
 
     // A member literally named "static" is a method, not a static modifier

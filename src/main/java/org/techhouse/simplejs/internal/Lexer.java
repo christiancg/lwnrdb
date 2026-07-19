@@ -14,6 +14,7 @@ import org.techhouse.simplejs.elements.JsKeyword;
 import org.techhouse.simplejs.elements.JsNull;
 import org.techhouse.simplejs.elements.JsNumber;
 import org.techhouse.simplejs.elements.JsOperator;
+import org.techhouse.simplejs.elements.JsPrivateIdentifier;
 import org.techhouse.simplejs.elements.JsRegex;
 import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
@@ -84,6 +85,8 @@ public final class Lexer {
                 lexed = lexNumber(sourceCode, pos);
             } else if (Character.isLetter(c) || c == '_' || c == '$') {
                 lexed = lexWord(sourceCode, pos);
+            } else if (c == '#' && pos + 1 < n && isIdentifierStart(sourceCode.charAt(pos + 1))) {
+                lexed = lexPrivateIdentifier(sourceCode, pos);
             } else if (c == '/' && startsRegex(last)) {
                 lexed = lexRegex(sourceCode, pos);
             } else {
@@ -305,6 +308,26 @@ public final class Lexer {
             default -> JS_KEYWORD.contains(word) ? new JsKeyword(word) : new JsIdentifier(word);
         };
         return new Lexed(token, i);
+    }
+
+    // A private identifier is a `#` immediately followed by an identifier; the leading `#` is
+    // dropped and only the name is stored.
+    private static Lexed lexPrivateIdentifier(String src, int start) {
+        final var n = src.length();
+        var i = start + 1;
+        while (i < n) {
+            final var c = src.charAt(i);
+            if (Character.isLetterOrDigit(c) || c == '_' || c == '$') {
+                i++;
+            } else {
+                break;
+            }
+        }
+        return new Lexed(new JsPrivateIdentifier(src.substring(start + 1, i)), i);
+    }
+
+    private static boolean isIdentifierStart(char c) {
+        return Character.isLetter(c) || c == '_' || c == '$';
     }
 
     // A slash begins a regex only when the previous significant token cannot end an

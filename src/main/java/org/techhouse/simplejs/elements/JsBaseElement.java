@@ -2,7 +2,7 @@ package org.techhouse.simplejs.elements;
 
 public abstract class JsBaseElement {
     public enum JsType {
-        KEYWORD, IDENTIFIER, NUMBER, BIGINT, STRING, BOOLEAN, NULL, UNDEFINED, OPERATOR, SEPARATOR, REGEX, TEMPLATE_STRING, EOF
+        KEYWORD, IDENTIFIER, PRIVATE_IDENTIFIER, NUMBER, BIGINT, STRING, BOOLEAN, NULL, UNDEFINED, OPERATOR, SEPARATOR, REGEX, TEMPLATE_STRING, EOF
     }
 
     public JsType getType() {
@@ -13,6 +13,7 @@ public abstract class JsBaseElement {
         return switch (object) {
             case JsKeyword ignored -> JsType.KEYWORD;
             case JsIdentifier ignored -> JsType.IDENTIFIER;
+            case JsPrivateIdentifier ignored -> JsType.PRIVATE_IDENTIFIER;
             case JsNumber ignored -> JsType.NUMBER;
             case JsBigInt ignored -> JsType.BIGINT;
             case JsString ignored -> JsType.STRING;
