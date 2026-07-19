@@ -41,6 +41,9 @@ build/
 CLAUDE.md
 .claude/
 
+### Plans (local-only, not tracked) ###
+plans/
+
 ### DB files ###
 logs/
 db/
