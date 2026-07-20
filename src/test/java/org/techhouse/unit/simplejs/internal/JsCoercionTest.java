@@ -9,10 +9,13 @@ import java.math.BigInteger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -105,5 +108,17 @@ public class JsCoercionTest {
     public void test_to_primitive() {
         assertEquals("[object Object]", ((JsString) JsCoercion.toPrimitive(new JsObject())).getValue());
         assertEquals(5, ((JsNumber) JsCoercion.toPrimitive(new JsNumber(5))).getValue());
+    }
+
+    // Function values report the function typeof and a non-throwing string form
+    @Test
+    public void test_function_coercion() {
+        final var function = new JsFunction("f", List.of(), null, false, false, Environment.global());
+        final var nativeFunction = new JsNativeFunction("n", (_, _) -> JsUndefined.getInstance());
+        assertEquals("function", JsCoercion.typeOf(function));
+        assertEquals("function", JsCoercion.typeOf(nativeFunction));
+        assertEquals("function f() { }", JsCoercion.toStr(function));
+        assertEquals("function n() { }", JsCoercion.toStr(nativeFunction));
+        assertTrue(JsCoercion.toBoolean(function));
     }
 }

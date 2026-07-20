@@ -9,9 +9,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.math.BigInteger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -31,6 +34,23 @@ public class JsValueTest {
         assertEquals(JsValue.JsValueType.NULL, JsNull.getInstance().getType());
         assertEquals(JsValue.JsValueType.OBJECT, new JsObject().getType());
         assertEquals(JsValue.JsValueType.ARRAY, new JsArray().getType());
+        assertEquals(JsValue.JsValueType.FUNCTION,
+                new JsFunction(null, List.of(), null, false, false, Environment.global()).getType());
+        assertEquals(JsValue.JsValueType.FUNCTION,
+                new JsNativeFunction("id", (_, _) -> JsUndefined.getInstance()).getType());
+    }
+
+    // Function values expose their name and native functions invoke their implementation
+    @Test
+    public void test_function_values() {
+        final var function = new JsFunction("f", List.of(), null, true, true, Environment.global());
+        assertEquals("f", function.getName());
+        assertTrue(function.isArrow());
+        assertTrue(function.isExpressionBody());
+        final var native1 = new JsNativeFunction("sum",
+                (_, args) -> new JsNumber(((JsNumber) args.getFirst()).getValue() + 1));
+        assertEquals("sum", native1.getName());
+        assertEquals(2, ((JsNumber) native1.invoke(JsUndefined.getInstance(), List.of(new JsNumber(1)))).getValue());
     }
 
     // Singletons and boolean constants keep a single identity

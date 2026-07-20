@@ -23,6 +23,8 @@ public final class Environment {
     private final Environment parent;
     private final boolean functionScope;
     private final Map<String, Binding> bindings = new HashMap<>();
+    private JsValue thisValue;
+    private boolean hasThis;
 
     private Environment(Environment parent, boolean functionScope) {
         this.parent = parent;
@@ -35,6 +37,30 @@ public final class Environment {
 
     public Environment child() {
         return new Environment(this, false);
+    }
+
+    public Environment functionChild() {
+        return new Environment(this, true);
+    }
+
+    public void defineThis(JsValue value) {
+        this.thisValue = value;
+        this.hasThis = true;
+    }
+
+    public JsValue resolveThis() {
+        var env = this;
+        while (env != null) {
+            if (env.hasThis) {
+                return env.thisValue;
+            }
+            env = env.parent;
+        }
+        return JsUndefined.getInstance();
+    }
+
+    public void declareFunction(String name, JsValue value) {
+        bindings.put(name, new Binding(value, "var", true));
     }
 
     public boolean hasLocal(String name) {

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -216,19 +217,18 @@ public class InterpreterTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("return 5;"));
     }
 
-    // Nodes outside the phase 6a scope raise UnsupportedNodeException
+    // Nodes outside the current interpreter scope raise UnsupportedNodeException
     @Test
     public void test_unsupported_nodes() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("function f() {}"));
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("f()"));
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("try { } catch (e) { }"));
         assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("[...a]"));
         assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("let [a] = [1];"));
         assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("1 instanceof Object"));
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("switch (1) { case 1: break; }"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("(function (...rest) {})()"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("(function (a) {})(...[1])"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("try { throw 1; } catch ([e]) { }"));
     }
 
-    // this evaluates to undefined at the top level in phase 6a
+    // this evaluates to undefined at the top level
     @Test
     public void test_this_is_undefined() {
         assertInstanceOf(JsUndefined.class, Interpreter.run("this"));
@@ -313,5 +313,182 @@ public class InterpreterTest {
     @Test
     public void test_labeled_block_break() {
         assertEquals(1, num("let r = 0; blk: { r = 1; break blk; r = 2; } r"));
+    }
+
+    // Function declarations are callable and hoisted before their definition
+    @Test
+    public void test_function_declaration_and_hoisting() {
+        assertEquals(5, num("function add(a, b) { return a + b; } add(2, 3)"));
+        assertEquals(5, num("let r = add(2, 3); function add(a, b) { return a + b; } r"));
+    }
+
+    // Mutually recursive function declarations resolve each other
+    @Test
+    public void test_mutual_recursion() {
+        final var source = """
+                function isEven(n) { return n === 0 ? true : isOdd(n - 1); }
+                function isOdd(n) { return n === 0 ? false : isEven(n - 1); }
+                isEven(10)
+                """;
+        assertTrue(bool(source));
+    }
+
+    // Function expressions, named or anonymous, can be assigned and invoked
+    @Test
+    public void test_function_expression() {
+        assertEquals(4, num("let square = function (x) { return x * x; }; square(2)"));
+        assertEquals(6, num("let f = function fact(n) { return n; }; f(6)"));
+        assertEquals(7, num("(function () { return 7; })()"));
+    }
+
+    // Arrow functions support both expression and block bodies
+    @Test
+    public void test_arrow_functions() {
+        assertEquals(6, num("let triple = x => x * 3; triple(2)"));
+        assertEquals(8, num("let f = (a, b) => { return a * b; }; f(2, 4)"));
+        assertEquals(0, num("let f = () => 0; f()"));
+    }
+
+    // Closures capture and mutate their defining scope independently per call
+    @Test
+    public void test_closures() {
+        final var source = """
+                function counter() {
+                    let n = 0;
+                    return function () { n++; return n; };
+                }
+                let a = counter();
+                let b = counter();
+                a(); a();
+                a() + b()
+                """;
+        assertEquals(4, num(source));
+    }
+
+    // Missing arguments are undefined and extra arguments are ignored
+    @Test
+    public void test_argument_binding() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("function f(a, b) { return b; } f(1)"));
+        assertEquals(1, num("function f(a) { return a; } f(1, 2, 3)"));
+    }
+
+    // A method call binds this to its receiver; arrows keep the lexical this
+    @Test
+    public void test_this_binding() {
+        assertEquals(5, num("let o = { v: 5, read: function () { return this.v; } }; o.read()"));
+        final var arrowSource = """
+                let o = {
+                    v: 9,
+                    run: function () {
+                        let inner = () => this.v;
+                        return inner();
+                    }
+                };
+                o.run()
+                """;
+        assertEquals(9, num(arrowSource));
+    }
+
+    // new allocates an instance, binds this, and honours an explicit object return
+    @Test
+    public void test_new_expression() {
+        assertEquals(3, num("function Point(x) { this.x = x; } let p = new Point(3); p.x"));
+        assertEquals(7, num("function F() { this.a = 1; return { a: 7 }; } new F().a"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("let f = () => 1; new f()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new 5()"));
+    }
+
+    // Calling a non-function value throws a TypeError
+    @Test
+    public void test_call_non_function() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("let x = 5; x()"));
+    }
+
+    // return without an argument yields undefined and stops later statements
+    @Test
+    public void test_return_semantics() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("function f() { return; } f()"));
+        assertEquals(1, num("function f() { return 1; return 2; } f()"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("function f() { } f()"));
+    }
+
+    // throw and catch move a thrown value into the handler binding
+    @Test
+    public void test_throw_and_catch() {
+        assertEquals("boom", str("let m = ''; try { throw 'boom'; } catch (e) { m = e; } m"));
+        assertEquals("TypeError:x",
+                str("let s = ''; try { throw new TypeError('x'); } catch (e) { s = e.name + ':' + e.message; } s"));
+    }
+
+    // A runtime error is catchable and arrives as a TypeError error object
+    @Test
+    public void test_runtime_error_is_catchable() {
+        assertEquals("TypeError", str("let n = ''; try { let o = null; o.a; } catch (e) { n = e.name; } n"));
+    }
+
+    // finally always runs, and an abrupt finally overrides the try or catch outcome
+    @Test
+    public void test_finally_semantics() {
+        assertEquals(1, num("let r = 0; try { r = 1; } finally { r += 0; } r"));
+        assertEquals(2, num("function f() { try { return 1; } finally { return 2; } } f()"));
+        assertEquals("cf", str("let s = ''; try { throw 'x'; } catch (e) { s += 'c'; } finally { s += 'f'; } s"));
+    }
+
+    // A throw with no handler still runs finally, then propagates
+    @Test
+    public void test_finally_rethrows() {
+        assertThrows(JsThrowException.class, () -> Interpreter.run("try { throw 'x'; } finally { let a = 1; }"));
+    }
+
+    // switch matches by strict equality, falls through, and honours break
+    @Test
+    public void test_switch_matching() {
+        assertEquals(10, num("let r = 0; switch (1) { case 1: r = 10; break; case 2: r = 20; } r"));
+        assertEquals(30, num("let r = 0; switch (1) { case 1: r += 10; case 2: r += 20; } r"));
+        assertEquals(99, num("let r = 0; switch (5) { case 1: r = 1; break; default: r = 99; } r"));
+    }
+
+    // A default clause in the middle is reached only when no case matches
+    @Test
+    public void test_switch_default_in_middle() {
+        assertEquals(7, num("let r = 0; switch (9) { case 1: r = 1; break; default: r = 7; break; case 2: r = 2; } r"));
+    }
+
+    // continue inside a switch continues the enclosing loop
+    @Test
+    public void test_switch_continue_in_loop() {
+        final var source = """
+                let s = 0;
+                for (let i = 0; i < 4; i++) {
+                    switch (i) {
+                        case 1: continue;
+                        default: s += i;
+                    }
+                }
+                s
+                """;
+        assertEquals(5, num(source));
+    }
+
+    // A labeled break inside a switch exits the labeled loop
+    @Test
+    public void test_switch_labeled_break() {
+        final var source = """
+                let s = 0;
+                loop: for (let i = 0; i < 4; i++) {
+                    switch (i) {
+                        case 2: break loop;
+                        default: s += i;
+                    }
+                }
+                s
+                """;
+        assertEquals(1, num(source));
+    }
+
+    // let declarations inside cases share one switch block scope
+    @Test
+    public void test_switch_lexical_scope() {
+        assertEquals(3, num("switch (1) { case 1: let x = 3; x; break; }; 3"));
     }
 }

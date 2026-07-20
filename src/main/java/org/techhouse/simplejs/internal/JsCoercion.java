@@ -5,6 +5,8 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -50,6 +52,8 @@ public final class JsCoercion {
             case JsUndefined ignored -> "undefined";
             case JsArray a -> arrayToString(a);
             case JsObject ignored -> "[object Object]";
+            case JsFunction f -> functionToString(f.getName());
+            case JsNativeFunction f -> functionToString(f.getName());
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }
@@ -68,8 +72,14 @@ public final class JsCoercion {
             case JsBoolean ignored -> "boolean";
             case JsBigInt ignored -> "bigint";
             case JsUndefined ignored -> "undefined";
+            case JsFunction ignored -> "function";
+            case JsNativeFunction ignored -> "function";
             default -> "object";
         };
+    }
+
+    private static String functionToString(String name) {
+        return "function " + (name == null ? "" : name) + "() { }";
     }
 
     private static String arrayToString(JsArray array) {
@@ -98,6 +108,8 @@ public final class JsCoercion {
             }
             case "-Infinity" -> {
                 return Double.NEGATIVE_INFINITY;
+            }
+            default -> {
             }
         }
         final var radixValue = radixLiteralToNumber(s);

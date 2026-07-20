@@ -13,7 +13,12 @@ public class InterpreterProgramTest {
     }
 
     private static String str() {
-        return ((JsString) Interpreter.run("let s = '';\nfor (let i = 0; i < 3; i++) {\n    s += i;\n}\ns\n")).getValue();
+        return ((JsString) Interpreter.run("let s = '';\nfor (let i = 0; i < 3; i++) {\n    s += i;\n}\ns\n"))
+                .getValue();
+    }
+
+    private static String str(String source) {
+        return ((JsString) Interpreter.run(source)).getValue();
     }
 
     // A for loop builds a Fibonacci sequence in an array
@@ -83,5 +88,93 @@ public class InterpreterProgramTest {
     @Test
     public void test_string_building() {
         assertEquals("012", str());
+    }
+
+    // A recursive function declaration computes a factorial
+    @Test
+    public void test_recursive_factorial() {
+        final var source = """
+                function factorial(n) {
+                    if (n <= 1) return 1;
+                    return n * factorial(n - 1);
+                }
+                factorial(5)
+                """;
+        assertEquals(120, num(source));
+    }
+
+    // A recursive Fibonacci function returns the expected term
+    @Test
+    public void test_recursive_fibonacci() {
+        final var source = """
+                function fib(n) {
+                    if (n < 2) return n;
+                    return fib(n - 1) + fib(n - 2);
+                }
+                fib(10)
+                """;
+        assertEquals(55, num(source));
+    }
+
+    // A closure-based accumulator keeps private state across calls
+    @Test
+    public void test_closure_accumulator() {
+        final var source = """
+                function makeAdder(step) {
+                    let total = 0;
+                    return function (n) {
+                        total += n * step;
+                        return total;
+                    };
+                }
+                let add = makeAdder(2);
+                add(1);
+                add(2);
+                add(3)
+                """;
+        assertEquals(12, num(source));
+    }
+
+    // try/catch/finally recovers from a thrown error and still runs cleanup
+    @Test
+    public void test_try_catch_finally_recovery() {
+        final var source = """
+                let log = '';
+                function risky(n) {
+                    if (n < 0) throw new RangeError('negative');
+                    return n * 2;
+                }
+                let result = 0;
+                try {
+                    result = risky(-1);
+                } catch (e) {
+                    result = -1;
+                    log += e.name;
+                } finally {
+                    log += ':done';
+                }
+                log + '=' + result
+                """;
+        assertEquals("RangeError:done=-1", str(source));
+    }
+
+    // A switch-based dispatcher selects a branch with fall-through
+    @Test
+    public void test_switch_dispatcher() {
+        final var source = """
+                function classify(n) {
+                    let kind = '';
+                    switch (n % 2) {
+                        case 0:
+                            kind = 'even';
+                            break;
+                        default:
+                            kind = 'odd';
+                    }
+                    return kind;
+                }
+                classify(3) + ',' + classify(4)
+                """;
+        assertEquals("odd,even", str(source));
     }
 }

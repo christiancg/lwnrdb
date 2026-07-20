@@ -1,5 +1,7 @@
 package org.techhouse.unit.simplejs.internal;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -13,8 +15,6 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class JsOperatorsTest {
     private static double num(JsValue value) {

@@ -1,38 +1,53 @@
 package org.techhouse.simplejs.internal;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import org.techhouse.simplejs.builtins.ErrorBuiltins;
+import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.nodes.ArrayExpression;
+import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
+import org.techhouse.simplejs.nodes.CallExpression;
+import org.techhouse.simplejs.nodes.CatchClause;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
+import org.techhouse.simplejs.nodes.FunctionDeclaration;
+import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
+import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
+import org.techhouse.simplejs.nodes.ThrowStatement;
+import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
@@ -40,6 +55,8 @@ import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -68,6 +85,7 @@ public final class Interpreter {
 
     private JsValue evalProgram(Program program) {
         final var env = Environment.global();
+        ErrorBuiltins.install(env);
         hoist(program.getBody(), env);
         var last = (JsValue) JsUndefined.getInstance();
         for (final var statement : program.getBody()) {
@@ -94,6 +112,11 @@ public final class Interpreter {
                         }
                     }
                 }
+            } else if (statement instanceof FunctionDeclaration declaration) {
+                final var name = declaration.getName().getName();
+                final var function = makeFunction(name, declaration.getParams(), declaration.getBody(), false, false,
+                        env);
+                env.declareFunction(name, function);
             }
         }
     }
@@ -110,9 +133,13 @@ public final class Interpreter {
             case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) statement, env, label);
             case FOR_STATEMENT -> evalFor((ForStatement) statement, env, label);
             case LABELED_STATEMENT -> evalLabeled((LabeledStatement) statement, env);
+            case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) statement, env, label);
             case BREAK_STATEMENT -> Completion.breakOut(labelName(((BreakStatement) statement).getLabel()));
             case CONTINUE_STATEMENT -> Completion.continueOut(labelName(((ContinueStatement) statement).getLabel()));
-            case RETURN_STATEMENT -> throw new SyntaxErrorException("Illegal return statement");
+            case RETURN_STATEMENT -> evalReturn((ReturnStatement) statement, env);
+            case THROW_STATEMENT -> throw new JsThrowException(eval(((ThrowStatement) statement).getArgument(), env));
+            case TRY_STATEMENT -> evalTry((TryStatement) statement, env);
+            case FUNCTION_DECLARATION -> Completion.empty();
             default -> throw new UnsupportedNodeException(statement.getType().name());
         };
     }
@@ -220,6 +247,7 @@ public final class Interpreter {
             case WHILE_STATEMENT -> evalWhile((WhileStatement) body, env, label);
             case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) body, env, label);
             case FOR_STATEMENT -> evalFor((ForStatement) body, env, label);
+            case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) body, env, label);
             default -> evalStatement(body, env, null);
         };
         if (completion.kind() == Completion.Kind.BREAK && label.equals(completion.label())) {
@@ -245,6 +273,104 @@ public final class Interpreter {
         return label == null ? null : label.getName();
     }
 
+    private Completion evalReturn(ReturnStatement statement, Environment env) {
+        final var argument = statement.getArgument();
+        return Completion.returnValue(argument == null ? JsUndefined.getInstance() : eval(argument, env));
+    }
+
+    private Completion evalTry(TryStatement statement, Environment env) {
+        Completion result = null;
+        RuntimeException thrown = null;
+        try {
+            result = evalBlock(statement.getBlock(), env);
+        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                | SyntaxErrorException error) {
+            if (statement.getHandler() == null) {
+                thrown = error;
+            } else {
+                try {
+                    result = evalCatch(statement.getHandler(), toErrorValue(error), env);
+                } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                        | SyntaxErrorException nested) {
+                    thrown = nested;
+                }
+            }
+        }
+        if (statement.getFinalizer() != null) {
+            final var finalizer = evalBlock(statement.getFinalizer(), env);
+            if (!finalizer.isNormal()) {
+                return finalizer;
+            }
+        }
+        if (thrown != null) {
+            throw thrown;
+        }
+        return result;
+    }
+
+    private Completion evalCatch(CatchClause handler, JsValue error, Environment env) {
+        final var catchEnv = env.child();
+        if (handler.getParam() != null) {
+            if (!(handler.getParam() instanceof Identifier id)) {
+                throw new UnsupportedNodeException(handler.getParam().getType().name());
+            }
+            catchEnv.declareLexical(id.getName(), "let");
+            catchEnv.initialize(id.getName(), error);
+        }
+        return evalBlock(handler.getBody(), catchEnv);
+    }
+
+    private JsValue toErrorValue(RuntimeException error) {
+        if (error instanceof JsThrowException thrown) {
+            return thrown.getValue();
+        }
+        final var name = switch (error) {
+            case TypeErrorException ignored -> "TypeError";
+            case ReferenceErrorException ignored -> "ReferenceError";
+            case RangeErrorException ignored -> "RangeError";
+            default -> "SyntaxError";
+        };
+        return ErrorBuiltins.makeError(name, error.getMessage());
+    }
+
+    private Completion evalSwitch(SwitchStatement statement, Environment env, String label) {
+        final var switchEnv = env.child();
+        for (final var switchCase : statement.getCases()) {
+            hoist(switchCase.getConsequent(), switchEnv);
+        }
+        final var discriminant = eval(statement.getDiscriminant(), switchEnv);
+        final var cases = statement.getCases();
+        var start = -1;
+        var defaultIndex = -1;
+        for (var i = 0; i < cases.size(); i++) {
+            final var test = cases.get(i).getTest();
+            if (test == null) {
+                defaultIndex = i;
+            } else if (JsOperators.strictEquals(discriminant, eval(test, switchEnv))) {
+                start = i;
+                break;
+            }
+        }
+        if (start == -1) {
+            start = defaultIndex;
+        }
+        if (start == -1) {
+            return Completion.empty();
+        }
+        for (var i = start; i < cases.size(); i++) {
+            for (final var consequent : cases.get(i).getConsequent()) {
+                final var completion = evalStatement(consequent, switchEnv, null);
+                if (completion.kind() == Completion.Kind.BREAK && matchesLabel(completion.label(), label)) {
+                    return Completion.empty();
+                }
+                if (!completion.isNormal()) {
+                    return completion;
+                }
+            }
+        }
+        return Completion.empty();
+    }
+
     private JsValue eval(Expression expression, Environment env) {
         return switch (expression.getType()) {
             case NUMBER_LITERAL -> new JsNumber(((NumberLiteral) expression).getValue().doubleValue());
@@ -255,7 +381,11 @@ public final class Interpreter {
             case UNDEFINED_LITERAL -> JsUndefined.getInstance();
             case TEMPLATE_LITERAL -> evalTemplate((TemplateLiteral) expression, env);
             case IDENTIFIER -> env.get(((Identifier) expression).getName());
-            case THIS_EXPRESSION -> JsUndefined.getInstance();
+            case THIS_EXPRESSION -> env.resolveThis();
+            case FUNCTION_EXPRESSION -> evalFunctionExpression((FunctionExpression) expression, env);
+            case ARROW_FUNCTION_EXPRESSION -> evalArrowFunction((ArrowFunctionExpression) expression, env);
+            case CALL_EXPRESSION -> evalCall((CallExpression) expression, env);
+            case NEW_EXPRESSION -> evalNew((NewExpression) expression, env);
             case ARRAY_EXPRESSION -> evalArray((ArrayExpression) expression, env);
             case OBJECT_EXPRESSION -> evalObject((ObjectExpression) expression, env);
             case UNARY_EXPRESSION -> evalUnary((UnaryExpression) expression, env);
@@ -559,6 +689,112 @@ public final class Interpreter {
         if (isNullish(target)) {
             throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+        }
+    }
+
+    private JsValue evalFunctionExpression(FunctionExpression expression, Environment env) {
+        final var name = expression.getName() == null ? null : expression.getName().getName();
+        return makeFunction(name, expression.getParams(), expression.getBody(), false, false, env);
+    }
+
+    private JsValue evalArrowFunction(ArrowFunctionExpression expression, Environment env) {
+        return makeFunction(null, expression.getParams(), expression.getBody(), true, expression.isExpressionBody(),
+                env);
+    }
+
+    private JsFunction makeFunction(String name, List<JsNode> params, JsNode body, boolean arrow,
+            boolean expressionBody, Environment closure) {
+        return new JsFunction(name, params, body, arrow, expressionBody, closure);
+    }
+
+    private JsValue evalCall(CallExpression call, Environment env) {
+        final var callee = call.getCallee();
+        var thisArg = (JsValue) JsUndefined.getInstance();
+        final JsValue function;
+        if (callee instanceof MemberExpression member) {
+            final var object = eval(member.getObject(), env);
+            if (member.isOptional() && isNullish(object)) {
+                return JsUndefined.getInstance();
+            }
+            thisArg = object;
+            function = getMember(object, memberKey(member, env));
+        } else {
+            function = eval(callee, env);
+        }
+        return callValue(function, thisArg, evalArguments(call.getArguments(), env));
+    }
+
+    private JsValue evalNew(NewExpression expression, Environment env) {
+        final var callee = eval(expression.getCallee(), env);
+        final var args = evalArguments(expression.getArguments(), env);
+        if (callee instanceof JsNativeFunction nativeFunction) {
+            return nativeFunction.invoke(JsUndefined.getInstance(), args);
+        }
+        if (callee instanceof JsFunction function && !function.isArrow()) {
+            final var instance = new JsObject();
+            final var result = callFunction(function, instance, args);
+            return isObjectLike(result) ? result : instance;
+        }
+        throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
+    }
+
+    private boolean isObjectLike(JsValue value) {
+        return value instanceof JsObject || value instanceof JsArray || value instanceof JsFunction
+                || value instanceof JsNativeFunction;
+    }
+
+    private List<JsValue> evalArguments(List<Expression> arguments, Environment env) {
+        final var values = new ArrayList<JsValue>();
+        for (final var argument : arguments) {
+            if (argument instanceof SpreadElement) {
+                throw new UnsupportedNodeException(argument.getType().name());
+            }
+            values.add(eval(argument, env));
+        }
+        return values;
+    }
+
+    private JsValue callValue(JsValue callee, JsValue thisArg, List<JsValue> args) {
+        if (callee instanceof JsFunction function) {
+            return callFunction(function, thisArg, args);
+        }
+        if (callee instanceof JsNativeFunction nativeFunction) {
+            return nativeFunction.invoke(thisArg, args);
+        }
+        throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
+    }
+
+    private JsValue callFunction(JsFunction function, JsValue thisArg, List<JsValue> args) {
+        final var activation = function.getClosure().functionChild();
+        if (!function.isArrow()) {
+            activation.defineThis(thisArg);
+        }
+        bindParams(function.getParams(), args, activation);
+        if (function.isExpressionBody()) {
+            return eval((Expression) function.getBody(), activation);
+        }
+        final var body = (BlockStatement) function.getBody();
+        hoist(body.getBody(), activation);
+        for (final var statement : body.getBody()) {
+            final var completion = evalStatement(statement, activation, null);
+            if (completion.kind() == Completion.Kind.RETURN) {
+                return completion.value();
+            }
+            if (!completion.isNormal()) {
+                break;
+            }
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
+        for (var i = 0; i < params.size(); i++) {
+            final var param = params.get(i);
+            if (!(param instanceof Identifier id)) {
+                throw new UnsupportedNodeException(param.getType().name());
+            }
+            activation.declareVar(id.getName());
+            activation.assign(id.getName(), i < args.size() ? args.get(i) : JsUndefined.getInstance());
         }
     }
 
