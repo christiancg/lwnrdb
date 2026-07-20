@@ -5,6 +5,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -54,6 +55,7 @@ public final class JsCoercion {
             case JsObject ignored -> "[object Object]";
             case JsFunction f -> functionToString(f.getName());
             case JsNativeFunction f -> functionToString(f.getName());
+            case JsClass c -> "class " + (c.getName() == null ? "" : c.getName());
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }
@@ -74,6 +76,7 @@ public final class JsCoercion {
             case JsUndefined ignored -> "undefined";
             case JsFunction ignored -> "function";
             case JsNativeFunction ignored -> "function";
+            case JsClass ignored -> "function";
             default -> "object";
         };
     }

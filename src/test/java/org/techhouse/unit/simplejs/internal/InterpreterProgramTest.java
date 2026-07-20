@@ -233,4 +233,57 @@ public class InterpreterProgramTest {
                 """;
         assertEquals("1,9,3", str(source));
     }
+
+    // A Stack class encapsulates a private field behind push/pop and a size getter
+    @Test
+    public void test_stack_class_with_private_field() {
+        final var source = """
+                class Stack {
+                    #items = [];
+                    push(x) { this.#items.push(x); return this; }
+                    pop() { return this.#items.pop(); }
+                    get size() { return this.#items.length; }
+                }
+                let s = new Stack();
+                s.push(1).push(2).push(3);
+                let top = s.pop();
+                top + ':' + s.size
+                """;
+        assertEquals("3:2", str(source));
+    }
+
+    // An inheritance chain overrides area() and reuses the base via super
+    @Test
+    public void test_shape_inheritance_with_super() {
+        final var source = """
+                class Shape {
+                    constructor(name) { this.name = name; }
+                    area() { return 0; }
+                    describe() { return this.name + '=' + this.area(); }
+                }
+                class Circle extends Shape {
+                    constructor(r) { super('circle'); this.r = r; }
+                    area() { return Math.floor(super.area() + this.r * this.r * 3); }
+                }
+                new Circle(2).describe()
+                """;
+        assertEquals("circle=12", str(source));
+    }
+
+    // A static field and method maintain a shared instance counter
+    @Test
+    public void test_static_instance_counter() {
+        final var source = """
+                class Widget {
+                    static count = 0;
+                    constructor() { Widget.count++; }
+                    static total() { return Widget.count; }
+                }
+                new Widget();
+                new Widget();
+                new Widget();
+                Widget.total()
+                """;
+        assertEquals(3, num(source));
+    }
 }

@@ -29,6 +29,7 @@ public final class EJsonInterop {
             case JsUndefined ignored -> null;
             case JsFunction ignored -> null;
             case JsNativeFunction ignored -> null;
+            case JsClass ignored -> null;
             case JsArray array -> arrayToEjson(array, visited);
             case JsObject object -> objectToEjson(object, visited);
             default -> null;

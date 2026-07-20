@@ -27,11 +27,15 @@ import org.techhouse.simplejs.nodes.BooleanLiteral;
 import org.techhouse.simplejs.nodes.BreakStatement;
 import org.techhouse.simplejs.nodes.CallExpression;
 import org.techhouse.simplejs.nodes.CatchClause;
+import org.techhouse.simplejs.nodes.ClassBody;
+import org.techhouse.simplejs.nodes.ClassDeclaration;
+import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
+import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
@@ -41,17 +45,21 @@ import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
+import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
+import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.StringLiteral;
+import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThrowStatement;
@@ -63,6 +71,7 @@ import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -102,7 +111,7 @@ public final class Interpreter {
         hoist(program.getBody(), env);
         var last = (JsValue) JsUndefined.getInstance();
         for (final var statement : program.getBody()) {
-            final var completion = evalStatement(statement, env, null);
+            final var completion = evalStatement(statement, env);
             if (!completion.isNormal()) {
                 throw new SyntaxErrorException(
                         "Illegal " + completion.kind().name().toLowerCase(Locale.ROOT) + " statement");
@@ -136,7 +145,7 @@ public final class Interpreter {
         }
     }
 
-    private Completion evalStatement(Statement statement, Environment env, String label) {
+    private Completion evalStatement(Statement statement, Environment env) {
         return switch (statement.getType()) {
             case BLOCK_STATEMENT -> evalBlock((BlockStatement) statement, env);
             case EMPTY_STATEMENT -> Completion.empty();
@@ -144,16 +153,17 @@ public final class Interpreter {
                 Completion.normal(eval(((ExpressionStatement) statement).getExpression(), env));
             case VARIABLE_DECLARATION -> evalVariableDeclaration((VariableDeclaration) statement, env);
             case IF_STATEMENT -> evalIf((IfStatement) statement, env);
-            case WHILE_STATEMENT -> evalWhile((WhileStatement) statement, env, label);
-            case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) statement, env, label);
-            case FOR_STATEMENT -> evalFor((ForStatement) statement, env, label);
+            case WHILE_STATEMENT -> evalWhile((WhileStatement) statement, env, null);
+            case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) statement, env, null);
+            case FOR_STATEMENT -> evalFor((ForStatement) statement, env, null);
             case LABELED_STATEMENT -> evalLabeled((LabeledStatement) statement, env);
-            case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) statement, env, label);
+            case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) statement, env, null);
             case BREAK_STATEMENT -> Completion.breakOut(labelName(((BreakStatement) statement).getLabel()));
             case CONTINUE_STATEMENT -> Completion.continueOut(labelName(((ContinueStatement) statement).getLabel()));
             case RETURN_STATEMENT -> evalReturn((ReturnStatement) statement, env);
             case THROW_STATEMENT -> throw new JsThrowException(eval(((ThrowStatement) statement).getArgument(), env));
             case TRY_STATEMENT -> evalTry((TryStatement) statement, env);
+            case CLASS_DECLARATION -> evalClassDeclaration((ClassDeclaration) statement, env);
             case FUNCTION_DECLARATION -> Completion.empty();
             default -> throw new UnsupportedNodeException(statement.getType().name());
         };
@@ -163,7 +173,7 @@ public final class Interpreter {
         final var blockEnv = env.child();
         hoist(block.getBody(), blockEnv);
         for (final var statement : block.getBody()) {
-            final var completion = evalStatement(statement, blockEnv, null);
+            final var completion = evalStatement(statement, blockEnv);
             if (!completion.isNormal()) {
                 return completion;
             }
@@ -197,17 +207,17 @@ public final class Interpreter {
 
     private Completion evalIf(IfStatement statement, Environment env) {
         if (JsCoercion.toBoolean(eval(statement.getTest(), env))) {
-            return evalStatement(statement.getConsequent(), env, null);
+            return evalStatement(statement.getConsequent(), env);
         }
         if (statement.getAlternate() != null) {
-            return evalStatement(statement.getAlternate(), env, null);
+            return evalStatement(statement.getAlternate(), env);
         }
         return Completion.empty();
     }
 
     private Completion evalWhile(WhileStatement statement, Environment env, String label) {
         while (JsCoercion.toBoolean(eval(statement.getTest(), env))) {
-            final var completion = evalStatement(statement.getBody(), env, null);
+            final var completion = evalStatement(statement.getBody(), env);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 return completion;
@@ -221,7 +231,7 @@ public final class Interpreter {
 
     private Completion evalDoWhile(DoWhileStatement statement, Environment env, String label) {
         do {
-            final var completion = evalStatement(statement.getBody(), env, null);
+            final var completion = evalStatement(statement.getBody(), env);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 return completion;
@@ -243,7 +253,7 @@ public final class Interpreter {
             eval(expression, loopEnv);
         }
         while (statement.getTest() == null || JsCoercion.toBoolean(eval(statement.getTest(), loopEnv))) {
-            final var completion = evalStatement(statement.getBody(), loopEnv, null);
+            final var completion = evalStatement(statement.getBody(), loopEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 return completion;
@@ -266,7 +276,7 @@ public final class Interpreter {
             case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) body, env, label);
             case FOR_STATEMENT -> evalFor((ForStatement) body, env, label);
             case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) body, env, label);
-            default -> evalStatement(body, env, null);
+            default -> evalStatement(body, env);
         };
         if (completion.kind() == Completion.Kind.BREAK && label.equals(completion.label())) {
             return Completion.empty();
@@ -382,7 +392,7 @@ public final class Interpreter {
         }
         for (var i = start; i < cases.size(); i++) {
             for (final var consequent : cases.get(i).getConsequent()) {
-                final var completion = evalStatement(consequent, switchEnv, null);
+                final var completion = evalStatement(consequent, switchEnv);
                 if (completion.kind() == Completion.Kind.BREAK && matchesLabel(completion.label(), label)) {
                     return Completion.empty();
                 }
@@ -418,6 +428,8 @@ public final class Interpreter {
             case ASSIGNMENT_EXPRESSION -> evalAssignment((AssignmentExpression) expression, env);
             case CONDITIONAL_EXPRESSION -> evalConditional((ConditionalExpression) expression, env);
             case MEMBER_EXPRESSION -> evalMember((MemberExpression) expression, env);
+            case CLASS_EXPRESSION -> evalClassExpression((ClassExpression) expression, env);
+            case SUPER_EXPRESSION -> throw new SyntaxErrorException("'super' keyword unexpected here");
             default -> throw new UnsupportedNodeException(expression.getType().name());
         };
     }
@@ -554,6 +566,13 @@ public final class Interpreter {
             return update.isPrefix() ? newValue : numericOld(oldValue);
         }
         if (argument instanceof MemberExpression member) {
+            if (member.getProperty() instanceof PrivateIdentifier priv) {
+                final var object = eval(member.getObject(), env);
+                final var oldValue = getPrivateMember(object, priv.getName(), env);
+                final var newValue = JsOperators.delta(oldValue, increment);
+                setPrivateMember(object, priv.getName(), newValue, env);
+                return update.isPrefix() ? newValue : numericOld(oldValue);
+            }
             final var target = eval(member.getObject(), env);
             final var key = memberKey(member, env);
             final var oldValue = getMember(target, key);
@@ -574,9 +593,12 @@ public final class Interpreter {
     private JsValue evalBinary(BinaryExpression binary, Environment env) {
         final var operator = binary.getOperator();
         if ("instanceof".equals(operator)) {
-            throw new UnsupportedNodeException("instanceof");
+            return evalInstanceof(eval(binary.getLeft(), env), eval(binary.getRight(), env));
         }
         if ("in".equals(operator)) {
+            if (binary.getLeft() instanceof PrivateIdentifier priv) {
+                return evalBrandCheck(priv, eval(binary.getRight(), env), env);
+            }
             return evalIn(binary, env);
         }
         return JsOperators.binary(operator, eval(binary.getLeft(), env), eval(binary.getRight(), env));
@@ -653,6 +675,9 @@ public final class Interpreter {
     }
 
     private JsValue assignToMember(MemberExpression member, AssignmentExpression assignment, Environment env) {
+        if (member.getProperty() instanceof PrivateIdentifier priv) {
+            return assignToPrivate(member, priv, assignment, env);
+        }
         final var target = eval(member.getObject(), env);
         final var key = memberKey(member, env);
         final var operator = assignment.getOperator();
@@ -689,6 +714,16 @@ public final class Interpreter {
     }
 
     private JsValue evalMember(MemberExpression member, Environment env) {
+        if (member.getObject() instanceof SuperExpression) {
+            return evalSuperMemberRead(member, env);
+        }
+        if (member.getProperty() instanceof PrivateIdentifier priv) {
+            final var privateTarget = eval(member.getObject(), env);
+            if (member.isOptional() && isNullish(privateTarget)) {
+                return JsUndefined.getInstance();
+            }
+            return getPrivateMember(privateTarget, priv.getName(), env);
+        }
         final var target = eval(member.getObject(), env);
         if (member.isOptional() && isNullish(target)) {
             return JsUndefined.getInstance();
@@ -709,7 +744,21 @@ public final class Interpreter {
 
     private JsValue getMember(JsValue target, String key) {
         if (target instanceof JsObject object) {
+            final var cls = object.getKlass();
+            if (cls != null && !object.has(key)) {
+                final var getter = cls.findInstanceGetter(key);
+                if (getter != null) {
+                    return callFunction(getter, object, List.of());
+                }
+                final var method = cls.findInstanceMethod(key);
+                if (method != null) {
+                    return method;
+                }
+            }
             return object.get(key);
+        }
+        if (target instanceof JsClass cls) {
+            return getStaticMember(cls, key);
         }
         if (target instanceof JsArray array) {
             if ("length".equals(key)) {
@@ -746,20 +795,38 @@ public final class Interpreter {
     }
 
     private void setMember(JsValue target, String key, JsValue value) {
-        if (target instanceof JsObject object) {
-            object.set(key, value);
-            return;
-        }
-        if (target instanceof JsArray array) {
-            final var index = arrayIndex(key);
-            if (index != null) {
-                array.set(index, value);
+        switch (target) {
+            case JsObject object -> {
+                final var cls = object.getKlass();
+                if (cls != null && !object.has(key)) {
+                    final var setter = cls.findInstanceSetter(key);
+                    if (setter != null) {
+                        callFunction(setter, object, List.of(value));
+                        return;
+                    }
+                }
+                object.set(key, value);
             }
-            return;
-        }
-        if (isNullish(target)) {
-            throw new TypeErrorException(
+            case JsClass cls -> {
+                final var setter = cls.findStaticSetter(key);
+                if (setter != null) {
+                    callFunction(setter, cls, List.of(value));
+                } else {
+                    cls.setStaticProp(key, value);
+                }
+            }
+            case JsArray array -> {
+                final var index = arrayIndex(key);
+                if (index != null) {
+                    array.set(index, value);
+                }
+            }
+            case JsNull ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+            case JsUndefined ignored -> throw new TypeErrorException(
+                    "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+            default -> {
+            }
         }
     }
 
@@ -780,15 +847,25 @@ public final class Interpreter {
 
     private JsValue evalCall(CallExpression call, Environment env) {
         final var callee = call.getCallee();
+        if (callee instanceof SuperExpression) {
+            return evalSuperCall(call, env);
+        }
         var thisArg = (JsValue) JsUndefined.getInstance();
         final JsValue function;
         if (callee instanceof MemberExpression member) {
+            if (member.getObject() instanceof SuperExpression) {
+                return evalSuperMemberCall(member, call, env);
+            }
             final var object = eval(member.getObject(), env);
             if (member.isOptional() && isNullish(object)) {
                 return JsUndefined.getInstance();
             }
             thisArg = object;
-            function = getMember(object, memberKey(member, env));
+            if (member.getProperty() instanceof PrivateIdentifier priv) {
+                function = getPrivateMember(object, priv.getName(), env);
+            } else {
+                function = getMember(object, memberKey(member, env));
+            }
         } else {
             function = eval(callee, env);
         }
@@ -798,6 +875,9 @@ public final class Interpreter {
     private JsValue evalNew(NewExpression expression, Environment env) {
         final var callee = eval(expression.getCallee(), env);
         final var args = evalArguments(expression.getArguments(), env);
+        if (callee instanceof JsClass cls) {
+            return construct(cls, args);
+        }
         if (callee instanceof JsNativeFunction nativeFunction) {
             return nativeFunction.invoke(JsUndefined.getInstance(), args);
         }
@@ -811,7 +891,7 @@ public final class Interpreter {
 
     private boolean isObjectLike(JsValue value) {
         return value instanceof JsObject || value instanceof JsArray || value instanceof JsFunction
-                || value instanceof JsNativeFunction;
+                || value instanceof JsNativeFunction || value instanceof JsClass;
     }
 
     private List<JsValue> evalArguments(List<Expression> arguments, Environment env) {
@@ -848,7 +928,7 @@ public final class Interpreter {
         final var body = (BlockStatement) function.getBody();
         hoist(body.getBody(), activation);
         for (final var statement : body.getBody()) {
-            final var completion = evalStatement(statement, activation, null);
+            final var completion = evalStatement(statement, activation);
             if (completion.kind() == Completion.Kind.RETURN) {
                 return completion.value();
             }
@@ -1035,5 +1115,303 @@ public final class Interpreter {
                 throw new UnsupportedNodeException(leaf.getType().name());
             }
         };
+    }
+
+    private Completion evalClassDeclaration(ClassDeclaration declaration, Environment env) {
+        final var cls = buildClass(declaration.getId(), declaration.getSuperClass(), declaration.getBody(), env);
+        final var name = declaration.getId().getName();
+        env.declareLexical(name, "let");
+        env.initialize(name, cls);
+        return Completion.empty();
+    }
+
+    private JsValue evalClassExpression(ClassExpression expression, Environment env) {
+        return buildClass(expression.getId(), expression.getSuperClass(), expression.getBody(), env);
+    }
+
+    private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env) {
+        JsClass superClass = null;
+        if (superClassExpr != null) {
+            final var resolved = eval(superClassExpr, env);
+            if (!(resolved instanceof JsClass sc)) {
+                throw new TypeErrorException(
+                        "Class extends value " + JsCoercion.toStr(resolved) + " is not a constructor or null");
+            }
+            superClass = sc;
+        }
+        final var classScope = env.child();
+        final var methodScope = classScope.child();
+        final var name = id == null ? null : id.getName();
+        final var cls = new JsClass(name, superClass, methodScope);
+        methodScope.defineHomeClass(cls);
+        if (name != null) {
+            classScope.declareLexical(name, "const");
+            classScope.initialize(name, cls);
+        }
+        final var staticInit = new ArrayList<JsNode>();
+        for (final var member : body.getMembers()) {
+            switch (member) {
+                case MethodDefinition method -> installMethod(cls, method, classScope);
+                case FieldDefinition field -> {
+                    if (field.isStatic()) {
+                        staticInit.add(field);
+                    } else {
+                        cls.addInstanceField(field);
+                    }
+                }
+                case StaticBlock block -> staticInit.add(block);
+                default -> throw new UnsupportedNodeException(member.getType().name());
+            }
+        }
+        runStaticInit(cls, staticInit);
+        return cls;
+    }
+
+    private void installMethod(JsClass cls, MethodDefinition method, Environment classScope) {
+        final var value = method.getValue();
+        if (value.isAsync() || value.isGenerator()) {
+            throw new UnsupportedNodeException("async/generator class method");
+        }
+        final var fn = makeFunction(null, value.getParams(), value.getBody(), false, false, cls.getMethodScope());
+        final var kind = method.getKind();
+        if ("constructor".equals(kind)) {
+            cls.setConstructor(fn);
+            return;
+        }
+        if (method.getKey() instanceof PrivateIdentifier priv) {
+            cls.addPrivateInstanceMethod(priv.getName(), kind, fn);
+            return;
+        }
+        final var key = method.isComputed()
+                ? JsCoercion.toStr(eval(method.getKey(), classScope))
+                : staticKeyName(method.getKey());
+        if (method.isStatic()) {
+            cls.addStaticMethod(key, kind, fn);
+        } else {
+            cls.addInstanceMethod(key, kind, fn);
+        }
+    }
+
+    private void runStaticInit(JsClass cls, List<JsNode> staticInit) {
+        final var staticScope = cls.getMethodScope().child();
+        staticScope.defineThis(cls);
+        for (final var node : staticInit) {
+            if (node instanceof FieldDefinition field) {
+                final var key = field.isComputed()
+                        ? JsCoercion.toStr(eval(field.getKey(), staticScope))
+                        : staticKeyName(field.getKey());
+                final var value = field.getValue() == null
+                        ? JsUndefined.getInstance()
+                        : eval(field.getValue(), staticScope);
+                cls.setStaticProp(key, value);
+            } else {
+                final var block = (StaticBlock) node;
+                final var blockEnv = staticScope.child();
+                hoist(block.getBody(), blockEnv);
+                for (final var statement : block.getBody()) {
+                    if (!evalStatement(statement, blockEnv).isNormal()) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    private JsValue construct(JsClass cls, List<JsValue> args) {
+        final var instance = new JsObject();
+        instance.setKlass(cls);
+        callConstructorChain(cls, instance, args);
+        return instance;
+    }
+
+    private void callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args) {
+        final var constructor = cls.getConstructor();
+        if (cls.getSuperClass() == null) {
+            initFields(cls, instance);
+            if (constructor != null) {
+                callFunction(constructor, instance, args);
+            }
+        } else if (constructor == null) {
+            callConstructorChain(cls.getSuperClass(), instance, args);
+            initFields(cls, instance);
+        } else {
+            callFunction(constructor, instance, args);
+        }
+    }
+
+    private void initFields(JsClass cls, JsObject instance) {
+        for (final var field : cls.getInstanceFields()) {
+            final var fieldScope = cls.getMethodScope().child();
+            fieldScope.defineThis(instance);
+            final var value = field.getValue() == null ? JsUndefined.getInstance() : eval(field.getValue(), fieldScope);
+            if (field.getKey() instanceof PrivateIdentifier priv) {
+                instance.setPrivate(priv.getName(), value);
+            } else {
+                final var key = field.isComputed()
+                        ? JsCoercion.toStr(eval(field.getKey(), fieldScope))
+                        : staticKeyName(field.getKey());
+                instance.set(key, value);
+            }
+        }
+    }
+
+    private JsValue evalSuperCall(CallExpression call, Environment env) {
+        final var home = superHomeClass(env);
+        final var thisValue = env.resolveThis();
+        if (!(thisValue instanceof JsObject instance)) {
+            throw new TypeErrorException("'super' call outside of a constructor");
+        }
+        final var args = evalArguments(call.getArguments(), env);
+        callConstructorChain(home.getSuperClass(), instance, args);
+        initFields(home, instance);
+        return JsUndefined.getInstance();
+    }
+
+    private JsValue evalSuperMemberCall(MemberExpression member, CallExpression call, Environment env) {
+        final var home = superHomeClass(env);
+        final var thisArg = env.resolveThis();
+        final var parent = home.getSuperClass();
+        final var key = memberKey(member, env);
+        final var args = evalArguments(call.getArguments(), env);
+        final var staticContext = thisArg instanceof JsClass;
+        final var method = staticContext ? parent.findStaticMethod(key) : parent.findInstanceMethod(key);
+        if (method != null) {
+            return callFunction(method, thisArg, args);
+        }
+        final var getter = staticContext ? parent.findStaticGetter(key) : parent.findInstanceGetter(key);
+        if (getter != null) {
+            return callValue(callFunction(getter, thisArg, List.of()), thisArg, args);
+        }
+        throw new TypeErrorException("(intermediate value).super." + key + " is not a function");
+    }
+
+    private JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
+        final var home = superHomeClass(env);
+        final var thisArg = env.resolveThis();
+        final var parent = home.getSuperClass();
+        final var key = memberKey(member, env);
+        final var staticContext = thisArg instanceof JsClass;
+        final var getter = staticContext ? parent.findStaticGetter(key) : parent.findInstanceGetter(key);
+        if (getter != null) {
+            return callFunction(getter, thisArg, List.of());
+        }
+        final var method = staticContext ? parent.findStaticMethod(key) : parent.findInstanceMethod(key);
+        if (method != null) {
+            return method;
+        }
+        if (staticContext) {
+            return getStaticMember(parent, key);
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private JsClass superHomeClass(Environment env) {
+        if (env.resolveHomeClass() instanceof JsClass cls && cls.getSuperClass() != null) {
+            return cls;
+        }
+        throw new SyntaxErrorException("'super' keyword unexpected here");
+    }
+
+    private JsValue getStaticMember(JsClass cls, String key) {
+        final var getter = cls.findStaticGetter(key);
+        if (getter != null) {
+            return callFunction(getter, cls, List.of());
+        }
+        final var method = cls.findStaticMethod(key);
+        if (method != null) {
+            return method;
+        }
+        for (var current = cls; current != null; current = current.getSuperClass()) {
+            if (current.hasStaticProp(key)) {
+                return current.getStaticProp(key);
+            }
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private JsValue getPrivateMember(JsValue target, String name, Environment env) {
+        if (target instanceof JsObject object) {
+            if (object.hasPrivate(name)) {
+                return object.getPrivate(name);
+            }
+            if (env.resolveHomeClass() instanceof JsClass cls) {
+                final var getter = cls.getPrivateInstanceGetter(name);
+                if (getter != null) {
+                    return callFunction(getter, object, List.of());
+                }
+                final var method = cls.getPrivateInstanceMethod(name);
+                if (method != null) {
+                    return method;
+                }
+            }
+        }
+        throw new TypeErrorException(
+                "Cannot read private member #" + name + " from an object whose class did not declare it");
+    }
+
+    private void setPrivateMember(JsValue target, String name, JsValue value, Environment env) {
+        if (target instanceof JsObject object) {
+            if (env.resolveHomeClass() instanceof JsClass cls) {
+                final var setter = cls.getPrivateInstanceSetter(name);
+                if (setter != null) {
+                    callFunction(setter, object, List.of(value));
+                    return;
+                }
+            }
+            object.setPrivate(name, value);
+            return;
+        }
+        throw new TypeErrorException(
+                "Cannot write private member #" + name + " to an object whose class did not declare it");
+    }
+
+    private JsValue assignToPrivate(MemberExpression member, PrivateIdentifier priv, AssignmentExpression assignment,
+            Environment env) {
+        final var target = eval(member.getObject(), env);
+        final var name = priv.getName();
+        final var operator = assignment.getOperator();
+        if ("=".equals(operator)) {
+            final var value = eval(assignment.getValue(), env);
+            setPrivateMember(target, name, value, env);
+            return value;
+        }
+        final var current = getPrivateMember(target, name, env);
+        if (LOGICAL_ASSIGN.contains(operator)) {
+            if (shouldNotApplyLogical(operator, current)) {
+                return current;
+            }
+            final var value = eval(assignment.getValue(), env);
+            setPrivateMember(target, name, value, env);
+            return value;
+        }
+        final var value = JsOperators.binary(baseOperator(operator), current, eval(assignment.getValue(), env));
+        setPrivateMember(target, name, value, env);
+        return value;
+    }
+
+    private JsValue evalBrandCheck(PrivateIdentifier priv, JsValue target, Environment env) {
+        final var name = priv.getName();
+        if (target instanceof JsObject object) {
+            if (object.hasPrivate(name)) {
+                return JsBoolean.TRUE;
+            }
+            if (env.resolveHomeClass() instanceof JsClass cls && cls.declaresPrivate(name)) {
+                return JsBoolean.of(object.getKlass() != null && object.getKlass().isSubclassOf(cls));
+            }
+        }
+        return JsBoolean.FALSE;
+    }
+
+    private JsValue evalInstanceof(JsValue left, JsValue right) {
+        if (right instanceof JsClass cls) {
+            if (left instanceof JsObject object && object.getKlass() != null) {
+                return JsBoolean.of(object.getKlass().isSubclassOf(cls));
+            }
+            return JsBoolean.FALSE;
+        }
+        if (right instanceof JsFunction || right instanceof JsNativeFunction) {
+            return JsBoolean.FALSE;
+        }
+        throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
     }
 }

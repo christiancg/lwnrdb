@@ -1,6 +1,8 @@
 package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
@@ -80,5 +82,20 @@ public class EnvironmentTest {
         child.declareVar("h");
         child.assign("h", new JsNumber(5));
         assertEquals(5, ((JsNumber) env.get("h")).getValue());
+    }
+
+    // A home class defined on a parent scope resolves from a descendant scope
+    @Test
+    public void test_home_class_resolves_up_chain() {
+        final var env = Environment.global();
+        final var home = new JsNumber(1);
+        env.defineHomeClass(home);
+        assertSame(home, env.child().child().resolveHomeClass());
+    }
+
+    // Resolving a home class with none defined returns null
+    @Test
+    public void test_home_class_absent_returns_null() {
+        assertNull(Environment.global().resolveHomeClass());
     }
 }

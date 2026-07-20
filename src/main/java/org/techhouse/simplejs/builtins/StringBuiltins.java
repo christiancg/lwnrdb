@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.List;
+import java.util.Locale;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -23,14 +24,13 @@ public final class StringBuiltins {
         final var value = receiver.getValue();
         return switch (name) {
             case "slice" -> new JsNativeFunction("slice", (_, args) -> new JsString(slice(value, args)));
-            case "substring" ->
-                new JsNativeFunction("substring", (_, args) -> new JsString(substring(value, args)));
+            case "substring" -> new JsNativeFunction("substring", (_, args) -> new JsString(substring(value, args)));
             case "split" -> new JsNativeFunction("split", (_, args) -> split(value, args));
             case "replace" -> new JsNativeFunction("replace", (_, args) -> new JsString(replace(value, args)));
             case "toUpperCase" ->
-                new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase()));
+                new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
             case "toLowerCase" ->
-                new JsNativeFunction("toLowerCase", (_, _) -> new JsString(value.toLowerCase()));
+                new JsNativeFunction("toLowerCase", (_, _) -> new JsString(value.toLowerCase(Locale.ROOT)));
             case "trim" -> new JsNativeFunction("trim", (_, _) -> new JsString(value.strip()));
             case "includes" ->
                 new JsNativeFunction("includes", (_, args) -> JsBoolean.of(value.contains(str(args, 0))));
@@ -41,8 +41,7 @@ public final class StringBuiltins {
             case "padStart" -> new JsNativeFunction("padStart", (_, args) -> new JsString(padStart(value, args)));
             case "repeat" -> new JsNativeFunction("repeat", (_, args) -> new JsString(repeat(value, args)));
             case "charAt" -> new JsNativeFunction("charAt", (_, args) -> new JsString(charAt(value, args)));
-            case "indexOf" ->
-                new JsNativeFunction("indexOf", (_, args) -> new JsNumber(value.indexOf(str(args, 0))));
+            case "indexOf" -> new JsNativeFunction("indexOf", (_, args) -> new JsNumber(value.indexOf(str(args, 0))));
             default -> null;
         };
     }
@@ -50,7 +49,8 @@ public final class StringBuiltins {
     private static String slice(String value, List<JsValue> args) {
         final var length = value.length();
         var start = clampIndex(intArg(args, 0, 0), length);
-        var end = args.size() < 2 || args.get(1) instanceof JsUndefined ? length
+        var end = args.size() < 2 || args.get(1) instanceof JsUndefined
+                ? length
                 : clampIndex(intArg(args, 1, length), length);
         if (start >= end) {
             return "";
@@ -61,7 +61,8 @@ public final class StringBuiltins {
     private static String substring(String value, List<JsValue> args) {
         final var length = value.length();
         var start = Math.clamp(intArg(args, 0, 0), 0, length);
-        var end = args.size() < 2 || args.get(1) instanceof JsUndefined ? length
+        var end = args.size() < 2 || args.get(1) instanceof JsUndefined
+                ? length
                 : Math.clamp(intArg(args, 1, length), 0, length);
         if (start > end) {
             final var tmp = start;

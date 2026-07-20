@@ -46,8 +46,7 @@ public class EJsonInteropTest {
     // a BigInt cannot be converted
     @Test
     public void test_bigint_to_ejson_throws() {
-        assertThrows(TypeErrorException.class,
-                () -> EJsonInterop.toEjson(new JsBigInt(BigInteger.ONE)));
+        assertThrows(TypeErrorException.class, () -> EJsonInterop.toEjson(new JsBigInt(BigInteger.ONE)));
     }
 
     // objects and arrays round-trip, dropping undefined members

@@ -44,8 +44,7 @@ public final class ArrayBuiltins {
             case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
             case "find" -> new JsNativeFunction("find", (_, args) -> find(receiver, args, invoker));
             case "some" -> new JsNativeFunction("some", (_, args) -> JsBoolean.of(some(receiver, args, invoker)));
-            case "every" ->
-                new JsNativeFunction("every", (_, args) -> JsBoolean.of(every(receiver, args, invoker)));
+            case "every" -> new JsNativeFunction("every", (_, args) -> JsBoolean.of(every(receiver, args, invoker)));
             case "includes" ->
                 new JsNativeFunction("includes", (_, args) -> JsBoolean.of(indexOf(receiver, args) >= 0));
             case "indexOf" -> new JsNativeFunction("indexOf", (_, args) -> new JsNumber(indexOf(receiver, args)));
@@ -186,9 +185,7 @@ public final class ArrayBuiltins {
         final var elements = receiver.getElements();
         final var length = elements.size();
         final var start = clampIndex(intArg(args, 0, 0), length);
-        final var deleteCount = args.size() < 2
-                ? length - start
-                : Math.clamp(intArg(args, 1, 0), 0, length - start);
+        final var deleteCount = args.size() < 2 ? length - start : Math.clamp(intArg(args, 1, 0), 0, length - start);
         final var removed = new JsArray();
         for (var i = 0; i < deleteCount; i++) {
             removed.push(elements.remove(start));

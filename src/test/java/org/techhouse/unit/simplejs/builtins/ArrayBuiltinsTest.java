@@ -1,13 +1,13 @@
 package org.techhouse.unit.simplejs.builtins;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class ArrayBuiltinsTest {
     private static double num(String source) {

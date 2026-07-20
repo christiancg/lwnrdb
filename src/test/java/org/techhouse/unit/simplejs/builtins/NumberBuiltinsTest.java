@@ -1,11 +1,11 @@
 package org.techhouse.unit.simplejs.builtins;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class NumberBuiltinsTest {
     private static double num(String source) {

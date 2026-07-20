@@ -8,11 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Objects;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Environment;
+import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -38,6 +41,29 @@ public class JsValueTest {
                 new JsFunction(null, List.of(), null, false, false, Environment.global()).getType());
         assertEquals(JsValue.JsValueType.FUNCTION,
                 new JsNativeFunction("id", (_, _) -> JsUndefined.getInstance()).getType());
+        assertEquals(JsValue.JsValueType.CLASS, new JsClass("A", null, Environment.global()).getType());
+    }
+
+    // A class value is typeof "function" and stringifies with its name
+    @Test
+    public void test_class_value() {
+        final var cls = new JsClass("Widget", null, Environment.global());
+        assertEquals("function", JsCoercion.typeOf(cls));
+        assertEquals("class Widget", JsCoercion.toStr(cls));
+        assertEquals("Widget", cls.getName());
+    }
+
+    // A class instance links to its class and stores private fields
+    @Test
+    public void test_object_class_and_private_fields() {
+        final var cls = new JsClass("A", null, Environment.global());
+        final var object = new JsObject();
+        object.setKlass(cls);
+        assertSame(cls, object.getKlass());
+        assertFalse(object.hasPrivate("x"));
+        object.setPrivate("x", new JsNumber(7));
+        assertTrue(object.hasPrivate("x"));
+        assertEquals(7, ((JsNumber) Objects.requireNonNull(object.getPrivate("x"))).getValue());
     }
 
     // Function values expose their name and native functions invoke their implementation

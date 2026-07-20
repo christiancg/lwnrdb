@@ -25,6 +25,8 @@ public final class Environment {
     private final Map<String, Binding> bindings = new HashMap<>();
     private JsValue thisValue;
     private boolean hasThis;
+    private JsValue homeClass;
+    private boolean hasHomeClass;
 
     private Environment(Environment parent, boolean functionScope) {
         this.parent = parent;
@@ -57,6 +59,22 @@ public final class Environment {
             env = env.parent;
         }
         return JsUndefined.getInstance();
+    }
+
+    public void defineHomeClass(JsValue value) {
+        this.homeClass = value;
+        this.hasHomeClass = true;
+    }
+
+    public JsValue resolveHomeClass() {
+        var env = this;
+        while (env != null) {
+            if (env.hasHomeClass) {
+                return env.homeClass;
+            }
+            env = env.parent;
+        }
+        return null;
     }
 
     public void declareFunction(String name, JsValue value) {

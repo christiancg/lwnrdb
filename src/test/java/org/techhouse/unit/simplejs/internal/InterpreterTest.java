@@ -220,9 +220,8 @@ public class InterpreterTest {
     // Nodes outside the current interpreter scope raise UnsupportedNodeException
     @Test
     public void test_unsupported_nodes() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("1 instanceof Object"));
         assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("for (let x of [1]) {}"));
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("class A {}"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("for (let k in {}) {}"));
     }
 
     // this evaluates to undefined at the top level

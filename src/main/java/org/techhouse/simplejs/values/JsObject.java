@@ -7,6 +7,8 @@ import java.util.Set;
 public final class JsObject extends JsValue {
     private final Map<String, JsValue> properties = new LinkedHashMap<>();
     private boolean frozen;
+    private JsClass klass;
+    private Map<String, JsValue> privateFields;
 
     public JsValue get(String key) {
         final var value = properties.get(key);
@@ -46,5 +48,28 @@ public final class JsObject extends JsValue {
 
     public Map<String, JsValue> getProperties() {
         return properties;
+    }
+
+    public JsClass getKlass() {
+        return klass;
+    }
+
+    public void setKlass(JsClass klass) {
+        this.klass = klass;
+    }
+
+    public JsValue getPrivate(String key) {
+        return privateFields == null ? null : privateFields.get(key);
+    }
+
+    public void setPrivate(String key, JsValue value) {
+        if (privateFields == null) {
+            privateFields = new LinkedHashMap<>();
+        }
+        privateFields.put(key, value);
+    }
+
+    public boolean hasPrivate(String key) {
+        return privateFields != null && privateFields.containsKey(key);
     }
 }
