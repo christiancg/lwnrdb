@@ -16,8 +16,9 @@ source String
 ```
 
 The **lexer** and **parser** are implemented and cover the ES2020–ES2026
-syntactic surface. The **interpreter** is the one remaining stage (see the last
-section). This document describes the engine as built.
+syntactic surface. The **interpreter** is being built in sub-phases (see the last
+section); **Phase 6a** — the evaluation core — is done. This document describes the
+engine as built.
 
 > **Status legend:** ✅ implemented · ⬜ not yet built.
 
@@ -27,8 +28,9 @@ section). This document describes the engine as built.
 |---|---|
 | `simplejs/elements/` | ✅ Token types produced by the lexer. `JsBaseElement` is the abstract base with a `JsType` enum resolved by a centralized `internalGetType` switch; each concrete token (`JsKeyword`, `JsIdentifier`, `JsPrivateIdentifier`, `JsNumber`, `JsBigInt`, `JsString`, `JsBoolean`, `JsNull`, `JsUndefined`, `JsOperator`, `JsSeparator`, `JsRegex`, `JsTemplateString`, `JsEOF`) is a small immutable class with `getX()` getters. Singletons (`JsNull`/`JsUndefined`/`JsEOF`) use `getInstance()`. `SourcePosition` (offset/length/line/column) is a token-location value held **parallel** to the token stream rather than on the tokens, so the singletons keep their identity. |
 | `simplejs/nodes/` | ✅ AST node types produced by the parser. Mirrors the `elements/` convention exactly: an abstract `JsNode` base with a `NodeType` enum resolved by a centralized `internalGetType` switch, plus `Expression`/`Statement` marker abstract subclasses for parser type-safety. |
-| `simplejs/internal/` | `Lexer` (✅) and `Parser` (✅), later `Interpreter` (⬜). Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). |
-| `simplejs/exceptions/` | ✅ Dedicated `RuntimeException` subclasses. Lexer errors: `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors: `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). |
+| `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phase 6a core; later phases ⬜). Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; the interpreter's runtime helpers `Environment` (scope chain), `Completion` (control-flow signal), `JsCoercion` (type conversions) and `JsOperators` (operator semantics) live here too. |
+| `simplejs/values/` | ✅ (phase 6a) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map) and `JsArray`. A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful; conversion to/from EJson is deferred to the database-integration sub-phase. |
+| `simplejs/exceptions/` | ✅ Dedicated `RuntimeException` subclasses. Lexer errors: `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors: `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). Interpreter (phase 6a) errors extend `SimpleJsRuntimeException`: `ReferenceErrorException`, `TypeErrorException`, `RangeErrorException`, `SyntaxErrorException`, and `UnsupportedNodeException` (a parsed node outside the current interpreter phase's scope). |
 
 ## The lexer
 
@@ -186,15 +188,41 @@ non-goals of the front end:
   module placement/resolution and explicit-resource-management disposal semantics
   (`Symbol.dispose`/`Symbol.asyncDispose`).
 
-## Phase 6 — the interpreter ⬜
+## Phase 6 — the interpreter
 
-A tree-walking `Interpreter` over the AST: lexical scopes/environments, closures,
-prototype-free object/array/function values, the standard operator semantics, and
-control-flow (via internal completion signals for `return`/`break`/`continue`/
-`throw`). The evaluation surface and its integration with the database (how a
-script is invoked, what host values and built-ins it sees, and its sandboxing/
-resource limits) will be specified when this phase is planned. This is where
-SimpleJS becomes useful to the database rather than a standalone parser.
+A tree-walking `Interpreter` over the AST. It is built in sub-phases so each
+increment is small and testable:
+
+- **6a — evaluation core ✅** — the value model (`values/`), lexical
+  scopes/environments (`Environment`, with `var` hoisting to the function scope and
+  `let`/`const` block scoping + temporal dead zone), control flow via internal
+  completion signals (`Completion`: `NORMAL`/`BREAK`/`CONTINUE`/`RETURN`, with
+  labeled `break`/`continue`), the full expression grammar (literals incl. BigInt and
+  templates, identifiers, member reads incl. `?.`, arrays/objects, unary/update/
+  binary/logical/assignment/conditional, `typeof`/`void`/`delete`, `in`) and the
+  straight-line & loop statements (`if`/`else`, `while`, `do…while`, C-style `for`,
+  blocks, expression/empty statements, `var`/`let`/`const`). Standard operator
+  semantics live in `JsOperators`; conversions in `JsCoercion`. `this` is `undefined`
+  (no receiver yet) and `instanceof` is deferred. Any parsed node outside 6a's scope
+  raises `UnsupportedNodeException`. Not wired into the database yet.
+- **6b — functions ⬜** — function declarations/expressions/arrows, closures, calls,
+  `return`, argument binding.
+- **6c — classes ⬜** — `class`/`new`/`this`/`super`, methods, fields, `instanceof`.
+- **6d — extended control flow ⬜** — `try`/`catch`/`finally`/`throw`, `for-in`/
+  `for-of`, `switch`.
+- **6e — destructuring & spread ⬜** — array/object patterns, defaults, rest/spread.
+- **6f — modules ⬜** — `import`/`export` resolution.
+- **6g — async & generators ⬜** — `async`/`await`, generators, `yield`.
+
+The evaluation surface and its integration with the database (how a script is
+invoked, what host values and built-ins it sees, and its sandboxing/resource limits)
+will be specified in a later sub-phase. That is where SimpleJS becomes useful to the
+database rather than a standalone parser.
+
+**Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
+short-circuits per member access rather than across a whole chain (`a?.b.c` still
+throws when `a` is nullish); `for (let …)` uses a single loop scope rather than a
+fresh per-iteration binding (unobservable until closures arrive in 6b).
 
 ## Testing conventions
 
