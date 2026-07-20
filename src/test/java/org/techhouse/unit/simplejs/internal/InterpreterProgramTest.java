@@ -177,4 +177,60 @@ public class InterpreterProgramTest {
                 """;
         assertEquals("odd,even", str(source));
     }
+
+    // Object destructuring with a default feeds an array method pipeline
+    @Test
+    public void test_destructure_and_map() {
+        final var source = """
+                let args = {a: 3};
+                const {a, b = 2} = args;
+                [a, b].map(x => x * 2).join(',')
+                """;
+        assertEquals("6,4", str(source));
+    }
+
+    // A map/filter/reduce pipeline computes a total
+    @Test
+    public void test_pipeline() {
+        final var source = """
+                let nums = [1, 2, 3, 4, 5, 6];
+                nums.filter(n => n % 2 === 0).map(n => n * n).reduce((a, b) => a + b, 0)
+                """;
+        assertEquals(56, num(source));
+    }
+
+    // Object.entries rebuilds a transformed object
+    @Test
+    public void test_entries_rebuild() {
+        final var source = """
+                let prices = {apple: 1, pear: 2};
+                let doubled = {};
+                Object.entries(prices).forEach(([k, v]) => { doubled[k] = v * 2; });
+                doubled.apple + ',' + doubled.pear
+                """;
+        assertEquals("2,4", str(source));
+    }
+
+    // JSON round-trips through a transformation
+    @Test
+    public void test_json_transform() {
+        final var source = """
+                let doc = JSON.parse('{"items":[1,2,3]}');
+                doc.items.push(4);
+                JSON.parse(JSON.stringify(doc)).items.length
+                """;
+        assertEquals(4, num(source));
+    }
+
+    // Object spread merges two sources with override
+    @Test
+    public void test_object_spread_merge() {
+        final var source = """
+                let base = {a: 1, b: 2};
+                let override = {b: 9, c: 3};
+                let merged = {...base, ...override};
+                merged.a + ',' + merged.b + ',' + merged.c
+                """;
+        assertEquals("1,9,3", str(source));
+    }
 }

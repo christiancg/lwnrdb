@@ -1,10 +1,14 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
+import org.techhouse.simplejs.builtins.GlobalScope;
+import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
@@ -12,8 +16,10 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.nodes.ArrayExpression;
+import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
+import org.techhouse.simplejs.nodes.AssignmentPattern;
 import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
@@ -38,8 +44,10 @@ import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
+import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
+import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
@@ -69,6 +77,11 @@ public final class Interpreter {
         CONTINUE_LOOP, BREAK_LOOP, PROPAGATE
     }
 
+    @FunctionalInterface
+    private interface LeafBinder {
+        void bind(JsNode leaf, JsValue value, Environment env);
+    }
+
     private static final Set<String> LOGICAL_ASSIGN = Set.of("&&=", "||=", "??=");
     private static final Set<String> LEXICAL_KINDS = Set.of("let", "const");
 
@@ -85,7 +98,7 @@ public final class Interpreter {
 
     private JsValue evalProgram(Program program) {
         final var env = Environment.global();
-        ErrorBuiltins.install(env);
+        GlobalScope.install(env);
         hoist(program.getBody(), env);
         var last = (JsValue) JsUndefined.getInstance();
         for (final var statement : program.getBody()) {
@@ -104,11 +117,13 @@ public final class Interpreter {
             if (statement instanceof VariableDeclaration declaration) {
                 final var kind = declaration.getKind();
                 for (final var declarator : declaration.getDeclarations()) {
-                    if (declarator.getId() instanceof Identifier id) {
+                    final var names = new ArrayList<String>();
+                    collectBoundNames(declarator.getId(), names);
+                    for (final var name : names) {
                         if (LEXICAL_KINDS.contains(kind)) {
-                            env.declareLexical(id.getName(), kind);
+                            env.declareLexical(name, kind);
                         } else if ("var".equals(kind)) {
-                            env.declareVar(id.getName());
+                            env.declareVar(name);
                         }
                     }
                 }
@@ -162,16 +177,19 @@ public final class Interpreter {
             throw new UnsupportedNodeException("VariableDeclaration kind '" + kind + "'");
         }
         for (final var declarator : declaration.getDeclarations()) {
-            if (!(declarator.getId() instanceof Identifier id)) {
-                throw new UnsupportedNodeException(declarator.getId().getType().name());
-            }
-            final var name = id.getName();
+            final var id = declarator.getId();
             final var init = declarator.getInit();
-            final var value = init == null ? JsUndefined.getInstance() : eval(init, env);
-            if (LEXICAL_KINDS.contains(kind)) {
-                env.initialize(name, value);
-            } else if (init != null) {
-                env.assign(name, value);
+            if (id instanceof Identifier identifier) {
+                final var name = identifier.getName();
+                final var value = init == null ? JsUndefined.getInstance() : eval(init, env);
+                if (LEXICAL_KINDS.contains(kind)) {
+                    env.initialize(name, value);
+                } else if (init != null) {
+                    env.assign(name, value);
+                }
+            } else {
+                final var value = init == null ? JsUndefined.getInstance() : eval(init, env);
+                destructure(id, value, env, declarationLeaf(kind));
             }
         }
         return Completion.empty();
@@ -310,12 +328,17 @@ public final class Interpreter {
 
     private Completion evalCatch(CatchClause handler, JsValue error, Environment env) {
         final var catchEnv = env.child();
-        if (handler.getParam() != null) {
-            if (!(handler.getParam() instanceof Identifier id)) {
-                throw new UnsupportedNodeException(handler.getParam().getType().name());
-            }
+        final var param = handler.getParam();
+        if (param instanceof Identifier id) {
             catchEnv.declareLexical(id.getName(), "let");
             catchEnv.initialize(id.getName(), error);
+        } else if (param != null) {
+            final var names = new ArrayList<String>();
+            collectBoundNames(param, names);
+            for (final var name : names) {
+                catchEnv.declareLexical(name, "let");
+            }
+            destructure(param, error, catchEnv, declarationLeaf("let"));
         }
         return evalBlock(handler.getBody(), catchEnv);
     }
@@ -415,8 +438,8 @@ public final class Interpreter {
         for (final var element : array.getElements()) {
             if (element == null) {
                 result.push(JsUndefined.getInstance());
-            } else if (element instanceof SpreadElement) {
-                throw new UnsupportedNodeException(element.getType().name());
+            } else if (element instanceof SpreadElement spread) {
+                spreadInto(result.getElements(), eval(spread.getArgument(), env));
             } else {
                 result.push(eval(element, env));
             }
@@ -424,9 +447,42 @@ public final class Interpreter {
         return result;
     }
 
+    private void spreadInto(List<JsValue> target, JsValue value) {
+        if (value instanceof JsArray array) {
+            target.addAll(array.getElements());
+        } else if (value instanceof JsString string) {
+            for (var i = 0; i < string.getValue().length(); i++) {
+                target.add(new JsString(String.valueOf(string.getValue().charAt(i))));
+            }
+        } else {
+            throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+        }
+    }
+
+    private void spreadObject(JsObject target, JsValue source) {
+        if (source instanceof JsObject object) {
+            for (final var entry : object.getProperties().entrySet()) {
+                target.set(entry.getKey(), entry.getValue());
+            }
+        } else if (source instanceof JsArray array) {
+            final var elements = array.getElements();
+            for (var i = 0; i < elements.size(); i++) {
+                target.set(Integer.toString(i), elements.get(i));
+            }
+        } else if (source instanceof JsString string) {
+            for (var i = 0; i < string.getValue().length(); i++) {
+                target.set(Integer.toString(i), new JsString(String.valueOf(string.getValue().charAt(i))));
+            }
+        }
+    }
+
     private JsValue evalObject(ObjectExpression object, Environment env) {
         final var result = new JsObject();
         for (final var member : object.getProperties()) {
+            if (member instanceof SpreadElement spread) {
+                spreadObject(result, eval(spread.getArgument(), env));
+                continue;
+            }
             if (!(member instanceof Property property)) {
                 throw new UnsupportedNodeException(member.getType().name());
             }
@@ -567,6 +623,11 @@ public final class Interpreter {
         if (target instanceof MemberExpression member) {
             return assignToMember(member, assignment, env);
         }
+        if (target instanceof ArrayPattern || target instanceof ObjectPattern) {
+            final var value = eval(assignment.getValue(), env);
+            destructure(target, value, env, assignmentLeaf());
+            return value;
+        }
         throw new UnsupportedNodeException(target.getType().name());
     }
 
@@ -655,17 +716,27 @@ public final class Interpreter {
                 return new JsNumber(array.length());
             }
             final var index = arrayIndex(key);
-            return index == null ? JsUndefined.getInstance() : array.get(index);
+            if (index != null) {
+                return array.get(index);
+            }
+            final var method = ArrayBuiltins.getMethod(array, key, this::callValue);
+            return method == null ? JsUndefined.getInstance() : method;
         }
         if (target instanceof JsString string) {
             if ("length".equals(key)) {
                 return new JsNumber(string.getValue().length());
             }
             final var index = arrayIndex(key);
-            if (index != null && index < string.getValue().length()) {
-                return new JsString(String.valueOf(string.getValue().charAt(index)));
+            if (index != null) {
+                return index < string.getValue().length()
+                        ? new JsString(String.valueOf(string.getValue().charAt(index)))
+                        : JsUndefined.getInstance();
             }
-            return JsUndefined.getInstance();
+            final var method = StringBuiltins.getMethod(string, key);
+            return method == null ? JsUndefined.getInstance() : method;
+        }
+        if (target instanceof JsNativeFunction fn && fn.hasProperty(key)) {
+            return fn.getProperty(key);
         }
         if (isNullish(target)) {
             throw new TypeErrorException(
@@ -746,10 +817,11 @@ public final class Interpreter {
     private List<JsValue> evalArguments(List<Expression> arguments, Environment env) {
         final var values = new ArrayList<JsValue>();
         for (final var argument : arguments) {
-            if (argument instanceof SpreadElement) {
-                throw new UnsupportedNodeException(argument.getType().name());
+            if (argument instanceof SpreadElement spread) {
+                spreadInto(values, eval(spread.getArgument(), env));
+            } else {
+                values.add(eval(argument, env));
             }
-            values.add(eval(argument, env));
         }
         return values;
     }
@@ -790,11 +862,31 @@ public final class Interpreter {
     private void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
         for (var i = 0; i < params.size(); i++) {
             final var param = params.get(i);
-            if (!(param instanceof Identifier id)) {
-                throw new UnsupportedNodeException(param.getType().name());
+            if (param instanceof RestElement rest) {
+                final var restArray = new JsArray();
+                for (var j = i; j < args.size(); j++) {
+                    restArray.push(args.get(j));
+                }
+                declareParamNames(rest.getArgument(), activation);
+                destructure(rest.getArgument(), restArray, activation, paramLeaf());
+                return;
             }
-            activation.declareVar(id.getName());
-            activation.assign(id.getName(), i < args.size() ? args.get(i) : JsUndefined.getInstance());
+            final var value = i < args.size() ? args.get(i) : JsUndefined.getInstance();
+            if (param instanceof Identifier id) {
+                activation.declareVar(id.getName());
+                activation.assign(id.getName(), value);
+            } else {
+                declareParamNames(param, activation);
+                destructure(param, value, activation, paramLeaf());
+            }
+        }
+    }
+
+    private void declareParamNames(JsNode param, Environment activation) {
+        final var names = new ArrayList<String>();
+        collectBoundNames(param, names);
+        for (final var name : names) {
+            activation.declareVar(name);
         }
     }
 
@@ -819,5 +911,129 @@ public final class Interpreter {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private void destructure(JsNode target, JsValue value, Environment env, LeafBinder leaf) {
+        switch (target) {
+            case AssignmentPattern pattern -> {
+                final var resolved = value instanceof JsUndefined ? eval(pattern.getRight(), env) : value;
+                destructure(pattern.getLeft(), resolved, env, leaf);
+            }
+            case ArrayPattern pattern -> destructureArray(pattern, value, env, leaf);
+            case ObjectPattern pattern -> destructureObject(pattern, value, env, leaf);
+            default -> leaf.bind(target, value, env);
+        }
+    }
+
+    private void destructureArray(ArrayPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
+        final var elements = arrayLikeElements(value);
+        final var patternElements = pattern.getElements();
+        for (var i = 0; i < patternElements.size(); i++) {
+            final var element = patternElements.get(i);
+            if (element == null) {
+                continue;
+            }
+            if (element instanceof RestElement rest) {
+                final var restArray = new JsArray();
+                for (var j = i; j < elements.size(); j++) {
+                    restArray.push(elements.get(j));
+                }
+                destructure(rest.getArgument(), restArray, env, leaf);
+                return;
+            }
+            final var elementValue = i < elements.size() ? elements.get(i) : JsUndefined.getInstance();
+            destructure(element, elementValue, env, leaf);
+        }
+    }
+
+    private void destructureObject(ObjectPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
+        if (isNullish(value)) {
+            throw new TypeErrorException(
+                    "Cannot destructure '" + JsCoercion.toStr(value) + "' as it is " + JsCoercion.toStr(value) + ".");
+        }
+        final var taken = new HashSet<String>();
+        for (final var member : pattern.getProperties()) {
+            if (member instanceof RestElement rest) {
+                final var restObject = new JsObject();
+                if (value instanceof JsObject object) {
+                    for (final var entry : object.getProperties().entrySet()) {
+                        if (!taken.contains(entry.getKey())) {
+                            restObject.set(entry.getKey(), entry.getValue());
+                        }
+                    }
+                }
+                destructure(rest.getArgument(), restObject, env, leaf);
+                return;
+            }
+            final var property = (Property) member;
+            final var key = property.isComputed()
+                    ? JsCoercion.toStr(eval(property.getKey(), env))
+                    : staticKeyName(property.getKey());
+            taken.add(key);
+            destructure(property.getValue(), getMember(value, key), env, leaf);
+        }
+    }
+
+    private List<JsValue> arrayLikeElements(JsValue value) {
+        if (value instanceof JsArray array) {
+            return array.getElements();
+        }
+        if (value instanceof JsString string) {
+            final var chars = new ArrayList<JsValue>();
+            for (var i = 0; i < string.getValue().length(); i++) {
+                chars.add(new JsString(String.valueOf(string.getValue().charAt(i))));
+            }
+            return chars;
+        }
+        throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+    }
+
+    private void collectBoundNames(JsNode target, List<String> names) {
+        switch (target) {
+            case Identifier id -> names.add(id.getName());
+            case AssignmentPattern pattern -> collectBoundNames(pattern.getLeft(), names);
+            case RestElement rest -> collectBoundNames(rest.getArgument(), names);
+            case ArrayPattern pattern -> {
+                for (final var element : pattern.getElements()) {
+                    if (element != null) {
+                        collectBoundNames(element, names);
+                    }
+                }
+            }
+            case ObjectPattern pattern -> {
+                for (final var member : pattern.getProperties()) {
+                    if (member instanceof RestElement rest) {
+                        collectBoundNames(rest.getArgument(), names);
+                    } else {
+                        collectBoundNames(((Property) member).getValue(), names);
+                    }
+                }
+            }
+            default -> {
+            }
+        }
+    }
+
+    private LeafBinder declarationLeaf(String kind) {
+        if (LEXICAL_KINDS.contains(kind)) {
+            return (leaf, value, env) -> env.initialize(((Identifier) leaf).getName(), value);
+        }
+        return (leaf, value, env) -> env.assign(((Identifier) leaf).getName(), value);
+    }
+
+    private LeafBinder paramLeaf() {
+        return (leaf, value, env) -> env.assign(((Identifier) leaf).getName(), value);
+    }
+
+    private LeafBinder assignmentLeaf() {
+        return (leaf, value, env) -> {
+            if (leaf instanceof Identifier id) {
+                env.assign(id.getName(), value);
+            } else if (leaf instanceof MemberExpression member) {
+                setMember(eval(member.getObject(), env), memberKey(member, env), value);
+            } else {
+                throw new UnsupportedNodeException(leaf.getType().name());
+            }
+        };
     }
 }

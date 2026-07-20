@@ -17,8 +17,8 @@ source String
 
 The **lexer** and **parser** are implemented and cover the ES2020–ES2026
 syntactic surface. The **interpreter** is being built in sub-phases (see the last
-section); **Phase 6a** — the evaluation core — is done. This document describes the
-engine as built.
+section); **Phases 6a–6c** are done. This document describes the engine as built.
+(Sub-phase numbering follows `plans/simplejs-interpreter.md`, which is authoritative.)
 
 > **Status legend:** ✅ implemented · ⬜ not yet built.
 
@@ -28,9 +28,9 @@ engine as built.
 |---|---|
 | `simplejs/elements/` | ✅ Token types produced by the lexer. `JsBaseElement` is the abstract base with a `JsType` enum resolved by a centralized `internalGetType` switch; each concrete token (`JsKeyword`, `JsIdentifier`, `JsPrivateIdentifier`, `JsNumber`, `JsBigInt`, `JsString`, `JsBoolean`, `JsNull`, `JsUndefined`, `JsOperator`, `JsSeparator`, `JsRegex`, `JsTemplateString`, `JsEOF`) is a small immutable class with `getX()` getters. Singletons (`JsNull`/`JsUndefined`/`JsEOF`) use `getInstance()`. `SourcePosition` (offset/length/line/column) is a token-location value held **parallel** to the token stream rather than on the tokens, so the singletons keep their identity. |
 | `simplejs/nodes/` | ✅ AST node types produced by the parser. Mirrors the `elements/` convention exactly: an abstract `JsNode` base with a `NodeType` enum resolved by a centralized `internalGetType` switch, plus `Expression`/`Statement` marker abstract subclasses for parser type-safety. |
-| `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phases 6a–6b; later phases ⬜). Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; the interpreter's runtime helpers `Environment` (scope chain, `this` binding, function-scope hoisting), `Completion` (control-flow signal), `JsCoercion` (type conversions) and `JsOperators` (operator semantics) live here too. |
-| `simplejs/values/` | ✅ (phases 6a–6b) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map), `JsArray`, `JsFunction` (a closure: params, body, captured `Environment`, arrow/expression-body flags) and `JsNativeFunction` (a host/built-in function backed by a `BiFunction`). A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful; conversion to/from EJson is deferred to the database-integration sub-phase. |
-| `simplejs/builtins/` | ✅ (phase 6b) Standard-library values installed into the global scope. `ErrorBuiltins` registers the `Error`/`TypeError`/`RangeError`/`SyntaxError` constructors as `JsNativeFunction`s and builds the `{name, message}` error object shape (also used to surface a caught runtime error to `catch`). The fuller built-in surface (`Object`/`Array`/`String`/`Math`/`JSON`/`console`) lands in a later sub-phase. |
+| `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phases 6a–6c; later phases ⬜). Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; it resolves array/string instance methods lazily via `ArrayBuiltins`/`StringBuiltins` and runs a single unified destructuring routine (declarations, params, assignment LHS, `catch`) parameterized by a leaf binder. The interpreter's runtime helpers `Environment` (scope chain, `this` binding, function-scope hoisting), `Completion` (control-flow signal), `JsCoercion` (type conversions) and `JsOperators` (operator semantics) live here too. |
+| `simplejs/values/` | ✅ (phases 6a–6c) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map, with a `freeze` flag for `Object.freeze`), `JsArray`, `JsFunction` (a closure: params, body, captured `Environment`, arrow/expression-body flags) and `JsNativeFunction` (a host/built-in function backed by a `BiFunction`, plus an optional static-property map for callable namespaces like `Number.isNaN`). `EJsonInterop` converts `JsValue ↔ org.techhouse.ejson` elements (used by `JSON.parse`/`stringify`; custom-type mapping is minimal until the DB sub-phase). A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful. |
+| `simplejs/builtins/` | ✅ (phases 6b–6c) Standard-library values installed into the global scope by `GlobalScope.install`. `ErrorBuiltins` registers the `Error`/`TypeError`/`RangeError`/`SyntaxError` constructors and the `{name, message}` error shape. `ObjectBuiltins` (`keys`/`values`/`entries`/`assign`/`freeze`), `ArrayBuiltins` (callable `Array` + `isArray` and the instance methods `map`/`filter`/`reduce`/`forEach`/`find`/`some`/`every`/`includes`/`indexOf`/`slice`/`splice`/`concat`/`join`/`push`/`pop`/`shift`/`unshift`/`sort`/`flat`), `StringBuiltins` (`slice`/`substring`/`split`/`replace`/`toUpperCase`/`toLowerCase`/`trim`/`includes`/`startsWith`/`endsWith`/`padStart`/`repeat`/`charAt`/`indexOf`), `NumberBuiltins` (callable `Number` + `isNaN`/`isInteger`/`isFinite`/`parseInt`/`parseFloat`), `MathBuiltins`, `JsonBuiltins` (`JSON.parse`/`stringify`, delegating to EJson via `EJsonInterop`), and `ConsoleBuiltins` (`log`/`error`/`warn`/`info`, routed to a redirectable sink — stdout until the host binding lands). Callback-taking array methods call back into user functions through the `Invoker` seam. `String.replace` is literal (no regex). |
 | `simplejs/exceptions/` | ✅ Dedicated `RuntimeException` subclasses. Lexer errors: `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors: `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). Interpreter errors extend `SimpleJsRuntimeException`: `ReferenceErrorException`, `TypeErrorException`, `RangeErrorException`, `SyntaxErrorException`, `UnsupportedNodeException` (a parsed node outside the current interpreter phase's scope), and `JsThrowException` (carries the `JsValue` thrown by a `throw` statement; unwound by the nearest `try`/`catch`). |
 
 ## The lexer
@@ -212,15 +212,24 @@ increment is small and testable:
   arrives as a `{name, message}` object), and `switch` (strict-equality matching,
   fall-through, labeled `break`). A minimal `Error` family (`Error`/`TypeError`/
   `RangeError`/`SyntaxError`) is installed as global constructors. Function parameters
-  are identifiers only — rest/defaults/destructuring params, argument spread in calls,
-  and the `arguments` object are deferred; method-shorthand object properties are a
-  parser gap, so use `key: function () { … }`.
-- **6c — classes ⬜** — `class`/`super`, methods, fields, `instanceof` (`new`/`this`
-  already handled in 6b).
-- **6d — extended control flow ⬜** — `for-in`/`for-of`.
-- **6e — destructuring & spread ⬜** — array/object patterns, defaults, rest/spread.
-- **6f — modules ⬜** — `import`/`export` resolution.
-- **6g — async & generators ⬜** — `async`/`await`, generators, `yield`.
+  are identifiers only in 6b — rest/defaults/destructuring params and argument spread
+  arrive in 6c; the `arguments` object stays deferred. Method-shorthand object
+  properties are a parser gap, so use `key: function () { … }`.
+- **6c — objects, arrays, members, destructuring & core built-ins ✅** — spread in
+  array/object literals and call arguments; full destructuring (nested, defaults,
+  rest, computed keys) in declarations, function params, assignment LHS and `catch`;
+  built-in method dispatch on arrays/strings; and the core standard library
+  (`Object`/`Array`/`String`/`Number`/`Boolean`/`Math`/`JSON`/`console` + `parseInt`/
+  `parseFloat`/`isNaN`/`isFinite`), with `JSON` delegating to EJson via `EJsonInterop`.
+  `instanceof` and `for-in`/`for-of` remain deferred. Documented limitations:
+  `String.replace` is literal (no regex); `console` writes to stdout until the host
+  binding lands; JSON mapping of EJson custom types is minimal. Still not wired into
+  the database.
+- **6d — classes ⬜** — `class`/`super`, methods, fields, `instanceof`.
+- **6e — iteration, generators & async ⬜** — `for-in`/`for-of`, generators/`yield`,
+  `async`/`await`, promises, the event loop.
+- **6f — modules & host integration ⬜** — `import`/`export`, the `args`/`db` modules,
+  enforcement, sandboxing.
 
 The evaluation surface and its integration with the database (how a script is
 invoked, what host values and built-ins it sees, and its sandboxing/resource limits)
