@@ -13,6 +13,15 @@ public final class Coroutine {
         JsValue run();
     }
 
+    @FunctionalInterface
+    public interface ResumeObserver {
+        void afterResume(RuntimeException escaped);
+    }
+
+    public enum PauseReason {
+        YIELD, AWAIT
+    }
+
     public record StepResult(JsValue value, boolean done) {
     }
 
@@ -47,9 +56,36 @@ public final class Coroutine {
     private RuntimeException escaped;
 
     private Body body;
+    private PauseReason pauseReason = PauseReason.YIELD;
+    private ResumeObserver resumeObserver;
+    private volatile boolean async;
 
     public boolean isDone() {
         return done;
+    }
+
+    public boolean isAsync() {
+        return async;
+    }
+
+    public void markAsync() {
+        this.async = true;
+    }
+
+    public PauseReason pauseReason() {
+        return pauseReason;
+    }
+
+    public JsValue yieldedValue() {
+        return yielded;
+    }
+
+    public JsValue completedValue() {
+        return completed;
+    }
+
+    public void setResumeObserver(ResumeObserver observer) {
+        this.resumeObserver = observer;
     }
 
     public void prime(Body value) {
@@ -107,10 +143,12 @@ public final class Coroutine {
 
     public JsValue yieldOut(JsValue value) {
         this.yielded = value;
+        this.pauseReason = PauseReason.YIELD;
         return pause();
     }
 
     public JsValue await(JsPromise promise) {
+        this.pauseReason = PauseReason.AWAIT;
         promise.subscribe(this::resumeValue, reason -> resumeError(new JsThrowException(reason)));
         return pause();
     }
@@ -148,6 +186,10 @@ public final class Coroutine {
             throw new IllegalStateException("Coroutine driver interrupted", interrupted);
         } finally {
             lock.unlock();
+        }
+        if (resumeObserver != null) {
+            resumeObserver.afterResume(esc);
+            return;
         }
         if (esc != null) {
             throw esc;

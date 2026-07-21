@@ -91,6 +91,7 @@ import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.nodes.YieldExpression;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
@@ -498,12 +499,75 @@ public final class Interpreter {
     }
 
     private Completion evalForOf(ForOfStatement statement, Environment env, String label) {
+        if (statement.isAwait()) {
+            return evalForAwaitOf(statement, env, label);
+        }
         final var iteration = new Iteration(eval(statement.getRight(), env));
         var value = iteration.next();
         while (value != null) {
             tick();
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), value, iterationEnv);
+            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var action = classify(completion, label);
+            if (action == LoopAction.PROPAGATE) {
+                iteration.close();
+                return completion;
+            }
+            if (action == LoopAction.BREAK_LOOP) {
+                iteration.close();
+                break;
+            }
+            value = iteration.next();
+        }
+        return Completion.empty();
+    }
+
+    private Completion evalForAwaitOf(ForOfStatement statement, Environment env, String label) {
+        final var coroutine = currentCoroutine.get();
+        if (coroutine == null) {
+            throw new SyntaxErrorException("for await is only valid inside an async function");
+        }
+        final var source = eval(statement.getRight(), env);
+        if (source instanceof JsAsyncGenerator generator) {
+            return iterateAsyncGenerator(statement, env, label, coroutine, generator);
+        }
+        return iterateAsyncValues(statement, env, label, coroutine, new Iteration(source));
+    }
+
+    private Completion iterateAsyncGenerator(ForOfStatement statement, Environment env, String label,
+            Coroutine coroutine, JsAsyncGenerator generator) {
+        while (true) {
+            tick();
+            final var step = coroutine
+                    .await(toPromise(driveAsyncGenerator(generator, AsyncStep.NEXT, JsUndefined.getInstance())));
+            if (JsCoercion.toBoolean(getMember(step, "done"))) {
+                break;
+            }
+            final var iterationEnv = env.child();
+            bindForTarget(statement.getLeft(), getMember(step, "value"), iterationEnv);
+            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var action = classify(completion, label);
+            if (action == LoopAction.PROPAGATE) {
+                driveAsyncGenerator(generator, AsyncStep.RETURN, JsUndefined.getInstance());
+                return completion;
+            }
+            if (action == LoopAction.BREAK_LOOP) {
+                driveAsyncGenerator(generator, AsyncStep.RETURN, JsUndefined.getInstance());
+                break;
+            }
+        }
+        return Completion.empty();
+    }
+
+    private Completion iterateAsyncValues(ForOfStatement statement, Environment env, String label, Coroutine coroutine,
+            Iteration iteration) {
+        var value = iteration.next();
+        while (value != null) {
+            tick();
+            final var awaited = coroutine.await(toPromise(value));
+            final var iterationEnv = env.child();
+            bindForTarget(statement.getLeft(), awaited, iterationEnv);
             final var completion = evalStatement(statement.getBody(), iterationEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
@@ -1078,6 +1142,7 @@ public final class Interpreter {
             case JsArray array -> getArrayMember(array, key);
             case JsString string -> getStringMember(string, key);
             case JsGenerator generator -> generatorMethod(generator, key);
+            case JsAsyncGenerator generator -> asyncGeneratorMethod(generator, key);
             case JsRegExp regexp -> regExpMember(regexp, key);
             case JsPromise promise -> promiseMethod(promise, key);
             case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
@@ -1274,6 +1339,9 @@ public final class Interpreter {
                 activation.defineThis(thisArg);
             }
             bindParams(function.getParams(), args, activation);
+            if (function.isAsync() && function.isGenerator()) {
+                return makeAsyncGenerator(function, activation);
+            }
             if (function.isGenerator()) {
                 return makeGenerator(function, activation);
             }
@@ -1331,6 +1399,19 @@ public final class Interpreter {
         return promise;
     }
 
+    private JsValue makeAsyncGenerator(JsFunction function, Environment activation) {
+        final var coroutine = new Coroutine();
+        coroutines.add(coroutine);
+        final var generator = new JsAsyncGenerator(coroutine);
+        coroutine.markAsync();
+        coroutine.setResumeObserver(escaped -> observeAsyncGenerator(generator, escaped));
+        coroutine.prime(() -> {
+            currentCoroutine.set(coroutine);
+            return runFunctionBody(function, activation);
+        });
+        return generator;
+    }
+
     private JsValue evalYield(YieldExpression yield, Environment env) {
         final var coroutine = currentCoroutine.get();
         if (coroutine == null) {
@@ -1344,6 +1425,9 @@ public final class Interpreter {
     }
 
     private JsValue yieldDelegate(Coroutine coroutine, JsValue iterable) {
+        if (iterable instanceof JsAsyncGenerator generator && coroutine.isAsync()) {
+            return yieldDelegateAsync(coroutine, generator);
+        }
         if (iterable instanceof JsGenerator generator) {
             final var inner = generator.getCoroutine();
             var sent = (JsValue) JsUndefined.getInstance();
@@ -1362,6 +1446,17 @@ public final class Interpreter {
             value = iteration.next();
         }
         return JsUndefined.getInstance();
+    }
+
+    private JsValue yieldDelegateAsync(Coroutine coroutine, JsAsyncGenerator generator) {
+        while (true) {
+            final var step = coroutine
+                    .await(toPromise(driveAsyncGenerator(generator, AsyncStep.NEXT, JsUndefined.getInstance())));
+            if (JsCoercion.toBoolean(getMember(step, "done"))) {
+                return getMember(step, "value");
+            }
+            coroutine.yieldOut(getMember(step, "value"));
+        }
     }
 
     private JsValue evalAwait(AwaitExpression await, Environment env) {
@@ -1611,9 +1706,6 @@ public final class Interpreter {
 
     private void installMethod(JsClass cls, MethodDefinition method, Environment classScope) {
         final var value = method.getValue();
-        if (value.isAsync() && value.isGenerator()) {
-            throw new UnsupportedNodeException("async generator method");
-        }
         final var fn = makeFunction(null, value.getParams(), value.getBody(), false, false, value.isAsync(),
                 value.isGenerator(), cls.getMethodScope());
         final var kind = method.getKind();
@@ -1870,10 +1962,91 @@ public final class Interpreter {
     }
 
     private JsValue stepResult(Coroutine.StepResult step) {
+        return stepResult(step.value(), step.done());
+    }
+
+    private JsValue stepResult(JsValue value, boolean done) {
         final var result = new JsObject();
-        result.set("value", step.value());
-        result.set("done", JsBoolean.of(step.done()));
+        result.set("value", value);
+        result.set("done", JsBoolean.of(done));
         return result;
+    }
+
+    private enum AsyncStep {
+        NEXT, RETURN, THROW
+    }
+
+    private JsValue asyncGeneratorMethod(JsAsyncGenerator generator, String key) {
+        return switch (key) {
+            case "next" ->
+                new JsNativeFunction("next", (_, args) -> driveAsyncGenerator(generator, AsyncStep.NEXT, arg0(args)));
+            case "return" -> new JsNativeFunction("return",
+                    (_, args) -> driveAsyncGenerator(generator, AsyncStep.RETURN, arg0(args)));
+            case "throw" ->
+                new JsNativeFunction("throw", (_, args) -> driveAsyncGenerator(generator, AsyncStep.THROW, arg0(args)));
+            default -> JsUndefined.getInstance();
+        };
+    }
+
+    private JsValue driveAsyncGenerator(JsAsyncGenerator generator, AsyncStep kind, JsValue arg) {
+        final var coroutine = generator.getCoroutine();
+        final var promise = new JsPromise(eventLoop);
+        if (coroutine.isDone()) {
+            if (kind == AsyncStep.THROW) {
+                promise.reject(arg);
+            } else {
+                promise.resolve(stepResult(kind == AsyncStep.RETURN ? arg : JsUndefined.getInstance(), true));
+            }
+            return promise;
+        }
+        generator.setPending(promise);
+        try {
+            final var step = switch (kind) {
+                case NEXT -> coroutine.resumeNext(arg);
+                case RETURN -> coroutine.resumeReturn(arg);
+                case THROW -> coroutine.resumeThrow(arg);
+            };
+            if (!coroutine.isDone() && coroutine.pauseReason() == Coroutine.PauseReason.AWAIT) {
+                return promise;
+            }
+            resolveStep(generator, step.value(), step.done());
+        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                | SyntaxErrorException error) {
+            rejectStep(generator, error);
+        }
+        return promise;
+    }
+
+    private void observeAsyncGenerator(JsAsyncGenerator generator, RuntimeException escaped) {
+        final var coroutine = generator.getCoroutine();
+        if (escaped != null) {
+            rejectStep(generator, escaped);
+        } else if (coroutine.isDone()) {
+            resolveStep(generator, coroutine.completedValue(), true);
+        } else if (coroutine.pauseReason() == Coroutine.PauseReason.YIELD) {
+            resolveStep(generator, coroutine.yieldedValue(), false);
+        }
+    }
+
+    private void resolveStep(JsAsyncGenerator generator, JsValue value, boolean done) {
+        final var promise = generator.clearPending();
+        if (promise != null) {
+            promise.resolve(stepResult(value, done));
+        }
+    }
+
+    private void rejectStep(JsAsyncGenerator generator, RuntimeException error) {
+        final var promise = generator.clearPending();
+        if (promise == null) {
+            return;
+        }
+        if (error instanceof JsThrowException || error instanceof TypeErrorException
+                || error instanceof ReferenceErrorException || error instanceof RangeErrorException
+                || error instanceof SyntaxErrorException) {
+            promise.reject(toErrorValue(error));
+        } else {
+            throw error;
+        }
     }
 
     private JsValue regExpMember(JsRegExp regexp, String key) {

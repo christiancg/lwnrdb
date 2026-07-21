@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
-import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNumber;
@@ -86,12 +85,6 @@ public class InterpreterAsyncTest {
     public void test_await_outside_async_is_syntax_error() {
         assertThrows(SyntaxErrorException.class,
                 () -> Interpreter.run("function f() { return await Promise.resolve(1); } f()"));
-    }
-
-    // async generator methods are not supported
-    @Test
-    public void test_async_generator_method_unsupported() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("class C { async *m() {} }"));
     }
 
     // chained awaits accumulate results in order

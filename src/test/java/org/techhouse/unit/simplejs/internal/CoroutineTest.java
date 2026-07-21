@@ -99,4 +99,47 @@ public class CoroutineTest {
         assertTrue(step.done());
         assertEquals(5, ((JsNumber) step.value()).getValue());
     }
+
+    // a yield pause reports YIELD and exposes the yielded value
+    @Test
+    public void test_pause_reason_yield() {
+        final var coroutine = new Coroutine();
+        coroutine.prime(() -> coroutine.yieldOut(new JsNumber(3)));
+        coroutine.resumeNext(JsUndefined.getInstance());
+        assertEquals(Coroutine.PauseReason.YIELD, coroutine.pauseReason());
+        assertEquals(3, ((JsNumber) coroutine.yieldedValue()).getValue());
+    }
+
+    // the resume observer fires after each resume with the escaped error (null on success)
+    @Test
+    public void test_resume_observer_fires() {
+        final var coroutine = new Coroutine();
+        final var escapes = new RuntimeException[1];
+        final var count = new int[]{0};
+        coroutine.setResumeObserver(escaped -> {
+            escapes[0] = escaped;
+            count[0]++;
+        });
+        coroutine.prime(() -> {
+            coroutine.yieldOut(new JsNumber(1));
+            return new JsNumber(2);
+        });
+        coroutine.resumeNext(JsUndefined.getInstance());
+        assertEquals(1, count[0]);
+        assertNull(escapes[0]);
+        assertEquals(Coroutine.PauseReason.YIELD, coroutine.pauseReason());
+        coroutine.resumeNext(JsUndefined.getInstance());
+        assertEquals(2, count[0]);
+        assertTrue(coroutine.isDone());
+        assertEquals(2, ((JsNumber) coroutine.completedValue()).getValue());
+    }
+
+    // markAsync flags a coroutine as async-capable
+    @Test
+    public void test_mark_async() {
+        final var coroutine = new Coroutine();
+        assertFalse(coroutine.isAsync());
+        coroutine.markAsync();
+        assertTrue(coroutine.isAsync());
+    }
 }

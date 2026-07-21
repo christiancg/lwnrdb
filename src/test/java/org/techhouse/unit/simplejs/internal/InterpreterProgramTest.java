@@ -4,12 +4,27 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
 public class InterpreterProgramTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
+    }
+
+    // reads an accumulator array reference after the event loop has drained
+    private static String drained() {
+        final var array = (JsArray) Interpreter.run("let out = [];\nasync function* range(n) {\n    for (let i = 0; i < n; i++) {\n        yield await Promise.resolve(i * i);\n    }\n}\nasync function main() {\n    for await (const sq of range(4)) out.push(sq);\n}\nmain();\nout\n");
+        final var sb = new StringBuilder();
+        for (var i = 0; i < array.length(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(JsCoercion.toStr(array.get(i)));
+        }
+        return sb.toString();
     }
 
     private static String str() {
@@ -215,6 +230,12 @@ public class InterpreterProgramTest {
     @Test
     public void test_regex_global_replace() {
         assertEquals("a#b#", str("'a1b2'.replace(/\\d/g, '#')"));
+    }
+
+    // An async generator that awaits is consumed by for-await end to end
+    @Test
+    public void test_async_generator_pipeline() {
+        assertEquals("0,1,4,9", drained());
     }
 
     // Named capture groups are read from a match result

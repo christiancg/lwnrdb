@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
-import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
@@ -315,10 +314,10 @@ public class InterpreterClassTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("5 instanceof 5"));
     }
 
-    // Async-generator class methods are not yet supported (plain async and generator methods are)
+    // Async-generator class methods build an async generator (no longer rejected)
     @Test
-    public void test_async_generator_method_unsupported() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("class A { async *m() {} }"));
+    public void test_async_generator_method_supported() {
+        assertEquals("object", ((JsString) Interpreter.run("typeof (new (class { async *m() {} })()).m()")).getValue());
     }
 
     // A bare super expression is a syntax error

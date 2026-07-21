@@ -323,13 +323,23 @@ public final class Parser {
 
         private Statement parseFor() {
             expectKeyword("for");
+            final var isAwait = isKeyword("await");
+            if (isAwait) {
+                advance();
+            }
             expectSeparator('(');
             if (isSeparator(';')) {
+                if (isAwait) {
+                    throw error();
+                }
                 return parseClassicForRest(null);
             }
             final var init = parseForHeaderLeft();
             if (isKeyword("in") || isKeyword("of")) {
-                return parseForInOf(init);
+                return parseForInOf(init, isAwait);
+            }
+            if (isAwait) {
+                throw error();
             }
             return parseClassicForRest(init);
         }
@@ -357,17 +367,20 @@ public final class Parser {
             });
         }
 
-        private Statement parseForInOf(JsNode left) {
+        private Statement parseForInOf(JsNode left, boolean isAwait) {
             final var target = left instanceof ArrayExpression || left instanceof ObjectExpression
                     ? toAssignmentPattern((Expression) left)
                     : left;
             validateForInOfTarget(target);
             final var isOf = "of".equals(((JsKeyword) current()).getValue());
+            if (isAwait && !isOf) {
+                throw error();
+            }
             advance();
             final var right = isOf ? parseAssignment() : parseExpression();
             expectSeparator(')');
             final var body = parseStatement();
-            return isOf ? new ForOfStatement(target, right, body) : new ForInStatement(target, right, body);
+            return isOf ? new ForOfStatement(target, right, body, isAwait) : new ForInStatement(target, right, body);
         }
 
         private void validateForInOfTarget(JsNode left) {

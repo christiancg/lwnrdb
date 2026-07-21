@@ -3,6 +3,7 @@ package org.techhouse.simplejs.internal;
 import java.math.BigInteger;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
@@ -61,6 +62,7 @@ public final class JsCoercion {
             case JsClass c -> "class " + (c.getName() == null ? "" : c.getName());
             case JsPromise ignored -> "[object Promise]";
             case JsGenerator ignored -> "[object Generator]";
+            case JsAsyncGenerator ignored -> "[object AsyncGenerator]";
             case JsRegExp r -> "/" + r.getSource() + "/" + r.getFlags();
             default -> throw new TypeErrorException("Cannot convert value to string");
         };

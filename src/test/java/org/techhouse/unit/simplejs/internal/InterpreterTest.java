@@ -218,10 +218,10 @@ public class InterpreterTest {
         assertInstanceOf(JsUndefined.class, Interpreter.run("return 5;"));
     }
 
-    // Nodes outside the current interpreter scope still raise UnsupportedNodeException (async generators deferred)
+    // Nodes outside the current interpreter scope still raise UnsupportedNodeException (using disposal deferred)
     @Test
     public void test_unsupported_nodes() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("class A { async *m() {} }"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("using x = 1;"));
     }
 
     // this evaluates to undefined at the top level

@@ -453,6 +453,20 @@ public class ParserTest {
         assertInstanceOf(VariableDeclaration.class, loop.getLeft());
         assertInstanceOf(Identifier.class, loop.getRight());
         assertInstanceOf(BlockStatement.class, loop.getBody());
+        assertFalse(loop.isAwait());
+    }
+
+    @Test
+    public void test_for_await_of_statement() {
+        final var loop = assertInstanceOf(ForOfStatement.class, firstStatement("for await (const x of gen) {}"));
+        assertTrue(loop.isAwait());
+        assertInstanceOf(VariableDeclaration.class, loop.getLeft());
+    }
+
+    @Test
+    public void test_for_await_requires_of() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("for await (const x in obj) {}"));
+        assertThrows(UnexpectedTokenException.class, () -> parse("for await (;;) {}"));
     }
 
     @Test
