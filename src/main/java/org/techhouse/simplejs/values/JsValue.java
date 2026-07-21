@@ -2,7 +2,7 @@ package org.techhouse.simplejs.values;
 
 public abstract class JsValue {
     public enum JsValueType {
-        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS
+        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR
     }
 
     public JsValueType getType() {
@@ -22,6 +22,8 @@ public abstract class JsValue {
             case JsFunction ignored -> JsValueType.FUNCTION;
             case JsNativeFunction ignored -> JsValueType.FUNCTION;
             case JsClass ignored -> JsValueType.CLASS;
+            case JsPromise ignored -> JsValueType.PROMISE;
+            case JsGenerator ignored -> JsValueType.GENERATOR;
             default -> throw new IllegalStateException("Unexpected value: " + object);
         };
     }

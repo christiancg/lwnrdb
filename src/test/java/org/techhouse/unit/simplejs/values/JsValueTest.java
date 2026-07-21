@@ -10,17 +10,21 @@ import java.math.BigInteger;
 import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.Environment;
+import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -38,10 +42,23 @@ public class JsValueTest {
         assertEquals(JsValue.JsValueType.OBJECT, new JsObject().getType());
         assertEquals(JsValue.JsValueType.ARRAY, new JsArray().getType());
         assertEquals(JsValue.JsValueType.FUNCTION,
-                new JsFunction(null, List.of(), null, false, false, Environment.global()).getType());
+                new JsFunction(null, List.of(), null, false, false, false, false, Environment.global()).getType());
         assertEquals(JsValue.JsValueType.FUNCTION,
                 new JsNativeFunction("id", (_, _) -> JsUndefined.getInstance()).getType());
         assertEquals(JsValue.JsValueType.CLASS, new JsClass("A", null, Environment.global()).getType());
+        assertEquals(JsValue.JsValueType.PROMISE, new JsPromise(new EventLoop()).getType());
+        assertEquals(JsValue.JsValueType.GENERATOR, new JsGenerator(new Coroutine()).getType());
+    }
+
+    // Promise and generator values are typeof "object" and stringify as tagged objects
+    @Test
+    public void test_promise_and_generator_values() {
+        final var promise = new JsPromise(new EventLoop());
+        assertEquals("object", JsCoercion.typeOf(promise));
+        assertEquals("[object Promise]", JsCoercion.toStr(promise));
+        final var generator = new JsGenerator(new Coroutine());
+        assertEquals("object", JsCoercion.typeOf(generator));
+        assertEquals("[object Generator]", JsCoercion.toStr(generator));
     }
 
     // A class value is typeof "function" and stringifies with its name
@@ -69,7 +86,7 @@ public class JsValueTest {
     // Function values expose their name and native functions invoke their implementation
     @Test
     public void test_function_values() {
-        final var function = new JsFunction("f", List.of(), null, true, true, Environment.global());
+        final var function = new JsFunction("f", List.of(), null, true, true, false, false, Environment.global());
         assertEquals("f", function.getName());
         assertTrue(function.isArrow());
         assertTrue(function.isExpressionBody());

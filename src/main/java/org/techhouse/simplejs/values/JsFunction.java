@@ -10,15 +10,19 @@ public final class JsFunction extends JsValue {
     private final JsNode body;
     private final boolean arrow;
     private final boolean expressionBody;
+    private final boolean async;
+    private final boolean generator;
     private final Environment closure;
 
     public JsFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
-            Environment closure) {
+            boolean async, boolean generator, Environment closure) {
         this.name = name;
         this.params = params;
         this.body = body;
         this.arrow = arrow;
         this.expressionBody = expressionBody;
+        this.async = async;
+        this.generator = generator;
         this.closure = closure;
     }
 
@@ -40,6 +44,14 @@ public final class JsFunction extends JsValue {
 
     public boolean isExpressionBody() {
         return expressionBody;
+    }
+
+    public boolean isAsync() {
+        return async;
+    }
+
+    public boolean isGenerator() {
+        return generator;
     }
 
     public Environment getClosure() {

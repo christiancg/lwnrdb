@@ -7,10 +7,12 @@ import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -56,6 +58,8 @@ public final class JsCoercion {
             case JsFunction f -> functionToString(f.getName());
             case JsNativeFunction f -> functionToString(f.getName());
             case JsClass c -> "class " + (c.getName() == null ? "" : c.getName());
+            case JsPromise ignored -> "[object Promise]";
+            case JsGenerator ignored -> "[object Generator]";
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }

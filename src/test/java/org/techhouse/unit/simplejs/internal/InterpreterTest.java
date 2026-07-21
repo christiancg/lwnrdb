@@ -217,11 +217,11 @@ public class InterpreterTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("return 5;"));
     }
 
-    // Nodes outside the current interpreter scope raise UnsupportedNodeException
+    // Nodes outside the current interpreter scope raise UnsupportedNodeException (modules land in 6f)
     @Test
     public void test_unsupported_nodes() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("for (let x of [1]) {}"));
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("for (let k in {}) {}"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("import x from 'y';"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("export const x = 1;"));
     }
 
     // this evaluates to undefined at the top level

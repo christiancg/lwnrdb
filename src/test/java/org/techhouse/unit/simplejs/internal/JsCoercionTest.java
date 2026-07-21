@@ -113,7 +113,7 @@ public class JsCoercionTest {
     // Function values report the function typeof and a non-throwing string form
     @Test
     public void test_function_coercion() {
-        final var function = new JsFunction("f", List.of(), null, false, false, Environment.global());
+        final var function = new JsFunction("f", List.of(), null, false, false, false, false, Environment.global());
         final var nativeFunction = new JsNativeFunction("n", (_, _) -> JsUndefined.getInstance());
         assertEquals("function", JsCoercion.typeOf(function));
         assertEquals("function", JsCoercion.typeOf(nativeFunction));

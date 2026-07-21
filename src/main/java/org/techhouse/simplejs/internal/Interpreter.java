@@ -20,6 +20,7 @@ import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
+import org.techhouse.simplejs.nodes.AwaitExpression;
 import org.techhouse.simplejs.nodes.BigIntLiteral;
 import org.techhouse.simplejs.nodes.BinaryExpression;
 import org.techhouse.simplejs.nodes.BlockStatement;
@@ -36,6 +37,8 @@ import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.FieldDefinition;
+import org.techhouse.simplejs.nodes.ForInStatement;
+import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
@@ -68,15 +71,18 @@ import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
+import org.techhouse.simplejs.nodes.YieldExpression;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -94,6 +100,10 @@ public final class Interpreter {
     private static final Set<String> LOGICAL_ASSIGN = Set.of("&&=", "||=", "??=");
     private static final Set<String> LEXICAL_KINDS = Set.of("let", "const");
 
+    private final EventLoop eventLoop = new EventLoop();
+    private final ThreadLocal<Coroutine> currentCoroutine = new ThreadLocal<>();
+    private final List<Coroutine> coroutines = new ArrayList<>();
+
     private Interpreter() {
     }
 
@@ -107,7 +117,7 @@ public final class Interpreter {
 
     private JsValue evalProgram(Program program) {
         final var env = Environment.global();
-        GlobalScope.install(env);
+        GlobalScope.install(env, eventLoop, this::callValue);
         hoist(program.getBody(), env);
         var last = (JsValue) JsUndefined.getInstance();
         for (final var statement : program.getBody()) {
@@ -117,6 +127,12 @@ public final class Interpreter {
                         "Illegal " + completion.kind().name().toLowerCase(Locale.ROOT) + " statement");
             }
             last = completion.value();
+        }
+        eventLoop.drain();
+        for (final var coroutine : coroutines) {
+            if (!coroutine.isDone()) {
+                coroutine.cancel();
+            }
         }
         return last;
     }
@@ -139,7 +155,7 @@ public final class Interpreter {
             } else if (statement instanceof FunctionDeclaration declaration) {
                 final var name = declaration.getName().getName();
                 final var function = makeFunction(name, declaration.getParams(), declaration.getBody(), false, false,
-                        env);
+                        declaration.isAsync(), declaration.isGenerator(), env);
                 env.declareFunction(name, function);
             }
         }
@@ -156,6 +172,8 @@ public final class Interpreter {
             case WHILE_STATEMENT -> evalWhile((WhileStatement) statement, env, null);
             case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) statement, env, null);
             case FOR_STATEMENT -> evalFor((ForStatement) statement, env, null);
+            case FOR_IN_STATEMENT -> evalForIn((ForInStatement) statement, env, null);
+            case FOR_OF_STATEMENT -> evalForOf((ForOfStatement) statement, env, null);
             case LABELED_STATEMENT -> evalLabeled((LabeledStatement) statement, env);
             case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) statement, env, null);
             case BREAK_STATEMENT -> Completion.breakOut(labelName(((BreakStatement) statement).getLabel()));
@@ -268,6 +286,84 @@ public final class Interpreter {
         return Completion.empty();
     }
 
+    private Completion evalForOf(ForOfStatement statement, Environment env, String label) {
+        final var iteration = new Iteration(eval(statement.getRight(), env));
+        var value = iteration.next();
+        while (value != null) {
+            final var iterationEnv = env.child();
+            bindForTarget(statement.getLeft(), value, iterationEnv);
+            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var action = classify(completion, label);
+            if (action == LoopAction.PROPAGATE) {
+                iteration.close();
+                return completion;
+            }
+            if (action == LoopAction.BREAK_LOOP) {
+                iteration.close();
+                break;
+            }
+            value = iteration.next();
+        }
+        return Completion.empty();
+    }
+
+    private Completion evalForIn(ForInStatement statement, Environment env, String label) {
+        final var target = eval(statement.getRight(), env);
+        for (final var key : enumerateKeys(target)) {
+            final var iterationEnv = env.child();
+            bindForTarget(statement.getLeft(), new JsString(key), iterationEnv);
+            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var action = classify(completion, label);
+            if (action == LoopAction.PROPAGATE) {
+                return completion;
+            }
+            if (action == LoopAction.BREAK_LOOP) {
+                break;
+            }
+        }
+        return Completion.empty();
+    }
+
+    private void bindForTarget(JsNode left, JsValue value, Environment env) {
+        if (left instanceof VariableDeclaration declaration) {
+            final var kind = declaration.getKind();
+            final var id = declaration.getDeclarations().getFirst().getId();
+            final var names = new ArrayList<String>();
+            collectBoundNames(id, names);
+            for (final var name : names) {
+                if (LEXICAL_KINDS.contains(kind)) {
+                    env.declareLexical(name, kind);
+                } else {
+                    env.declareVar(name);
+                }
+            }
+            destructure(id, value, env, declarationLeaf(kind));
+        } else {
+            destructure(left, value, env, assignmentLeaf());
+        }
+    }
+
+    private List<String> enumerateKeys(JsValue target) {
+        if (target instanceof JsObject object) {
+            return new ArrayList<>(object.keys());
+        }
+        if (target instanceof JsArray array) {
+            final var keys = new ArrayList<String>();
+            for (var i = 0; i < array.length(); i++) {
+                keys.add(Integer.toString(i));
+            }
+            return keys;
+        }
+        if (target instanceof JsString string) {
+            final var keys = new ArrayList<String>();
+            for (var i = 0; i < string.getValue().length(); i++) {
+                keys.add(Integer.toString(i));
+            }
+            return keys;
+        }
+        return List.of();
+    }
+
     private Completion evalLabeled(LabeledStatement statement, Environment env) {
         final var label = statement.getLabel().getName();
         final var body = statement.getBody();
@@ -275,6 +371,8 @@ public final class Interpreter {
             case WHILE_STATEMENT -> evalWhile((WhileStatement) body, env, label);
             case DO_WHILE_STATEMENT -> evalDoWhile((DoWhileStatement) body, env, label);
             case FOR_STATEMENT -> evalFor((ForStatement) body, env, label);
+            case FOR_IN_STATEMENT -> evalForIn((ForInStatement) body, env, label);
+            case FOR_OF_STATEMENT -> evalForOf((ForOfStatement) body, env, label);
             case SWITCH_STATEMENT -> evalSwitch((SwitchStatement) body, env, label);
             default -> evalStatement(body, env);
         };
@@ -307,22 +405,20 @@ public final class Interpreter {
     }
 
     private Completion evalTry(TryStatement statement, Environment env) {
-        Completion result = null;
-        RuntimeException thrown = null;
+        var result = Completion.empty();
+        RuntimeException pending = null;
         try {
-            result = evalBlock(statement.getBlock(), env);
-        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
-                | SyntaxErrorException error) {
-            if (statement.getHandler() == null) {
-                thrown = error;
-            } else {
-                try {
-                    result = evalCatch(statement.getHandler(), toErrorValue(error), env);
-                } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
-                        | SyntaxErrorException nested) {
-                    thrown = nested;
+            try {
+                result = evalBlock(statement.getBlock(), env);
+            } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                    | SyntaxErrorException error) {
+                if (statement.getHandler() == null) {
+                    throw error;
                 }
+                result = evalCatch(statement.getHandler(), toErrorValue(error), env);
             }
+        } catch (RuntimeException error) {
+            pending = error;
         }
         if (statement.getFinalizer() != null) {
             final var finalizer = evalBlock(statement.getFinalizer(), env);
@@ -330,8 +426,8 @@ public final class Interpreter {
                 return finalizer;
             }
         }
-        if (thrown != null) {
-            throw thrown;
+        if (pending != null) {
+            throw pending;
         }
         return result;
     }
@@ -429,6 +525,8 @@ public final class Interpreter {
             case CONDITIONAL_EXPRESSION -> evalConditional((ConditionalExpression) expression, env);
             case MEMBER_EXPRESSION -> evalMember((MemberExpression) expression, env);
             case CLASS_EXPRESSION -> evalClassExpression((ClassExpression) expression, env);
+            case YIELD_EXPRESSION -> evalYield((YieldExpression) expression, env);
+            case AWAIT_EXPRESSION -> evalAwait((AwaitExpression) expression, env);
             case SUPER_EXPRESSION -> throw new SyntaxErrorException("'super' keyword unexpected here");
             default -> throw new UnsupportedNodeException(expression.getType().name());
         };
@@ -460,30 +558,44 @@ public final class Interpreter {
     }
 
     private void spreadInto(List<JsValue> target, JsValue value) {
-        if (value instanceof JsArray array) {
-            target.addAll(array.getElements());
-        } else if (value instanceof JsString string) {
-            for (var i = 0; i < string.getValue().length(); i++) {
-                target.add(new JsString(String.valueOf(string.getValue().charAt(i))));
+        switch (value) {
+            case JsArray array -> target.addAll(array.getElements());
+            case JsString string -> {
+                for (var i = 0; i < string.getValue().length(); i++) {
+                    target.add(new JsString(String.valueOf(string.getValue().charAt(i))));
+                }
             }
-        } else {
-            throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+            case JsGenerator ignored -> {
+                final var iteration = new Iteration(value);
+                var element = iteration.next();
+                while (element != null) {
+                    target.add(element);
+                    element = iteration.next();
+                }
+            }
+            default -> throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
         }
     }
 
     private void spreadObject(JsObject target, JsValue source) {
-        if (source instanceof JsObject object) {
-            for (final var entry : object.getProperties().entrySet()) {
-                target.set(entry.getKey(), entry.getValue());
+        switch (source) {
+            case JsObject object -> {
+                for (final var entry : object.getProperties().entrySet()) {
+                    target.set(entry.getKey(), entry.getValue());
+                }
             }
-        } else if (source instanceof JsArray array) {
-            final var elements = array.getElements();
-            for (var i = 0; i < elements.size(); i++) {
-                target.set(Integer.toString(i), elements.get(i));
+            case JsArray array -> {
+                final var elements = array.getElements();
+                for (var i = 0; i < elements.size(); i++) {
+                    target.set(Integer.toString(i), elements.get(i));
+                }
             }
-        } else if (source instanceof JsString string) {
-            for (var i = 0; i < string.getValue().length(); i++) {
-                target.set(Integer.toString(i), new JsString(String.valueOf(string.getValue().charAt(i))));
+            case JsString string -> {
+                for (var i = 0; i < string.getValue().length(); i++) {
+                    target.set(Integer.toString(i), new JsString(String.valueOf(string.getValue().charAt(i))));
+                }
+            }
+            default -> {
             }
         }
     }
@@ -743,55 +855,64 @@ public final class Interpreter {
     }
 
     private JsValue getMember(JsValue target, String key) {
-        if (target instanceof JsObject object) {
-            final var cls = object.getKlass();
-            if (cls != null && !object.has(key)) {
-                final var getter = cls.findInstanceGetter(key);
-                if (getter != null) {
-                    return callFunction(getter, object, List.of());
-                }
-                final var method = cls.findInstanceMethod(key);
-                if (method != null) {
-                    return method;
-                }
+        return switch (target) {
+            case JsObject object -> getObjectMember(object, key);
+            case JsClass cls -> getStaticMember(cls, key);
+            case JsArray array -> getArrayMember(array, key);
+            case JsString string -> getStringMember(string, key);
+            case JsGenerator generator -> generatorMethod(generator, key);
+            case JsPromise promise -> promiseMethod(promise, key);
+            case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
+            case JsNull ignored -> throw cannotReadProperties(target, key);
+            case JsUndefined ignored -> throw cannotReadProperties(target, key);
+            default -> JsUndefined.getInstance();
+        };
+    }
+
+    private JsValue getObjectMember(JsObject object, String key) {
+        final var cls = object.getKlass();
+        if (cls != null && !object.has(key)) {
+            final var getter = cls.findInstanceGetter(key);
+            if (getter != null) {
+                return callFunction(getter, object, List.of());
             }
-            return object.get(key);
-        }
-        if (target instanceof JsClass cls) {
-            return getStaticMember(cls, key);
-        }
-        if (target instanceof JsArray array) {
-            if ("length".equals(key)) {
-                return new JsNumber(array.length());
+            final var method = cls.findInstanceMethod(key);
+            if (method != null) {
+                return method;
             }
-            final var index = arrayIndex(key);
-            if (index != null) {
-                return array.get(index);
-            }
-            final var method = ArrayBuiltins.getMethod(array, key, this::callValue);
-            return method == null ? JsUndefined.getInstance() : method;
         }
-        if (target instanceof JsString string) {
-            if ("length".equals(key)) {
-                return new JsNumber(string.getValue().length());
-            }
-            final var index = arrayIndex(key);
-            if (index != null) {
-                return index < string.getValue().length()
-                        ? new JsString(String.valueOf(string.getValue().charAt(index)))
-                        : JsUndefined.getInstance();
-            }
-            final var method = StringBuiltins.getMethod(string, key);
-            return method == null ? JsUndefined.getInstance() : method;
+        return object.get(key);
+    }
+
+    private JsValue getArrayMember(JsArray array, String key) {
+        if ("length".equals(key)) {
+            return new JsNumber(array.length());
         }
-        if (target instanceof JsNativeFunction fn && fn.hasProperty(key)) {
-            return fn.getProperty(key);
+        final var index = arrayIndex(key);
+        if (index != null) {
+            return array.get(index);
         }
-        if (isNullish(target)) {
-            throw new TypeErrorException(
-                    "Cannot read properties of " + JsCoercion.toStr(target) + " (reading '" + key + "')");
+        final var method = ArrayBuiltins.getMethod(array, key, this::callValue);
+        return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private JsValue getStringMember(JsString string, String key) {
+        if ("length".equals(key)) {
+            return new JsNumber(string.getValue().length());
         }
-        return JsUndefined.getInstance();
+        final var index = arrayIndex(key);
+        if (index != null) {
+            return index < string.getValue().length()
+                    ? new JsString(String.valueOf(string.getValue().charAt(index)))
+                    : JsUndefined.getInstance();
+        }
+        final var method = StringBuiltins.getMethod(string, key);
+        return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private TypeErrorException cannotReadProperties(JsValue target, String key) {
+        return new TypeErrorException(
+                "Cannot read properties of " + JsCoercion.toStr(target) + " (reading '" + key + "')");
     }
 
     private void setMember(JsValue target, String key, JsValue value) {
@@ -832,17 +953,18 @@ public final class Interpreter {
 
     private JsValue evalFunctionExpression(FunctionExpression expression, Environment env) {
         final var name = expression.getName() == null ? null : expression.getName().getName();
-        return makeFunction(name, expression.getParams(), expression.getBody(), false, false, env);
+        return makeFunction(name, expression.getParams(), expression.getBody(), false, false, expression.isAsync(),
+                expression.isGenerator(), env);
     }
 
     private JsValue evalArrowFunction(ArrowFunctionExpression expression, Environment env) {
         return makeFunction(null, expression.getParams(), expression.getBody(), true, expression.isExpressionBody(),
-                env);
+                expression.isAsync(), false, env);
     }
 
     private JsFunction makeFunction(String name, List<JsNode> params, JsNode body, boolean arrow,
-            boolean expressionBody, Environment closure) {
-        return new JsFunction(name, params, body, arrow, expressionBody, closure);
+            boolean expressionBody, boolean async, boolean generator, Environment closure) {
+        return new JsFunction(name, params, body, arrow, expressionBody, async, generator, closure);
     }
 
     private JsValue evalCall(CallExpression call, Environment env) {
@@ -922,6 +1044,16 @@ public final class Interpreter {
             activation.defineThis(thisArg);
         }
         bindParams(function.getParams(), args, activation);
+        if (function.isGenerator()) {
+            return makeGenerator(function, activation);
+        }
+        if (function.isAsync()) {
+            return runAsync(function, activation);
+        }
+        return runFunctionBody(function, activation);
+    }
+
+    private JsValue runFunctionBody(JsFunction function, Environment activation) {
         if (function.isExpressionBody()) {
             return eval((Expression) function.getBody(), activation);
         }
@@ -937,6 +1069,83 @@ public final class Interpreter {
             }
         }
         return JsUndefined.getInstance();
+    }
+
+    private JsValue makeGenerator(JsFunction function, Environment activation) {
+        final var coroutine = new Coroutine();
+        coroutines.add(coroutine);
+        coroutine.prime(() -> {
+            currentCoroutine.set(coroutine);
+            return runFunctionBody(function, activation);
+        });
+        return new JsGenerator(coroutine);
+    }
+
+    private JsValue runAsync(JsFunction function, Environment activation) {
+        final var promise = new JsPromise(eventLoop);
+        final var coroutine = new Coroutine();
+        coroutines.add(coroutine);
+        coroutine.startAsync(() -> {
+            currentCoroutine.set(coroutine);
+            try {
+                promise.resolve(runFunctionBody(function, activation));
+            } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                    | SyntaxErrorException error) {
+                promise.reject(toErrorValue(error));
+            }
+            return JsUndefined.getInstance();
+        });
+        return promise;
+    }
+
+    private JsValue evalYield(YieldExpression yield, Environment env) {
+        final var coroutine = currentCoroutine.get();
+        if (coroutine == null) {
+            throw new SyntaxErrorException("yield is only valid inside a generator");
+        }
+        if (yield.isDelegate()) {
+            return yieldDelegate(coroutine, eval(yield.getArgument(), env));
+        }
+        final var value = yield.getArgument() == null ? JsUndefined.getInstance() : eval(yield.getArgument(), env);
+        return coroutine.yieldOut(value);
+    }
+
+    private JsValue yieldDelegate(Coroutine coroutine, JsValue iterable) {
+        if (iterable instanceof JsGenerator generator) {
+            final var inner = generator.getCoroutine();
+            var sent = (JsValue) JsUndefined.getInstance();
+            while (true) {
+                final var step = inner.resumeNext(sent);
+                if (step.done()) {
+                    return step.value();
+                }
+                sent = coroutine.yieldOut(step.value());
+            }
+        }
+        final var iteration = new Iteration(iterable);
+        var value = iteration.next();
+        while (value != null) {
+            coroutine.yieldOut(value);
+            value = iteration.next();
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private JsValue evalAwait(AwaitExpression await, Environment env) {
+        final var coroutine = currentCoroutine.get();
+        if (coroutine == null) {
+            throw new SyntaxErrorException("await is only valid inside an async function");
+        }
+        return coroutine.await(toPromise(eval(await.getArgument(), env)));
+    }
+
+    private JsPromise toPromise(JsValue value) {
+        if (value instanceof JsPromise promise) {
+            return promise;
+        }
+        final var promise = new JsPromise(eventLoop);
+        promise.resolve(value);
+        return promise;
     }
 
     private void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
@@ -1169,10 +1378,11 @@ public final class Interpreter {
 
     private void installMethod(JsClass cls, MethodDefinition method, Environment classScope) {
         final var value = method.getValue();
-        if (value.isAsync() || value.isGenerator()) {
-            throw new UnsupportedNodeException("async/generator class method");
+        if (value.isAsync() && value.isGenerator()) {
+            throw new UnsupportedNodeException("async generator method");
         }
-        final var fn = makeFunction(null, value.getParams(), value.getBody(), false, false, cls.getMethodScope());
+        final var fn = makeFunction(null, value.getParams(), value.getBody(), false, false, value.isAsync(),
+                value.isGenerator(), cls.getMethodScope());
         final var kind = method.getKind();
         if ("constructor".equals(kind)) {
             cls.setConstructor(fn);
@@ -1413,5 +1623,113 @@ public final class Interpreter {
             return JsBoolean.FALSE;
         }
         throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
+    }
+
+    private JsValue generatorMethod(JsGenerator generator, String key) {
+        final var coroutine = generator.getCoroutine();
+        return switch (key) {
+            case "next" -> new JsNativeFunction("next", (_, args) -> stepResult(coroutine.resumeNext(arg0(args))));
+            case "return" ->
+                new JsNativeFunction("return", (_, args) -> stepResult(coroutine.resumeReturn(arg0(args))));
+            case "throw" -> new JsNativeFunction("throw", (_, args) -> stepResult(coroutine.resumeThrow(arg0(args))));
+            default -> JsUndefined.getInstance();
+        };
+    }
+
+    private JsValue stepResult(Coroutine.StepResult step) {
+        final var result = new JsObject();
+        result.set("value", step.value());
+        result.set("done", JsBoolean.of(step.done()));
+        return result;
+    }
+
+    private JsValue promiseMethod(JsPromise promise, String key) {
+        return switch (key) {
+            case "then" -> new JsNativeFunction("then", (_, args) -> promiseThen(promise, arg0(args), arg1(args)));
+            case "catch" ->
+                new JsNativeFunction("catch", (_, args) -> promiseThen(promise, JsUndefined.getInstance(), arg0(args)));
+            case "finally" -> new JsNativeFunction("finally", (_, args) -> promiseFinally(promise, arg0(args)));
+            default -> JsUndefined.getInstance();
+        };
+    }
+
+    private JsValue promiseThen(JsPromise promise, JsValue onFulfilled, JsValue onRejected) {
+        final var derived = new JsPromise(eventLoop);
+        promise.subscribe(value -> settleThen(derived, onFulfilled, value, true),
+                reason -> settleThen(derived, onRejected, reason, false));
+        return derived;
+    }
+
+    private void settleThen(JsPromise derived, JsValue handler, JsValue input, boolean fulfilled) {
+        if (!(handler instanceof JsFunction) && !(handler instanceof JsNativeFunction)) {
+            if (fulfilled) {
+                derived.resolve(input);
+            } else {
+                derived.reject(input);
+            }
+            return;
+        }
+        try {
+            derived.resolve(callValue(handler, JsUndefined.getInstance(), List.of(input)));
+        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                | SyntaxErrorException error) {
+            derived.reject(toErrorValue(error));
+        }
+    }
+
+    private JsValue promiseFinally(JsPromise promise, JsValue onFinally) {
+        final var derived = new JsPromise(eventLoop);
+        promise.subscribe(value -> {
+            runFinally(onFinally);
+            derived.resolve(value);
+        }, reason -> {
+            runFinally(onFinally);
+            derived.reject(reason);
+        });
+        return derived;
+    }
+
+    private void runFinally(JsValue onFinally) {
+        if (onFinally instanceof JsFunction || onFinally instanceof JsNativeFunction) {
+            callValue(onFinally, JsUndefined.getInstance(), List.of());
+        }
+    }
+
+    private JsValue arg0(List<JsValue> args) {
+        return args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+    }
+
+    private JsValue arg1(List<JsValue> args) {
+        return args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+    }
+
+    private final class Iteration {
+        private final JsGenerator generator;
+        private final List<JsValue> buffer;
+        private int index;
+
+        private Iteration(JsValue iterable) {
+            if (iterable instanceof JsGenerator gen) {
+                this.generator = gen;
+                this.buffer = null;
+            } else {
+                this.generator = null;
+                this.buffer = arrayLikeElements(iterable);
+            }
+        }
+
+        private JsValue next() {
+            if (generator != null) {
+                final var step = generator.getCoroutine().resumeNext(JsUndefined.getInstance());
+                return step.done() ? null : step.value();
+            }
+            return index < buffer.size() ? buffer.get(index++) : null;
+        }
+
+        private void close() {
+            if (generator != null && !generator.getCoroutine().isDone()) {
+                generator.getCoroutine().resumeReturn(JsUndefined.getInstance());
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import org.techhouse.simplejs.internal.Environment;
+import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsValue;
@@ -9,7 +10,7 @@ public final class GlobalScope {
     private GlobalScope() {
     }
 
-    public static void install(Environment global) {
+    public static void install(Environment global, EventLoop eventLoop, Invoker invoker) {
         ErrorBuiltins.install(global);
         define(global, "Object", ObjectBuiltins.create());
         define(global, "Array", ArrayBuiltins.create());
@@ -19,6 +20,7 @@ public final class GlobalScope {
         define(global, "Math", MathBuiltins.create());
         define(global, "JSON", JsonBuiltins.create());
         define(global, "console", ConsoleBuiltins.create());
+        define(global, "Promise", PromiseBuiltins.create(eventLoop, invoker));
         define(global, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());

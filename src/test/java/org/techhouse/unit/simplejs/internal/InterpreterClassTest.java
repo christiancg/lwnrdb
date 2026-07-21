@@ -315,10 +315,10 @@ public class InterpreterClassTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("5 instanceof 5"));
     }
 
-    // Async/generator class methods are not yet supported
+    // Async-generator class methods are not yet supported (plain async and generator methods are)
     @Test
-    public void test_async_method_unsupported() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("class A { async m() {} } new A().m()"));
+    public void test_async_generator_method_unsupported() {
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("class A { async *m() {} }"));
     }
 
     // A bare super expression is a syntax error
