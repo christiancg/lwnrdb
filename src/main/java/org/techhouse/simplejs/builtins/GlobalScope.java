@@ -1,5 +1,6 @@
 package org.techhouse.simplejs.builtins;
 
+import java.util.function.Consumer;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -10,7 +11,7 @@ public final class GlobalScope {
     private GlobalScope() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker) {
+    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, Consumer<String> consoleSink) {
         ErrorBuiltins.install(global);
         define(global, "Object", ObjectBuiltins.create());
         define(global, "Array", ArrayBuiltins.create());
@@ -19,7 +20,7 @@ public final class GlobalScope {
         define(global, "Boolean", booleanFunction());
         define(global, "Math", MathBuiltins.create());
         define(global, "JSON", JsonBuiltins.create());
-        define(global, "console", ConsoleBuiltins.create());
+        define(global, "console", consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
         define(global, "Promise", PromiseBuiltins.create(eventLoop, invoker));
         define(global, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());

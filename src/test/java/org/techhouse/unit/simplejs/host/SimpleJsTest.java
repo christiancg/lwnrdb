@@ -1,0 +1,107 @@
+package org.techhouse.unit.simplejs.host;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.ArrayList;
+import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.host.ScriptResult;
+import org.techhouse.simplejs.host.SimpleHostBindings;
+
+public class SimpleJsTest {
+    private final SimpleJs engine = new SimpleJs();
+
+    private ScriptResult run(String source) {
+        return engine.run(source, SimpleHostBindings.empty());
+    }
+
+    // A top-level return value is serialized to EJson as the script result
+    @Test
+    public void test_return_value() {
+        final var result = run("let x = (1 + 2) * 3; return x;");
+        assertFalse(result.isError());
+        assertEquals(9, result.getValue().asJsonNumber().asInteger());
+    }
+
+    // With no return, export default becomes the result
+    @Test
+    public void test_export_default_result() {
+        final var result = run("export default { ok: true };");
+        assertFalse(result.isError());
+        assertTrue(result.getValue().asJsonObject().get("ok").asJsonBoolean().getValue());
+    }
+
+    // With only named exports the result is an object of those exports
+    @Test
+    public void test_named_exports_result() {
+        final var result = run("export const a = 1; export const b = 2;");
+        assertFalse(result.isError());
+        assertEquals(1, result.getValue().asJsonObject().get("a").asJsonNumber().asInteger());
+        assertEquals(2, result.getValue().asJsonObject().get("b").asJsonNumber().asInteger());
+    }
+
+    // return takes precedence over export default
+    @Test
+    public void test_return_beats_export_default() {
+        final var result = run("export default 1; return 2;");
+        assertEquals(2, result.getValue().asJsonNumber().asInteger());
+    }
+
+    // An array result is serialized as a JSON array
+    @Test
+    public void test_array_result() {
+        final var result = run("return [1, 2, 3].map(x => x * 2);");
+        assertInstanceOf(JsonArray.class, result.getValue());
+        assertEquals(3, result.getValue().asJsonArray().size());
+    }
+
+    // An empty (undefined) result serializes to JSON null
+    @Test
+    public void test_undefined_result_is_null() {
+        final var result = run("let x = 1;");
+        assertFalse(result.isError());
+        assertInstanceOf(JsonNull.class, result.getValue());
+    }
+
+    // A syntax error is reported as an error result
+    @Test
+    public void test_syntax_error() {
+        final var result = run("let = ;");
+        assertTrue(result.isError());
+        assertEquals("SyntaxError", result.getErrorName());
+    }
+
+    // A thrown Error that escapes becomes an error result carrying its name and message
+    @Test
+    public void test_thrown_error() {
+        final var result = run("throw new TypeError('bad thing');");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+        assertEquals("bad thing", result.getErrorMessage());
+    }
+
+    // A runtime TypeError (member access on null) is reported as an error result
+    @Test
+    public void test_runtime_type_error() {
+        final var result = run("let o = null; return o.a;");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+    }
+
+    // console.log is routed to the host console sink
+    @Test
+    public void test_console_sink() {
+        final var captured = new ArrayList<String>();
+        final var host = new SimpleHostBindings(new JsonObject(), null, captured::add, ResourceLimits.unlimited());
+        engine.run("console.log('hi', 42);", host);
+        assertEquals(1, captured.size());
+        assertEquals("hi 42", captured.getFirst());
+    }
+}

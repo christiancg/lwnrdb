@@ -20,16 +20,20 @@ public final class ConsoleBuiltins {
     }
 
     public static JsObject create() {
+        return create(sink);
+    }
+
+    public static JsObject create(Consumer<String> consoleSink) {
         final var console = new JsObject();
-        console.set("log", new JsNativeFunction("log", (_, args) -> write(args)));
-        console.set("error", new JsNativeFunction("error", (_, args) -> write(args)));
-        console.set("warn", new JsNativeFunction("warn", (_, args) -> write(args)));
-        console.set("info", new JsNativeFunction("info", (_, args) -> write(args)));
+        console.set("log", new JsNativeFunction("log", (_, args) -> write(consoleSink, args)));
+        console.set("error", new JsNativeFunction("error", (_, args) -> write(consoleSink, args)));
+        console.set("warn", new JsNativeFunction("warn", (_, args) -> write(consoleSink, args)));
+        console.set("info", new JsNativeFunction("info", (_, args) -> write(consoleSink, args)));
         return console;
     }
 
-    private static JsValue write(List<JsValue> args) {
-        sink.accept(args.stream().map(JsCoercion::toStr).collect(Collectors.joining(" ")));
+    private static JsValue write(Consumer<String> consoleSink, List<JsValue> args) {
+        consoleSink.accept(args.stream().map(JsCoercion::toStr).collect(Collectors.joining(" ")));
         return JsUndefined.getInstance();
     }
 }

@@ -2,19 +2,27 @@ package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
+import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
+import org.techhouse.simplejs.exceptions.ScriptAbortException;
+import org.techhouse.simplejs.exceptions.ScriptLimitException;
+import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
+import org.techhouse.simplejs.host.HostBindings;
+import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
@@ -34,6 +42,9 @@ import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.ConditionalExpression;
 import org.techhouse.simplejs.nodes.ContinueStatement;
 import org.techhouse.simplejs.nodes.DoWhileStatement;
+import org.techhouse.simplejs.nodes.ExportAllDeclaration;
+import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
+import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.FieldDefinition;
@@ -44,6 +55,10 @@ import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.ImportDeclaration;
+import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
+import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
+import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
@@ -72,6 +87,7 @@ import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.nodes.YieldExpression;
+import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -100,33 +116,100 @@ public final class Interpreter {
     private static final Set<String> LOGICAL_ASSIGN = Set.of("&&=", "||=", "??=");
     private static final Set<String> LEXICAL_KINDS = Set.of("let", "const");
 
+    public record ProgramOutcome(JsValue lastValue, boolean hasReturn, JsValue returnValue, JsValue exportDefault,
+            Map<String, JsValue> namedExports) {
+    }
+
     private final EventLoop eventLoop = new EventLoop();
     private final ThreadLocal<Coroutine> currentCoroutine = new ThreadLocal<>();
     private final List<Coroutine> coroutines = new ArrayList<>();
 
-    private Interpreter() {
+    private final HostBindings host;
+    private final int maxDepth;
+    private long instructionsRemaining;
+    private final long deadlineNanos;
+    private int depth;
+
+    private Interpreter(HostBindings host) {
+        this.host = host;
+        final var limits = host.limits();
+        this.maxDepth = limits.maxDepth();
+        this.instructionsRemaining = limits.instructionBudget();
+        this.deadlineNanos = limits.wallClockMillis() > 0
+                ? System.nanoTime() + limits.wallClockMillis() * 1_000_000L
+                : -1;
     }
 
     public static JsValue run(Program program) {
-        return new Interpreter().evalProgram(program);
+        return new Interpreter(SimpleHostBindings.empty()).evalProgram(program);
     }
 
     public static JsValue run(String source) {
         return run(Parser.parse(Lexer.lexWithPositions(source)));
     }
 
+    public static ProgramOutcome run(Program program, HostBindings host) {
+        return new Interpreter(host).runModule(program);
+    }
+
+    public static ProgramOutcome run(String source, HostBindings host) {
+        return run(Parser.parse(Lexer.lexWithPositions(source)), host);
+    }
+
+    private void tick() {
+        if (instructionsRemaining >= 0) {
+            if (instructionsRemaining == 0) {
+                throw new ScriptLimitException("Script exceeded its instruction budget");
+            }
+            instructionsRemaining--;
+        }
+        if (deadlineNanos >= 0 && System.nanoTime() >= deadlineNanos) {
+            throw new ScriptTimeoutException("Script exceeded its time limit");
+        }
+    }
+
     private JsValue evalProgram(Program program) {
+        return runModule(program).lastValue();
+    }
+
+    private ProgramOutcome runModule(Program program) {
         final var env = Environment.global();
-        GlobalScope.install(env, eventLoop, this::callValue);
+        GlobalScope.install(env, eventLoop, this::callValue, host.console());
+        for (final var statement : program.getBody()) {
+            if (statement instanceof ImportDeclaration importDeclaration) {
+                bindImport(importDeclaration, env);
+            }
+        }
         hoist(program.getBody(), env);
         var last = (JsValue) JsUndefined.getInstance();
-        for (final var statement : program.getBody()) {
-            final var completion = evalStatement(statement, env);
-            if (!completion.isNormal()) {
-                throw new SyntaxErrorException(
-                        "Illegal " + completion.kind().name().toLowerCase(Locale.ROOT) + " statement");
+        final var namedExports = new LinkedHashMap<String, JsValue>();
+        JsValue exportDefault = null;
+        var hasReturn = false;
+        var returnValue = (JsValue) JsUndefined.getInstance();
+        moduleLoop : for (final var statement : program.getBody()) {
+            switch (statement) {
+                case ImportDeclaration ignored -> {
+                    // already bound in the pre-pass above
+                }
+                case ExportDefaultDeclaration exportDefaultDeclaration ->
+                    exportDefault = evalExportDefault(exportDefaultDeclaration, env);
+                case ExportNamedDeclaration exportNamedDeclaration ->
+                    evalExportNamed(exportNamedDeclaration, env, namedExports);
+                case ExportAllDeclaration exportAllDeclaration -> evalExportAll(exportAllDeclaration, namedExports);
+                default -> {
+                    final var completion = evalStatement(statement, env);
+                    if (completion.kind() == Completion.Kind.RETURN) {
+                        hasReturn = true;
+                        returnValue = completion.value();
+                        break moduleLoop;
+                    }
+                    if (!completion.isNormal()) {
+                        throw new SyntaxErrorException(
+                                "Illegal " + completion.kind().name().toLowerCase(Locale.ROOT) + " statement");
+                    }
+                    last = completion.value();
+                }
             }
-            last = completion.value();
         }
         eventLoop.drain();
         for (final var coroutine : coroutines) {
@@ -134,11 +217,120 @@ public final class Interpreter {
                 coroutine.cancel();
             }
         }
-        return last;
+        return new ProgramOutcome(last, hasReturn, returnValue, exportDefault, namedExports);
+    }
+
+    private JsValue resolveModule(String source) {
+        return switch (source) {
+            case "args" -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args());
+            case "db" -> {
+                if (host.database() == null) {
+                    throw new JsThrowException(ErrorBuiltins.makeError("Error", "Database access is not available"));
+                }
+                yield DbModule.create(host.database());
+            }
+            default ->
+                throw new JsThrowException(ErrorBuiltins.makeError("Error", "Cannot find module '" + source + "'"));
+        };
+    }
+
+    private void bindImport(ImportDeclaration declaration, Environment env) {
+        final var namespace = resolveModule(declaration.getSource().getValue());
+        for (final var specifier : declaration.getSpecifiers()) {
+            switch (specifier) {
+                case ImportDefaultSpecifier defaultSpecifier ->
+                    defineModuleBinding(env, defaultSpecifier.getLocal().getName(), namespace);
+                case ImportNamespaceSpecifier namespaceSpecifier ->
+                    defineModuleBinding(env, namespaceSpecifier.getLocal().getName(), namespace);
+                case ImportSpecifier importSpecifier -> defineModuleBinding(env, importSpecifier.getLocal().getName(),
+                        moduleMember(namespace, moduleName(importSpecifier.getImported())));
+                default -> throw new UnsupportedNodeException(specifier.getType().name());
+            }
+        }
+    }
+
+    private JsValue evalExportDefault(ExportDefaultDeclaration declaration, Environment env) {
+        final var value = declaration.getDeclaration();
+        if (value instanceof FunctionDeclaration functionDeclaration) {
+            final var name = functionDeclaration.getName() == null ? null : functionDeclaration.getName().getName();
+            return makeFunction(name, functionDeclaration.getParams(), functionDeclaration.getBody(), false, false,
+                    functionDeclaration.isAsync(), functionDeclaration.isGenerator(), env);
+        }
+        if (value instanceof ClassDeclaration classDeclaration) {
+            evalClassDeclaration(classDeclaration, env);
+            return env.get(classDeclaration.getId().getName());
+        }
+        return eval((Expression) value, env);
+    }
+
+    private void evalExportNamed(ExportNamedDeclaration declaration, Environment env, Map<String, JsValue> exports) {
+        if (declaration.getDeclaration() instanceof Statement inner) {
+            evalStatement(inner, env);
+            final var names = new ArrayList<String>();
+            collectExportedNames(inner, names);
+            for (final var name : names) {
+                exports.put(name, env.get(name));
+            }
+            return;
+        }
+        for (final var specifier : declaration.getSpecifiers()) {
+            final var local = moduleName(specifier.getLocal());
+            exports.put(moduleName(specifier.getExported()), env.get(local));
+        }
+    }
+
+    private void evalExportAll(ExportAllDeclaration declaration, Map<String, JsValue> exports) {
+        final var namespace = resolveModule(declaration.getSource().getValue());
+        if (declaration.getExported() != null) {
+            exports.put(declaration.getExported().getName(), namespace);
+        } else if (namespace instanceof JsObject object) {
+            for (final var key : object.keys()) {
+                exports.put(key, object.get(key));
+            }
+        }
+    }
+
+    private void collectExportedNames(Statement declaration, List<String> names) {
+        switch (declaration) {
+            case VariableDeclaration variableDeclaration -> {
+                for (final var declarator : variableDeclaration.getDeclarations()) {
+                    collectBoundNames(declarator.getId(), names);
+                }
+            }
+            case FunctionDeclaration functionDeclaration -> names.add(functionDeclaration.getName().getName());
+            case ClassDeclaration classDeclaration -> names.add(classDeclaration.getId().getName());
+            default -> {
+                // no exported bindings
+            }
+        }
+    }
+
+    private JsValue moduleMember(JsValue namespace, String name) {
+        if (namespace instanceof JsObject object) {
+            return object.get(name);
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private String moduleName(JsNode node) {
+        return switch (node) {
+            case Identifier identifier -> identifier.getName();
+            case StringLiteral literal -> literal.getValue();
+            default -> throw new UnsupportedNodeException(node.getType().name());
+        };
+    }
+
+    private void defineModuleBinding(Environment env, String name, JsValue value) {
+        if (!env.hasLocal(name)) {
+            env.declareVar(name);
+        }
+        env.assign(name, value);
     }
 
     private void hoist(List<Statement> body, Environment env) {
-        for (final var statement : body) {
+        for (final var raw : body) {
+            final var statement = raw instanceof ExportNamedDeclaration export
+                    && export.getDeclaration() instanceof Statement inner ? inner : raw;
             if (statement instanceof VariableDeclaration declaration) {
                 final var kind = declaration.getKind();
                 for (final var declarator : declaration.getDeclarations()) {
@@ -183,6 +375,19 @@ public final class Interpreter {
             case TRY_STATEMENT -> evalTry((TryStatement) statement, env);
             case CLASS_DECLARATION -> evalClassDeclaration((ClassDeclaration) statement, env);
             case FUNCTION_DECLARATION -> Completion.empty();
+            case IMPORT_DECLARATION -> {
+                bindImport((ImportDeclaration) statement, env);
+                yield Completion.empty();
+            }
+            case EXPORT_NAMED_DECLARATION -> {
+                final var declaration = ((ExportNamedDeclaration) statement).getDeclaration();
+                yield declaration instanceof Statement inner ? evalStatement(inner, env) : Completion.empty();
+            }
+            case EXPORT_DEFAULT_DECLARATION -> {
+                evalExportDefault((ExportDefaultDeclaration) statement, env);
+                yield Completion.empty();
+            }
+            case EXPORT_ALL_DECLARATION -> Completion.empty();
             default -> throw new UnsupportedNodeException(statement.getType().name());
         };
     }
@@ -235,6 +440,7 @@ public final class Interpreter {
 
     private Completion evalWhile(WhileStatement statement, Environment env, String label) {
         while (JsCoercion.toBoolean(eval(statement.getTest(), env))) {
+            tick();
             final var completion = evalStatement(statement.getBody(), env);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
@@ -249,6 +455,7 @@ public final class Interpreter {
 
     private Completion evalDoWhile(DoWhileStatement statement, Environment env, String label) {
         do {
+            tick();
             final var completion = evalStatement(statement.getBody(), env);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
@@ -271,6 +478,7 @@ public final class Interpreter {
             eval(expression, loopEnv);
         }
         while (statement.getTest() == null || JsCoercion.toBoolean(eval(statement.getTest(), loopEnv))) {
+            tick();
             final var completion = evalStatement(statement.getBody(), loopEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
@@ -290,6 +498,7 @@ public final class Interpreter {
         final var iteration = new Iteration(eval(statement.getRight(), env));
         var value = iteration.next();
         while (value != null) {
+            tick();
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), value, iterationEnv);
             final var completion = evalStatement(statement.getBody(), iterationEnv);
@@ -310,6 +519,7 @@ public final class Interpreter {
     private Completion evalForIn(ForInStatement statement, Environment env, String label) {
         final var target = eval(statement.getRight(), env);
         for (final var key : enumerateKeys(target)) {
+            tick();
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), new JsString(key), iterationEnv);
             final var completion = evalStatement(statement.getBody(), iterationEnv);
@@ -417,6 +627,8 @@ public final class Interpreter {
                 }
                 result = evalCatch(statement.getHandler(), toErrorValue(error), env);
             }
+        } catch (ScriptAbortException abort) {
+            throw abort;
         } catch (RuntimeException error) {
             pending = error;
         }
@@ -1029,6 +1241,7 @@ public final class Interpreter {
     }
 
     private JsValue callValue(JsValue callee, JsValue thisArg, List<JsValue> args) {
+        tick();
         if (callee instanceof JsFunction function) {
             return callFunction(function, thisArg, args);
         }
@@ -1039,18 +1252,26 @@ public final class Interpreter {
     }
 
     private JsValue callFunction(JsFunction function, JsValue thisArg, List<JsValue> args) {
-        final var activation = function.getClosure().functionChild();
-        if (!function.isArrow()) {
-            activation.defineThis(thisArg);
+        if (maxDepth >= 0 && depth >= maxDepth) {
+            throw new ScriptLimitException("Script exceeded its maximum call depth");
         }
-        bindParams(function.getParams(), args, activation);
-        if (function.isGenerator()) {
-            return makeGenerator(function, activation);
+        depth++;
+        try {
+            final var activation = function.getClosure().functionChild();
+            if (!function.isArrow()) {
+                activation.defineThis(thisArg);
+            }
+            bindParams(function.getParams(), args, activation);
+            if (function.isGenerator()) {
+                return makeGenerator(function, activation);
+            }
+            if (function.isAsync()) {
+                return runAsync(function, activation);
+            }
+            return runFunctionBody(function, activation);
+        } finally {
+            depth--;
         }
-        if (function.isAsync()) {
-            return runAsync(function, activation);
-        }
-        return runFunctionBody(function, activation);
     }
 
     private JsValue runFunctionBody(JsFunction function, Environment activation) {

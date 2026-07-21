@@ -210,18 +210,18 @@ public class InterpreterTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("let o = null; o.a"));
     }
 
-    // A top-level break or return is an illegal syntax error
+    // A top-level break/continue is an illegal syntax error; a top-level return is allowed (6f)
     @Test
     public void test_illegal_control_flow() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("break;"));
-        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("return 5;"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("continue;"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("return 5;"));
     }
 
-    // Nodes outside the current interpreter scope raise UnsupportedNodeException (modules land in 6f)
+    // Nodes outside the current interpreter scope still raise UnsupportedNodeException (regex deferred)
     @Test
     public void test_unsupported_nodes() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("import x from 'y';"));
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("export const x = 1;"));
+        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("/abc/;"));
     }
 
     // this evaluates to undefined at the top level
