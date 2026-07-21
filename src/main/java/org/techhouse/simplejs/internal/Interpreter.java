@@ -200,7 +200,7 @@ public final class Interpreter {
                 runModuleBody(program, env, result);
                 return JsUndefined.getInstance();
             });
-            eventLoop.drain();
+            eventLoop.drain(deadlineNanos);
         } finally {
             for (final var pending : coroutines) {
                 if (!pending.isDone()) {

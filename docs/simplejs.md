@@ -249,8 +249,10 @@ increment is small and testable:
   `yield*`) and `async`/`await` share **one** mechanism: a `Coroutine` runs the function body on a
   JDK **virtual thread** and hands control back and forth through a single `ReentrantLock` + `Condition`
   so only one thread ever runs at a time (single-threaded JS semantics, no shared-state races). An
-  `EventLoop` holds a microtask queue for Promise reactions and coroutine resumes; `Interpreter.run`
-  drains it to quiescence, then cancels any still-suspended coroutines, before returning. A generator
+  `EventLoop` holds a microtask queue for Promise reactions and coroutine resumes plus a real-time,
+  due-time-ordered timer queue (macrotasks) fired after microtasks and bounded by the sandbox
+  deadline; `Interpreter.run` drains both to quiescence, then cancels any still-suspended coroutines,
+  before returning. A generator
   call returns a `JsGenerator` whose `next`/`return`/`throw` (dispatched lazily via `getMember`, like
   array methods) drive the coroutine and yield `{value, done}`; `return()`/cancellation unwind the
   suspended body through `finally` blocks (`evalTry` runs its finalizer on every exit path). An
@@ -268,8 +270,14 @@ increment is small and testable:
   element). Async and generator **class methods** are supported, including async generators. Top-level
   `await`/`for await` **are** supported: the module body runs inside a `Coroutine` driven by the
   `EventLoop`, so `await` at the script root works; top-level `yield` stays a runtime `SyntaxError`
-  (`yield` is valid only inside a generator). Documented limitations: no timers/macrotasks (no
-  `setTimeout`), unhandled promise rejections are silently ignored, and abandoned (never fully consumed)
+  (`yield` is valid only inside a generator). **Timers** are a real-time macrotask layer on the same
+  `EventLoop`: `setTimeout`/`setInterval` enqueue a due-time-ordered timer and `drain(deadlineNanos)`
+  becomes a two-tier loop — flush all microtasks, then genuinely wait for and fire the single
+  earliest-due timer, repeat — so `Promise.then` runs before `setTimeout(0)` and timers fire in delay
+  order; `clearTimeout`/`clearInterval` cancel by id. The wait is **deadline-aware**: a timer due past
+  the sandbox wall-clock budget raises `ScriptTimeoutException` rather than over-sleeping, and an
+  uncaught throw in a timer callback is swallowed (it does not abort the script). Documented
+  limitations: unhandled promise rejections are silently ignored, and abandoned (never fully consumed)
   generators are cancelled at end-of-run. Because the legacy `run` overloads return the last top-level
   statement value computed **before** the drain, async results observed through those overloads use a
   mutable accumulator (array/object) that the drained reactions mutate; the host `run(…, HostBindings)`
@@ -297,7 +305,7 @@ increment is small and testable:
   `AuthorizationChecker.check` and `SchemaValidationHelper.check`, then calls
   `OperationProcessor.processMessage`; a denial/schema violation throws a JS `Error` into the
   script (catchable). Documented limitations: module resolution is restricted to `args`/`db`
-  (no filesystem/network), import attributes are validated-only, and no `setTimeout`/timers. The
+  (no filesystem/network) and import attributes are validated-only. The
   `RUN_SCRIPT` operation that would expose `SimpleJs.run` over the wire is a deferred follow-up
   (not built here).
 
