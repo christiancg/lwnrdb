@@ -188,6 +188,7 @@ public final class Interpreter {
         final var result = new ModuleResult();
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
+        coroutine.markAsync();
         try {
             coroutine.startAsync(() -> {
                 currentCoroutine.set(coroutine);
@@ -544,7 +545,7 @@ public final class Interpreter {
 
     private Completion evalForAwaitOf(ForOfStatement statement, Environment env, String label) {
         final var coroutine = currentCoroutine.get();
-        if (coroutine == null) {
+        if (coroutine == null || !coroutine.isAsync()) {
             throw new SyntaxErrorException("for await is only valid inside an async function");
         }
         final var source = eval(statement.getRight(), env);
@@ -1420,6 +1421,7 @@ public final class Interpreter {
         final var promise = new JsPromise(eventLoop);
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
+        coroutine.markAsync();
         coroutine.startAsync(() -> {
             currentCoroutine.set(coroutine);
             try {
@@ -1496,7 +1498,7 @@ public final class Interpreter {
 
     private JsValue evalAwait(AwaitExpression await, Environment env) {
         final var coroutine = currentCoroutine.get();
-        if (coroutine == null) {
+        if (coroutine == null || !coroutine.isAsync()) {
             throw new SyntaxErrorException("await is only valid inside an async function");
         }
         return coroutine.await(toPromise(eval(await.getArgument(), env)));

@@ -154,6 +154,20 @@ public class InterpreterAsyncTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("yield 1;"));
     }
 
+    // await inside a plain (sync) generator is a syntax error, surfaced when the body runs
+    @Test
+    public void test_await_inside_sync_generator_is_syntax_error() {
+        assertThrows(SyntaxErrorException.class,
+                () -> Interpreter.run("function* g() { await Promise.resolve(1); } g().next()"));
+    }
+
+    // for await inside a plain (sync) generator is a syntax error, surfaced when the body runs
+    @Test
+    public void test_for_await_inside_sync_generator_is_syntax_error() {
+        assertThrows(SyntaxErrorException.class,
+                () -> Interpreter.run("function* g() { for await (const x of []) {} } g().next()"));
+    }
+
     // yield inside a plain async function (not a generator) is a syntax error, surfaced as a rejection
     @Test
     public void test_yield_in_plain_async_function_rejects() {
