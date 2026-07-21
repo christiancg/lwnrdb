@@ -392,6 +392,29 @@ public class ParserTest {
         assertInstanceOf(ExpressionStatement.class, firstStatement("using[a] = arr;"));
     }
 
+    // a using declaration is allowed in a for-of head
+    @Test
+    public void test_using_in_for_of_head() {
+        final var statement = assertInstanceOf(ForOfStatement.class, firstStatement("for (using r of xs) {}"));
+        final var declaration = assertInstanceOf(VariableDeclaration.class, statement.getLeft());
+        assertEquals("using", declaration.getKind());
+        assertNull(declaration.getDeclarations().getFirst().getInit());
+    }
+
+    // `using` before `of` stays the loop variable, not a declaration
+    @Test
+    public void test_using_as_for_of_variable() {
+        final var statement = assertInstanceOf(ForOfStatement.class, firstStatement("for (using of xs) {}"));
+        assertInstanceOf(Identifier.class, statement.getLeft());
+    }
+
+    // a using declaration is rejected in a for-in head and in a classic for head
+    @Test
+    public void test_using_rejected_outside_for_of() {
+        assertThrows(UnexpectedTokenException.class, () -> parse("for (using k in obj) {}"));
+        assertThrows(UnexpectedTokenException.class, () -> parse("for (using i = 0; i < 1; i++) {}"));
+    }
+
     @Test
     public void test_block_statement() {
         final var block = assertInstanceOf(BlockStatement.class, firstStatement("{ let x = 1; x; }"));

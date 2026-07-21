@@ -9,6 +9,7 @@ public final class JsObject extends JsValue {
     private boolean frozen;
     private JsClass klass;
     private Map<String, JsValue> privateFields;
+    private Map<JsSymbol, JsValue> symbolProperties;
 
     public JsValue get(String key) {
         final var value = properties.get(key);
@@ -71,5 +72,24 @@ public final class JsObject extends JsValue {
 
     public boolean hasPrivate(String key) {
         return privateFields != null && privateFields.containsKey(key);
+    }
+
+    public JsValue getSymbol(JsSymbol key) {
+        final var value = symbolProperties == null ? null : symbolProperties.get(key);
+        return value == null ? JsUndefined.getInstance() : value;
+    }
+
+    public void setSymbol(JsSymbol key, JsValue value) {
+        if (frozen) {
+            return;
+        }
+        if (symbolProperties == null) {
+            symbolProperties = new LinkedHashMap<>();
+        }
+        symbolProperties.put(key, value);
+    }
+
+    public boolean hasSymbol(JsSymbol key) {
+        return symbolProperties != null && symbolProperties.containsKey(key);
     }
 }

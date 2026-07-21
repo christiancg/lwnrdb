@@ -16,6 +16,7 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -85,6 +86,7 @@ public final class JsCoercion {
             case JsFunction ignored -> "function";
             case JsNativeFunction ignored -> "function";
             case JsClass ignored -> "function";
+            case JsSymbol ignored -> "symbol";
             default -> "object";
         };
     }

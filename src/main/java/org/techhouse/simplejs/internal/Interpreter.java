@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
@@ -80,6 +81,7 @@ import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
+import org.techhouse.simplejs.nodes.SwitchCase;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
@@ -105,6 +107,7 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -120,6 +123,7 @@ public final class Interpreter {
 
     private static final Set<String> LOGICAL_ASSIGN = Set.of("&&=", "||=", "??=");
     private static final Set<String> LEXICAL_KINDS = Set.of("let", "const");
+    private static final Set<String> USING_KINDS = Set.of("using", "await using");
 
     public record ProgramOutcome(JsValue lastValue, boolean hasReturn, JsValue returnValue, JsValue exportDefault,
             Map<String, JsValue> namedExports) {
@@ -209,6 +213,18 @@ public final class Interpreter {
     }
 
     private void runModuleBody(Program program, Environment env, ModuleResult result) {
+        RuntimeException pending = null;
+        try {
+            runModuleStatements(program, env, result);
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException error) {
+            pending = error;
+        }
+        disposeScope(env, Completion.empty(), pending);
+    }
+
+    private void runModuleStatements(Program program, Environment env, ModuleResult result) {
         moduleLoop : for (final var statement : program.getBody()) {
             switch (statement) {
                 case ImportDeclaration ignored -> {
@@ -364,6 +380,8 @@ public final class Interpreter {
                     for (final var name : names) {
                         if (LEXICAL_KINDS.contains(kind)) {
                             env.declareLexical(name, kind);
+                        } else if (USING_KINDS.contains(kind)) {
+                            env.declareLexical(name, "const");
                         } else if ("var".equals(kind)) {
                             env.declareVar(name);
                         }
@@ -420,8 +438,15 @@ public final class Interpreter {
     private Completion evalBlock(BlockStatement block, Environment env) {
         final var blockEnv = env.child();
         hoist(block.getBody(), blockEnv);
-        for (final var statement : block.getBody()) {
-            final var completion = evalStatement(statement, blockEnv);
+        if (!blockDeclaresUsing(block.getBody())) {
+            return execStatements(block.getBody(), blockEnv);
+        }
+        return runDisposing(blockEnv, () -> execStatements(block.getBody(), blockEnv));
+    }
+
+    private Completion execStatements(List<Statement> body, Environment env) {
+        for (final var statement : body) {
+            final var completion = evalStatement(statement, env);
             if (!completion.isNormal()) {
                 return completion;
             }
@@ -429,8 +454,71 @@ public final class Interpreter {
         return Completion.empty();
     }
 
+    private Completion evalIterationBody(Statement body, Environment iterationEnv) {
+        if (iterationEnv.hasDisposables()) {
+            return runDisposing(iterationEnv, () -> evalStatement(body, iterationEnv));
+        }
+        return evalStatement(body, iterationEnv);
+    }
+
+    private boolean blockDeclaresUsing(List<Statement> body) {
+        for (final var statement : body) {
+            if (statement instanceof VariableDeclaration declaration && USING_KINDS.contains(declaration.getKind())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Completion runDisposing(Environment env, Supplier<Completion> body) {
+        var result = Completion.empty();
+        RuntimeException pending = null;
+        try {
+            result = body.get();
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException error) {
+            pending = error;
+        }
+        return disposeScope(env, result, pending);
+    }
+
+    private Completion disposeScope(Environment env, Completion result, RuntimeException pending) {
+        if (!env.hasDisposables()) {
+            if (pending != null) {
+                throw pending;
+            }
+            return result;
+        }
+        final var entries = env.disposables();
+        var error = pending;
+        for (var i = entries.size() - 1; i >= 0; i--) {
+            final var entry = entries.get(i);
+            try {
+                final var outcome = callValue(entry.method(), entry.resource(), List.of());
+                if (entry.async()) {
+                    currentCoroutine.get().await(toPromise(outcome));
+                }
+            } catch (ScriptAbortException abort) {
+                throw abort;
+            } catch (RuntimeException disposeError) {
+                error = error == null
+                        ? disposeError
+                        : new JsThrowException(ErrorBuiltins.makeSuppressedError(toErrorValue(disposeError),
+                                toErrorValue(error), "An error was suppressed during disposal"));
+            }
+        }
+        if (error != null) {
+            throw error;
+        }
+        return result;
+    }
+
     private Completion evalVariableDeclaration(VariableDeclaration declaration, Environment env) {
         final var kind = declaration.getKind();
+        if (USING_KINDS.contains(kind)) {
+            return evalUsingDeclaration(declaration, env, "await using".equals(kind));
+        }
         if (!LEXICAL_KINDS.contains(kind) && !"var".equals(kind)) {
             throw new UnsupportedNodeException("VariableDeclaration kind '" + kind + "'");
         }
@@ -451,6 +539,48 @@ public final class Interpreter {
             }
         }
         return Completion.empty();
+    }
+
+    private Completion evalUsingDeclaration(VariableDeclaration declaration, Environment env, boolean async) {
+        for (final var declarator : declaration.getDeclarations()) {
+            final var name = ((Identifier) declarator.getId()).getName();
+            final var value = eval(declarator.getInit(), env);
+            env.initialize(name, value);
+            registerUsingResource(env, value, async);
+        }
+        return Completion.empty();
+    }
+
+    private void registerUsingResource(Environment env, JsValue value, boolean async) {
+        if (async) {
+            final var coroutine = currentCoroutine.get();
+            if (coroutine == null || !coroutine.isAsync()) {
+                throw new SyntaxErrorException("await using is only valid inside an async function");
+            }
+        }
+        if (isNullish(value)) {
+            return;
+        }
+        final var method = disposeMethod(value, async);
+        if (!isCallable(method)) {
+            throw new TypeErrorException(
+                    "Object does not have a " + (async ? "Symbol.asyncDispose" : "Symbol.dispose") + " method");
+        }
+        env.registerDisposable(value, method, async);
+    }
+
+    private JsValue disposeMethod(JsValue value, boolean async) {
+        if (async) {
+            final var asyncMethod = getMemberByKey(value, JsSymbol.ASYNC_DISPOSE);
+            if (!isNullish(asyncMethod)) {
+                return asyncMethod;
+            }
+        }
+        return getMemberByKey(value, JsSymbol.DISPOSE);
+    }
+
+    private boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
     private Completion evalIf(IfStatement statement, Environment env) {
@@ -529,7 +659,7 @@ public final class Interpreter {
             tick();
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), value, iterationEnv);
-            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 iteration.close();
@@ -567,7 +697,7 @@ public final class Interpreter {
             }
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), getMember(step, "value"), iterationEnv);
-            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 driveAsyncGenerator(generator, AsyncStep.RETURN, JsUndefined.getInstance());
@@ -589,7 +719,7 @@ public final class Interpreter {
             final var awaited = coroutine.await(toPromise(value));
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), awaited, iterationEnv);
-            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 iteration.close();
@@ -610,7 +740,7 @@ public final class Interpreter {
             tick();
             final var iterationEnv = env.child();
             bindForTarget(statement.getLeft(), new JsString(key), iterationEnv);
-            final var completion = evalStatement(statement.getBody(), iterationEnv);
+            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 return completion;
@@ -626,6 +756,13 @@ public final class Interpreter {
         if (left instanceof VariableDeclaration declaration) {
             final var kind = declaration.getKind();
             final var id = declaration.getDeclarations().getFirst().getId();
+            if (USING_KINDS.contains(kind)) {
+                final var name = ((Identifier) id).getName();
+                env.declareLexical(name, "const");
+                env.initialize(name, value);
+                registerUsingResource(env, value, "await using".equals(kind));
+                return;
+            }
             final var names = new ArrayList<String>();
             collectBoundNames(id, names);
             for (final var name : names) {
@@ -786,6 +923,11 @@ public final class Interpreter {
         if (start == -1) {
             return Completion.empty();
         }
+        final var begin = start;
+        return runDisposing(switchEnv, () -> execSwitchCases(cases, begin, switchEnv, label));
+    }
+
+    private Completion execSwitchCases(List<SwitchCase> cases, int start, Environment switchEnv, String label) {
         for (var i = start; i < cases.size(); i++) {
             for (final var consequent : cases.get(i).getConsequent()) {
                 final var completion = evalStatement(consequent, switchEnv);
@@ -859,7 +1001,7 @@ public final class Interpreter {
             if (member.getProperty() instanceof PrivateIdentifier priv) {
                 function = getPrivateMember(object, priv.getName(), env);
             } else {
-                function = getMember(object, memberKey(member, env));
+                function = getMemberByKey(object, memberKeyValue(member, env));
             }
         } else {
             function = eval(tag, env);
@@ -951,13 +1093,19 @@ public final class Interpreter {
             if (!(member instanceof Property property)) {
                 throw new UnsupportedNodeException(member.getType().name());
             }
-            final var key = property.isComputed()
-                    ? JsCoercion.toStr(eval(property.getKey(), env))
-                    : staticKeyName(property.getKey());
             if (!(property.getValue() instanceof Expression value)) {
                 throw new UnsupportedNodeException(property.getValue().getType().name());
             }
-            result.set(key, eval(value, env));
+            if (property.isComputed()) {
+                final var keyValue = eval(property.getKey(), env);
+                if (keyValue instanceof JsSymbol symbol) {
+                    result.setSymbol(symbol, eval(value, env));
+                    continue;
+                }
+                result.set(JsCoercion.toStr(keyValue), eval(value, env));
+                continue;
+            }
+            result.set(staticKeyName(property.getKey()), eval(value, env));
         }
         return result;
     }
@@ -1027,10 +1175,10 @@ public final class Interpreter {
                 return update.isPrefix() ? newValue : numericOld(oldValue);
             }
             final var target = eval(member.getObject(), env);
-            final var key = memberKey(member, env);
-            final var oldValue = getMember(target, key);
+            final var key = memberKeyValue(member, env);
+            final var oldValue = getMemberByKey(target, key);
             final var newValue = JsOperators.delta(oldValue, increment);
-            setMember(target, key, newValue);
+            setMemberByKey(target, key, newValue);
             return update.isPrefix() ? newValue : numericOld(oldValue);
         }
         throw new UnsupportedNodeException(argument.getType().name());
@@ -1132,24 +1280,24 @@ public final class Interpreter {
             return assignToPrivate(member, priv, assignment, env);
         }
         final var target = eval(member.getObject(), env);
-        final var key = memberKey(member, env);
+        final var key = memberKeyValue(member, env);
         final var operator = assignment.getOperator();
         if ("=".equals(operator)) {
             final var value = eval(assignment.getValue(), env);
-            setMember(target, key, value);
+            setMemberByKey(target, key, value);
             return value;
         }
-        final var current = getMember(target, key);
+        final var current = getMemberByKey(target, key);
         if (LOGICAL_ASSIGN.contains(operator)) {
             if (shouldNotApplyLogical(operator, current)) {
                 return current;
             }
             final var value = eval(assignment.getValue(), env);
-            setMember(target, key, value);
+            setMemberByKey(target, key, value);
             return value;
         }
         final var value = JsOperators.binary(baseOperator(operator), current, eval(assignment.getValue(), env));
-        setMember(target, key, value);
+        setMemberByKey(target, key, value);
         return value;
     }
 
@@ -1181,8 +1329,7 @@ public final class Interpreter {
         if (member.isOptional() && isNullish(target)) {
             return JsUndefined.getInstance();
         }
-        final var key = memberKey(member, env);
-        return getMember(target, key);
+        return getMemberByKey(target, memberKeyValue(member, env));
     }
 
     private String memberKey(MemberExpression member, Environment env) {
@@ -1193,6 +1340,33 @@ public final class Interpreter {
             return id.getName();
         }
         throw new UnsupportedNodeException(member.getProperty().getType().name());
+    }
+
+    private JsValue memberKeyValue(MemberExpression member, Environment env) {
+        if (member.isComputed()) {
+            return eval(member.getProperty(), env);
+        }
+        if (member.getProperty() instanceof Identifier id) {
+            return new JsString(id.getName());
+        }
+        throw new UnsupportedNodeException(member.getProperty().getType().name());
+    }
+
+    private JsValue getMemberByKey(JsValue target, JsValue keyValue) {
+        if (keyValue instanceof JsSymbol symbol) {
+            return target instanceof JsObject object ? object.getSymbol(symbol) : JsUndefined.getInstance();
+        }
+        return getMember(target, JsCoercion.toStr(keyValue));
+    }
+
+    private void setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
+        if (keyValue instanceof JsSymbol symbol) {
+            if (target instanceof JsObject object) {
+                object.setSymbol(symbol, value);
+            }
+            return;
+        }
+        setMember(target, JsCoercion.toStr(keyValue), value);
     }
 
     private JsValue getMember(JsValue target, String key) {
@@ -1338,7 +1512,7 @@ public final class Interpreter {
             if (member.getProperty() instanceof PrivateIdentifier priv) {
                 function = getPrivateMember(object, priv.getName(), env);
             } else {
-                function = getMember(object, memberKey(member, env));
+                function = getMemberByKey(object, memberKeyValue(member, env));
             }
         } else {
             function = eval(callee, env);
@@ -1437,16 +1611,10 @@ public final class Interpreter {
         }
         final var body = (BlockStatement) function.getBody();
         hoist(body.getBody(), activation);
-        for (final var statement : body.getBody()) {
-            final var completion = evalStatement(statement, activation);
-            if (completion.kind() == Completion.Kind.RETURN) {
-                return completion.value();
-            }
-            if (!completion.isNormal()) {
-                break;
-            }
-        }
-        return JsUndefined.getInstance();
+        final var completion = blockDeclaresUsing(body.getBody())
+                ? runDisposing(activation, () -> execStatements(body.getBody(), activation))
+                : execStatements(body.getBody(), activation);
+        return completion.kind() == Completion.Kind.RETURN ? completion.value() : JsUndefined.getInstance();
     }
 
     private JsValue makeGenerator(JsFunction function, Environment activation) {
@@ -1861,11 +2029,15 @@ public final class Interpreter {
             final var value = field.getValue() == null ? JsUndefined.getInstance() : eval(field.getValue(), fieldScope);
             if (field.getKey() instanceof PrivateIdentifier priv) {
                 instance.setPrivate(priv.getName(), value);
+            } else if (field.isComputed()) {
+                final var keyValue = eval(field.getKey(), fieldScope);
+                if (keyValue instanceof JsSymbol symbol) {
+                    instance.setSymbol(symbol, value);
+                } else {
+                    instance.set(JsCoercion.toStr(keyValue), value);
+                }
             } else {
-                final var key = field.isComputed()
-                        ? JsCoercion.toStr(eval(field.getKey(), fieldScope))
-                        : staticKeyName(field.getKey());
-                instance.set(key, value);
+                instance.set(staticKeyName(field.getKey()), value);
             }
         }
     }

@@ -336,6 +336,11 @@ public final class Parser {
                 return parseClassicForRest(null);
             }
             final var init = parseForHeaderLeft();
+            final var isUsingHead = init instanceof VariableDeclaration declaration
+                    && "using".equals(declaration.getKind());
+            if (isUsingHead && !isKeyword("of")) {
+                throw error();
+            }
             if (isKeyword("in") || isKeyword("of")) {
                 return parseForInOf(init, isAwait);
             }
@@ -349,7 +354,16 @@ public final class Parser {
             if (isKeyword("var") || isKeyword("let") || isKeyword("const")) {
                 return parseForVariableDeclaration();
             }
+            if (isUsingDeclarationStart()) {
+                return parseForUsingDeclaration();
+            }
             return withNoIn(this::parseExpression);
+        }
+
+        private VariableDeclaration parseForUsingDeclaration() {
+            expectContextualKeyword("using");
+            final var id = parseIdentifier();
+            return new VariableDeclaration("using", List.of(new VariableDeclarator(id, null)));
         }
 
         private VariableDeclaration parseForVariableDeclaration() {

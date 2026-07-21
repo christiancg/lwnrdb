@@ -189,9 +189,9 @@ non-goals of the front end:
   an async context, and `export default function/class` (which yields an expression
   value) are all interpreter concerns.
 - **The legacy import-`assert` spelling is not accepted** — only the standardized
-  `with` attribute clause is; attribute *resolution* is likewise deferred, as are
-  module placement/resolution and explicit-resource-management disposal semantics
-  (`Symbol.dispose`/`Symbol.asyncDispose`).
+  `with` attribute clause is; attribute *resolution* is likewise deferred, as is
+  module placement/resolution. Explicit-resource-management disposal
+  (`Symbol.dispose`/`Symbol.asyncDispose`) is implemented by the interpreter (see Phase 6).
 
 ## Phase 6 — the interpreter
 
@@ -297,9 +297,26 @@ increment is small and testable:
   `AuthorizationChecker.check` and `SchemaValidationHelper.check`, then calls
   `OperationProcessor.processMessage`; a denial/schema violation throws a JS `Error` into the
   script (catchable). Documented limitations: module resolution is restricted to `args`/`db`
-  (no filesystem/network), import attributes are validated-only, `using`/`await using` disposal
-  remains deferred, and no `setTimeout`/timers. The `RUN_SCRIPT` operation
-  that would expose `SimpleJs.run` over the wire is a deferred follow-up (not built here).
+  (no filesystem/network), import attributes are validated-only, and no `setTimeout`/timers. The
+  `RUN_SCRIPT` operation that would expose `SimpleJs.run` over the wire is a deferred follow-up
+  (not built here).
+
+**Explicit resource management (`using`/`await using`).** A `using`/`await using` declaration
+binds a block-scoped const-like resource and runs its disposer when the enclosing scope exits —
+on every path (normal, `return`/`break`/`continue`, or a thrown error), in **reverse** declaration
+order. `using` calls the resource's `[Symbol.dispose]()`; `await using` `await`s
+`[Symbol.asyncDispose]()` (falling back to `[Symbol.dispose]`) and is valid only in an async
+context (module top level / async function / async generator — a runtime `SyntaxError` otherwise).
+A `null`/`undefined` resource is a no-op; a non-`null` resource without a callable dispose method
+throws a `TypeError` at the declaration. When the body throws and a disposer also throws, the errors
+aggregate into a `SuppressedError` (`error` = the newest, `suppressed` = the accumulated); a
+sandbox abort (`ScriptAbortException`) skips disposal, mirroring `finally`. Disposal is wired into
+block, function-body, module-top-level, `for-of`/`for-in` (per iteration), and `switch` scopes.
+Symbols exist as a real `JsSymbol` value (`typeof` → `"symbol"`, distinct identity per `Symbol(…)`,
+string coercion throws) with the well-known `Symbol.dispose`/`Symbol.asyncDispose` and symbol-keyed
+object properties; there is no `Symbol.iterator` integration or `Symbol.for` registry, and class
+**method-form** symbol keys (`class R { [Symbol.dispose]() {} }`) are unsupported — use a field
+(`[Symbol.dispose] = () => {…}`) or an object literal.
 
 **Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
 short-circuits per member access rather than across a whole chain (`a?.b.c` still

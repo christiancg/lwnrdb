@@ -12,7 +12,6 @@ import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
-import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
@@ -218,10 +217,10 @@ public class InterpreterTest {
         assertInstanceOf(JsUndefined.class, Interpreter.run("return 5;"));
     }
 
-    // Nodes outside the current interpreter scope still raise UnsupportedNodeException (using disposal deferred)
+    // a using declaration whose resource has no dispose method raises a TypeError
     @Test
-    public void test_unsupported_nodes() {
-        assertThrows(UnsupportedNodeException.class, () -> Interpreter.run("using x = 1;"));
+    public void test_using_non_disposable_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("using x = 1;"));
     }
 
     // this evaluates to undefined at the top level

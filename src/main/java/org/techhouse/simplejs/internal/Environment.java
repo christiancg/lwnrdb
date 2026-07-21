@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.internal;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -8,6 +10,9 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class Environment {
+    public record DisposalEntry(JsValue resource, JsValue method, boolean async) {
+    }
+
     private static final class Binding {
         private JsValue value;
         private final String kind;
@@ -27,6 +32,7 @@ public final class Environment {
     private boolean hasThis;
     private JsValue homeClass;
     private boolean hasHomeClass;
+    private List<DisposalEntry> disposables;
 
     private Environment(Environment parent, boolean functionScope) {
         this.parent = parent;
@@ -133,6 +139,21 @@ public final class Environment {
             env = env.parent;
         }
         return null;
+    }
+
+    public void registerDisposable(JsValue resource, JsValue method, boolean async) {
+        if (disposables == null) {
+            disposables = new ArrayList<>();
+        }
+        disposables.add(new DisposalEntry(resource, method, async));
+    }
+
+    public boolean hasDisposables() {
+        return disposables != null && !disposables.isEmpty();
+    }
+
+    public List<DisposalEntry> disposables() {
+        return disposables == null ? List.of() : disposables;
     }
 
     private Environment functionScope() {
