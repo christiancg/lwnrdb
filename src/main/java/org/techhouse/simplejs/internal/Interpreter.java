@@ -11,6 +11,7 @@ import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
+import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -71,6 +72,7 @@ import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Property;
+import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
@@ -99,6 +101,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -720,6 +723,8 @@ public final class Interpreter {
             case BOOLEAN_LITERAL -> JsBoolean.of(((BooleanLiteral) expression).getValue());
             case NULL_LITERAL -> JsNull.getInstance();
             case UNDEFINED_LITERAL -> JsUndefined.getInstance();
+            case REGEX_LITERAL -> RegexTranslator.compile(((RegexLiteral) expression).getPattern(),
+                    ((RegexLiteral) expression).getFlags());
             case TEMPLATE_LITERAL -> evalTemplate((TemplateLiteral) expression, env);
             case IDENTIFIER -> env.get(((Identifier) expression).getName());
             case THIS_EXPRESSION -> env.resolveThis();
@@ -1073,6 +1078,7 @@ public final class Interpreter {
             case JsArray array -> getArrayMember(array, key);
             case JsString string -> getStringMember(string, key);
             case JsGenerator generator -> generatorMethod(generator, key);
+            case JsRegExp regexp -> regExpMember(regexp, key);
             case JsPromise promise -> promiseMethod(promise, key);
             case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
             case JsNull ignored -> throw cannotReadProperties(target, key);
@@ -1118,7 +1124,7 @@ public final class Interpreter {
                     ? new JsString(String.valueOf(string.getValue().charAt(index)))
                     : JsUndefined.getInstance();
         }
-        final var method = StringBuiltins.getMethod(string, key);
+        final var method = StringBuiltins.getMethod(string, key, this::callValue);
         return method == null ? JsUndefined.getInstance() : method;
     }
 
@@ -1152,6 +1158,12 @@ public final class Interpreter {
                 final var index = arrayIndex(key);
                 if (index != null) {
                     array.set(index, value);
+                }
+            }
+            case JsRegExp regexp -> {
+                if ("lastIndex".equals(key)) {
+                    final var next = JsCoercion.toNumber(value);
+                    regexp.setLastIndex(Double.isNaN(next) ? 0 : (int) next);
                 }
             }
             case JsNull ignored -> throw new TypeErrorException(
@@ -1862,6 +1874,11 @@ public final class Interpreter {
         result.set("value", step.value());
         result.set("done", JsBoolean.of(step.done()));
         return result;
+    }
+
+    private JsValue regExpMember(JsRegExp regexp, String key) {
+        final var member = RegexBuiltins.getMethod(regexp, key);
+        return member == null ? JsUndefined.getInstance() : member;
     }
 
     private JsValue promiseMethod(JsPromise promise, String key) {

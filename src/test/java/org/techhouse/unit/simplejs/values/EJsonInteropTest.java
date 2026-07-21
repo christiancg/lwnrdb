@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.util.List;
@@ -15,6 +16,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
@@ -84,5 +86,13 @@ public class EJsonInteropTest {
         final var object = new JsObject();
         object.set("self", object);
         assertThrows(TypeErrorException.class, () -> EJsonInterop.toEjson(object));
+    }
+
+    // a regex serializes to an empty object, matching JSON.stringify(/x/)
+    @Test
+    public void test_regex_to_empty_object() {
+        final var result = EJsonInterop.toEjson(RegexTranslator.compile("x", "g"));
+        assertInstanceOf(JsonObject.class, result);
+        assertTrue(result.asJsonObject().entrySet().isEmpty());
     }
 }

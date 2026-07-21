@@ -1,12 +1,18 @@
 package org.techhouse.simplejs.builtins;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -20,13 +26,17 @@ public final class StringBuiltins {
                 (_, args) -> new JsString(args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst())));
     }
 
-    public static JsNativeFunction getMethod(JsString receiver, String name) {
+    public static JsNativeFunction getMethod(JsString receiver, String name, Invoker invoker) {
         final var value = receiver.getValue();
         return switch (name) {
             case "slice" -> new JsNativeFunction("slice", (_, args) -> new JsString(slice(value, args)));
             case "substring" -> new JsNativeFunction("substring", (_, args) -> new JsString(substring(value, args)));
             case "split" -> new JsNativeFunction("split", (_, args) -> split(value, args));
-            case "replace" -> new JsNativeFunction("replace", (_, args) -> new JsString(replace(value, args)));
+            case "replace" -> new JsNativeFunction("replace", (_, args) -> replace(value, args, invoker, false));
+            case "replaceAll" -> new JsNativeFunction("replaceAll", (_, args) -> replace(value, args, invoker, true));
+            case "match" -> new JsNativeFunction("match", (_, args) -> match(value, args));
+            case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> matchAll(value, args));
+            case "search" -> new JsNativeFunction("search", (_, args) -> new JsNumber(search(value, args)));
             case "toUpperCase" ->
                 new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
             case "toLowerCase" ->
@@ -78,6 +88,9 @@ public final class StringBuiltins {
             result.push(new JsString(value));
             return result;
         }
+        if (args.getFirst() instanceof JsRegExp regexp) {
+            return splitByRegex(value, regexp);
+        }
         final var separator = str(args, 0);
         if (separator.isEmpty()) {
             for (var i = 0; i < value.length(); i++) {
@@ -96,14 +109,206 @@ public final class StringBuiltins {
         return result;
     }
 
-    private static String replace(String value, List<JsValue> args) {
+    private static JsValue replace(String value, List<JsValue> args, Invoker invoker, boolean all) {
+        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp) {
+            return new JsString(replaceRegex(value, regexp, args, invoker, all));
+        }
         final var search = str(args, 0);
-        final var replacement = str(args, 1);
+        final var replacement = args.size() > 1 && isCallable(args.get(1)) ? null : str(args, 1);
+        if (all) {
+            return new JsString(replaceAllLiteral(value, search, args, invoker));
+        }
         final var index = value.indexOf(search);
         if (index < 0) {
+            return new JsString(value);
+        }
+        final var piece = replacement != null
+                ? replacement
+                : JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(),
+                        List.of(new JsString(search), new JsNumber(index), new JsString(value))));
+        return new JsString(value.substring(0, index) + piece + value.substring(index + search.length()));
+    }
+
+    private static String replaceAllLiteral(String value, String search, List<JsValue> args, Invoker invoker) {
+        if (search.isEmpty()) {
             return value;
         }
-        return value.substring(0, index) + replacement + value.substring(index + search.length());
+        final var sb = new StringBuilder();
+        var from = 0;
+        var index = value.indexOf(search);
+        while (index >= 0) {
+            sb.append(value, from, index);
+            if (args.size() > 1 && isCallable(args.get(1))) {
+                sb.append(JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(),
+                        List.of(new JsString(search), new JsNumber(index), new JsString(value)))));
+            } else {
+                sb.append(str(args, 1));
+            }
+            from = index + search.length();
+            index = value.indexOf(search, from);
+        }
+        sb.append(value.substring(from));
+        return sb.toString();
+    }
+
+    private static String replaceRegex(String value, JsRegExp regexp, List<JsValue> args, Invoker invoker,
+            boolean all) {
+        final var matcher = regexp.getPattern().matcher(value);
+        final var global = all || regexp.isGlobal();
+        final var sb = new StringBuilder();
+        var last = 0;
+        while (matcher.find()) {
+            sb.append(value, last, matcher.start());
+            sb.append(replacementPiece(matcher, value, args, invoker));
+            last = matcher.end();
+            if (!global) {
+                break;
+            }
+            if (matcher.end() == matcher.start()) {
+                if (matcher.end() >= value.length()) {
+                    break;
+                }
+                sb.append(value.charAt(matcher.end()));
+                last = matcher.end() + 1;
+                matcher.region(last, value.length());
+            }
+        }
+        sb.append(value.substring(last));
+        return sb.toString();
+    }
+
+    private static String replacementPiece(Matcher matcher, String input, List<JsValue> args, Invoker invoker) {
+        if (args.size() > 1 && isCallable(args.get(1))) {
+            final var callArgs = new ArrayList<JsValue>();
+            callArgs.add(new JsString(matcher.group()));
+            for (var i = 1; i <= matcher.groupCount(); i++) {
+                callArgs.add(matcher.group(i) == null ? JsUndefined.getInstance() : new JsString(matcher.group(i)));
+            }
+            callArgs.add(new JsNumber(matcher.start()));
+            callArgs.add(new JsString(input));
+            return JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(), callArgs));
+        }
+        return expand(str(args, 1), matcher, input);
+    }
+
+    private static String expand(String template, Matcher matcher, String input) {
+        final var sb = new StringBuilder();
+        for (var i = 0; i < template.length(); i++) {
+            final var ch = template.charAt(i);
+            if (ch != '$' || i + 1 >= template.length()) {
+                sb.append(ch);
+                continue;
+            }
+            final var next = template.charAt(i + 1);
+            switch (next) {
+                case '$' -> sb.append('$');
+                case '&' -> sb.append(matcher.group());
+                case '`' -> sb.append(input, 0, matcher.start());
+                case '\'' -> sb.append(input.substring(matcher.end()));
+                case '<' -> i = appendNamedGroup(sb, template, i + 2, matcher) - 1;
+                default -> {
+                    if (Character.isDigit(next)) {
+                        i = appendNumberedGroup(sb, template, i + 1, matcher) - 1;
+                    } else {
+                        sb.append('$');
+                        continue;
+                    }
+                }
+            }
+            i++;
+        }
+        return sb.toString();
+    }
+
+    private static int appendNamedGroup(StringBuilder sb, String template, int start, Matcher matcher) {
+        final var close = template.indexOf('>', start);
+        if (close < 0) {
+            sb.append("$<");
+            return start;
+        }
+        final var name = template.substring(start, close);
+        final var group = matcher.group(name);
+        if (group != null) {
+            sb.append(group);
+        }
+        return close;
+    }
+
+    private static int appendNumberedGroup(StringBuilder sb, String template, int start, Matcher matcher) {
+        var end = start + 1;
+        if (end < template.length() && Character.isDigit(template.charAt(end))
+                && Integer.parseInt(template.substring(start, end + 1)) <= matcher.groupCount()) {
+            end++;
+        }
+        final var group = Integer.parseInt(template.substring(start, end));
+        if (group >= 1 && group <= matcher.groupCount() && matcher.group(group) != null) {
+            sb.append(matcher.group(group));
+        }
+        return end - 1;
+    }
+
+    private static JsValue match(String value, List<JsValue> args) {
+        final var regexp = toRegExp(args);
+        if (!regexp.isGlobal()) {
+            final var matcher = regexp.getPattern().matcher(value);
+            return matcher.find()
+                    ? RegexBuiltins.buildMatchResult(matcher, value, regexp.getSource())
+                    : JsNull.getInstance();
+        }
+        final var matcher = regexp.getPattern().matcher(value);
+        final var result = new JsArray();
+        while (matcher.find()) {
+            result.push(new JsString(matcher.group()));
+            if (matcher.end() == matcher.start()) {
+                if (matcher.end() >= value.length()) {
+                    break;
+                }
+                matcher.region(matcher.end() + 1, value.length());
+            }
+        }
+        return result.length() == 0 ? JsNull.getInstance() : result;
+    }
+
+    private static JsValue matchAll(String value, List<JsValue> args) {
+        final var regexp = toRegExp(args);
+        final var matcher = regexp.getPattern().matcher(value);
+        final var result = new JsArray();
+        while (matcher.find()) {
+            result.push(RegexBuiltins.buildMatchResult(matcher, value, regexp.getSource()));
+            if (matcher.end() == matcher.start()) {
+                if (matcher.end() >= value.length()) {
+                    break;
+                }
+                matcher.region(matcher.end() + 1, value.length());
+            }
+        }
+        return result;
+    }
+
+    private static int search(String value, List<JsValue> args) {
+        final var regexp = toRegExp(args);
+        final var matcher = regexp.getPattern().matcher(value);
+        return matcher.find() ? matcher.start() : -1;
+    }
+
+    private static JsValue splitByRegex(String value, JsRegExp regexp) {
+        final var parts = regexp.getPattern().split(value, -1);
+        final var result = new JsArray();
+        for (final var part : parts) {
+            result.push(new JsString(part));
+        }
+        return result;
+    }
+
+    private static JsRegExp toRegExp(List<JsValue> args) {
+        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp) {
+            return regexp;
+        }
+        return RegexTranslator.compile(args.isEmpty() ? "" : str(args, 0), "");
+    }
+
+    private static boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
     private static String padStart(String value, List<JsValue> args) {

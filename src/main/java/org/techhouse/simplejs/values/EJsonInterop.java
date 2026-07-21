@@ -32,6 +32,7 @@ public final class EJsonInterop {
             case JsClass ignored -> null;
             case JsArray array -> arrayToEjson(array, visited);
             case JsObject object -> objectToEjson(object, visited);
+            case JsRegExp ignored -> new JsonObject();
             default -> null;
         };
     }

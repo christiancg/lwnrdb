@@ -22,6 +22,7 @@ public final class GlobalScope {
         define(global, "JSON", JsonBuiltins.create());
         define(global, "console", consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
         define(global, "Promise", PromiseBuiltins.create(eventLoop, invoker));
+        define(global, "RegExp", RegexBuiltins.create());
         define(global, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());

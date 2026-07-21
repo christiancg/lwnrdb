@@ -1,5 +1,7 @@
 package org.techhouse.unit.simplejs.host;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import org.junit.jupiter.api.AfterAll;
@@ -20,8 +22,6 @@ import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class EnforcingDatabaseAccessIntegrationTest {
     private static final String ADMIN = "scriptadmin";

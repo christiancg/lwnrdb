@@ -13,6 +13,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -60,6 +61,7 @@ public final class JsCoercion {
             case JsClass c -> "class " + (c.getName() == null ? "" : c.getName());
             case JsPromise ignored -> "[object Promise]";
             case JsGenerator ignored -> "[object Generator]";
+            case JsRegExp r -> "/" + r.getSource() + "/" + r.getFlags();
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }

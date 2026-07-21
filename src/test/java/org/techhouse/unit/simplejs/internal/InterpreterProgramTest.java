@@ -211,6 +211,22 @@ public class InterpreterProgramTest {
         assertEquals("2,4", str(source));
     }
 
+    // A regex literal drives a global replace end to end
+    @Test
+    public void test_regex_global_replace() {
+        assertEquals("a#b#", str("'a1b2'.replace(/\\d/g, '#')"));
+    }
+
+    // Named capture groups are read from a match result
+    @Test
+    public void test_regex_named_capture() {
+        final var source = """
+                const m = '2024-01'.match(/(?<year>\\d+)-(?<month>\\d+)/);
+                m.groups.year + '/' + m.groups.month
+                """;
+        assertEquals("2024/01", str(source));
+    }
+
     // JSON round-trips through a transformation
     @Test
     public void test_json_transform() {
