@@ -203,4 +203,22 @@ public class StringBuiltinsTest {
         assertEquals("b", str("'abc'.match('b')[0]"));
         assertEquals(1, num("'a1b'.search('\\\\d')"));
     }
+
+    // String.raw concatenates the raw segments with the interpolated substitutions
+    @Test
+    public void test_string_raw_concatenates_raw_and_substitutions() {
+        final var source = """
+                const strings = { raw: ['a\\\\n', 'b', 'c'] };
+                String.raw(strings, 1, 2)
+                """;
+        assertEquals("a\\n1b2c", str(source));
+    }
+
+    // String.raw returns an empty string when the raw segments are missing or empty
+    @Test
+    public void test_string_raw_empty() {
+        assertEquals("", str("String.raw({ raw: [] })"));
+        assertEquals("", str("String.raw({})"));
+        assertEquals("", str("String.raw()"));
+    }
 }

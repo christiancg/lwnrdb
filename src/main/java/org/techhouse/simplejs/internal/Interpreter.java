@@ -81,6 +81,7 @@ import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchStatement;
+import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThrowStatement;
 import org.techhouse.simplejs.nodes.TryStatement;
@@ -810,6 +811,7 @@ public final class Interpreter {
             case REGEX_LITERAL -> RegexTranslator.compile(((RegexLiteral) expression).getPattern(),
                     ((RegexLiteral) expression).getFlags());
             case TEMPLATE_LITERAL -> evalTemplate((TemplateLiteral) expression, env);
+            case TAGGED_TEMPLATE_EXPRESSION -> evalTaggedTemplate((TaggedTemplateExpression) expression, env);
             case IDENTIFIER -> env.get(((Identifier) expression).getName());
             case THIS_EXPRESSION -> env.resolveThis();
             case FUNCTION_EXPRESSION -> evalFunctionExpression((FunctionExpression) expression, env);
@@ -842,6 +844,44 @@ public final class Interpreter {
             sb.append(quasis.get(i + 1));
         }
         return new JsString(sb.toString());
+    }
+
+    private JsValue evalTaggedTemplate(TaggedTemplateExpression tagged, Environment env) {
+        final var tag = tagged.getTag();
+        var thisArg = (JsValue) JsUndefined.getInstance();
+        final JsValue function;
+        if (tag instanceof MemberExpression member && !(member.getObject() instanceof SuperExpression)) {
+            final var object = eval(member.getObject(), env);
+            if (member.isOptional() && isNullish(object)) {
+                return JsUndefined.getInstance();
+            }
+            thisArg = object;
+            if (member.getProperty() instanceof PrivateIdentifier priv) {
+                function = getPrivateMember(object, priv.getName(), env);
+            } else {
+                function = getMember(object, memberKey(member, env));
+            }
+        } else {
+            function = eval(tag, env);
+        }
+        final var quasi = tagged.getQuasi();
+        final var strings = new JsArray();
+        final var raw = new JsArray();
+        for (final var cooked : quasi.getQuasis()) {
+            strings.push(new JsString(cooked));
+        }
+        for (final var rawQuasi : quasi.getRawQuasis()) {
+            raw.push(new JsString(rawQuasi));
+        }
+        raw.freeze();
+        strings.setProperty("raw", raw);
+        strings.freeze();
+        final var args = new ArrayList<JsValue>();
+        args.add(strings);
+        for (final var expression : quasi.getExpressions()) {
+            args.add(eval(expression, env));
+        }
+        return callValue(function, thisArg, args);
     }
 
     private JsValue evalArray(ArrayExpression array, Environment env) {
@@ -1194,6 +1234,9 @@ public final class Interpreter {
         final var index = arrayIndex(key);
         if (index != null) {
             return array.get(index);
+        }
+        if (array.hasProperty(key)) {
+            return array.getProperty(key);
         }
         final var method = ArrayBuiltins.getMethod(array, key, this::callValue);
         return method == null ? JsUndefined.getInstance() : method;

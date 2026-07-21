@@ -124,7 +124,13 @@ tokens (not `JsOperator`), so binary-operator detection checks keyword values to
   matched only where the grammar expects them, so they remain usable as identifiers.
 - **Templates.** `JsTemplateString` carries each `${...}` interpolation as its own
   token list (EOF-terminated), so `parseTemplate` runs a nested parser per
-  interpolation.
+  interpolation. It also carries the **raw** quasi text (escape sequences left
+  verbatim) alongside the cooked text, which tagged templates expose as `strings.raw`.
+- **Tagged templates.** A template literal following a call/member expression in
+  `parseCallMemberTail` becomes a `TaggedTemplateExpression` (tag + `TemplateLiteral`);
+  the interpreter invokes the tag with a frozen strings array (carrying a frozen `raw`
+  companion array) followed by the interpolated values. `String.raw` is provided.
+  A tagged template in the `new`-callee position (`` new tag`…` ``) is not supported.
 
 ## Supported grammar
 
@@ -171,9 +177,6 @@ non-goals of the front end:
   similar newline-sensitive rules are not enforced.
 - **`import` is a keyword** — dynamic `import(...)` and `import.meta` are not parsed;
   every `import` begins a declaration.
-- **No tagged template literals** — a template following an expression (`` tag`x${y}` ``)
-  is not parsed as a tag call; `parseCallMemberTail` handles `.`/`?.`/`[]`/`()` but has
-  no template arm, so the template is left as a separate primary.
 - **No `with` statement** — `with` is only a contextual keyword for import attributes
   (`with { type: "json" }`); the legacy `with (obj) { … }` statement is not parsed.
 - **No `debugger` statement** — `debugger` is not a keyword, so `debugger;` parses as an

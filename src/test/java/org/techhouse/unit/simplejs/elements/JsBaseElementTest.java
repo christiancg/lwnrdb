@@ -37,7 +37,7 @@ public class JsBaseElementTest {
         assertEquals(JsType.OPERATOR, new JsOperator("+").getType());
         assertEquals(JsType.SEPARATOR, new JsSeparator(';').getType());
         assertEquals(JsType.REGEX, new JsRegex("a", "g").getType());
-        assertEquals(JsType.TEMPLATE_STRING, new JsTemplateString(List.of(""), List.of()).getType());
+        assertEquals(JsType.TEMPLATE_STRING, new JsTemplateString(List.of(""), List.of(""), List.of()).getType());
         assertEquals(JsType.EOF, JsEOF.getInstance().getType());
     }
 }

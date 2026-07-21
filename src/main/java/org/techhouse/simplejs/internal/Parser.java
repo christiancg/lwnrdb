@@ -85,6 +85,7 @@ import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchCase;
 import org.techhouse.simplejs.nodes.SwitchStatement;
+import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThisExpression;
 import org.techhouse.simplejs.nodes.ThrowStatement;
@@ -1033,6 +1034,9 @@ public final class Parser {
                     expr = new MemberExpression(expr, property, true, false);
                 } else if (isSeparator('(')) {
                     expr = new CallExpression(expr, parseArguments());
+                } else if (current().getType() == JsType.TEMPLATE_STRING) {
+                    final var template = parseTemplate((JsTemplateString) advance());
+                    expr = new TaggedTemplateExpression(expr, template);
                 } else {
                     advancing = false;
                 }
@@ -1513,7 +1517,7 @@ public final class Parser {
             for (final var expressionTokens : template.getExpressions()) {
                 expressions.add(new State(expressionTokens, null).parseTemplateExpression());
             }
-            return new TemplateLiteral(template.getQuasis(), expressions);
+            return new TemplateLiteral(template.getQuasis(), template.getRawQuasis(), expressions);
         }
 
         private Expression parseTemplateExpression() {

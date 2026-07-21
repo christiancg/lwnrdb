@@ -3,6 +3,7 @@ package org.techhouse.unit.simplejs.values;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -140,5 +141,30 @@ public class JsValueTest {
         assertEquals(6, array.length());
         assertInstanceOf(JsUndefined.class, array.get(4));
         assertEquals(9, ((JsNumber) array.get(5)).getValue());
+    }
+
+    // Arrays carry named own properties alongside their elements
+    @Test
+    public void test_array_own_properties() {
+        final var array = new JsArray();
+        assertFalse(array.hasProperty("raw"));
+        assertNull(array.getProperty("raw"));
+        array.setProperty("raw", new JsString("x"));
+        assertTrue(array.hasProperty("raw"));
+        assertEquals("x", ((JsString) Objects.requireNonNull(array.getProperty("raw"))).getValue());
+    }
+
+    // Freezing an array blocks element and property mutation
+    @Test
+    public void test_array_freeze() {
+        final var array = new JsArray(List.of(new JsNumber(1)));
+        array.freeze();
+        assertTrue(array.isFrozen());
+        array.set(0, new JsNumber(2));
+        array.push(new JsNumber(3));
+        array.setProperty("raw", new JsString("x"));
+        assertEquals(1, array.length());
+        assertEquals(1, ((JsNumber) array.get(0)).getValue());
+        assertFalse(array.hasProperty("raw"));
     }
 }

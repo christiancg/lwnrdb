@@ -324,4 +324,77 @@ public class InterpreterProgramTest {
                 """;
         assertEquals(3, num(source));
     }
+
+    // A tagged template invokes the tag with the strings array followed by the interpolated values
+    @Test
+    public void test_tagged_template_passes_strings_and_values() {
+        final var source = """
+                function t(s, ...v) { return s.join('|') + '#' + v.join(','); }
+                t`a${1}b${2}c`
+                """;
+        assertEquals("a|b|c#1,2", str(source));
+    }
+
+    // The strings array carries a raw companion that preserves escape sequences
+    @Test
+    public void test_tagged_template_raw_property() {
+        final var source = """
+                function t(s) { return s.raw[0] + '/' + s[0]; }
+                t`\\n`
+                """;
+        assertEquals("\\n/\n", str(source));
+    }
+
+    // A member-tagged template binds this to the receiver object
+    @Test
+    public void test_tagged_template_this_binding() {
+        final var source = """
+                const obj = { name: 'x', tag: function(s) { return this.name; } };
+                obj.tag`hi`
+                """;
+        assertEquals("x", str(source));
+    }
+
+    // A template with no substitutions passes a single-element strings array and no extra args
+    @Test
+    public void test_tagged_template_no_substitutions() {
+        final var source = """
+                function t(s, ...v) { return s.length + ':' + v.length; }
+                t`hello`
+                """;
+        assertEquals("1:0", str(source));
+    }
+
+    // A nested tagged template inside an interpolation evaluates correctly
+    @Test
+    public void test_tagged_template_nested() {
+        final var source = """
+                function u(s) { return s[0].toUpperCase(); }
+                function t(s, v) { return s[0] + v + s[1]; }
+                t`<${ u`x` }>`
+                """;
+        assertEquals("<X>", str(source));
+    }
+
+    // Tagging a non-function value throws a TypeError
+    @Test
+    public void test_tagged_template_non_function_throws() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    const notFn = 5;
+                    notFn`x`;
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("TypeError", str(source));
+    }
+
+    // String.raw builds a string from the raw quasis and substitutions
+    @Test
+    public void test_string_raw_tag() {
+        assertEquals("a\\n1b", str("String.raw`a\\n${1}b`"));
+    }
 }

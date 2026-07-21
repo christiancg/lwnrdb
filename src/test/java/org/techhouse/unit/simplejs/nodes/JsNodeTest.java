@@ -65,6 +65,7 @@ import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchCase;
 import org.techhouse.simplejs.nodes.SwitchStatement;
+import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThisExpression;
 import org.techhouse.simplejs.nodes.ThrowStatement;
@@ -114,7 +115,9 @@ public class JsNodeTest {
         assertEquals(NodeType.NULL_LITERAL, new NullLiteral().getType());
         assertEquals(NodeType.UNDEFINED_LITERAL, new UndefinedLiteral().getType());
         assertEquals(NodeType.REGEX_LITERAL, new RegexLiteral("a", "g").getType());
-        assertEquals(NodeType.TEMPLATE_LITERAL, new TemplateLiteral(List.of(""), List.of()).getType());
+        assertEquals(NodeType.TEMPLATE_LITERAL, new TemplateLiteral(List.of(""), List.of(""), List.of()).getType());
+        assertEquals(NodeType.TAGGED_TEMPLATE_EXPRESSION,
+                new TaggedTemplateExpression(id, new TemplateLiteral(List.of(""), List.of(""), List.of())).getType());
         assertEquals(NodeType.IDENTIFIER, id.getType());
         assertEquals(NodeType.THIS_EXPRESSION, new ThisExpression().getType());
         assertEquals(NodeType.ARRAY_EXPRESSION, new ArrayExpression(List.of()).getType());

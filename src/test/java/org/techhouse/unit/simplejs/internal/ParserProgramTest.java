@@ -46,6 +46,7 @@ import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.SwitchStatement;
+import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThrowStatement;
 import org.techhouse.simplejs.nodes.TryStatement;
@@ -478,5 +479,34 @@ public class ParserProgramTest {
         final var big = assertInstanceOf(VariableDeclaration.class, body.get(1));
         final var bigInit = assertInstanceOf(BigIntLiteral.class, big.getDeclarations().getFirst().getInit());
         assertEquals(new BigInteger("65535"), bigInit.getValue());
+    }
+
+    // A tagged template attaches the template to its tag as a TaggedTemplateExpression
+    @Test
+    public void test_parse_tagged_template() {
+        final var program = parse("tag`a${1}b`;");
+        final var stmt = assertInstanceOf(ExpressionStatement.class, program.getBody().getFirst());
+        final var tagged = assertInstanceOf(TaggedTemplateExpression.class, stmt.getExpression());
+        assertEquals("tag", assertInstanceOf(Identifier.class, tagged.getTag()).getName());
+        assertEquals(2, tagged.getQuasi().getQuasis().size());
+        assertEquals(1, tagged.getQuasi().getExpressions().size());
+    }
+
+    // A member expression can be the tag of a tagged template
+    @Test
+    public void test_parse_member_tagged_template() {
+        final var program = parse("obj.tag`x`;");
+        final var stmt = assertInstanceOf(ExpressionStatement.class, program.getBody().getFirst());
+        final var tagged = assertInstanceOf(TaggedTemplateExpression.class, stmt.getExpression());
+        assertInstanceOf(MemberExpression.class, tagged.getTag());
+    }
+
+    // Tagged templates chain with further member/tagged tails
+    @Test
+    public void test_parse_chained_tagged_template() {
+        final var program = parse("tag`a`.length;");
+        final var stmt = assertInstanceOf(ExpressionStatement.class, program.getBody().getFirst());
+        final var member = assertInstanceOf(MemberExpression.class, stmt.getExpression());
+        assertInstanceOf(TaggedTemplateExpression.class, member.getObject());
     }
 }

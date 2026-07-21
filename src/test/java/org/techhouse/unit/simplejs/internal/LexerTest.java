@@ -361,6 +361,21 @@ public class LexerTest {
         assertInstanceOf(JsNumber.class, expr.get(2));
     }
 
+    // Raw quasis preserve escape sequences verbatim while cooked quasis interpret them
+    @Test
+    public void test_lex_template_captures_raw_quasis() {
+        final var template = (JsTemplateString) Lexer.lex("`a\\n${x}b`").getFirst();
+        assertEquals(List.of("a\n", "b"), template.getQuasis());
+        assertEquals(List.of("a\\n", "b"), template.getRawQuasis());
+    }
+
+    // With no escapes the raw and cooked quasis are identical
+    @Test
+    public void test_lex_template_raw_matches_cooked_when_no_escapes() {
+        final var template = (JsTemplateString) Lexer.lex("`hello world`").getFirst();
+        assertEquals(template.getQuasis(), template.getRawQuasis());
+    }
+
     // Template interpolation containing object braces
     @Test
     public void test_lex_template_nested_braces() {

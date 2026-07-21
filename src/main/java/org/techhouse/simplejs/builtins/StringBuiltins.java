@@ -12,6 +12,7 @@ import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -22,8 +23,40 @@ public final class StringBuiltins {
     }
 
     public static JsNativeFunction create() {
-        return new JsNativeFunction("String",
+        final var string = new JsNativeFunction("String",
                 (_, args) -> new JsString(args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst())));
+        string.setProperty("raw", new JsNativeFunction("raw", (_, args) -> new JsString(raw(args))));
+        return string;
+    }
+
+    private static String raw(List<JsValue> args) {
+        if (args.isEmpty()) {
+            return "";
+        }
+        final var raw = rawSegments(args.getFirst());
+        if (raw == null || raw.length() == 0) {
+            return "";
+        }
+        final var result = new StringBuilder();
+        for (var i = 0; i < raw.length(); i++) {
+            result.append(JsCoercion.toStr(raw.get(i)));
+            if (i + 1 < raw.length() && i + 1 < args.size()) {
+                result.append(JsCoercion.toStr(args.get(i + 1)));
+            }
+        }
+        return result.toString();
+    }
+
+    private static JsArray rawSegments(JsValue strings) {
+        final JsValue raw;
+        if (strings instanceof JsArray array) {
+            raw = array.getProperty("raw");
+        } else if (strings instanceof JsObject object) {
+            raw = object.get("raw");
+        } else {
+            raw = null;
+        }
+        return raw instanceof JsArray array ? array : null;
     }
 
     public static JsNativeFunction getMethod(JsString receiver, String name, Invoker invoker) {

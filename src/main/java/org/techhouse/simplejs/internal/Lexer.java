@@ -390,8 +390,10 @@ public final class Lexer {
     private static Lexed lexTemplate(String src, int start) {
         final var n = src.length();
         final var quasis = new ArrayList<String>();
+        final var rawQuasis = new ArrayList<String>();
         final var expressions = new ArrayList<List<JsBaseElement>>();
         final var builder = new StringBuilder();
+        var rawStart = start + 1;
         var i = start + 1;
         while (i < n) {
             final var c = src.charAt(i);
@@ -402,13 +404,16 @@ public final class Lexer {
                 i = appendEscape(src, i + 1, builder);
             } else if (c == '`') {
                 quasis.add(builder.toString());
-                return new Lexed(new JsTemplateString(quasis, expressions), i + 1);
+                rawQuasis.add(src.substring(rawStart, i));
+                return new Lexed(new JsTemplateString(quasis, rawQuasis, expressions), i + 1);
             } else if (c == '$' && i + 1 < n && src.charAt(i + 1) == '{') {
                 quasis.add(builder.toString());
+                rawQuasis.add(src.substring(rawStart, i));
                 builder.setLength(0);
                 final var close = scanBalancedBraces(src, i + 2, start);
                 expressions.add(lex(src.substring(i + 2, close)));
                 i = close + 1;
+                rawStart = i;
             } else {
                 builder.append(c);
                 i++;
