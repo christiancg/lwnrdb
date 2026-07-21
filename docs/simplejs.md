@@ -260,13 +260,18 @@ increment is small and testable:
   observer; a call returns a `JsAsyncGenerator` whose `next`/`return`/`throw` each return a `JsPromise`
   of `{value, done}` (the driver settles it once the body reaches a real `yield`/return, so the body may
   `await` any number of times between yields). `for await (… of …)` (a `ForOfStatement` with an `await`
-  flag; `for await` outside an async function is a runtime `SyntaxError`) and async `yield*` delegation
-  consume async iterables (and sync iterables of promises, awaiting each element). Async and generator
-  **class methods** are supported, including async generators. Documented limitations: no timers/macrotasks (no
-  `setTimeout`), no top-level `await`/`yield` (a runtime `SyntaxError`), unhandled promise rejections
-  are silently ignored, and abandoned (never fully consumed) generators are cancelled at end-of-run.
-  Because `run` returns the last top-level statement value computed **before** the drain, async
-  results are observed through a mutable accumulator (array/object) that the drained reactions mutate.
+  flag; `for await` inside a plain — non-async, non-generator — function is a runtime `SyntaxError`) and
+  async `yield*` delegation consume async iterables (and sync iterables of promises, awaiting each
+  element). Async and generator **class methods** are supported, including async generators. Top-level
+  `await`/`for await` **are** supported: the module body runs inside a `Coroutine` driven by the
+  `EventLoop`, so `await` at the script root works; top-level `yield` stays a runtime `SyntaxError`
+  (`yield` is valid only inside a generator). Documented limitations: no timers/macrotasks (no
+  `setTimeout`), unhandled promise rejections are silently ignored, and abandoned (never fully consumed)
+  generators are cancelled at end-of-run. Because the legacy `run` overloads return the last top-level
+  statement value computed **before** the drain, async results observed through those overloads use a
+  mutable accumulator (array/object) that the drained reactions mutate; the host `run(…, HostBindings)`
+  entrypoint reads the `ProgramOutcome` after the drain, so a top-level `await`ed `return` value is
+  returned directly.
   Still not wired into the database.
 - **6f — modules & host integration ✅** — the engine is wired to LWNRDB through the
   `simplejs/host/` seam. `SimpleJs.run(String source, HostBindings host)` is the sole public

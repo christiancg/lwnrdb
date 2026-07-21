@@ -29,7 +29,8 @@ public class InterpreterAsyncGeneratorTest {
     }
 
     private static JsArray arr() {
-        return (JsArray) Interpreter.run("let out = [];\nasync function* g() {}\nasync function main() { for await (const x of g()) out.push(x); out.push('end'); }\nmain();\nout\n");
+        return (JsArray) Interpreter.run(
+                "let out = [];\nasync function* g() {}\nasync function main() { for await (const x of g()) out.push(x); out.push('end'); }\nmain();\nout\n");
     }
 
     // an async generator call is an object with next/return/throw methods
@@ -160,10 +161,22 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("err:bad", joined(source));
     }
 
-    // for await outside an async function is a syntax error
+    // for await is valid at the top level (top-level await), consuming a list of promises
     @Test
-    public void test_for_await_outside_async_throws() {
-        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("for await (const x of [1]) {}"));
+    public void test_top_level_for_await_consumes_promises() {
+        final var source = """
+                let out = [];
+                for await (const x of [Promise.resolve(1), Promise.resolve(2)]) out.push(x);
+                out
+                """;
+        assertEquals("1,2", joined(source));
+    }
+
+    // for await inside a plain (non-async) function is still a syntax error
+    @Test
+    public void test_for_await_inside_plain_function_throws() {
+        assertThrows(SyntaxErrorException.class,
+                () -> Interpreter.run("function f() { for await (const x of [1]) {} } f()"));
     }
 
     // an empty async generator completes immediately

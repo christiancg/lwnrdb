@@ -16,7 +16,8 @@ public class InterpreterProgramTest {
 
     // reads an accumulator array reference after the event loop has drained
     private static String drained() {
-        final var array = (JsArray) Interpreter.run("let out = [];\nasync function* range(n) {\n    for (let i = 0; i < n; i++) {\n        yield await Promise.resolve(i * i);\n    }\n}\nasync function main() {\n    for await (const sq of range(4)) out.push(sq);\n}\nmain();\nout\n");
+        final var array = (JsArray) Interpreter.run(
+                "let out = [];\nasync function* range(n) {\n    for (let i = 0; i < n; i++) {\n        yield await Promise.resolve(i * i);\n    }\n}\nasync function main() {\n    for await (const sq of range(4)) out.push(sq);\n}\nmain();\nout\n");
         final var sb = new StringBuilder();
         for (var i = 0; i < array.length(); i++) {
             if (i > 0) {

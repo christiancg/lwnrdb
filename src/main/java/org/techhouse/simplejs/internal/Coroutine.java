@@ -59,6 +59,7 @@ public final class Coroutine {
     private PauseReason pauseReason = PauseReason.YIELD;
     private ResumeObserver resumeObserver;
     private volatile boolean async;
+    private volatile boolean yieldAllowed;
 
     public boolean isDone() {
         return done;
@@ -70,6 +71,14 @@ public final class Coroutine {
 
     public void markAsync() {
         this.async = true;
+    }
+
+    public boolean isYieldAllowed() {
+        return yieldAllowed;
+    }
+
+    public void markGenerator() {
+        this.yieldAllowed = true;
     }
 
     public PauseReason pauseReason() {

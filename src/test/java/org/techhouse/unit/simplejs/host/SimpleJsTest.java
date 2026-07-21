@@ -95,6 +95,23 @@ public class SimpleJsTest {
         assertEquals("TypeError", result.getErrorName());
     }
 
+    // A top-level await result is unwrapped and returned as the script result
+    @Test
+    public void test_top_level_await_return_value() {
+        final var result = run("return await Promise.resolve(7);");
+        assertFalse(result.isError());
+        assertEquals(7, result.getValue().asJsonNumber().asInteger());
+    }
+
+    // A rejected top-level await surfaces as an error result
+    @Test
+    public void test_top_level_await_rejection_is_error() {
+        final var result = run("await Promise.reject(new TypeError('nope'));");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+        assertEquals("nope", result.getErrorMessage());
+    }
+
     // console.log is routed to the host console sink
     @Test
     public void test_console_sink() {

@@ -185,43 +185,62 @@ public final class Interpreter {
             }
         }
         hoist(program.getBody(), env);
-        var last = (JsValue) JsUndefined.getInstance();
-        final var namedExports = new LinkedHashMap<String, JsValue>();
-        JsValue exportDefault = null;
-        var hasReturn = false;
-        var returnValue = (JsValue) JsUndefined.getInstance();
+        final var result = new ModuleResult();
+        final var coroutine = new Coroutine();
+        coroutines.add(coroutine);
+        try {
+            coroutine.startAsync(() -> {
+                currentCoroutine.set(coroutine);
+                runModuleBody(program, env, result);
+                return JsUndefined.getInstance();
+            });
+            eventLoop.drain();
+        } finally {
+            for (final var pending : coroutines) {
+                if (!pending.isDone()) {
+                    pending.cancel();
+                }
+            }
+        }
+        return new ProgramOutcome(result.last, result.hasReturn, result.returnValue, result.exportDefault,
+                result.namedExports);
+    }
+
+    private void runModuleBody(Program program, Environment env, ModuleResult result) {
         moduleLoop : for (final var statement : program.getBody()) {
             switch (statement) {
                 case ImportDeclaration ignored -> {
                     // already bound in the pre-pass above
                 }
                 case ExportDefaultDeclaration exportDefaultDeclaration ->
-                    exportDefault = evalExportDefault(exportDefaultDeclaration, env);
+                    result.exportDefault = evalExportDefault(exportDefaultDeclaration, env);
                 case ExportNamedDeclaration exportNamedDeclaration ->
-                    evalExportNamed(exportNamedDeclaration, env, namedExports);
-                case ExportAllDeclaration exportAllDeclaration -> evalExportAll(exportAllDeclaration, namedExports);
+                    evalExportNamed(exportNamedDeclaration, env, result.namedExports);
+                case ExportAllDeclaration exportAllDeclaration ->
+                    evalExportAll(exportAllDeclaration, result.namedExports);
                 default -> {
                     final var completion = evalStatement(statement, env);
                     if (completion.kind() == Completion.Kind.RETURN) {
-                        hasReturn = true;
-                        returnValue = completion.value();
+                        result.hasReturn = true;
+                        result.returnValue = completion.value();
                         break moduleLoop;
                     }
                     if (!completion.isNormal()) {
                         throw new SyntaxErrorException(
                                 "Illegal " + completion.kind().name().toLowerCase(Locale.ROOT) + " statement");
                     }
-                    last = completion.value();
+                    result.last = completion.value();
                 }
             }
         }
-        eventLoop.drain();
-        for (final var coroutine : coroutines) {
-            if (!coroutine.isDone()) {
-                coroutine.cancel();
-            }
-        }
-        return new ProgramOutcome(last, hasReturn, returnValue, exportDefault, namedExports);
+    }
+
+    private static final class ModuleResult {
+        private JsValue last = JsUndefined.getInstance();
+        private final Map<String, JsValue> namedExports = new LinkedHashMap<>();
+        private JsValue exportDefault;
+        private boolean hasReturn;
+        private JsValue returnValue = JsUndefined.getInstance();
     }
 
     private JsValue resolveModule(String source) {
@@ -1348,9 +1367,23 @@ public final class Interpreter {
             if (function.isAsync()) {
                 return runAsync(function, activation);
             }
-            return runFunctionBody(function, activation);
+            return runPlainFunction(function, activation);
         } finally {
             depth--;
+        }
+    }
+
+    private JsValue runPlainFunction(JsFunction function, Environment activation) {
+        final var saved = currentCoroutine.get();
+        currentCoroutine.remove();
+        try {
+            return runFunctionBody(function, activation);
+        } finally {
+            if (saved != null) {
+                currentCoroutine.set(saved);
+            } else {
+                currentCoroutine.remove();
+            }
         }
     }
 
@@ -1375,6 +1408,7 @@ public final class Interpreter {
     private JsValue makeGenerator(JsFunction function, Environment activation) {
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
+        coroutine.markGenerator();
         coroutine.prime(() -> {
             currentCoroutine.set(coroutine);
             return runFunctionBody(function, activation);
@@ -1404,6 +1438,7 @@ public final class Interpreter {
         coroutines.add(coroutine);
         final var generator = new JsAsyncGenerator(coroutine);
         coroutine.markAsync();
+        coroutine.markGenerator();
         coroutine.setResumeObserver(escaped -> observeAsyncGenerator(generator, escaped));
         coroutine.prime(() -> {
             currentCoroutine.set(coroutine);
@@ -1414,7 +1449,7 @@ public final class Interpreter {
 
     private JsValue evalYield(YieldExpression yield, Environment env) {
         final var coroutine = currentCoroutine.get();
-        if (coroutine == null) {
+        if (coroutine == null || !coroutine.isYieldAllowed()) {
             throw new SyntaxErrorException("yield is only valid inside a generator");
         }
         if (yield.isDelegate()) {
