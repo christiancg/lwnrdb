@@ -1,13 +1,13 @@
 package org.techhouse.unit.simplejs.internal;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 public class InterpreterIterationTest {
     private static double num(String source) {
@@ -110,5 +110,63 @@ public class InterpreterIterationTest {
     @Test
     public void test_spread_generator_into_array() {
         assertEquals("1,2,3", str("function* g() { yield 1; yield 2; yield 3; } [...g()].join(',')"));
+    }
+
+    // for-of drives an object exposing a custom [Symbol.iterator]
+    @Test
+    public void test_for_of_custom_iterable() {
+        final var source = """
+                let obj = {
+                    [Symbol.iterator]() {
+                        let i = 0;
+                        return { next() { return i < 3 ? {value: i++, done: false} : {value: 0, done: true}; } };
+                    }
+                };
+                let s = 0;
+                for (const x of obj) s += x;
+                s
+                """;
+        assertEquals(3, num(source));
+    }
+
+    // spread expands a custom iterable into an array literal
+    @Test
+    public void test_spread_custom_iterable() {
+        final var source = """
+                let obj = {
+                    [Symbol.iterator]() {
+                        let i = 1;
+                        return { next() { return i <= 3 ? {value: i++, done: false} : {value: 0, done: true}; } };
+                    }
+                };
+                [...obj].join(',')
+                """;
+        assertEquals("1,2,3", str(source));
+    }
+
+    // an early break calls the iterator's return() to close it
+    @Test
+    public void test_for_of_early_close_calls_return() {
+        final var source = """
+                let closed = false;
+                let obj = {
+                    [Symbol.iterator]() {
+                        let i = 0;
+                        return {
+                            next() { return {value: i++, done: false}; },
+                            return() { closed = true; return {done: true}; }
+                        };
+                    }
+                };
+                for (const x of obj) { if (x === 2) break; }
+                closed
+                """;
+        assertTrue(((JsBoolean) Interpreter.run(source)).getValue());
+    }
+
+    // an object with no [Symbol.iterator] is not iterable
+    @Test
+    public void test_for_of_plain_object_not_iterable() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("for (const x of {a: 1}) {}"));
     }
 }

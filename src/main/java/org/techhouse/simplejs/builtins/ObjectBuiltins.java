@@ -16,7 +16,7 @@ public final class ObjectBuiltins {
     private ObjectBuiltins() {
     }
 
-    public static JsObject create() {
+    public static JsObject create(IterableToList iterableToList) {
         final var object = new JsObject();
         object.set("keys", new JsNativeFunction("keys", (_, args) -> keys(args)));
         object.set("values", new JsNativeFunction("values", (_, args) -> values(args)));
@@ -32,7 +32,7 @@ public final class ObjectBuiltins {
                 new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args)));
         object.set("getOwnPropertyDescriptor",
                 new JsNativeFunction("getOwnPropertyDescriptor", (_, args) -> getOwnPropertyDescriptor(args)));
-        object.set("fromEntries", new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args)));
+        object.set("fromEntries", new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
         return object;
     }
 
@@ -214,14 +214,14 @@ public final class ObjectBuiltins {
         return JsUndefined.getInstance();
     }
 
-    private static JsValue fromEntries(List<JsValue> args) {
+    private static JsValue fromEntries(List<JsValue> args, IterableToList iterableToList) {
         final var result = new JsObject();
-        if (first(args) instanceof JsArray entries) {
-            for (final var element : entries.getElements()) {
-                if (element instanceof JsArray pair && pair.length() > 0) {
-                    final var value = pair.length() > 1 ? pair.get(1) : JsUndefined.getInstance();
-                    result.set(JsCoercion.toStr(pair.get(0)), value);
-                }
+        final var source = first(args);
+        final var entries = source instanceof JsArray array ? array.getElements() : iterableToList.drain(source);
+        for (final var element : entries) {
+            if (element instanceof JsArray pair && pair.length() > 0) {
+                final var value = pair.length() > 1 ? pair.get(1) : JsUndefined.getInstance();
+                result.set(JsCoercion.toStr(pair.get(0)), value);
             }
         }
         return result;

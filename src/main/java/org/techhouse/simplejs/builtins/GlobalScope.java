@@ -12,10 +12,11 @@ public final class GlobalScope {
     private GlobalScope() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, Consumer<String> consoleSink) {
+    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, IterableToList iterableToList,
+            Consumer<String> consoleSink) {
         final var globalObject = new JsObject();
         ErrorBuiltins.install(global);
-        define(global, globalObject, "Object", ObjectBuiltins.create());
+        define(global, globalObject, "Object", ObjectBuiltins.create(iterableToList));
         define(global, globalObject, "Array", ArrayBuiltins.create());
         define(global, globalObject, "String", StringBuiltins.create());
         define(global, globalObject, "Number", NumberBuiltins.create());

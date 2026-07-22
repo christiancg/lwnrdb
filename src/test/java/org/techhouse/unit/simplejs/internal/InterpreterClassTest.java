@@ -326,4 +326,37 @@ public class InterpreterClassTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("super"));
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("super.foo"));
     }
+
+    // A class-defined [Symbol.iterator] method makes instances iterable in for-of
+    @Test
+    public void test_class_symbol_iterator() {
+        final var source = """
+                class Range {
+                    constructor(n) { this.n = n; }
+                    [Symbol.iterator]() {
+                        let i = 0;
+                        let n = this.n;
+                        return { next() { return i < n ? {value: i++, done: false} : {value: 0, done: true}; } };
+                    }
+                }
+                let s = 0;
+                for (const x of new Range(4)) s += x;
+                s
+                """;
+        assertEquals(6, num(source));
+    }
+
+    // A class-defined [Symbol.dispose] method runs at using-scope exit
+    @Test
+    public void test_class_symbol_dispose_under_using() {
+        final var source = """
+                let disposed = false;
+                class Resource {
+                    [Symbol.dispose]() { disposed = true; }
+                }
+                { using r = new Resource(); }
+                disposed
+                """;
+        assertTrue(bool(source));
+    }
 }

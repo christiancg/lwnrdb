@@ -137,4 +137,56 @@ public class InterpreterObjectTest {
         assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter.run("let {} = {}; true")).getValue());
         assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter.run("let [] = []; true")).getValue());
     }
+
+    // Object-literal method shorthand defines a callable member bound to the object
+    @Test
+    public void test_object_method_shorthand() {
+        assertEquals(5, num("let o = { x: 2, add(n) { return this.x + n; } }; o.add(3)"));
+    }
+
+    // A computed method key stores the method under the evaluated name
+    @Test
+    public void test_object_computed_method() {
+        assertEquals(7, num("let k = 'go'; let o = { [k]() { return 7; } }; o.go()"));
+    }
+
+    // Getter and setter accessors run on read and write
+    @Test
+    public void test_object_accessors() {
+        final var source = """
+                let o = {
+                    _v: 1,
+                    get v() { return this._v; },
+                    set v(n) { this._v = n * 2; }
+                };
+                o.v = 5;
+                o.v
+                """;
+        assertEquals(10, num(source));
+    }
+
+    // A getter-only accessor returns its computed value
+    @Test
+    public void test_object_getter_only() {
+        assertEquals(42, num("let o = { get answer() { return 42; } }; o.answer"));
+    }
+
+    // A property literally named get/set is not treated as an accessor
+    @Test
+    public void test_object_get_set_as_keys() {
+        assertEquals(3, num("let o = { get: 1, set: 2 }; o.get + o.set"));
+    }
+
+    // An async object method resolves through the microtask queue
+    @Test
+    public void test_object_async_method() {
+        final var source = """
+                let out = [];
+                let o = { async f() { return 4; } };
+                o.f().then(v => out.push(v));
+                out
+                """;
+        assertEquals(4,
+                ((JsNumber) ((org.techhouse.simplejs.values.JsArray) Interpreter.run(source)).get(0)).getValue());
+    }
 }

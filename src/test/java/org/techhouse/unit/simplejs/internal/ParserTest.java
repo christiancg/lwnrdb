@@ -316,6 +316,39 @@ public class ParserTest {
     }
 
     @Test
+    public void test_object_method_shorthand() {
+        final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ foo() {}, [k]() {} })"));
+        final var method = assertInstanceOf(Property.class, obj.getProperties().getFirst());
+        assertEquals("method", method.getKind());
+        assertInstanceOf(FunctionExpression.class, method.getValue());
+        final var computed = assertInstanceOf(Property.class, obj.getProperties().get(1));
+        assertEquals("method", computed.getKind());
+        assertTrue(computed.isComputed());
+    }
+
+    @Test
+    public void test_object_accessors() {
+        final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ get x() {}, set x(v) {} })"));
+        assertEquals("get", assertInstanceOf(Property.class, obj.getProperties().getFirst()).getKind());
+        assertEquals("set", assertInstanceOf(Property.class, obj.getProperties().get(1)).getKind());
+    }
+
+    @Test
+    public void test_object_get_set_as_plain_keys() {
+        final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ get: 1, set: 2 })"));
+        assertEquals("init", assertInstanceOf(Property.class, obj.getProperties().getFirst()).getKind());
+        assertEquals("init", assertInstanceOf(Property.class, obj.getProperties().get(1)).getKind());
+    }
+
+    @Test
+    public void test_object_cover_initialized_shorthand_parses() {
+        final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ a = 1 })"));
+        final var prop = assertInstanceOf(Property.class, obj.getProperties().getFirst());
+        assertTrue(prop.isShorthand());
+        assertInstanceOf(AssignmentExpression.class, prop.getValue());
+    }
+
+    @Test
     public void test_arrow_single_param() {
         final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("x => x + 1"));
         assertEquals(1, arrow.getParams().size());

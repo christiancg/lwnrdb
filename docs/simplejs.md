@@ -322,9 +322,7 @@ sandbox abort (`ScriptAbortException`) skips disposal, mirroring `finally`. Disp
 block, function-body, module-top-level, `for-of`/`for-in` (per iteration), and `switch` scopes.
 Symbols exist as a real `JsSymbol` value (`typeof` → `"symbol"`, distinct identity per `Symbol(…)`,
 string coercion throws) with the well-known `Symbol.dispose`/`Symbol.asyncDispose` and symbol-keyed
-object properties; there is no `Symbol.iterator` integration or `Symbol.for` registry, and class
-**method-form** symbol keys (`class R { [Symbol.dispose]() {} }`) are unsupported — use a field
-(`[Symbol.dispose] = () => {…}`) or an object literal.
+object properties.
 
 **Object model & callable foundations (engine-completion Phase 1).** `JsObject` carries an
 optional prototype link (`getProto`/`setProto`); member reads fall back through the `proto`
@@ -343,6 +341,21 @@ call arguments (not the exotic, argument-aliasing `arguments` object); arrows in
 enclosing `arguments` lexically. `globalThis` is a backing object that reflects the installed
 builtins and top-level values written through `GlobalScope.define` — it is **not** a fully live
 mirror of every lexical binding.
+
+**Iterator protocol, symbol keys & object-literal methods (engine-completion Phase 2).**
+The well-known `Symbol.iterator`/`Symbol.asyncIterator` are real `JsSymbol` constants, and
+`Symbol.for(key)`/`Symbol.keyFor(sym)` provide a process-wide registry of shared symbols.
+`for-of`, spread (`[...x]`), and `Object.fromEntries` now consume **any iterable**: a value that
+is not an array/string/generator is opened via its `[Symbol.iterator]()` method and driven by the
+`next()` → `{value, done}` protocol, calling the iterator's `return()` on an early exit
+(`break`/`throw`). `class R { [Symbol.iterator]() {…} }` (and other symbol-keyed methods,
+getters/setters, and fields — instance and static) are supported: computed method keys that
+evaluate to a symbol route into per-class symbol tables consulted on symbol member reads/writes.
+Object literals support **method shorthand** (`{ foo() {} }`, including computed `{ [k]() {} }`
+and `async`/generator forms) and **accessors** (`{ get x() {}, set x(v) {} }`, stored as accessor
+descriptors so member get/set invoke them); `get`/`set`/`async` stay contextual, so
+`{ get: 1 }` remains a plain property and `{ a = 1 }` still parses as a cover-initialized
+shorthand.
 
 **Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
 short-circuits per member access rather than across a whole chain (`a?.b.c` still

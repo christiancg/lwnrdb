@@ -119,6 +119,17 @@ public class ObjectBuiltinsTest {
         assertEquals(3, num("let o = Object.fromEntries([['a', 1], ['b', 2]]); o.a + o.b"));
     }
 
+    // fromEntries consumes any iterable of pairs, not just arrays
+    @Test
+    public void test_from_entries_iterable() {
+        final var source = """
+                function* pairs() { yield ['a', 1]; yield ['b', 4]; }
+                let o = Object.fromEntries(pairs());
+                o.a + o.b
+                """;
+        assertEquals(5, num(source));
+    }
+
     // defineProperty on a frozen object is a no-op
     @Test
     public void test_define_property_frozen() {

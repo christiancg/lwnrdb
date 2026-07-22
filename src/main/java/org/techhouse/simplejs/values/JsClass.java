@@ -23,6 +23,13 @@ public final class JsClass extends JsValue {
     private final Map<String, JsFunction> privateInstanceMethods = new LinkedHashMap<>();
     private final Map<String, JsFunction> privateInstanceGetters = new LinkedHashMap<>();
     private final Map<String, JsFunction> privateInstanceSetters = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsFunction> instanceSymbolMethods = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsFunction> instanceSymbolGetters = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsFunction> instanceSymbolSetters = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsFunction> staticSymbolMethods = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsFunction> staticSymbolGetters = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsFunction> staticSymbolSetters = new LinkedHashMap<>();
+    private final Map<JsSymbol, JsValue> staticSymbolProps = new LinkedHashMap<>();
     private final Environment methodScope;
 
     public JsClass(String name, JsClass superClass, Environment methodScope) {
@@ -63,13 +70,57 @@ public final class JsClass extends JsValue {
         selectAccessor(privateInstanceMethods, privateInstanceGetters, privateInstanceSetters, kind).put(key, fn);
     }
 
-    private static Map<String, JsFunction> selectAccessor(Map<String, JsFunction> methods,
-            Map<String, JsFunction> getters, Map<String, JsFunction> setters, String kind) {
+    private static <K> Map<K, JsFunction> selectAccessor(Map<K, JsFunction> methods, Map<K, JsFunction> getters,
+            Map<K, JsFunction> setters, String kind) {
         return switch (kind) {
             case "get" -> getters;
             case "set" -> setters;
             default -> methods;
         };
+    }
+
+    public void addInstanceSymbolMethod(JsSymbol key, String kind, JsFunction fn) {
+        selectAccessor(instanceSymbolMethods, instanceSymbolGetters, instanceSymbolSetters, kind).put(key, fn);
+    }
+
+    public void addStaticSymbolMethod(JsSymbol key, String kind, JsFunction fn) {
+        selectAccessor(staticSymbolMethods, staticSymbolGetters, staticSymbolSetters, kind).put(key, fn);
+    }
+
+    public JsFunction findInstanceSymbolMethod(JsSymbol key) {
+        return findInChain(cls -> cls.instanceSymbolMethods, key);
+    }
+
+    public JsFunction findInstanceSymbolGetter(JsSymbol key) {
+        return findInChain(cls -> cls.instanceSymbolGetters, key);
+    }
+
+    public JsFunction findInstanceSymbolSetter(JsSymbol key) {
+        return findInChain(cls -> cls.instanceSymbolSetters, key);
+    }
+
+    public JsFunction findStaticSymbolMethod(JsSymbol key) {
+        return findInChain(cls -> cls.staticSymbolMethods, key);
+    }
+
+    public JsFunction findStaticSymbolGetter(JsSymbol key) {
+        return findInChain(cls -> cls.staticSymbolGetters, key);
+    }
+
+    public JsFunction findStaticSymbolSetter(JsSymbol key) {
+        return findInChain(cls -> cls.staticSymbolSetters, key);
+    }
+
+    public void setStaticSymbolProp(JsSymbol key, JsValue value) {
+        staticSymbolProps.put(key, value);
+    }
+
+    public JsValue getStaticSymbolProp(JsSymbol key) {
+        return staticSymbolProps.get(key);
+    }
+
+    public boolean hasStaticSymbolProp(JsSymbol key) {
+        return staticSymbolProps.containsKey(key);
     }
 
     public void addInstanceField(FieldDefinition field) {
@@ -116,7 +167,7 @@ public final class JsClass extends JsValue {
         return findInChain(cls -> cls.staticSetters, key);
     }
 
-    private JsFunction findInChain(Function<JsClass, Map<String, JsFunction>> table, String key) {
+    private <K> JsFunction findInChain(Function<JsClass, Map<K, JsFunction>> table, K key) {
         for (var cls = this; cls != null; cls = cls.superClass) {
             final var fn = table.apply(cls).get(key);
             if (fn != null) {

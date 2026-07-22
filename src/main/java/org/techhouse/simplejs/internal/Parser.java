@@ -1495,12 +1495,48 @@ public final class Parser {
         }
 
         private Property parseProperty() {
+            var async = false;
+            if (isKeyword("async") && starOrKeyFollows()) {
+                advance();
+                async = true;
+            }
+            final var generator = matchOperator("*");
+            var kind = "init";
+            if (!async && !generator && (isIdentifier("get") || isIdentifier("set")) && beginsPropertyKey(peek())) {
+                kind = ((JsIdentifier) current()).getValue();
+                advance();
+            }
+            final var computed = isSeparator('[');
+            final var fromIdentifier = current().getType() == JsType.IDENTIFIER;
+            final var key = parsePropertyKey();
+            if (isSeparator('(')) {
+                final var value = new FunctionExpression(null, parseParams(), parseBlock(), async, generator);
+                return new Property(key, value, computed, false, "init".equals(kind) ? "method" : kind);
+            }
+            if (async || generator || !"init".equals(kind)) {
+                throw error();
+            }
+            if (matchOperator(":")) {
+                return new Property(key, parseAssignment(), computed, false);
+            }
+            if (!computed && fromIdentifier) {
+                // CoverInitializedName: `{a = 1}` is only valid as a destructuring pattern, but a
+                // single-token lookahead cannot tell it apart from an object literal, so keep it as
+                // an assignment-valued shorthand and let toAssignmentPattern reinterpret it.
+                if (matchOperator("=")) {
+                    return new Property(key, new AssignmentExpression("=", key, parseAssignment()), false, true);
+                }
+                return new Property(key, key, false, true);
+            }
+            throw error();
+        }
+
+        private Expression parsePropertyKey() {
             if (isSeparator('[')) {
                 advance();
                 final var key = parseAssignment();
                 expectSeparator(']');
-                expectOperator(":");
-                return new Property(key, parseAssignment(), true, false);
+                return key;
             }
             final var t = current();
             final Expression key = switch (t.getType()) {
@@ -1511,19 +1547,26 @@ public final class Parser {
                 default -> throw error();
             };
             advance();
-            if (matchOperator(":")) {
-                return new Property(key, parseAssignment(), false, false);
-            }
-            if (t.getType() == JsType.IDENTIFIER) {
-                // CoverInitializedName: `{a = 1}` is only valid as a destructuring pattern, but a
-                // single-token lookahead cannot tell it apart from an object literal, so keep it as
-                // an assignment-valued shorthand and let toAssignmentPattern reinterpret it.
-                if (matchOperator("=")) {
-                    return new Property(key, new AssignmentExpression("=", key, parseAssignment()), false, true);
-                }
-                return new Property(key, key, false, true);
-            }
-            throw error();
+            return key;
+        }
+
+        private boolean beginsPropertyKey(JsBaseElement t) {
+            return switch (t.getType()) {
+                case IDENTIFIER, KEYWORD, STRING, NUMBER -> true;
+                case SEPARATOR -> ((JsSeparator) t).getValue() == '[';
+                default -> false;
+            };
+        }
+
+        private boolean starOrKeyFollows() {
+            final var next = peek();
+            return (next.getType() == JsType.OPERATOR && "*".equals(((JsOperator) next).getValue()))
+                    || beginsPropertyKey(next);
+        }
+
+        private boolean isIdentifier(String name) {
+            final var t = current();
+            return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(name);
         }
 
         private TemplateLiteral parseTemplate(JsTemplateString template) {

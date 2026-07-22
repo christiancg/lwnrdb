@@ -185,7 +185,7 @@ public final class Interpreter {
 
     private ProgramOutcome runModule(Program program) {
         final var env = Environment.global();
-        GlobalScope.install(env, eventLoop, this::callValue, host.console());
+        GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console());
         for (final var statement : program.getBody()) {
             if (statement instanceof ImportDeclaration importDeclaration) {
                 bindImport(importDeclaration, env);
@@ -1050,7 +1050,7 @@ public final class Interpreter {
                     target.add(new JsString(String.valueOf(string.getValue().charAt(i))));
                 }
             }
-            case JsGenerator ignored -> {
+            default -> {
                 final var iteration = new Iteration(value);
                 var element = iteration.next();
                 while (element != null) {
@@ -1058,7 +1058,6 @@ public final class Interpreter {
                     element = iteration.next();
                 }
             }
-            default -> throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
         }
     }
 
@@ -1098,18 +1097,36 @@ public final class Interpreter {
             if (!(property.getValue() instanceof Expression value)) {
                 throw new UnsupportedNodeException(property.getValue().getType().name());
             }
+            final var accessor = "get".equals(property.getKind()) || "set".equals(property.getKind());
             if (property.isComputed()) {
                 final var keyValue = eval(property.getKey(), env);
-                if (keyValue instanceof JsSymbol symbol) {
-                    result.setSymbol(symbol, eval(value, env));
-                    continue;
+                final var evaluated = eval(value, env);
+                if (accessor) {
+                    storeAccessor(result, JsCoercion.toStr(keyValue), property.getKind(), evaluated);
+                } else if (keyValue instanceof JsSymbol symbol) {
+                    result.setSymbol(symbol, evaluated);
+                } else {
+                    result.set(JsCoercion.toStr(keyValue), evaluated);
                 }
-                result.set(JsCoercion.toStr(keyValue), eval(value, env));
                 continue;
             }
-            result.set(staticKeyName(property.getKey()), eval(value, env));
+            final var name = staticKeyName(property.getKey());
+            final var evaluated = eval(value, env);
+            if (accessor) {
+                storeAccessor(result, name, property.getKind(), evaluated);
+            } else {
+                result.set(name, evaluated);
+            }
         }
         return result;
+    }
+
+    private void storeAccessor(JsObject target, String key, String kind, JsValue fn) {
+        if ("get".equals(kind)) {
+            target.defineAccessor(key, fn, null);
+        } else {
+            target.defineAccessor(key, null, fn);
+        }
     }
 
     private String staticKeyName(Expression key) {
@@ -1356,14 +1373,56 @@ public final class Interpreter {
 
     private JsValue getMemberByKey(JsValue target, JsValue keyValue) {
         if (keyValue instanceof JsSymbol symbol) {
-            return target instanceof JsObject object ? object.getSymbol(symbol) : JsUndefined.getInstance();
+            return getSymbolMember(target, symbol);
         }
         return getMember(target, JsCoercion.toStr(keyValue));
+    }
+
+    private JsValue getSymbolMember(JsValue target, JsSymbol symbol) {
+        if (target instanceof JsObject object) {
+            if (object.hasSymbol(symbol)) {
+                return object.getSymbol(symbol);
+            }
+            final var cls = object.getKlass();
+            if (cls != null) {
+                final var getter = cls.findInstanceSymbolGetter(symbol);
+                if (getter != null) {
+                    return callFunction(getter, object, List.of());
+                }
+                final var method = cls.findInstanceSymbolMethod(symbol);
+                if (method != null) {
+                    return method;
+                }
+            }
+            return object.getSymbol(symbol);
+        }
+        if (target instanceof JsClass cls) {
+            final var getter = cls.findStaticSymbolGetter(symbol);
+            if (getter != null) {
+                return callFunction(getter, cls, List.of());
+            }
+            final var method = cls.findStaticSymbolMethod(symbol);
+            if (method != null) {
+                return method;
+            }
+            if (cls.hasStaticSymbolProp(symbol)) {
+                return cls.getStaticSymbolProp(symbol);
+            }
+        }
+        return JsUndefined.getInstance();
     }
 
     private void setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
         if (keyValue instanceof JsSymbol symbol) {
             if (target instanceof JsObject object) {
+                final var cls = object.getKlass();
+                if (cls != null && !object.hasSymbol(symbol)) {
+                    final var setter = cls.findInstanceSymbolSetter(symbol);
+                    if (setter != null) {
+                        callFunction(setter, object, List.of(value));
+                        return;
+                    }
+                }
                 object.setSymbol(symbol, value);
             }
             return;
@@ -2004,9 +2063,23 @@ public final class Interpreter {
             cls.addPrivateInstanceMethod(priv.getName(), kind, fn);
             return;
         }
-        final var key = method.isComputed()
-                ? JsCoercion.toStr(eval(method.getKey(), classScope))
-                : staticKeyName(method.getKey());
+        if (method.isComputed()) {
+            final var keyValue = eval(method.getKey(), classScope);
+            if (keyValue instanceof JsSymbol symbol) {
+                if (method.isStatic()) {
+                    cls.addStaticSymbolMethod(symbol, kind, fn);
+                } else {
+                    cls.addInstanceSymbolMethod(symbol, kind, fn);
+                }
+                return;
+            }
+            installStringMethod(cls, method, kind, fn, JsCoercion.toStr(keyValue));
+            return;
+        }
+        installStringMethod(cls, method, kind, fn, staticKeyName(method.getKey()));
+    }
+
+    private void installStringMethod(JsClass cls, MethodDefinition method, String kind, JsFunction fn, String key) {
         if (method.isStatic()) {
             cls.addStaticMethod(key, kind, fn);
         } else {
@@ -2019,13 +2092,19 @@ public final class Interpreter {
         staticScope.defineThis(cls);
         for (final var node : staticInit) {
             if (node instanceof FieldDefinition field) {
-                final var key = field.isComputed()
-                        ? JsCoercion.toStr(eval(field.getKey(), staticScope))
-                        : staticKeyName(field.getKey());
                 final var value = field.getValue() == null
                         ? JsUndefined.getInstance()
                         : eval(field.getValue(), staticScope);
-                cls.setStaticProp(key, value);
+                if (field.isComputed()) {
+                    final var keyValue = eval(field.getKey(), staticScope);
+                    if (keyValue instanceof JsSymbol symbol) {
+                        cls.setStaticSymbolProp(symbol, value);
+                    } else {
+                        cls.setStaticProp(JsCoercion.toStr(keyValue), value);
+                    }
+                } else {
+                    cls.setStaticProp(staticKeyName(field.getKey()), value);
+                }
             } else {
                 final var block = (StaticBlock) node;
                 final var blockEnv = staticScope.child();
@@ -2408,15 +2487,22 @@ public final class Interpreter {
     private final class Iteration {
         private final JsGenerator generator;
         private final List<JsValue> buffer;
+        private final JsObject iterator;
         private int index;
 
         private Iteration(JsValue iterable) {
             if (iterable instanceof JsGenerator gen) {
                 this.generator = gen;
                 this.buffer = null;
-            } else {
+                this.iterator = null;
+            } else if (iterable instanceof JsArray || iterable instanceof JsString) {
                 this.generator = null;
                 this.buffer = arrayLikeElements(iterable);
+                this.iterator = null;
+            } else {
+                this.generator = null;
+                this.buffer = null;
+                this.iterator = openIterator(iterable);
             }
         }
 
@@ -2425,6 +2511,14 @@ public final class Interpreter {
                 final var step = generator.getCoroutine().resumeNext(JsUndefined.getInstance());
                 return step.done() ? null : step.value();
             }
+            if (iterator != null) {
+                final var nextFn = getMember(iterator, "next");
+                if (!isCallable(nextFn)) {
+                    throw new TypeErrorException("iterator.next is not a function");
+                }
+                final var step = callValue(nextFn, iterator, List.of());
+                return JsCoercion.toBoolean(getMember(step, "done")) ? null : getMember(step, "value");
+            }
             return index < buffer.size() ? buffer.get(index++) : null;
         }
 
@@ -2432,6 +2526,35 @@ public final class Interpreter {
             if (generator != null && !generator.getCoroutine().isDone()) {
                 generator.getCoroutine().resumeReturn(JsUndefined.getInstance());
             }
+            if (iterator != null) {
+                final var returnFn = getMember(iterator, "return");
+                if (isCallable(returnFn)) {
+                    callValue(returnFn, iterator, List.of());
+                }
+            }
         }
+    }
+
+    private List<JsValue> iterableToList(JsValue iterable) {
+        final var result = new ArrayList<JsValue>();
+        final var iteration = new Iteration(iterable);
+        var element = iteration.next();
+        while (element != null) {
+            result.add(element);
+            element = iteration.next();
+        }
+        return result;
+    }
+
+    private JsObject openIterator(JsValue iterable) {
+        final var iterFn = getMemberByKey(iterable, JsSymbol.ITERATOR);
+        if (!isCallable(iterFn)) {
+            throw new TypeErrorException(JsCoercion.toStr(iterable) + " is not iterable");
+        }
+        final var iter = callValue(iterFn, iterable, List.of());
+        if (!(iter instanceof JsObject object)) {
+            throw new TypeErrorException("Result of Symbol.iterator method is not an object");
+        }
+        return object;
     }
 }
