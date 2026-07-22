@@ -84,7 +84,7 @@ public final class DateBuiltins {
         }
     }
 
-    public static JsValue getMethod(JsDate receiver, String name, Invoker invoker) {
+    public static JsValue getMethod(JsDate receiver, String name) {
         final var method = instanceMethod(receiver, name);
         if (method != null) {
             return method;

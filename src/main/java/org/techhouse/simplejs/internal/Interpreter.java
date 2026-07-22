@@ -1514,7 +1514,7 @@ public final class Interpreter {
     }
 
     private JsValue dateMember(JsDate date, String key) {
-        final var method = DateBuiltins.getMethod(date, key, this::callValue);
+        final var method = DateBuiltins.getMethod(date, key);
         return method == null ? JsUndefined.getInstance() : method;
     }
 
