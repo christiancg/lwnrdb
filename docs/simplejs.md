@@ -326,6 +326,24 @@ object properties; there is no `Symbol.iterator` integration or `Symbol.for` reg
 **method-form** symbol keys (`class R { [Symbol.dispose]() {} }`) are unsupported — use a field
 (`[Symbol.dispose] = () => {…}`) or an object literal.
 
+**Object model & callable foundations (engine-completion Phase 1).** `JsObject` carries an
+optional prototype link (`getProto`/`setProto`); member reads fall back through the `proto`
+chain and then a shared `Object.prototype` builtin (`builtins/ObjectProtoBuiltins`:
+`hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toString` → `"[object Object]"`,
+`valueOf`) on an own-property + class-member miss. `Object` gains `create`, `getPrototypeOf`,
+`setPrototypeOf`, `defineProperty`/`defineProperties`, `getOwnPropertyNames`,
+`getOwnPropertyDescriptor`, and `fromEntries` (array-of-pairs form). Property descriptors
+support a pragmatic subset — `value` and accessor `get`/`set` (stored on the object so member
+get/set invoke them); `writable`/`configurable`/`enumerable` are accepted but **not enforced**
+(a `defineProperty` on a frozen object is a silent no-op). Functions expose
+`call`/`apply`/`bind` (`builtins/FunctionProtoBuiltins`); a bound function is a plain native
+function, so using it with `new` ignores the freshly-allocated instance (documented limitation).
+Non-arrow functions receive an `arguments` binding that is a **real** `JsArray` copy of the
+call arguments (not the exotic, argument-aliasing `arguments` object); arrows inherit the
+enclosing `arguments` lexically. `globalThis` is a backing object that reflects the installed
+builtins and top-level values written through `GlobalScope.define` — it is **not** a fully live
+mirror of every lexical binding.
+
 **Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
 short-circuits per member access rather than across a whole chain (`a?.b.c` still
 throws when `a` is nullish); `for (let …)` uses a single loop scope rather than a

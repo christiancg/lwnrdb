@@ -11,7 +11,9 @@ import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
+import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
+import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -1380,6 +1382,8 @@ public final class Interpreter {
             case JsRegExp regexp -> regExpMember(regexp, key);
             case JsPromise promise -> promiseMethod(promise, key);
             case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
+            case JsFunction fn -> functionMember(fn, key);
+            case JsNativeFunction nf -> functionMember(nf, key);
             case JsNull ignored -> throw cannotReadProperties(target, key);
             case JsUndefined ignored -> throw cannotReadProperties(target, key);
             default -> JsUndefined.getInstance();
@@ -1398,7 +1402,31 @@ public final class Interpreter {
                 return method;
             }
         }
+        if (!object.has(key)) {
+            final var accessorGetter = object.getAccessorGetter(key);
+            if (accessorGetter != null) {
+                return callValue(accessorGetter, object, List.of());
+            }
+            for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
+                final var protoGetter = proto.getAccessorGetter(key);
+                if (protoGetter != null) {
+                    return callValue(protoGetter, object, List.of());
+                }
+                if (proto.has(key)) {
+                    return proto.get(key);
+                }
+            }
+            final var builtin = ObjectProtoBuiltins.getMethod(object, key);
+            if (builtin != null) {
+                return builtin;
+            }
+        }
         return object.get(key);
+    }
+
+    private JsValue functionMember(JsValue function, String key) {
+        final var method = FunctionProtoBuiltins.getMethod(function, key, this::callValue);
+        return method == null ? JsUndefined.getInstance() : method;
     }
 
     private JsValue getArrayMember(JsArray array, String key) {
@@ -1443,6 +1471,16 @@ public final class Interpreter {
                     final var setter = cls.findInstanceSetter(key);
                     if (setter != null) {
                         callFunction(setter, object, List.of(value));
+                        return;
+                    }
+                }
+                if (!object.has(key)) {
+                    final var accessorSetter = object.getAccessorSetter(key);
+                    if (accessorSetter != null) {
+                        callValue(accessorSetter, object, List.of(value));
+                        return;
+                    }
+                    if (object.hasAccessor(key)) {
                         return;
                     }
                 }
@@ -1574,6 +1612,7 @@ public final class Interpreter {
             final var activation = function.getClosure().functionChild();
             if (!function.isArrow()) {
                 activation.defineThis(thisArg);
+                activation.declareFunction("arguments", new JsArray(new ArrayList<>(args)));
             }
             bindParams(function.getParams(), args, activation);
             if (function.isAsync() && function.isGenerator()) {

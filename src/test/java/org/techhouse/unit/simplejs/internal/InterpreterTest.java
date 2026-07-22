@@ -486,4 +486,24 @@ public class InterpreterTest {
     public void test_switch_lexical_scope() {
         assertEquals(3, num("switch (1) { case 1: let x = 3; x; break; }; 3"));
     }
+
+    // a normal function sees its arguments as a real array
+    @Test
+    public void test_arguments_length_and_indexing() {
+        assertEquals(3, num("function f() { return arguments.length; } f(1, 2, 3)"));
+        assertEquals(6, num("function f() { return arguments[0] + arguments[1] + arguments[2]; } f(1, 2, 3)"));
+    }
+
+    // an arrow inherits the enclosing function's arguments
+    @Test
+    public void test_arrow_inherits_arguments() {
+        assertEquals(2, num("function f() { let g = () => arguments.length; return g(); } f('a', 'b')"));
+    }
+
+    // globalThis reflects the installed builtins
+    @Test
+    public void test_global_this() {
+        assertTrue(bool("globalThis.Math === Math"));
+        assertEquals(4, num("globalThis.Math.max(1, 4)"));
+    }
 }
