@@ -221,4 +221,60 @@ public class StringBuiltinsTest {
         assertEquals("", str("String.raw({})"));
         assertEquals("", str("String.raw()"));
     }
+
+    // charCodeAt/codePointAt return unit values or NaN/undefined out of range
+    @Test
+    public void test_charcode_codepoint() {
+        assertEquals(97, num("'abc'.charCodeAt(0)"));
+        assertTrue(Double.isNaN(num("'abc'.charCodeAt(9)")));
+        assertEquals(97, num("'abc'.codePointAt(0)"));
+        assertTrue(bool("'abc'.codePointAt(9) === undefined"));
+    }
+
+    // at indexes from the end with negatives
+    @Test
+    public void test_at() {
+        assertEquals("c", str("'abc'.at(-1)"));
+        assertEquals("a", str("'abc'.at(0)"));
+        assertTrue(bool("'abc'.at(9) === undefined"));
+    }
+
+    // padEnd, trimStart and trimEnd
+    @Test
+    public void test_padend_trim() {
+        assertEquals("abc00", str("'abc'.padEnd(5, '0')"));
+        assertEquals("abc", str("'abc'.padEnd(2, '0')"));
+        assertEquals("hi  ", str("'  hi  '.trimStart()"));
+        assertEquals("  hi", str("'  hi  '.trimEnd()"));
+    }
+
+    // normalize, localeCompare and concat
+    @Test
+    public void test_normalize_localecompare_concat() {
+        assertEquals("abc", str("'abc'.normalize()"));
+        assertEquals(-1, num("'a'.localeCompare('b')"));
+        assertEquals(1, num("'b'.localeCompare('a')"));
+        assertEquals(0, num("'a'.localeCompare('a')"));
+        assertEquals("abcd", str("'ab'.concat('c', 'd')"));
+    }
+
+    // String.fromCharCode and fromCodePoint build strings from code units/points
+    @Test
+    public void test_fromcharcode_fromcodepoint() {
+        assertEquals("ABC", str("String.fromCharCode(65, 66, 67)"));
+        assertEquals("abc", str("String.fromCodePoint(97, 98, 99)"));
+    }
+
+    // padEnd with an empty pad returns the value unchanged
+    @Test
+    public void test_padend_empty_pad() {
+        assertEquals("abc", str("'abc'.padEnd(5, '')"));
+    }
+
+    // at and charCodeAt out-of-range boundaries
+    @Test
+    public void test_at_charcode_out_of_range() {
+        assertTrue(bool("'abc'.at(-9) === undefined"));
+        assertTrue(Double.isNaN(num("'abc'.charCodeAt(-1)")));
+    }
 }

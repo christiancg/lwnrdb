@@ -374,6 +374,18 @@ the usual `getTime`/component getters/setters (UTC and non-UTC variants coincide
 `JSON.stringify(date)` emits the ISO string; a `Map`/`Set` stringifies to `{}` (no own enumerable
 properties).
 
+**Standard-library breadth (engine-completion Phase 4).** Widely-used methods/statics/constants fill
+out `Number`, `Array` and `String`. `Number` instances resolve `toFixed`/`toPrecision`/
+`toExponential`/`toString([radix])`/`valueOf` (via a `JsNumber` arm in `getMember` →
+`NumberBuiltins.getMethod`), and the `Number` namespace carries `MAX_SAFE_INTEGER`/
+`MIN_SAFE_INTEGER`/`MAX_VALUE`/`MIN_VALUE`/`EPSILON`/`POSITIVE_INFINITY`/`NEGATIVE_INFINITY`/`NaN`.
+`Array` adds `findIndex`/`findLast`/`findLastIndex`/`lastIndexOf`/`reduceRight`/`flatMap`/`fill`/
+`copyWithin`/`reverse`/`at`/`keys`/`values`/`entries` (the last three return iterator objects) plus
+the statics `Array.from` (array-like/iterable + optional map fn) and `Array.of`; arrays stay
+iterable through the built-in fast path in `Iteration`. `String` adds `charCodeAt`/`codePointAt`/
+`at`/`padEnd`/`trimStart`/`trimEnd`/`normalize`/`localeCompare`/`concat` and the statics
+`String.fromCharCode`/`String.fromCodePoint`.
+
 **Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
 short-circuits per member access rather than across a whole chain (`a?.b.c` still
 throws when `a` is nullish); `for (let …)` uses a single loop scope rather than a

@@ -15,6 +15,7 @@ import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.MapBuiltins;
+import org.techhouse.simplejs.builtins.NumberBuiltins;
 import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.SetBuiltins;
@@ -1448,6 +1449,7 @@ public final class Interpreter {
             case JsClass cls -> getStaticMember(cls, key);
             case JsArray array -> getArrayMember(array, key);
             case JsString string -> getStringMember(string, key);
+            case JsNumber number -> numberMember(number, key);
             case JsGenerator generator -> generatorMethod(generator, key);
             case JsAsyncGenerator generator -> asyncGeneratorMethod(generator, key);
             case JsRegExp regexp -> regExpMember(regexp, key);
@@ -1515,6 +1517,11 @@ public final class Interpreter {
 
     private JsValue dateMember(JsDate date, String key) {
         final var method = DateBuiltins.getMethod(date, key);
+        return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private JsValue numberMember(JsNumber number, String key) {
+        final var method = NumberBuiltins.getMethod(number, key);
         return method == null ? JsUndefined.getInstance() : method;
     }
 

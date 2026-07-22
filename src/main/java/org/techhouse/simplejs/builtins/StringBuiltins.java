@@ -26,7 +26,27 @@ public final class StringBuiltins {
         final var string = new JsNativeFunction("String",
                 (_, args) -> new JsString(args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst())));
         string.setProperty("raw", new JsNativeFunction("raw", (_, args) -> new JsString(raw(args))));
+        string.setProperty("fromCharCode",
+                new JsNativeFunction("fromCharCode", (_, args) -> new JsString(fromCharCode(args))));
+        string.setProperty("fromCodePoint",
+                new JsNativeFunction("fromCodePoint", (_, args) -> new JsString(fromCodePoint(args))));
         return string;
+    }
+
+    private static String fromCharCode(List<JsValue> args) {
+        final var sb = new StringBuilder();
+        for (final var arg : args) {
+            sb.append((char) (int) JsCoercion.toNumber(arg));
+        }
+        return sb.toString();
+    }
+
+    private static String fromCodePoint(List<JsValue> args) {
+        final var sb = new StringBuilder();
+        for (final var arg : args) {
+            sb.appendCodePoint((int) JsCoercion.toNumber(arg));
+        }
+        return sb.toString();
     }
 
     private static String raw(List<JsValue> args) {
@@ -85,8 +105,78 @@ public final class StringBuiltins {
             case "repeat" -> new JsNativeFunction("repeat", (_, args) -> new JsString(repeat(value, args)));
             case "charAt" -> new JsNativeFunction("charAt", (_, args) -> new JsString(charAt(value, args)));
             case "indexOf" -> new JsNativeFunction("indexOf", (_, args) -> new JsNumber(value.indexOf(str(args, 0))));
+            case "charCodeAt" -> new JsNativeFunction("charCodeAt", (_, args) -> charCodeAt(value, args));
+            case "codePointAt" -> new JsNativeFunction("codePointAt", (_, args) -> codePointAt(value, args));
+            case "at" -> new JsNativeFunction("at", (_, args) -> at(value, args));
+            case "padEnd" -> new JsNativeFunction("padEnd", (_, args) -> new JsString(padEnd(value, args)));
+            case "trimStart" -> new JsNativeFunction("trimStart", (_, _) -> new JsString(value.stripLeading()));
+            case "trimEnd" -> new JsNativeFunction("trimEnd", (_, _) -> new JsString(value.stripTrailing()));
+            case "normalize" -> new JsNativeFunction("normalize", (_, args) -> new JsString(normalize(value, args)));
+            case "localeCompare" ->
+                new JsNativeFunction("localeCompare", (_, args) -> new JsNumber(localeCompare(value, args)));
+            case "concat" -> new JsNativeFunction("concat", (_, args) -> new JsString(concat(value, args)));
             default -> null;
         };
+    }
+
+    private static JsValue charCodeAt(String value, List<JsValue> args) {
+        final var index = intArg(args, 0, 0);
+        if (index < 0 || index >= value.length()) {
+            return new JsNumber(Double.NaN);
+        }
+        return new JsNumber(value.charAt(index));
+    }
+
+    private static JsValue codePointAt(String value, List<JsValue> args) {
+        final var index = intArg(args, 0, 0);
+        if (index < 0 || index >= value.length()) {
+            return JsUndefined.getInstance();
+        }
+        return new JsNumber(value.codePointAt(index));
+    }
+
+    private static JsValue at(String value, List<JsValue> args) {
+        var index = intArg(args, 0, 0);
+        if (index < 0) {
+            index += value.length();
+        }
+        if (index < 0 || index >= value.length()) {
+            return JsUndefined.getInstance();
+        }
+        return new JsString(String.valueOf(value.charAt(index)));
+    }
+
+    private static String padEnd(String value, List<JsValue> args) {
+        final var target = intArg(args, 0, 0);
+        if (value.length() >= target) {
+            return value;
+        }
+        final var pad = args.size() < 2 ? " " : str(args, 1);
+        if (pad.isEmpty()) {
+            return value;
+        }
+        final var sb = new StringBuilder(value);
+        while (sb.length() < target) {
+            sb.append(pad);
+        }
+        return sb.substring(0, target);
+    }
+
+    private static String normalize(String value, List<JsValue> args) {
+        final var form = args.isEmpty() || args.getFirst() instanceof JsUndefined ? "NFC" : str(args, 0);
+        return java.text.Normalizer.normalize(value, java.text.Normalizer.Form.valueOf(form));
+    }
+
+    private static int localeCompare(String value, List<JsValue> args) {
+        return Integer.signum(value.compareTo(str(args, 0)));
+    }
+
+    private static String concat(String value, List<JsValue> args) {
+        final var sb = new StringBuilder(value);
+        for (final var arg : args) {
+            sb.append(JsCoercion.toStr(arg));
+        }
+        return sb.toString();
     }
 
     private static String slice(String value, List<JsValue> args) {

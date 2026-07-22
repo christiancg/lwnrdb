@@ -3,13 +3,19 @@ package org.techhouse.unit.simplejs.builtins;
 import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsString;
 
 public class NumberBuiltinsTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
+    }
+
+    private static String str(String source) {
+        return ((JsString) Interpreter.run(source)).getValue();
     }
 
     private static boolean bool(String source) {
@@ -59,5 +65,76 @@ public class NumberBuiltinsTest {
         assertFalse(bool("isNaN('5')"));
         assertTrue(bool("isFinite(3)"));
         assertFalse(bool("isFinite(1 / 0)"));
+    }
+
+    // toFixed rounds half up to the requested number of digits
+    @Test
+    public void test_tofixed() {
+        assertEquals("3.14", str("(3.14159).toFixed(2)"));
+        assertEquals("3", str("(3).toFixed(0)"));
+        assertEquals("0.13", str("(0.125).toFixed(2)"));
+        assertEquals("NaN", str("(0 / 0).toFixed(2)"));
+    }
+
+    // toPrecision renders significant digits; no arg falls back to toString
+    @Test
+    public void test_toprecision() {
+        assertEquals("123", str("(123.456).toPrecision(3)"));
+        assertEquals("123.46", str("(123.456).toPrecision(5)"));
+        assertEquals("42", str("(42).toPrecision()"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toPrecision(0)"));
+    }
+
+    // toString honors a radix
+    @Test
+    public void test_tostring_radix() {
+        assertEquals("ff", str("(255).toString(16)"));
+        assertEquals("1010", str("(10).toString(2)"));
+        assertEquals("255", str("(255).toString()"));
+        assertEquals("-10", str("(-16).toString(16)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toString(40)"));
+    }
+
+    // toExponential renders exponential notation
+    @Test
+    public void test_toexponential() {
+        assertEquals("1.2345e+4", str("(12345).toExponential()"));
+        assertEquals("1.23e+4", str("(12345).toExponential(2)"));
+    }
+
+    // valueOf returns the primitive number
+    @Test
+    public void test_valueof() {
+        assertEquals(5, num("(5).valueOf()"));
+    }
+
+    // toString with a radix handles fractional, negative, NaN and infinite values
+    @Test
+    public void test_tostring_radix_edges() {
+        assertEquals("11.1", str("(3.5).toString(2)"));
+        assertEquals("NaN", str("(0 / 0).toString(2)"));
+        assertEquals("Infinity", str("(1 / 0).toString(2)"));
+        assertEquals("-Infinity", str("(-1 / 0).toString(2)"));
+    }
+
+    // toFixed/toPrecision/toExponential render NaN and infinities
+    @Test
+    public void test_nonfinite_formatting() {
+        assertEquals("NaN", str("(0 / 0).toFixed(2)"));
+        assertEquals("Infinity", str("(1 / 0).toFixed(2)"));
+        assertEquals("NaN", str("(0 / 0).toPrecision(2)"));
+        assertEquals("Infinity", str("(1 / 0).toPrecision(2)"));
+        assertEquals("NaN", str("(0 / 0).toExponential(2)"));
+        assertEquals("-Infinity", str("(-1 / 0).toExponential()"));
+    }
+
+    // Number carries the documented constants
+    @Test
+    public void test_constants() {
+        assertEquals(9007199254740991d, num("Number.MAX_SAFE_INTEGER"));
+        assertEquals(-9007199254740991d, num("Number.MIN_SAFE_INTEGER"));
+        assertTrue(bool("Number.POSITIVE_INFINITY === 1 / 0"));
+        assertTrue(bool("Number.isNaN(Number.NaN)"));
+        assertTrue(num("Number.EPSILON") > 0);
     }
 }

@@ -17,7 +17,7 @@ public final class GlobalScope {
         final var globalObject = new JsObject();
         ErrorBuiltins.install(global);
         define(global, globalObject, "Object", ObjectBuiltins.create(iterableToList));
-        define(global, globalObject, "Array", ArrayBuiltins.create());
+        define(global, globalObject, "Array", ArrayBuiltins.create(invoker, iterableToList));
         define(global, globalObject, "String", StringBuiltins.create());
         define(global, globalObject, "Number", NumberBuiltins.create());
         define(global, globalObject, "Boolean", booleanFunction());

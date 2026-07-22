@@ -114,7 +114,8 @@ public final class DateBuiltins {
         }
         return new JsNativeFunction(name, (_, args) -> {
             final var base = receiver.isValid() ? receiver.atUtc() : Instant.EPOCH.atZone(ZoneOffset.UTC);
-            receiver.setTime(Objects.requireNonNull(applySet(base, name, intArg(args, 0, 0))).toInstant().toEpochMilli());
+            receiver.setTime(
+                    Objects.requireNonNull(applySet(base, name, intArg(args, 0, 0))).toInstant().toEpochMilli());
             return new JsNumber(receiver.getTime());
         });
     }

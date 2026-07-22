@@ -96,4 +96,74 @@ public class ArrayBuiltinsTest {
     public void test_missing_callback_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("[1].map()"));
     }
+
+    // findIndex/findLast/findLastIndex/lastIndexOf locate elements
+    @Test
+    public void test_find_variants() {
+        assertEquals(1, num("[1, 2, 3].findIndex(x => x === 2)"));
+        assertEquals(-1, num("[1, 2, 3].findIndex(x => x === 9)"));
+        assertEquals(4, num("[1, 4, 2, 4, 3].findLast(x => x === 4)"));
+        assertEquals(3, num("[1, 4, 2, 4, 3].findLastIndex(x => x === 4)"));
+        assertEquals(3, num("[1, 2, 1, 2].lastIndexOf(2)"));
+    }
+
+    // reduceRight folds from the right, with and without an initial value
+    @Test
+    public void test_reduce_right() {
+        assertEquals("3,2,1", str("['1', '2', '3'].reduceRight((a, b) => a + ',' + b)"));
+        assertEquals(6, num("[1, 2, 3].reduceRight((a, b) => a + b, 0)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].reduceRight((a, b) => a + b)"));
+    }
+
+    // flatMap maps then flattens one level
+    @Test
+    public void test_flatmap() {
+        assertEquals("1,1,2,2", str("[1, 2].flatMap(x => [x, x]).join(',')"));
+        assertEquals("1,2,3,4", str("[[1, 2], [3, 4]].flatMap(x => x).join(',')"));
+    }
+
+    // fill and copyWithin mutate in place
+    @Test
+    public void test_fill_copywithin() {
+        assertEquals("0,9,9,3", str("let a = [0, 1, 2, 3]; a.fill(9, 1, 3); a.join(',')"));
+        assertEquals("9,9,9,9", str("[1, 2, 3, 4].fill(9).join(',')"));
+        assertEquals("4,5,3,4,5", str("let a = [1, 2, 3, 4, 5]; a.copyWithin(0, 3); a.join(',')"));
+    }
+
+    // reverse and at
+    @Test
+    public void test_reverse_at() {
+        assertEquals("3,2,1", str("[1, 2, 3].reverse().join(',')"));
+        assertEquals(3, num("[1, 2, 3].at(-1)"));
+        assertEquals(1, num("[1, 2, 3].at(0)"));
+        assertTrue(bool("[1, 2, 3].at(9) === undefined"));
+    }
+
+    // keys/values/entries return iterators consumable by for-of
+    @Test
+    public void test_iterators() {
+        assertEquals("0,1,2", str("let r = []; for (const k of ['a', 'b', 'c'].keys()) r.push(k); r.join(',')"));
+        assertEquals("a,b", str("let r = []; for (const v of ['a', 'b'].values()) r.push(v); r.join(',')"));
+        assertEquals("0:a,1:b",
+                str("let r = []; for (const e of ['a', 'b'].entries()) r.push(e[0] + ':' + e[1]); r.join(',')"));
+    }
+
+    // Array.from and Array.of build arrays
+    @Test
+    public void test_from_of() {
+        assertEquals("1,2,3", str("Array.of(1, 2, 3).join(',')"));
+        assertEquals("a,b", str("Array.from('ab').join(',')"));
+        assertEquals("2,4", str("Array.from([1, 2], x => x * 2).join(',')"));
+        assertEquals("1,2,3", str("Array.from(new Set([1, 2, 3])).join(',')"));
+    }
+
+    // the not-found and non-array branches
+    @Test
+    public void test_find_and_flatmap_edges() {
+        assertTrue(bool("[1, 2].findLast(x => x === 9) === undefined"));
+        assertEquals(-1, num("[1, 2].findLastIndex(x => x === 9)"));
+        assertEquals(-1, num("[1, 2].lastIndexOf()"));
+        assertEquals("1,2", str("[1, 2].flatMap(x => x).join(',')"));
+        assertEquals("4,2,3,4,5", str("let a = [1, 2, 3, 4, 5]; a.copyWithin(0, 3, 4); a.join(',')"));
+    }
 }

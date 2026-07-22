@@ -1,10 +1,13 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.List;
+import java.util.Locale;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class NumberBuiltins {
@@ -20,7 +23,124 @@ public final class NumberBuiltins {
                 new JsNativeFunction("isFinite", (_, args) -> JsBoolean.of(isFiniteNumber(args))));
         number.setProperty("parseFloat", parseFloatFunction());
         number.setProperty("parseInt", parseIntFunction());
+        number.setProperty("MAX_SAFE_INTEGER", new JsNumber(9007199254740991d));
+        number.setProperty("MIN_SAFE_INTEGER", new JsNumber(-9007199254740991d));
+        number.setProperty("MAX_VALUE", new JsNumber(Double.MAX_VALUE));
+        number.setProperty("MIN_VALUE", new JsNumber(Double.MIN_VALUE));
+        number.setProperty("EPSILON", new JsNumber(Math.ulp(1.0)));
+        number.setProperty("POSITIVE_INFINITY", new JsNumber(Double.POSITIVE_INFINITY));
+        number.setProperty("NEGATIVE_INFINITY", new JsNumber(Double.NEGATIVE_INFINITY));
+        number.setProperty("NaN", new JsNumber(Double.NaN));
         return number;
+    }
+
+    public static JsNativeFunction getMethod(JsNumber receiver, String name) {
+        final var value = receiver.getValue();
+        return switch (name) {
+            case "toFixed" -> new JsNativeFunction("toFixed", (_, args) -> new JsString(toFixed(value, args)));
+            case "toPrecision" ->
+                new JsNativeFunction("toPrecision", (_, args) -> new JsString(toPrecision(value, args)));
+            case "toExponential" ->
+                new JsNativeFunction("toExponential", (_, args) -> new JsString(toExponential(value, args)));
+            case "toString" -> new JsNativeFunction("toString", (_, args) -> new JsString(toStringRadix(value, args)));
+            case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> new JsNumber(value));
+            default -> null;
+        };
+    }
+
+    private static String toFixed(double value, List<JsValue> args) {
+        final var digits = intArg(args, 0);
+        if (Double.isNaN(value)) {
+            return "NaN";
+        }
+        if (!Double.isFinite(value)) {
+            return value > 0 ? "Infinity" : "-Infinity";
+        }
+        return java.math.BigDecimal.valueOf(value).setScale(digits, java.math.RoundingMode.HALF_UP).toPlainString();
+    }
+
+    private static String toPrecision(double value, List<JsValue> args) {
+        if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
+            return JsCoercion.toStr(new JsNumber(value));
+        }
+        final var precision = intArg(args, 0);
+        if (precision < 1 || precision > 100) {
+            throw new org.techhouse.simplejs.exceptions.RangeErrorException(
+                    "toPrecision() argument must be between 1 and 100");
+        }
+        if (Double.isNaN(value)) {
+            return "NaN";
+        }
+        if (!Double.isFinite(value)) {
+            return value > 0 ? "Infinity" : "-Infinity";
+        }
+        return java.math.BigDecimal.valueOf(value).round(new java.math.MathContext(precision)).toString();
+    }
+
+    private static String toExponential(double value, List<JsValue> args) {
+        if (Double.isNaN(value)) {
+            return "NaN";
+        }
+        if (!Double.isFinite(value)) {
+            return value > 0 ? "Infinity" : "-Infinity";
+        }
+        final var fixed = !args.isEmpty() && !(args.getFirst() instanceof JsUndefined);
+        final var pattern = "%." + (fixed ? intArg(args, 0) : 20) + "e";
+        return normalizeExponent(String.format(Locale.ROOT, pattern, value), fixed);
+    }
+
+    private static String toStringRadix(double value, List<JsValue> args) {
+        final var radix = intArg(args, 10);
+        if (radix == 10) {
+            return JsCoercion.toStr(new JsNumber(value));
+        }
+        if (radix < 2 || radix > 36) {
+            throw new org.techhouse.simplejs.exceptions.RangeErrorException(
+                    "toString() radix must be between 2 and 36");
+        }
+        if (Double.isNaN(value)) {
+            return "NaN";
+        }
+        if (!Double.isFinite(value)) {
+            return value > 0 ? "Infinity" : "-Infinity";
+        }
+        if (value == Math.floor(value)) {
+            return Long.toString((long) value, radix);
+        }
+        return doubleToRadix(value, radix);
+    }
+
+    private static String doubleToRadix(double value, int radix) {
+        final var negative = value < 0;
+        var v = Math.abs(value);
+        final var intPart = (long) v;
+        var frac = v - intPart;
+        final var sb = new StringBuilder(Long.toString(intPart, radix));
+        if (frac > 0) {
+            sb.append('.');
+            for (var i = 0; i < 20 && frac > 0; i++) {
+                frac *= radix;
+                final var digit = (int) frac;
+                sb.append(Character.forDigit(digit, radix));
+                frac -= digit;
+            }
+        }
+        return negative ? "-" + sb : sb.toString();
+    }
+
+    private static String normalizeExponent(String formatted, boolean fixed) {
+        final var idx = formatted.indexOf('e');
+        if (idx < 0) {
+            return formatted;
+        }
+        var mantissa = formatted.substring(0, idx);
+        if (!fixed && mantissa.contains(".")) {
+            mantissa = mantissa.replaceAll("0+$", "").replaceAll("\\.$", "");
+        }
+        var exp = formatted.substring(idx + 1);
+        final var sign = exp.startsWith("-") ? "-" : "+";
+        exp = exp.replaceAll("^[+-]", "").replaceAll("^0+(?=\\d)", "");
+        return mantissa + "e" + sign + exp;
     }
 
     public static JsNativeFunction parseFloatFunction() {
@@ -63,6 +183,14 @@ public final class NumberBuiltins {
 
     private static int radix(List<JsValue> args) {
         return args.size() < 2 ? 0 : (int) JsCoercion.toNumber(args.get(1));
+    }
+
+    private static int intArg(List<JsValue> args, int fallback) {
+        if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
+            return fallback;
+        }
+        final var value = JsCoercion.toNumber(args.getFirst());
+        return Double.isNaN(value) ? 0 : (int) value;
     }
 
     private static double parseFloat(String raw) {
