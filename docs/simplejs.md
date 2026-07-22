@@ -357,6 +357,23 @@ descriptors so member get/set invoke them); `get`/`set`/`async` stay contextual,
 `{ get: 1 }` remains a plain property and `{ a = 1 }` still parses as a cover-initialized
 shorthand.
 
+**Map / Set / WeakMap / WeakSet & Date (engine-completion Phase 3).** Four collection globals and
+`Date` are available. `Map`/`Set` are new value types (`values/JsMap`/`values/JsSet`) backed by a
+`LinkedHashMap`/`LinkedHashSet` keyed by a **SameValueZero** normalizer (`values/SameValueZero`) so
+`+0`/`-0` collapse, `NaN` is a self-equal key, and objects compare by identity; both preserve
+insertion order and are iterable via `[Symbol.iterator]` (so `for-of`, spread `[...m]`, and
+destructuring work). `Map` exposes `get`/`set`/`has`/`delete`/`clear`/`forEach`/`keys`/`values`/
+`entries` + `size`; `Set` exposes `add`/`has`/`delete`/`clear`/`forEach`/`keys`/`values`/`entries`
++ `size` (`keys`/`values`/`entries` return iterator objects). `WeakMap`/`WeakSet` reuse
+`JsMap`/`JsSet` and are **strong, not weak** (weakness is unobservable in this sandbox), keeping
+the one observable weak constraint: a primitive key/value throws a `TypeError`. `Date`
+(`values/JsDate`, an epoch-millis `double`; `NaN` = invalid) supports `new Date()` / `new Date(ms)`
+/ `new Date(isoString)` / `new Date(y, m, …)`, the statics `Date.now`/`Date.parse`/`Date.UTC`, and
+the usual `getTime`/component getters/setters (UTC and non-UTC variants coincide — the sandbox has
+**no local time zone**, everything is UTC), `toISOString`/`toJSON`/`toString`/`valueOf`.
+`JSON.stringify(date)` emits the ISO string; a `Map`/`Set` stringifies to `{}` (no own enumerable
+properties).
+
 **Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
 short-circuits per member access rather than across a whole chain (`a?.b.c` still
 throws when `a` is nullish); `for (let …)` uses a single loop scope rather than a

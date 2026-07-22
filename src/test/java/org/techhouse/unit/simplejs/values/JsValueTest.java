@@ -49,6 +49,28 @@ public class JsValueTest {
         assertEquals(JsValue.JsValueType.CLASS, new JsClass("A", null, Environment.global()).getType());
         assertEquals(JsValue.JsValueType.PROMISE, new JsPromise(new EventLoop()).getType());
         assertEquals(JsValue.JsValueType.GENERATOR, new JsGenerator(new Coroutine()).getType());
+        assertEquals(JsValue.JsValueType.MAP, new org.techhouse.simplejs.values.JsMap().getType());
+        assertEquals(JsValue.JsValueType.SET, new org.techhouse.simplejs.values.JsSet().getType());
+        assertEquals(JsValue.JsValueType.DATE, new org.techhouse.simplejs.values.JsDate(0).getType());
+    }
+
+    // Map/Set/Date are typeof "object" and stringify per spec
+    @Test
+    public void test_map_set_date_values() {
+        final var map = new org.techhouse.simplejs.values.JsMap();
+        assertEquals("object", JsCoercion.typeOf(map));
+        assertEquals("[object Map]", JsCoercion.toStr(map));
+        final var set = new org.techhouse.simplejs.values.JsSet();
+        assertEquals("object", JsCoercion.typeOf(set));
+        assertEquals("[object Set]", JsCoercion.toStr(set));
+        final var date = new org.techhouse.simplejs.values.JsDate(0);
+        assertEquals("object", JsCoercion.typeOf(date));
+        assertEquals(0, JsCoercion.toNumber(date));
+        assertEquals("1970-01-01T00:00:00.000Z", date.toISOString());
+        final var invalid = new org.techhouse.simplejs.values.JsDate(Double.NaN);
+        assertFalse(invalid.isValid());
+        assertNull(invalid.toISOString());
+        assertEquals("Invalid Date", invalid.toDateString());
     }
 
     // Promise and generator values are typeof "object" and stringify as tagged objects

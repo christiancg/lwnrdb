@@ -29,6 +29,11 @@ public final class GlobalScope {
         TimerBuiltins.install(global, eventLoop, invoker);
         define(global, globalObject, "RegExp", RegexBuiltins.create());
         define(global, globalObject, "Symbol", SymbolBuiltins.create());
+        define(global, globalObject, "Map", MapBuiltins.create(iterableToList, false));
+        define(global, globalObject, "WeakMap", MapBuiltins.create(iterableToList, true));
+        define(global, globalObject, "Set", SetBuiltins.create(iterableToList, false));
+        define(global, globalObject, "WeakSet", SetBuiltins.create(iterableToList, true));
+        define(global, globalObject, "Date", DateBuiltins.create());
         define(global, globalObject, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, globalObject, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, globalObject, "isNaN", NumberBuiltins.isNaNFunction());

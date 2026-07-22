@@ -9,12 +9,15 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
+import org.techhouse.simplejs.builtins.DateBuiltins;
 import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
+import org.techhouse.simplejs.builtins.MapBuiltins;
 import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
+import org.techhouse.simplejs.builtins.SetBuiltins;
 import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -100,14 +103,17 @@ import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
+import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsRegExp;
+import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -1379,6 +1385,12 @@ public final class Interpreter {
     }
 
     private JsValue getSymbolMember(JsValue target, JsSymbol symbol) {
+        if (target instanceof JsMap map && symbol == JsSymbol.ITERATOR) {
+            return new JsNativeFunction("[Symbol.iterator]", (_, _) -> MapBuiltins.entriesIterator(map));
+        }
+        if (target instanceof JsSet set && symbol == JsSymbol.ITERATOR) {
+            return new JsNativeFunction("[Symbol.iterator]", (_, _) -> SetBuiltins.valuesIterator(set));
+        }
         if (target instanceof JsObject object) {
             if (object.hasSymbol(symbol)) {
                 return object.getSymbol(symbol);
@@ -1439,6 +1451,9 @@ public final class Interpreter {
             case JsGenerator generator -> generatorMethod(generator, key);
             case JsAsyncGenerator generator -> asyncGeneratorMethod(generator, key);
             case JsRegExp regexp -> regExpMember(regexp, key);
+            case JsMap map -> mapMember(map, key);
+            case JsSet set -> jsSetMember(set, key);
+            case JsDate date -> dateMember(date, key);
             case JsPromise promise -> promiseMethod(promise, key);
             case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
             case JsFunction fn -> functionMember(fn, key);
@@ -1485,6 +1500,21 @@ public final class Interpreter {
 
     private JsValue functionMember(JsValue function, String key) {
         final var method = FunctionProtoBuiltins.getMethod(function, key, this::callValue);
+        return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private JsValue mapMember(JsMap map, String key) {
+        final var method = MapBuiltins.getMethod(map, key, this::callValue);
+        return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private JsValue jsSetMember(JsSet set, String key) {
+        final var method = SetBuiltins.getMethod(set, key, this::callValue);
+        return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private JsValue dateMember(JsDate date, String key) {
+        final var method = DateBuiltins.getMethod(date, key, this::callValue);
         return method == null ? JsUndefined.getInstance() : method;
     }
 

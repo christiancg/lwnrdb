@@ -2,7 +2,7 @@ package org.techhouse.simplejs.values;
 
 public abstract class JsValue {
     public enum JsValueType {
-        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL
+        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE
     }
 
     public JsValueType getType() {
@@ -27,6 +27,9 @@ public abstract class JsValue {
             case JsAsyncGenerator ignored -> JsValueType.ASYNC_GENERATOR;
             case JsRegExp ignored -> JsValueType.REGEXP;
             case JsSymbol ignored -> JsValueType.SYMBOL;
+            case JsMap ignored -> JsValueType.MAP;
+            case JsSet ignored -> JsValueType.SET;
+            case JsDate ignored -> JsValueType.DATE;
             default -> throw new IllegalStateException("Unexpected value: " + object);
         };
     }

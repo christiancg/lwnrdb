@@ -7,14 +7,17 @@ import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
+import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsRegExp;
+import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -42,6 +45,7 @@ public final class JsCoercion {
             case JsBoolean b -> b.getValue() ? 1 : 0;
             case JsNull ignored -> 0;
             case JsUndefined ignored -> Double.NaN;
+            case JsDate d -> d.getTime();
             case JsString s -> stringToNumber(s.getValue());
             case JsBigInt ignored -> throw new TypeErrorException("Cannot convert a BigInt to a number");
             default -> stringToNumber(toStr(value));
@@ -65,6 +69,9 @@ public final class JsCoercion {
             case JsGenerator ignored -> "[object Generator]";
             case JsAsyncGenerator ignored -> "[object AsyncGenerator]";
             case JsRegExp r -> "/" + r.getSource() + "/" + r.getFlags();
+            case JsMap ignored -> "[object Map]";
+            case JsSet ignored -> "[object Set]";
+            case JsDate d -> d.toDateString();
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }
