@@ -1060,7 +1060,7 @@ public final class Parser {
 
         private Expression parseOptionalTail(Expression object) {
             if (isSeparator('(')) {
-                return new CallExpression(object, parseArguments());
+                return new CallExpression(object, parseArguments(), true);
             }
             if (isSeparator('[')) {
                 advance();

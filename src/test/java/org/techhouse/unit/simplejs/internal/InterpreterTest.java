@@ -157,6 +157,33 @@ public class InterpreterTest {
         assertEquals(1, num("let o = { a: 1 }; o?.a"));
     }
 
+    // A nullish link short-circuits the whole rest of the chain, not just its own access
+    @Test
+    public void test_optional_chaining_short_circuit_propagation() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = null; a?.b.c"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = null; a?.b.c.d"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = null; a?.b[c].d"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = { b: null }; a.b?.c.d"));
+        assertEquals(3, num("let a = { b: { c: { d: 3 } } }; a?.b.c.d"));
+    }
+
+    // An optional call does not evaluate its callee's arguments when the chain short-circuits
+    @Test
+    public void test_optional_chaining_call_short_circuit() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = null; a?.b()"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = null; a?.b().c"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let a = null; a?.()"));
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("let calls = 0; let a = null; a?.b(calls = 1); calls === 1 ? 9 : undefined"));
+        assertEquals(5, num("let o = { b() { return 5; } }; o?.b()"));
+    }
+
+    // Non-optional access after a short-circuited link still throws when reached directly on nullish
+    @Test
+    public void test_optional_chaining_non_optional_still_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("let a = { b: null }; a.b.c"));
+    }
+
     // delete removes an object property and the in operator tests membership
     @Test
     public void test_delete_and_in() {

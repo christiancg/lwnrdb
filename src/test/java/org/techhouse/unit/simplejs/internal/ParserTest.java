@@ -265,7 +265,9 @@ public class ParserTest {
         final var optComputed = assertInstanceOf(MemberExpression.class, firstExpression("a?.[b]"));
         assertTrue(optComputed.isOptional());
         assertTrue(optComputed.isComputed());
-        assertInstanceOf(CallExpression.class, firstExpression("a?.(b)"));
+        final var optCall = assertInstanceOf(CallExpression.class, firstExpression("a?.(b)"));
+        assertTrue(optCall.isOptional());
+        assertFalse(assertInstanceOf(CallExpression.class, firstExpression("a(b)")).isOptional());
     }
 
     @Test

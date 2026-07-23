@@ -130,6 +130,11 @@ public final class Interpreter {
         void bind(JsNode leaf, JsValue value, Environment env);
     }
 
+    // Sentinel propagated up an optional chain once a link with `?.` sees a nullish base, so every
+    // later access in the same chain is skipped; unwrapped to `undefined` at the top of the chain.
+    private static final JsValue SHORT_CIRCUIT = new JsValue() {
+    };
+
     private static final Set<String> LOGICAL_ASSIGN = Set.of("&&=", "||=", "??=");
     private static final Set<String> LEXICAL_KINDS = Set.of("let", "const");
     private static final Set<String> USING_KINDS = Set.of("using", "await using");
@@ -967,7 +972,7 @@ public final class Interpreter {
             case THIS_EXPRESSION -> env.resolveThis();
             case FUNCTION_EXPRESSION -> evalFunctionExpression((FunctionExpression) expression, env);
             case ARROW_FUNCTION_EXPRESSION -> evalArrowFunction((ArrowFunctionExpression) expression, env);
-            case CALL_EXPRESSION -> evalCall((CallExpression) expression, env);
+            case CALL_EXPRESSION -> unwrapShortCircuit(evalCall((CallExpression) expression, env));
             case NEW_EXPRESSION -> evalNew((NewExpression) expression, env);
             case ARRAY_EXPRESSION -> evalArray((ArrayExpression) expression, env);
             case OBJECT_EXPRESSION -> evalObject((ObjectExpression) expression, env);
@@ -977,7 +982,7 @@ public final class Interpreter {
             case LOGICAL_EXPRESSION -> evalLogical((LogicalExpression) expression, env);
             case ASSIGNMENT_EXPRESSION -> evalAssignment((AssignmentExpression) expression, env);
             case CONDITIONAL_EXPRESSION -> evalConditional((ConditionalExpression) expression, env);
-            case MEMBER_EXPRESSION -> evalMember((MemberExpression) expression, env);
+            case MEMBER_EXPRESSION -> unwrapShortCircuit(evalMember((MemberExpression) expression, env));
             case CLASS_EXPRESSION -> evalClassExpression((ClassExpression) expression, env);
             case YIELD_EXPRESSION -> evalYield((YieldExpression) expression, env);
             case AWAIT_EXPRESSION -> evalAwait((AwaitExpression) expression, env);
@@ -1344,18 +1349,32 @@ public final class Interpreter {
         if (member.getObject() instanceof SuperExpression) {
             return evalSuperMemberRead(member, env);
         }
-        if (member.getProperty() instanceof PrivateIdentifier priv) {
-            final var privateTarget = eval(member.getObject(), env);
-            if (member.isOptional() && isNullish(privateTarget)) {
-                return JsUndefined.getInstance();
-            }
-            return getPrivateMember(privateTarget, priv.getName(), env);
+        final var target = evalChainObject(member.getObject(), env);
+        if (target == SHORT_CIRCUIT) {
+            return SHORT_CIRCUIT;
         }
-        final var target = eval(member.getObject(), env);
         if (member.isOptional() && isNullish(target)) {
-            return JsUndefined.getInstance();
+            return SHORT_CIRCUIT;
+        }
+        if (member.getProperty() instanceof PrivateIdentifier priv) {
+            return getPrivateMember(target, priv.getName(), env);
         }
         return getMemberByKey(target, memberKeyValue(member, env));
+    }
+
+    // Evaluate the object/callee side of a member or call while staying inside an optional chain:
+    // member/call sub-expressions propagate the SHORT_CIRCUIT sentinel so a nullish link earlier in
+    // the chain skips every later access; any other expression is a normal (chain-ending) evaluation.
+    private JsValue evalChainObject(Expression expression, Environment env) {
+        return switch (expression) {
+            case MemberExpression member -> evalMember(member, env);
+            case CallExpression call -> evalCall(call, env);
+            default -> eval(expression, env);
+        };
+    }
+
+    private JsValue unwrapShortCircuit(JsValue value) {
+        return value == SHORT_CIRCUIT ? JsUndefined.getInstance() : value;
     }
 
     private String memberKey(MemberExpression member, Environment env) {
@@ -1638,9 +1657,12 @@ public final class Interpreter {
             if (member.getObject() instanceof SuperExpression) {
                 return evalSuperMemberCall(member, call, env);
             }
-            final var object = eval(member.getObject(), env);
+            final var object = evalChainObject(member.getObject(), env);
+            if (object == SHORT_CIRCUIT) {
+                return SHORT_CIRCUIT;
+            }
             if (member.isOptional() && isNullish(object)) {
-                return JsUndefined.getInstance();
+                return SHORT_CIRCUIT;
             }
             thisArg = object;
             if (member.getProperty() instanceof PrivateIdentifier priv) {
@@ -1649,7 +1671,14 @@ public final class Interpreter {
                 function = getMemberByKey(object, memberKeyValue(member, env));
             }
         } else {
-            function = eval(callee, env);
+            final var callable = evalChainObject(callee, env);
+            if (callable == SHORT_CIRCUIT) {
+                return SHORT_CIRCUIT;
+            }
+            function = callable;
+        }
+        if (call.isOptional() && isNullish(function)) {
+            return SHORT_CIRCUIT;
         }
         return callValue(function, thisArg, evalArguments(call.getArguments(), env));
     }

@@ -386,9 +386,15 @@ iterable through the built-in fast path in `Iteration`. `String` adds `charCodeA
 `at`/`padEnd`/`trimStart`/`trimEnd`/`normalize`/`localeCompare`/`concat` and the statics
 `String.fromCharCode`/`String.fromCodePoint`.
 
-**Deliberate 6a simplifications** (revisited in later sub-phases): optional chaining
-short-circuits per member access rather than across a whole chain (`a?.b.c` still
-throws when `a` is nullish); `for (let …)` uses a single loop scope rather than a
+**Optional chaining** short-circuits across a whole chain: once any link with `?.`
+observes a nullish base, the rest of the chain is skipped and the expression evaluates
+to `undefined` without evaluating later property keys or call arguments (`a?.b.c`,
+`a?.b()`, `a?.()` on nullish `a` all yield `undefined`). A non-optional access on a
+nullish value still throws (`a.b.c` when `a.b` is nullish). Propagation uses an
+internal `SHORT_CIRCUIT` sentinel threaded through the member/call spine and unwrapped
+at the top of the chain (`Interpreter.evalMember`/`evalCall`/`evalChainObject`).
+
+**Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
 fresh per-iteration binding (unobservable until closures arrive in 6b).
 
 ## Testing conventions
