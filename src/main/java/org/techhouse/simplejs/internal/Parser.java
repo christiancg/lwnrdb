@@ -1110,6 +1110,9 @@ public final class Parser {
                     final var property = parseExpression();
                     expectSeparator(']');
                     expr = new MemberExpression(expr, property, true, false);
+                } else if (current().getType() == JsType.TEMPLATE_STRING) {
+                    final var template = parseTemplate((JsTemplateString) advance());
+                    expr = new TaggedTemplateExpression(expr, template);
                 } else {
                     advancing = false;
                 }

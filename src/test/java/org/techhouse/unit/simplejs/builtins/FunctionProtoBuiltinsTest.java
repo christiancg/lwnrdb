@@ -36,10 +36,10 @@ public class FunctionProtoBuiltinsTest {
         assertEquals(10, num("function f(a, b) { return this.base + a + b; } let g = f.bind({base: 4}, 1); g(5)"));
     }
 
-    // a bound function invoked with new ignores the new instance (documented limitation)
+    // a bound function used with new constructs the underlying target (bound this ignored)
     @Test
     public void test_bind_then_new() {
-        assertEquals(1, num("function f() { this.z = 1; return this.z; } let g = f.bind({}); new g()"));
+        assertEquals(1, num("function f() { this.z = 1; } let g = f.bind({}); new g().z"));
     }
 
     // bind of a native function still applies

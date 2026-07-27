@@ -9,6 +9,8 @@ public final class JsNativeFunction extends JsValue {
     private final String name;
     private final BiFunction<JsValue, List<JsValue>, JsValue> implementation;
     private Map<String, JsValue> properties;
+    private JsValue boundTarget;
+    private List<JsValue> boundArgs;
 
     public JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation) {
         this.name = name;
@@ -17,6 +19,23 @@ public final class JsNativeFunction extends JsValue {
 
     public String getName() {
         return name;
+    }
+
+    public void setBound(JsValue boundTarget, List<JsValue> boundArgs) {
+        this.boundTarget = boundTarget;
+        this.boundArgs = boundArgs;
+    }
+
+    public boolean isBound() {
+        return boundTarget != null;
+    }
+
+    public JsValue getBoundTarget() {
+        return boundTarget;
+    }
+
+    public List<JsValue> getBoundArgs() {
+        return boundArgs;
     }
 
     public JsValue invoke(JsValue thisArg, List<JsValue> args) {

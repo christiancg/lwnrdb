@@ -1536,6 +1536,9 @@ public final class Interpreter {
     }
 
     private JsValue functionMember(JsValue function, String key) {
+        if (function instanceof JsFunction fn && "prototype".equals(key)) {
+            return fn.getPrototype();
+        }
         final var method = FunctionProtoBuiltins.getMethod(function, key, this::callValue);
         return method == null ? JsUndefined.getInstance() : method;
     }
@@ -1702,18 +1705,31 @@ public final class Interpreter {
     private JsValue evalNew(NewExpression expression, Environment env) {
         final var callee = eval(expression.getCallee(), env);
         final var args = evalArguments(expression.getArguments(), env);
-        if (callee instanceof JsClass cls) {
-            return construct(cls, args);
-        }
-        if (callee instanceof JsNativeFunction nativeFunction) {
-            return nativeFunction.invoke(JsUndefined.getInstance(), args);
-        }
-        if (callee instanceof JsFunction function && !function.isArrow()) {
-            final var instance = new JsObject();
-            final var result = callFunction(function, instance, args);
-            return isObjectLike(result) ? result : instance;
-        }
-        throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
+        return constructValue(callee, args);
+    }
+
+    private JsValue constructValue(JsValue callee, List<JsValue> args) {
+        return switch (callee) {
+            case JsClass cls -> construct(cls, args);
+            case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
+                constructValue(nativeFunction.getBoundTarget(), boundArgs(nativeFunction, args));
+            case JsNativeFunction nativeFunction -> nativeFunction.invoke(JsUndefined.getInstance(), args);
+            case JsFunction function when !function.isArrow() -> constructFunction(function, args);
+            default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
+        };
+    }
+
+    private List<JsValue> boundArgs(JsNativeFunction nativeFunction, List<JsValue> args) {
+        final var combined = new ArrayList<>(nativeFunction.getBoundArgs());
+        combined.addAll(args);
+        return combined;
+    }
+
+    private JsValue constructFunction(JsFunction function, List<JsValue> args) {
+        final var instance = new JsObject();
+        instance.setProto(function.getPrototype());
+        final var result = callFunction(function, instance, args);
+        return isObjectLike(result) ? result : instance;
     }
 
     private boolean isObjectLike(JsValue value) {
@@ -2390,16 +2406,26 @@ public final class Interpreter {
     }
 
     private JsValue evalInstanceof(JsValue left, JsValue right) {
-        if (right instanceof JsClass cls) {
-            if (left instanceof JsObject object && object.getKlass() != null) {
-                return JsBoolean.of(object.getKlass().isSubclassOf(cls));
+        return switch (right) {
+            case JsClass cls -> JsBoolean.of(left instanceof JsObject object && object.getKlass() != null
+                    && object.getKlass().isSubclassOf(cls));
+            case JsFunction function -> JsBoolean.of(hasInPrototypeChain(left, function.getPrototype()));
+            case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
+                evalInstanceof(left, nativeFunction.getBoundTarget());
+            case JsNativeFunction ignored -> JsBoolean.FALSE;
+            default -> throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
+        };
+    }
+
+    private boolean hasInPrototypeChain(JsValue left, JsObject prototype) {
+        if (left instanceof JsObject object) {
+            for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
+                if (proto == prototype) {
+                    return true;
+                }
             }
-            return JsBoolean.FALSE;
         }
-        if (right instanceof JsFunction || right instanceof JsNativeFunction) {
-            return JsBoolean.FALSE;
-        }
-        throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
+        return false;
     }
 
     private JsValue generatorMethod(JsGenerator generator, String key) {

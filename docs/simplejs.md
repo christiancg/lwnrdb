@@ -130,7 +130,9 @@ tokens (not `JsOperator`), so binary-operator detection checks keyword values to
   `parseCallMemberTail` becomes a `TaggedTemplateExpression` (tag + `TemplateLiteral`);
   the interpreter invokes the tag with a frozen strings array (carrying a frozen `raw`
   companion array) followed by the interpolated values. `String.raw` is provided.
-  A tagged template in the `new`-callee position (`` new tag`…` ``) is not supported.
+  A tagged template in the `new`-callee position (`` new tag`…` ``) is also supported:
+  `parseNewCalleeTail` consumes the template into the callee `TaggedTemplateExpression`,
+  so `` new tag`x` `` evaluates the tag call and `new`-constructs its result.
 
 ## Supported grammar
 
@@ -239,9 +241,9 @@ increment is small and testable:
   with a nullable `klass` link and a lazily-created private-field map; instance methods/getters are
   found by `getMember` on an own-property miss (unbound — the member-call path binds `this`).
   Construction follows the standard field-ordering algorithm (base fields before the base
-  constructor; derived fields immediately after `super()` returns). Deliberate limitations:
-  `instanceof` returns `false` when the right-hand side is a plain-function constructor (only class
-  instances carry the `klass` link `instanceof` walks). Still not wired into the database.
+  constructor; derived fields immediately after `super()` returns). Still not wired into the
+  database. (Spec-gap Phase B later gave plain functions a `prototype` object, so `instanceof`
+  also walks the proto chain for a plain-function RHS — see below.)
 - **6e — iteration, generators & async ✅** — `for-in` (own enumerable keys of objects; index
   strings of arrays/strings; nothing for nullish) and `for-of` (arrays, strings, generators), both
   supporting declaration or assignment/destructuring targets, per-iteration `let`/`const` bindings,
@@ -342,7 +344,8 @@ support a pragmatic subset — `value` and accessor `get`/`set` (stored on the o
 get/set invoke them); `writable`/`configurable`/`enumerable` are accepted but **not enforced**
 (a `defineProperty` on a frozen object is a silent no-op). Functions expose
 `call`/`apply`/`bind` (`builtins/FunctionProtoBuiltins`); a bound function is a plain native
-function, so using it with `new` ignores the freshly-allocated instance (documented limitation).
+function tagged with its target + bound args (spec-gap Phase B), so `new` on it constructs the
+underlying target with the bound args prepended.
 Non-arrow functions receive an `arguments` binding that is a **real** `JsArray` copy of the
 call arguments (not the exotic, argument-aliasing `arguments` object); arrows inherit the
 enclosing `arguments` lexically. `globalThis` is a backing object that reflects the installed
@@ -400,6 +403,15 @@ to `undefined` without evaluating later property keys or call arguments (`a?.b.c
 nullish value still throws (`a.b.c` when `a.b` is nullish). Propagation uses an
 internal `SHORT_CIRCUIT` sentinel threaded through the member/call spine and unwrapped
 at the top of the chain (`Interpreter.evalMember`/`evalCall`/`evalChainObject`).
+
+**Plain-function `prototype`, `instanceof` & bound-`new` (spec-gap Phase B).** A `JsFunction`
+carries a lazily-created `prototype` `JsObject` (with a `constructor` back-reference). `new F()`
+links the fresh instance's proto to `F.prototype`, so methods assigned to `F.prototype` resolve
+through the instance's proto chain and `x instanceof F` walks that chain (true when any proto link
+is `F.prototype`). A bound function (`f.bind(…)`) is tagged with its target + bound args, so `new`
+on it constructs the underlying target (bound `this` ignored) and `instanceof` a bound function
+delegates to the target. A tagged template in the `new`-callee position (`` new tag`x` ``) is
+supported: the tag call is evaluated and its result `new`-constructed.
 
 **Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
 fresh per-iteration binding (unobservable until closures arrive in 6b).

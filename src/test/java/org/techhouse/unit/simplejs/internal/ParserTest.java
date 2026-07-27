@@ -66,6 +66,7 @@ import org.techhouse.simplejs.nodes.StaticBlock;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.SwitchStatement;
+import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.ThisExpression;
 import org.techhouse.simplejs.nodes.ThrowStatement;
@@ -289,6 +290,13 @@ public class ParserTest {
         assertTrue(assertInstanceOf(NewExpression.class, firstExpression("new Foo")).getArguments().isEmpty());
         final var neu = assertInstanceOf(NewExpression.class, firstExpression("new a.b.C()"));
         assertInstanceOf(MemberExpression.class, neu.getCallee());
+    }
+
+    @Test
+    public void test_new_with_tagged_template_callee() {
+        final var neu = assertInstanceOf(NewExpression.class, firstExpression("new tag`x`()"));
+        assertInstanceOf(TaggedTemplateExpression.class, neu.getCallee());
+        assertTrue(neu.getArguments().isEmpty());
     }
 
     @Test

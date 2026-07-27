@@ -13,6 +13,7 @@ public final class JsFunction extends JsValue {
     private final boolean async;
     private final boolean generator;
     private final Environment closure;
+    private JsObject prototype;
 
     public JsFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
             boolean async, boolean generator, Environment closure) {
@@ -56,5 +57,13 @@ public final class JsFunction extends JsValue {
 
     public Environment getClosure() {
         return closure;
+    }
+
+    public JsObject getPrototype() {
+        if (prototype == null) {
+            prototype = new JsObject();
+            prototype.set("constructor", this);
+        }
+        return prototype;
     }
 }

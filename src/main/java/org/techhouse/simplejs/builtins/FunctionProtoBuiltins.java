@@ -39,11 +39,13 @@ public final class FunctionProtoBuiltins {
     private static JsValue bind(JsValue target, List<JsValue> args, Invoker invoker) {
         final var boundThis = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var boundArgs = new ArrayList<>(args.isEmpty() ? List.of() : args.subList(1, args.size()));
-        return new JsNativeFunction("bound " + nameOf(target), (_, callArgs) -> {
+        final var bound = new JsNativeFunction("bound " + nameOf(target), (_, callArgs) -> {
             final var combined = new ArrayList<>(boundArgs);
             combined.addAll(callArgs);
             return invoker.call(target, boundThis, combined);
         });
+        bound.setBound(target, boundArgs);
+        return bound;
     }
 
     private static String nameOf(JsValue target) {
