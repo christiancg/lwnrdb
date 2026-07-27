@@ -23,6 +23,14 @@ public class PromiseBuiltinsTest {
         return ((JsString) array.get(0)).getValue();
     }
 
+    // the AggregateError global constructor stores the message and an errors array
+    @Test
+    public void test_aggregate_error_constructor() {
+        final var source = "let e = new AggregateError(['x', 'y'], 'oops');"
+                + " e.name + '|' + e.message + '|' + e.errors.join(',')";
+        assertEquals("AggregateError|oops|x,y", ((JsString) Interpreter.run(source)).getValue());
+    }
+
     // Promise.resolve settles fulfilled
     @Test
     public void test_resolve() {
@@ -128,5 +136,68 @@ public class PromiseBuiltinsTest {
                 out
                 """;
         assertEquals("first", string(arr(source)));
+    }
+
+    // Promise.allSettled reports per-element status, preserving input order
+    @Test
+    public void test_all_settled_mixed() {
+        final var source = """
+                let out = [];
+                Promise.allSettled([Promise.resolve(1), Promise.reject('e')]).then(a =>
+                    out.push(a[0].status + ',' + a[0].value + ',' + a[1].status + ',' + a[1].reason));
+                out
+                """;
+        assertEquals("fulfilled,1,rejected,e", string(arr(source)));
+    }
+
+    // Promise.allSettled with an empty array resolves immediately with an empty array
+    @Test
+    public void test_all_settled_empty() {
+        assertEquals(0, num(arr("let out = []; Promise.allSettled([]).then(a => out.push(a.length)); out"), 0));
+    }
+
+    // Promise.any resolves with the first fulfilment even if an earlier element rejects
+    @Test
+    public void test_any_first_fulfilment() {
+        final var source = """
+                let out = [];
+                Promise.any([Promise.reject('a'), Promise.resolve('b')]).then(v => out.push(v));
+                out
+                """;
+        assertEquals("b", string(arr(source)));
+    }
+
+    // Promise.any rejects with an AggregateError holding the reasons in input order when all reject
+    @Test
+    public void test_any_all_reject() {
+        final var source = """
+                let out = [];
+                Promise.any([Promise.reject('a'), Promise.reject('b')]).catch(e =>
+                    out.push(e.name + ':' + e.errors.join(',')));
+                out
+                """;
+        assertEquals("AggregateError:a,b", string(arr(source)));
+    }
+
+    // Promise.any with an empty array rejects immediately with an empty AggregateError
+    @Test
+    public void test_any_empty() {
+        final var source = """
+                let out = [];
+                Promise.any([]).catch(e => out.push(e.name + ':' + e.errors.length));
+                out
+                """;
+        assertEquals("AggregateError:0", string(arr(source)));
+    }
+
+    // the combinators accept any iterable, not just arrays (Set here)
+    @Test
+    public void test_all_accepts_set() {
+        final var source = """
+                let out = [];
+                Promise.all(new Set([Promise.resolve(1), Promise.resolve(2)])).then(a => out.push(a.join(',')));
+                out
+                """;
+        assertEquals("1,2", string(arr(source)));
     }
 }

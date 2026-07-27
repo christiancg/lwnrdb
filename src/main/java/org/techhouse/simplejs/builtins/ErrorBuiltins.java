@@ -3,6 +3,7 @@ package org.techhouse.simplejs.builtins;
 import java.util.List;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
@@ -29,6 +30,16 @@ public final class ErrorBuiltins {
         return result;
     }
 
+    public static JsObject makeAggregateError(List<JsValue> errors, String message) {
+        final var result = makeError("AggregateError", message);
+        final var array = new JsArray();
+        for (final var error : errors) {
+            array.push(error);
+        }
+        result.set("errors", array);
+        return result;
+    }
+
     public static void install(Environment global) {
         for (final var name : NAMES) {
             global.declareVar(name);
@@ -38,6 +49,11 @@ public final class ErrorBuiltins {
         global.assign("SuppressedError",
                 new JsNativeFunction("SuppressedError", (_, args) -> makeSuppressedError(arg(args, 0), arg(args, 1),
                         args.size() > 2 ? message(List.of(args.get(2))) : "")));
+        global.declareVar("AggregateError");
+        global.assign("AggregateError", new JsNativeFunction("AggregateError", (_, args) -> {
+            final var errors = arg(args, 0) instanceof JsArray array ? array.getElements() : List.<JsValue>of();
+            return makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : "");
+        }));
     }
 
     private static JsValue arg(List<JsValue> args, int index) {

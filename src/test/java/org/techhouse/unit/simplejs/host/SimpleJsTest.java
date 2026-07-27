@@ -121,4 +121,33 @@ public class SimpleJsTest {
         assertEquals(1, captured.size());
         assertEquals("hi 42", captured.getFirst());
     }
+
+    // a rejection with no handler is reported to the console sink at drain end
+    @Test
+    public void test_unhandled_rejection_reported() {
+        final var captured = new ArrayList<String>();
+        final var host = new SimpleHostBindings(new JsonObject(), null, captured::add, ResourceLimits.unlimited());
+        engine.run("Promise.reject('boom');", host);
+        assertEquals(1, captured.size());
+        assertEquals("UnhandledPromiseRejection: boom", captured.getFirst());
+    }
+
+    // attaching a rejection handler suppresses the unhandled-rejection report
+    @Test
+    public void test_handled_rejection_not_reported() {
+        final var captured = new ArrayList<String>();
+        final var host = new SimpleHostBindings(new JsonObject(), null, captured::add, ResourceLimits.unlimited());
+        engine.run("Promise.reject('boom').catch(() => {});", host);
+        assertTrue(captured.isEmpty());
+    }
+
+    // reportUnhandledRejections=false silences the report
+    @Test
+    public void test_unhandled_rejection_silenced() {
+        final var captured = new ArrayList<String>();
+        final var limits = new ResourceLimits(-1, -1, -1, false);
+        final var host = new SimpleHostBindings(new JsonObject(), null, captured::add, limits);
+        engine.run("Promise.reject('boom');", host);
+        assertTrue(captured.isEmpty());
+    }
 }

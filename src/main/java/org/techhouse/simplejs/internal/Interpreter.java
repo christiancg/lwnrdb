@@ -215,6 +215,7 @@ public final class Interpreter {
                 return JsUndefined.getInstance();
             });
             eventLoop.drain(deadlineNanos);
+            reportUnhandledRejections();
         } finally {
             for (final var pending : coroutines) {
                 if (!pending.isDone()) {
@@ -224,6 +225,21 @@ public final class Interpreter {
         }
         return new ProgramOutcome(result.last, result.hasReturn, result.returnValue, result.exportDefault,
                 result.namedExports);
+    }
+
+    private void reportUnhandledRejections() {
+        if (!host.limits().reportUnhandledRejections()) {
+            return;
+        }
+        final var sink = host.console();
+        if (sink == null) {
+            return;
+        }
+        for (final var promise : eventLoop.promises()) {
+            if (promise.isUnhandledRejection()) {
+                sink.accept("UnhandledPromiseRejection: " + JsCoercion.toStr(promise.getResult()));
+            }
+        }
     }
 
     private void runModuleBody(Program program, Environment env, ModuleResult result) {

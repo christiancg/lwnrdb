@@ -7,7 +7,9 @@ import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -15,12 +17,18 @@ public final class PromiseBuiltins {
     private PromiseBuiltins() {
     }
 
-    public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker) {
+    public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker, IterableToList iterableToList) {
         final var promise = new JsNativeFunction("Promise", (_, args) -> construct(eventLoop, invoker, args));
         promise.setProperty("resolve", new JsNativeFunction("resolve", (_, args) -> resolved(eventLoop, arg0(args))));
         promise.setProperty("reject", new JsNativeFunction("reject", (_, args) -> rejected(eventLoop, arg0(args))));
-        promise.setProperty("all", new JsNativeFunction("all", (_, args) -> all(eventLoop, arg0(args))));
-        promise.setProperty("race", new JsNativeFunction("race", (_, args) -> race(eventLoop, arg0(args))));
+        promise.setProperty("all",
+                new JsNativeFunction("all", (_, args) -> all(eventLoop, arg0(args), iterableToList)));
+        promise.setProperty("race",
+                new JsNativeFunction("race", (_, args) -> race(eventLoop, arg0(args), iterableToList)));
+        promise.setProperty("allSettled",
+                new JsNativeFunction("allSettled", (_, args) -> allSettled(eventLoop, arg0(args), iterableToList)));
+        promise.setProperty("any",
+                new JsNativeFunction("any", (_, args) -> any(eventLoop, arg0(args), iterableToList)));
         return promise;
     }
 
@@ -61,8 +69,8 @@ public final class PromiseBuiltins {
         return promise;
     }
 
-    private static JsValue all(EventLoop eventLoop, JsValue iterable) {
-        final var elements = elements(iterable);
+    private static JsValue all(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
+        final var elements = elements(iterable, iterableToList);
         final var derived = new JsPromise(eventLoop);
         final var results = new JsArray();
         final var remaining = new int[]{elements.size()};
@@ -84,19 +92,74 @@ public final class PromiseBuiltins {
         return derived;
     }
 
-    private static JsValue race(EventLoop eventLoop, JsValue iterable) {
+    private static JsValue race(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
         final var derived = new JsPromise(eventLoop);
-        for (final var element : elements(iterable)) {
+        for (final var element : elements(iterable, iterableToList)) {
             resolved(eventLoop, element).subscribe(derived::resolve, derived::reject);
         }
         return derived;
     }
 
-    private static List<JsValue> elements(JsValue iterable) {
+    private static JsValue allSettled(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
+        final var elements = elements(iterable, iterableToList);
+        final var derived = new JsPromise(eventLoop);
+        final var results = new JsArray();
+        final var remaining = new int[]{elements.size()};
+        if (elements.isEmpty()) {
+            derived.resolve(results);
+            return derived;
+        }
+        for (var i = 0; i < elements.size(); i++) {
+            results.push(JsUndefined.getInstance());
+            final var index = i;
+            resolved(eventLoop, elements.get(i)).subscribe(value -> {
+                results.set(index, outcome("fulfilled", "value", value));
+                if (--remaining[0] == 0) {
+                    derived.resolve(results);
+                }
+            }, reason -> {
+                results.set(index, outcome("rejected", "reason", reason));
+                if (--remaining[0] == 0) {
+                    derived.resolve(results);
+                }
+            });
+        }
+        return derived;
+    }
+
+    private static JsValue any(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
+        final var elements = elements(iterable, iterableToList);
+        final var derived = new JsPromise(eventLoop);
+        if (elements.isEmpty()) {
+            derived.reject(ErrorBuiltins.makeAggregateError(List.of(), "All promises were rejected"));
+            return derived;
+        }
+        final var reasons = new JsValue[elements.size()];
+        final var remaining = new int[]{elements.size()};
+        for (var i = 0; i < elements.size(); i++) {
+            final var index = i;
+            resolved(eventLoop, elements.get(i)).subscribe(derived::resolve, reason -> {
+                reasons[index] = reason;
+                if (--remaining[0] == 0) {
+                    derived.reject(ErrorBuiltins.makeAggregateError(List.of(reasons), "All promises were rejected"));
+                }
+            });
+        }
+        return derived;
+    }
+
+    private static JsObject outcome(String status, String field, JsValue value) {
+        final var entry = new JsObject();
+        entry.set("status", new JsString(status));
+        entry.set(field, value);
+        return entry;
+    }
+
+    private static List<JsValue> elements(JsValue iterable, IterableToList iterableToList) {
         if (iterable instanceof JsArray array) {
             return array.getElements();
         }
-        throw new TypeErrorException("Argument is not iterable");
+        return iterableToList.drain(iterable);
     }
 
     private static JsValue arg0(List<JsValue> args) {

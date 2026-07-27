@@ -25,7 +25,7 @@ public final class GlobalScope {
         define(global, globalObject, "JSON", JsonBuiltins.create());
         define(global, globalObject, "console",
                 consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
-        define(global, globalObject, "Promise", PromiseBuiltins.create(eventLoop, invoker));
+        define(global, globalObject, "Promise", PromiseBuiltins.create(eventLoop, invoker, iterableToList));
         TimerBuiltins.install(global, eventLoop, invoker);
         define(global, globalObject, "RegExp", RegexBuiltins.create());
         define(global, globalObject, "Symbol", SymbolBuiltins.create());

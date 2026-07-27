@@ -31,6 +31,33 @@ public class InterpreterAsyncTest {
         assertEquals("function", str("typeof (async function() {})().then"));
     }
 
+    // await Promise.allSettled resolves to the per-element status objects
+    @Test
+    public void test_await_all_settled() {
+        final var source = """
+                let out = [];
+                async function f() {
+                    let r = await Promise.allSettled([Promise.resolve(1), Promise.reject('e')]);
+                    return r[0].value + ':' + r[1].reason;
+                }
+                f().then(v => out.push(v));
+                out
+                """;
+        assertEquals("1:e", ((JsString) arr(source).get(0)).getValue());
+    }
+
+    // await Promise.any resolves to the first fulfilment
+    @Test
+    public void test_await_any() {
+        final var source = """
+                let out = [];
+                async function f() { return await Promise.any([Promise.reject('a'), Promise.resolve(7)]); }
+                f().then(v => out.push(v));
+                out
+                """;
+        assertEquals(7, first(arr(source)));
+    }
+
     // await resolves a promise value; the microtask queue drains before the run returns
     @Test
     public void test_await_resolves_value() {

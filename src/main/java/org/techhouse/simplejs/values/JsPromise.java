@@ -17,9 +17,11 @@ public final class JsPromise extends JsValue {
     private State state = State.PENDING;
     private JsValue result = JsUndefined.getInstance();
     private final List<Reaction> reactions = new ArrayList<>();
+    private boolean handled;
 
     public JsPromise(EventLoop eventLoop) {
         this.eventLoop = eventLoop;
+        eventLoop.registerPromise(this);
     }
 
     public State getState() {
@@ -28,6 +30,10 @@ public final class JsPromise extends JsValue {
 
     public JsValue getResult() {
         return result;
+    }
+
+    public boolean isUnhandledRejection() {
+        return state == State.REJECTED && !handled;
     }
 
     public void resolve(JsValue value) {
@@ -58,6 +64,7 @@ public final class JsPromise extends JsValue {
     }
 
     public void subscribe(Consumer<JsValue> onFulfilled, Consumer<JsValue> onRejected) {
+        handled = true;
         final var reaction = new Reaction(onFulfilled, onRejected);
         if (state == State.PENDING) {
             reactions.add(reaction);

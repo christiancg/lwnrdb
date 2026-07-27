@@ -1,13 +1,16 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.concurrent.locks.LockSupport;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
+import org.techhouse.simplejs.values.JsPromise;
 
 public final class EventLoop {
     private static final class Timer {
@@ -40,11 +43,20 @@ public final class EventLoop {
     private final PriorityQueue<Timer> timers = new PriorityQueue<>(
             Comparator.comparingLong(Timer::due).thenComparingLong(Timer::seq));
     private final Set<Long> cancelled = new HashSet<>();
+    private final List<JsPromise> promises = new ArrayList<>();
     private long nextTimerId = 1;
     private long nextSeq;
 
     public void queueMicrotask(Runnable task) {
         microtasks.add(task);
+    }
+
+    public void registerPromise(JsPromise promise) {
+        promises.add(promise);
+    }
+
+    public List<JsPromise> promises() {
+        return promises;
     }
 
     public long setTimer(Runnable callback, long delayMillis, boolean repeat) {
