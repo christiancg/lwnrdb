@@ -129,6 +129,22 @@ public final class Environment {
         binding.initialized = true;
     }
 
+    public JsValue tryGet(String name) {
+        final var binding = resolve(name);
+        return binding == null || !binding.initialized ? null : binding.value;
+    }
+
+    public boolean isDeclared(String name) {
+        return resolve(name) != null;
+    }
+
+    public void setGlobal(String name, JsValue value) {
+        if (resolve(name) == null) {
+            declareVar(name);
+        }
+        assign(name, value);
+    }
+
     private Binding resolve(String name) {
         var env = this;
         while (env != null) {

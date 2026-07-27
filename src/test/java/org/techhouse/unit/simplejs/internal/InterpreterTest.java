@@ -514,7 +514,7 @@ public class InterpreterTest {
         assertEquals(3, num("switch (1) { case 1: let x = 3; x; break; }; 3"));
     }
 
-    // a normal function sees its arguments as a real array
+    // a normal function reads its arguments by length and numeric index
     @Test
     public void test_arguments_length_and_indexing() {
         assertEquals(3, num("function f() { return arguments.length; } f(1, 2, 3)"));

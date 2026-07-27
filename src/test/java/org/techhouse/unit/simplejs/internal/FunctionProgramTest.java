@@ -91,4 +91,61 @@ public class FunctionProgramTest {
                 """;
         assertTrue(bool(source));
     }
+
+    // Mapped arguments: writing arguments[0] aliases the named simple parameter
+    @Test
+    public void test_mapped_arguments_index_to_param() {
+        assertEquals(9, num("function f(a){ arguments[0] = 9; return a; } f(1)"));
+    }
+
+    // Mapped arguments: writing the named parameter aliases arguments[0]
+    @Test
+    public void test_mapped_arguments_param_to_index() {
+        assertEquals(9, num("function f(a){ a = 9; return arguments[0]; } f(1)"));
+    }
+
+    // A default parameter makes the arguments object unmapped, so there is no aliasing
+    @Test
+    public void test_unmapped_arguments_with_default_param() {
+        assertEquals(1, num("function f(a = 0){ arguments[0] = 9; return a; } f(1)"));
+    }
+
+    // A rest parameter makes the arguments object unmapped, so there is no aliasing
+    @Test
+    public void test_unmapped_arguments_with_rest_param() {
+        assertEquals(1, num("function f(...a){ arguments[0] = 9; return a[0]; } f(1)"));
+    }
+
+    // arguments.length counts the passed arguments, extra args beyond params included
+    @Test
+    public void test_arguments_length_counts_passed() {
+        assertEquals(3, num("function f(a){ return arguments.length; } f(1, 2, 3)"));
+    }
+
+    // Extra arguments beyond the mapped parameters are readable but not aliased
+    @Test
+    public void test_arguments_extra_args_not_mapped() {
+        assertEquals(5, num("function f(a){ arguments[1] = 5; return arguments[1]; } f(1, 2)"));
+    }
+
+    // arguments is iterable with for-of, reflecting aliased values
+    @Test
+    public void test_arguments_for_of() {
+        final var source = """
+                function f(a, b){
+                    a = 10;
+                    let sum = 0;
+                    for (const x of arguments) { sum += x; }
+                    return sum;
+                }
+                f(1, 2)
+                """;
+        assertEquals(12, num(source));
+    }
+
+    // arguments spreads into an array
+    @Test
+    public void test_arguments_spread() {
+        assertEquals(6, num("function f(){ return [...arguments].reduce((a, b) => a + b, 0); } f(1, 2, 3)"));
+    }
 }

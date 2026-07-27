@@ -100,6 +100,7 @@ import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.nodes.YieldExpression;
 import org.techhouse.simplejs.values.EJsonInterop;
+import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
@@ -108,6 +109,7 @@ import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -1311,21 +1313,22 @@ public final class Interpreter {
     }
 
     private boolean hasMember(JsValue container, JsValue keyValue) {
-        if (container instanceof JsProxy proxy) {
-            return proxyHas(proxy, keyValue);
+        return switch (container) {
+            case JsProxy proxy -> proxyHas(proxy, keyValue);
+            case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue));
+            case JsObject object -> object.has(JsCoercion.toStr(keyValue));
+            case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue));
+            default -> throw new TypeErrorException(
+                    "Cannot use 'in' operator to search for '" + JsCoercion.toStr(keyValue) + "'");
+        };
+    }
+
+    private boolean arrayHasMember(JsArray array, String key) {
+        if ("length".equals(key)) {
+            return true;
         }
-        final var key = JsCoercion.toStr(keyValue);
-        if (container instanceof JsObject object) {
-            return object.has(key);
-        }
-        if (container instanceof JsArray array) {
-            if ("length".equals(key)) {
-                return true;
-            }
-            final var index = arrayIndex(key);
-            return index != null && index < array.length();
-        }
-        throw new TypeErrorException("Cannot use 'in' operator to search for '" + key + "'");
+        final var index = arrayIndex(key);
+        return index != null && index < array.length();
     }
 
     private JsValue evalLogical(LogicalExpression logical, Environment env) {
@@ -1548,6 +1551,8 @@ public final class Interpreter {
     private JsValue getMember(JsValue target, String key) {
         return switch (target) {
             case JsProxy proxy -> proxyGet(proxy, new JsString(key));
+            case JsGlobalObject global -> getGlobalMember(global, key);
+            case JsArguments arguments -> getArgumentsMember(arguments, key);
             case JsObject object -> getObjectMember(object, key);
             case JsClass cls -> getStaticMember(cls, key);
             case JsArray array -> getArrayMember(array, key);
@@ -1601,6 +1606,19 @@ public final class Interpreter {
             }
         }
         return object.get(key);
+    }
+
+    private JsValue getGlobalMember(JsGlobalObject global, String key) {
+        final var value = global.getEnv().tryGet(key);
+        return value == null ? JsUndefined.getInstance() : value;
+    }
+
+    private JsValue getArgumentsMember(JsArguments arguments, String key) {
+        if ("length".equals(key)) {
+            return new JsNumber(arguments.length());
+        }
+        final var index = arrayIndex(key);
+        return index == null ? JsUndefined.getInstance() : arguments.get(index);
     }
 
     private JsValue functionMember(JsValue function, String key) {
@@ -1668,6 +1686,13 @@ public final class Interpreter {
     private void setMember(JsValue target, String key, JsValue value) {
         switch (target) {
             case JsProxy proxy -> proxySet(proxy, new JsString(key), value);
+            case JsGlobalObject global -> global.getEnv().setGlobal(key, value);
+            case JsArguments arguments -> {
+                final var index = arrayIndex(key);
+                if (index != null) {
+                    arguments.set(index, value);
+                }
+            }
             case JsObject object -> {
                 final var cls = object.getKlass();
                 if (cls != null && !object.has(key)) {
@@ -1838,7 +1863,7 @@ public final class Interpreter {
             final var activation = function.getClosure().functionChild();
             if (!function.isArrow()) {
                 activation.defineThis(thisArg);
-                activation.declareFunction("arguments", new JsArray(new ArrayList<>(args)));
+                activation.declareFunction("arguments", makeArguments(function.getParams(), args, activation));
             }
             bindParams(function.getParams(), args, activation);
             if (function.isAsync() && function.isGenerator()) {
@@ -1989,6 +2014,24 @@ public final class Interpreter {
         return promise;
     }
 
+    private JsArguments makeArguments(List<JsNode> params, List<JsValue> args, Environment activation) {
+        var mapped = true;
+        for (final var param : params) {
+            if (!(param instanceof Identifier)) {
+                mapped = false;
+                break;
+            }
+        }
+        if (!mapped) {
+            return new JsArguments(args, null, null);
+        }
+        final var names = new ArrayList<String>();
+        for (final var param : params) {
+            names.add(((Identifier) param).getName());
+        }
+        return new JsArguments(args, names, activation);
+    }
+
     private void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
         for (var i = 0; i < params.size(); i++) {
             final var param = params.get(i);
@@ -2107,6 +2150,9 @@ public final class Interpreter {
     private List<JsValue> arrayLikeElements(JsValue value) {
         if (value instanceof JsArray array) {
             return array.getElements();
+        }
+        if (value instanceof JsArguments arguments) {
+            return arguments.snapshot();
         }
         if (value instanceof JsString string) {
             final var chars = new ArrayList<JsValue>();
@@ -2786,7 +2832,7 @@ public final class Interpreter {
                 this.generator = gen;
                 this.buffer = null;
                 this.iterator = null;
-            } else if (iterable instanceof JsArray || iterable instanceof JsString) {
+            } else if (iterable instanceof JsArray || iterable instanceof JsString || iterable instanceof JsArguments) {
                 this.generator = null;
                 this.buffer = arrayLikeElements(iterable);
                 this.iterator = null;

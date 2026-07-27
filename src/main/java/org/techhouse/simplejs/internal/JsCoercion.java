@@ -2,6 +2,7 @@ package org.techhouse.simplejs.internal;
 
 import java.math.BigInteger;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
@@ -10,6 +11,7 @@ import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -74,6 +76,8 @@ public final class JsCoercion {
             case JsSet ignored -> "[object Set]";
             case JsDate d -> d.toDateString();
             case JsProxy proxy -> toStr(proxy.getTarget());
+            case JsArguments ignored -> "[object Arguments]";
+            case JsGlobalObject ignored -> "[object global]";
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }

@@ -54,6 +54,38 @@ public class JsValueTest {
         assertEquals(JsValue.JsValueType.DATE, new org.techhouse.simplejs.values.JsDate(0).getType());
         assertEquals(JsValue.JsValueType.PROXY,
                 new org.techhouse.simplejs.values.JsProxy(new JsObject(), new JsObject()).getType());
+        assertEquals(JsValue.JsValueType.ARGUMENTS,
+                new org.techhouse.simplejs.values.JsArguments(List.of(), null, null).getType());
+        assertEquals(JsValue.JsValueType.GLOBAL,
+                new org.techhouse.simplejs.values.JsGlobalObject(Environment.global()).getType());
+    }
+
+    // Arguments and global objects are typeof "object" and stringify as tagged objects
+    @Test
+    public void test_arguments_and_global_values() {
+        final var arguments = new org.techhouse.simplejs.values.JsArguments(List.of(new JsNumber(1)), null, null);
+        assertEquals("object", JsCoercion.typeOf(arguments));
+        assertEquals("[object Arguments]", JsCoercion.toStr(arguments));
+        assertEquals(1, arguments.length());
+        assertEquals(1, ((JsNumber) arguments.get(0)).getValue());
+        assertInstanceOf(JsUndefined.class, arguments.get(3));
+        final var global = new org.techhouse.simplejs.values.JsGlobalObject(Environment.global());
+        assertEquals("object", JsCoercion.typeOf(global));
+        assertEquals("[object global]", JsCoercion.toStr(global));
+    }
+
+    // A mapped arguments slot aliases the backing environment binding both ways
+    @Test
+    public void test_mapped_arguments_aliasing() {
+        final var env = Environment.global();
+        env.declareVar("a");
+        env.assign("a", new JsNumber(1));
+        final var arguments = new org.techhouse.simplejs.values.JsArguments(List.of(new JsNumber(1)), List.of("a"),
+                env);
+        arguments.set(0, new JsNumber(9));
+        assertEquals(9, ((JsNumber) env.get("a")).getValue());
+        env.assign("a", new JsNumber(42));
+        assertEquals(42, ((JsNumber) arguments.get(0)).getValue());
     }
 
     // A proxy mirrors its target's typeof and string coercion, and reports callability
