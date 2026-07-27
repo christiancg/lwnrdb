@@ -504,6 +504,31 @@ wired by default — a host opts in by supplying it via `network()`. **Deliberat
 limitations**: dynamic import resolves only the `args`/`db` built-ins (import options are
 ignored), and the `Response` is a plain object (no streaming body, single-value headers).
 
+**Typed arrays (spec-gap Phase E).** Binary data is backed by three new isolated value
+types. `values/JsArrayBuffer` wraps a fixed-length shared `byte[]` (`byteLength`, `slice`);
+`values/JsTypedArray` is a view over a buffer (buffer ref + `byteOffset` + element `length`
++ a `Kind` enum), reading/writing elements through the buffer's bytes in little-endian order
+(the endianness JS exposes for typed arrays) with per-kind coercion — wraparound for the
+integer kinds (`Int8`/`Uint8`/`Int16`/`Uint16`/`Int32`/`Uint32`), round-half-to-even
+clamping for `Uint8ClampedArray`, IEEE narrowing for `Float32`/`Float64`, and modulo-2⁶⁴
+`JsBigInt` elements for `BigInt64`/`BigUint64` (a non-BigInt write throws `TypeError`).
+`values/JsDataView` reads/writes numbers and BigInts at an explicit byte offset with an
+explicit `littleEndian` flag (big-endian default per spec). `builtins/TypedArrayBuiltins`
+supplies the `ArrayBuffer`/`DataView` constructors and the nine number + two BigInt element
+constructors (accepting `(length)`, `(array-like/iterable)`, or `(buffer[, offset[,
+length]])`), plus the shared `%TypedArray%` prototype methods (`forEach`/`map`/`filter`/
+`reduce`/`reduceRight`/`find`/`findIndex`/`some`/`every`/`indexOf`/`lastIndexOf`/`includes`/
+`join`/`slice`/`subarray`/`set`/`fill`/`reverse`/`at`/`keys`/`values`/`entries`/`toString`)
+and the `from`/`of` statics; `map`/`filter`/`slice` return same-kind copies while `subarray`
+returns a new view sharing the buffer. `GlobalScope` installs all constructors. The
+interpreter routes `getMember`/`setMember` numeric-index and `length`/`byteLength`/
+`byteOffset`/`buffer`/`BYTES_PER_ELEMENT` access to these types, makes them iterable
+(`for-of`, spread, `Symbol.iterator`, `Array.from`) via `arrayLikeElements`, and
+`JsCoercion`/`EJsonInterop` stringify a typed array as a comma-joined list / JSON array of
+its numeric elements (an `ArrayBuffer`/`DataView` → `[object …]` / `{}`). **Deliberate
+simplification**: `JSON.stringify` emits a plain JSON array of the elements rather than V8's
+index-keyed object form.
+
 **Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
 fresh per-iteration binding (unobservable until closures arrive in 6b).
 

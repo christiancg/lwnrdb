@@ -15,12 +15,14 @@ import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.JsIterators;
 import org.techhouse.simplejs.builtins.MapBuiltins;
 import org.techhouse.simplejs.builtins.NumberBuiltins;
 import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.SetBuiltins;
 import org.techhouse.simplejs.builtins.StringBuiltins;
+import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
@@ -103,10 +105,12 @@ import org.techhouse.simplejs.nodes.YieldExpression;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
+import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
@@ -122,6 +126,7 @@ import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -1522,41 +1527,48 @@ public final class Interpreter {
     }
 
     private JsValue getSymbolMember(JsValue target, JsSymbol symbol) {
-        if (target instanceof JsMap map && symbol == JsSymbol.ITERATOR) {
-            return new JsNativeFunction("[Symbol.iterator]", (_, _) -> MapBuiltins.entriesIterator(map));
-        }
-        if (target instanceof JsSet set && symbol == JsSymbol.ITERATOR) {
-            return new JsNativeFunction("[Symbol.iterator]", (_, _) -> SetBuiltins.valuesIterator(set));
-        }
-        if (target instanceof JsObject object) {
-            if (object.hasSymbol(symbol)) {
-                return object.getSymbol(symbol);
-            }
-            final var cls = object.getKlass();
-            if (cls != null) {
-                final var getter = cls.findInstanceSymbolGetter(symbol);
-                if (getter != null) {
-                    return callFunction(getter, object, List.of());
-                }
-                final var method = cls.findInstanceSymbolMethod(symbol);
-                if (method != null) {
-                    return method;
-                }
-            }
+        return switch (target) {
+            case JsMap map when symbol == JsSymbol.ITERATOR ->
+                new JsNativeFunction("[Symbol.iterator]", (_, _) -> MapBuiltins.entriesIterator(map));
+            case JsTypedArray typed when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
+                    (_, _) -> JsIterators.of(TypedArrayBuiltins.elements(typed).iterator()));
+            case JsSet set when symbol == JsSymbol.ITERATOR ->
+                new JsNativeFunction("[Symbol.iterator]", (_, _) -> SetBuiltins.valuesIterator(set));
+            case JsObject object -> objectSymbolMember(object, symbol);
+            case JsClass cls -> classSymbolMember(cls, symbol);
+            default -> JsUndefined.getInstance();
+        };
+    }
+
+    private JsValue objectSymbolMember(JsObject object, JsSymbol symbol) {
+        if (object.hasSymbol(symbol)) {
             return object.getSymbol(symbol);
         }
-        if (target instanceof JsClass cls) {
-            final var getter = cls.findStaticSymbolGetter(symbol);
+        final var cls = object.getKlass();
+        if (cls != null) {
+            final var getter = cls.findInstanceSymbolGetter(symbol);
             if (getter != null) {
-                return callFunction(getter, cls, List.of());
+                return callFunction(getter, object, List.of());
             }
-            final var method = cls.findStaticSymbolMethod(symbol);
+            final var method = cls.findInstanceSymbolMethod(symbol);
             if (method != null) {
                 return method;
             }
-            if (cls.hasStaticSymbolProp(symbol)) {
-                return cls.getStaticSymbolProp(symbol);
-            }
+        }
+        return object.getSymbol(symbol);
+    }
+
+    private JsValue classSymbolMember(JsClass cls, JsSymbol symbol) {
+        final var getter = cls.findStaticSymbolGetter(symbol);
+        if (getter != null) {
+            return callFunction(getter, cls, List.of());
+        }
+        final var method = cls.findStaticSymbolMethod(symbol);
+        if (method != null) {
+            return method;
+        }
+        if (cls.hasStaticSymbolProp(symbol)) {
+            return cls.getStaticSymbolProp(symbol);
         }
         return JsUndefined.getInstance();
     }
@@ -1599,6 +1611,9 @@ public final class Interpreter {
             case JsMap map -> mapMember(map, key);
             case JsSet set -> jsSetMember(set, key);
             case JsDate date -> dateMember(date, key);
+            case JsTypedArray typed -> typedArrayMember(typed, key);
+            case JsArrayBuffer buffer -> orUndefined(TypedArrayBuiltins.bufferMethod(buffer, key));
+            case JsDataView view -> orUndefined(TypedArrayBuiltins.dataViewMethod(view, key));
             case JsPromise promise -> promiseMethod(promise, key);
             case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
             case JsFunction fn -> functionMember(fn, key);
@@ -1677,6 +1692,37 @@ public final class Interpreter {
     private JsValue dateMember(JsDate date, String key) {
         final var method = DateBuiltins.getMethod(date, key);
         return method == null ? JsUndefined.getInstance() : method;
+    }
+
+    private JsValue typedArrayMember(JsTypedArray typed, String key) {
+        switch (key) {
+            case "length" -> {
+                return new JsNumber(typed.length());
+            }
+            case "byteLength" -> {
+                return new JsNumber(typed.byteLength());
+            }
+            case "byteOffset" -> {
+                return new JsNumber(typed.byteOffset());
+            }
+            case "buffer" -> {
+                return typed.getBuffer();
+            }
+            case "BYTES_PER_ELEMENT" -> {
+                return new JsNumber(typed.kind().bytesPerElement());
+            }
+            default -> {
+            }
+        }
+        final var index = arrayIndex(key);
+        if (index != null) {
+            return typed.getElement(index);
+        }
+        return orUndefined(TypedArrayBuiltins.getMethod(typed, key, this::callValue));
+    }
+
+    private JsValue orUndefined(JsValue value) {
+        return value == null ? JsUndefined.getInstance() : value;
     }
 
     private JsValue numberMember(JsNumber number, String key) {
@@ -1761,6 +1807,12 @@ public final class Interpreter {
                 final var index = arrayIndex(key);
                 if (index != null) {
                     array.set(index, value);
+                }
+            }
+            case JsTypedArray typed -> {
+                final var index = arrayIndex(key);
+                if (index != null) {
+                    typed.setElement(index, value);
                 }
             }
             case JsRegExp regexp -> {
@@ -2188,6 +2240,9 @@ public final class Interpreter {
         }
         if (value instanceof JsArguments arguments) {
             return arguments.snapshot();
+        }
+        if (value instanceof JsTypedArray typed) {
+            return TypedArrayBuiltins.elements(typed);
         }
         if (value instanceof JsString string) {
             final var chars = new ArrayList<JsValue>();
@@ -2867,7 +2922,8 @@ public final class Interpreter {
                 this.generator = gen;
                 this.buffer = null;
                 this.iterator = null;
-            } else if (iterable instanceof JsArray || iterable instanceof JsString || iterable instanceof JsArguments) {
+            } else if (iterable instanceof JsArray || iterable instanceof JsString || iterable instanceof JsArguments
+                    || iterable instanceof JsTypedArray) {
                 this.generator = null;
                 this.buffer = arrayLikeElements(iterable);
                 this.iterator = null;

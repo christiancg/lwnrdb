@@ -36,9 +36,21 @@ public final class EJsonInterop {
             case JsDate date -> date.toISOString() == null ? JsonNull.INSTANCE : new JsonString(date.toISOString());
             case JsMap ignored -> new JsonObject();
             case JsSet ignored -> new JsonObject();
+            case JsTypedArray typed -> typedArrayToEjson(typed, visited);
+            case JsArrayBuffer ignored -> new JsonObject();
+            case JsDataView ignored -> new JsonObject();
             case JsProxy proxy -> toEjson(proxy.getTarget(), visited);
             default -> null;
         };
+    }
+
+    private static JsonBaseElement typedArrayToEjson(JsTypedArray typed, Map<JsValue, Boolean> visited) {
+        final var result = new JsonArray();
+        for (var i = 0; i < typed.length(); i++) {
+            final var converted = toEjson(typed.getElement(i), visited);
+            result.add(converted == null ? JsonNull.INSTANCE : converted);
+        }
+        return result;
     }
 
     private static JsonBaseElement arrayToEjson(JsArray array, Map<JsValue, Boolean> visited) {

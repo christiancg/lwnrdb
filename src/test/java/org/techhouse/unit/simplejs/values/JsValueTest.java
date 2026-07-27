@@ -58,6 +58,13 @@ public class JsValueTest {
                 new org.techhouse.simplejs.values.JsArguments(List.of(), null, null).getType());
         assertEquals(JsValue.JsValueType.GLOBAL,
                 new org.techhouse.simplejs.values.JsGlobalObject(Environment.global()).getType());
+        assertEquals(JsValue.JsValueType.ARRAY_BUFFER, new org.techhouse.simplejs.values.JsArrayBuffer(4).getType());
+        assertEquals(JsValue.JsValueType.TYPED_ARRAY,
+                new org.techhouse.simplejs.values.JsTypedArray(org.techhouse.simplejs.values.JsTypedArray.Kind.INT8,
+                        new org.techhouse.simplejs.values.JsArrayBuffer(1), 0, 1).getType());
+        assertEquals(JsValue.JsValueType.DATA_VIEW,
+                new org.techhouse.simplejs.values.JsDataView(new org.techhouse.simplejs.values.JsArrayBuffer(4), 0, 4)
+                        .getType());
     }
 
     // Arguments and global objects are typeof "object" and stringify as tagged objects

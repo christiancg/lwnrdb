@@ -37,6 +37,11 @@ public final class GlobalScope {
         define(global, "Date", DateBuiltins.create());
         define(global, "Reflect", ReflectBuiltins.create(ops));
         define(global, "Proxy", ProxyBuiltins.create());
+        define(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer());
+        define(global, "DataView", TypedArrayBuiltins.dataView());
+        for (final var kind : org.techhouse.simplejs.values.JsTypedArray.Kind.values()) {
+            define(global, kind.ctorName(), TypedArrayBuiltins.create(kind, invoker, iterableToList));
+        }
         define(global, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());

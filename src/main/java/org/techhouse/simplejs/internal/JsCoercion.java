@@ -4,10 +4,12 @@ import java.math.BigInteger;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
+import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
@@ -23,6 +25,7 @@ import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -78,6 +81,9 @@ public final class JsCoercion {
             case JsProxy proxy -> toStr(proxy.getTarget());
             case JsArguments ignored -> "[object Arguments]";
             case JsGlobalObject ignored -> "[object global]";
+            case JsTypedArray typed -> typedArrayToString(typed);
+            case JsArrayBuffer ignored -> "[object ArrayBuffer]";
+            case JsDataView ignored -> "[object DataView]";
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }
@@ -107,6 +113,17 @@ public final class JsCoercion {
 
     private static String functionToString(String name) {
         return "function " + (name == null ? "" : name) + "() { }";
+    }
+
+    private static String typedArrayToString(JsTypedArray typed) {
+        final var sb = new StringBuilder();
+        for (var i = 0; i < typed.length(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(toStr(typed.getElement(i)));
+        }
+        return sb.toString();
     }
 
     private static String arrayToString(JsArray array) {
