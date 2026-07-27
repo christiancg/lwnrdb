@@ -810,7 +810,13 @@ public final class Interpreter {
 
     private List<String> enumerateKeys(JsValue target) {
         if (target instanceof JsObject object) {
-            return new ArrayList<>(object.keys());
+            final var keys = new ArrayList<String>();
+            for (final var key : object.keys()) {
+                if (object.isEnumerable(key)) {
+                    keys.add(key);
+                }
+            }
+            return keys;
         }
         if (target instanceof JsArray array) {
             final var keys = new ArrayList<String>();
@@ -1093,7 +1099,9 @@ public final class Interpreter {
         switch (source) {
             case JsObject object -> {
                 for (final var entry : object.getProperties().entrySet()) {
-                    target.set(entry.getKey(), entry.getValue());
+                    if (object.isEnumerable(entry.getKey())) {
+                        target.set(entry.getKey(), entry.getValue());
+                    }
                 }
             }
             case JsArray array -> {
@@ -1193,7 +1201,7 @@ public final class Interpreter {
             final var target = eval(member.getObject(), env);
             final var key = memberKey(member, env);
             if (target instanceof JsObject object) {
-                object.delete(key);
+                return JsBoolean.of(object.delete(key));
             } else if (target instanceof JsArray array) {
                 final var index = arrayIndex(key);
                 if (index != null && index < array.length()) {
@@ -2018,7 +2026,7 @@ public final class Interpreter {
                 final var restObject = new JsObject();
                 if (value instanceof JsObject object) {
                     for (final var entry : object.getProperties().entrySet()) {
-                        if (!taken.contains(entry.getKey())) {
+                        if (!taken.contains(entry.getKey()) && object.isEnumerable(entry.getKey())) {
                             restObject.set(entry.getKey(), entry.getValue());
                         }
                     }

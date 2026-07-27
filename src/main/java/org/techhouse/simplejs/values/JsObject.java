@@ -1,18 +1,24 @@
 package org.techhouse.simplejs.values;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
 public final class JsObject extends JsValue {
+    public record PropertyFlags(boolean writable, boolean enumerable, boolean configurable) {
+        public static final PropertyFlags DEFAULT = new PropertyFlags(true, true, true);
+    }
+
     private final Map<String, JsValue> properties = new LinkedHashMap<>();
-    private boolean frozen;
+    private boolean extensible = true;
     private JsClass klass;
     private Map<String, JsValue> privateFields;
     private Map<JsSymbol, JsValue> symbolProperties;
     private JsObject proto;
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
+    private Map<String, PropertyFlags> descriptors;
 
     public JsValue get(String key) {
         final var value = properties.get(key);
@@ -20,9 +26,18 @@ public final class JsObject extends JsValue {
     }
 
     public void set(String key, JsValue value) {
-        if (frozen) {
+        if (properties.containsKey(key)) {
+            if (isWritable(key)) {
+                properties.put(key, value);
+            }
             return;
         }
+        if (extensible) {
+            properties.put(key, value);
+        }
+    }
+
+    public void defineValue(String key, JsValue value) {
         properties.put(key, value);
     }
 
@@ -31,19 +46,115 @@ public final class JsObject extends JsValue {
     }
 
     public boolean delete(String key) {
-        if (frozen) {
+        if (properties.containsKey(key) && isNotConfigurable(key)) {
             return false;
         }
         properties.remove(key);
+        if (descriptors != null) {
+            descriptors.remove(key);
+        }
         return true;
     }
 
+    public PropertyFlags getFlags(String key) {
+        if (descriptors == null) {
+            return PropertyFlags.DEFAULT;
+        }
+        final var flags = descriptors.get(key);
+        return flags == null ? PropertyFlags.DEFAULT : flags;
+    }
+
+    public void setFlags(String key, PropertyFlags flags) {
+        if (descriptors == null) {
+            descriptors = new LinkedHashMap<>();
+        }
+        descriptors.put(key, flags);
+    }
+
+    public boolean isWritable(String key) {
+        return getFlags(key).writable();
+    }
+
+    public boolean isEnumerable(String key) {
+        return getFlags(key).enumerable();
+    }
+
+    public boolean isNotConfigurable(String key) {
+        return !getFlags(key).configurable();
+    }
+
+    public boolean isExtensible() {
+        return extensible;
+    }
+
+    public void preventExtensions() {
+        extensible = false;
+    }
+
+    public void seal() {
+        extensible = false;
+        for (final var key : ownKeys()) {
+            final var flags = getFlags(key);
+            setFlags(key, new PropertyFlags(flags.writable(), flags.enumerable(), false));
+        }
+    }
+
     public void freeze() {
-        frozen = true;
+        extensible = false;
+        for (final var key : ownKeys()) {
+            setFlags(key, new PropertyFlags(false, isEnumerable(key), false));
+        }
     }
 
     public boolean isFrozen() {
-        return frozen;
+        if (extensible) {
+            return false;
+        }
+        for (final var key : properties.keySet()) {
+            final var flags = getFlags(key);
+            if (flags.writable() || flags.configurable()) {
+                return false;
+            }
+        }
+        return accessorsNonConfigurable();
+    }
+
+    public boolean isSealed() {
+        if (extensible) {
+            return false;
+        }
+        for (final var key : properties.keySet()) {
+            if (getFlags(key).configurable()) {
+                return false;
+            }
+        }
+        return accessorsNonConfigurable();
+    }
+
+    private boolean accessorsNonConfigurable() {
+        for (final var key : accessorKeys()) {
+            if (getFlags(key).configurable()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private Set<String> accessorKeys() {
+        final var keys = new LinkedHashSet<String>();
+        if (accessorGetters != null) {
+            keys.addAll(accessorGetters.keySet());
+        }
+        if (accessorSetters != null) {
+            keys.addAll(accessorSetters.keySet());
+        }
+        return keys;
+    }
+
+    private Set<String> ownKeys() {
+        final var keys = new LinkedHashSet<>(properties.keySet());
+        keys.addAll(accessorKeys());
+        return keys;
     }
 
     public Set<String> keys() {
@@ -83,7 +194,8 @@ public final class JsObject extends JsValue {
     }
 
     public void setSymbol(JsSymbol key, JsValue value) {
-        if (frozen) {
+        final var isNew = symbolProperties == null || !symbolProperties.containsKey(key);
+        if (isNew && !extensible) {
             return;
         }
         if (symbolProperties == null) {

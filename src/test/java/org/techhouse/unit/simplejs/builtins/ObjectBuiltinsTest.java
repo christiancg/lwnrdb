@@ -3,6 +3,7 @@ package org.techhouse.unit.simplejs.builtins;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -23,6 +24,10 @@ public class ObjectBuiltinsTest {
 
     private static boolean bool() {
         return ((JsBoolean) Interpreter.run("let o = {}; Object.freeze(o) === o")).getValue();
+    }
+
+    private static boolean flag(String source) {
+        return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
     // keys/values/entries enumerate own properties in insertion order
@@ -130,11 +135,11 @@ public class ObjectBuiltinsTest {
         assertEquals(5, num(source));
     }
 
-    // defineProperty on a frozen object is a no-op
+    // defineProperty adding a new key to a frozen (non-extensible) object throws
     @Test
     public void test_define_property_frozen() {
-        assertInstanceOf(JsUndefined.class,
-                Interpreter.run("let o = Object.freeze({}); Object.defineProperty(o, 'v', {value: 5}); o.v"));
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = Object.freeze({}); Object.defineProperty(o, 'v', {value: 5});"));
     }
 
     // defineProperties applies multiple descriptors at once
@@ -180,5 +185,137 @@ public class ObjectBuiltinsTest {
     @Test
     public void test_from_entries_edge_cases() {
         assertEquals(1, num("Object.keys(Object.fromEntries([['a'], 5, ['b', 2]])).length - 1"));
+    }
+
+    // a non-writable data property ignores later assignment
+    @Test
+    public void test_define_property_non_writable() {
+        assertEquals(1, num("let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: false}); o.v = 99; o.v"));
+    }
+
+    // a writable:true data property accepts later assignment
+    @Test
+    public void test_define_property_writable() {
+        assertEquals(99, num("let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: true}); o.v = 99; o.v"));
+    }
+
+    // a non-enumerable property is hidden from keys/values/entries and for-in, but visible to getOwnPropertyNames
+    @Test
+    public void test_define_property_non_enumerable() {
+        final var setup = "let o = {a: 1}; Object.defineProperty(o, 'hidden', {value: 2, enumerable: false}); ";
+        assertEquals("a", str(setup + "Object.keys(o).join(',')"));
+        assertEquals("1", str(setup + "Object.values(o).join(',')"));
+        assertEquals("a=1", str(setup + "Object.entries(o).map(e => e[0] + '=' + e[1]).join(',')"));
+        assertEquals("a", str(setup + "let out = []; for (let k in o) out.push(k); out.join(',')"));
+        assertEquals("a,hidden", str(setup + "Object.getOwnPropertyNames(o).join(',')"));
+    }
+
+    // a non-enumerable property is omitted from JSON.stringify
+    @Test
+    public void test_non_enumerable_json_stringify() {
+        assertEquals("{\"a\":1}", str(
+                "let o = {a: 1}; Object.defineProperty(o, 'hidden', {value: 2, enumerable: false}); JSON.stringify(o)"));
+    }
+
+    // propertyIsEnumerable reflects the real flag
+    @Test
+    public void test_property_is_enumerable() {
+        final var setup = "let o = {a: 1}; Object.defineProperty(o, 'hidden', {value: 2, enumerable: false}); ";
+        assertTrue(flag(setup + "o.propertyIsEnumerable('a')"));
+        assertFalse(flag(setup + "o.propertyIsEnumerable('hidden')"));
+        assertFalse(flag(setup + "o.propertyIsEnumerable('missing')"));
+    }
+
+    // freeze blocks add, modify and delete; isFrozen reports true
+    @Test
+    public void test_freeze_full() {
+        assertEquals(1, num("let o = Object.freeze({a: 1}); o.a = 5; o.b = 9; o.a"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let o = Object.freeze({a: 1}); o.b = 9; o.b"));
+        assertEquals(1, num("let o = Object.freeze({a: 1}); delete o.a; o.a"));
+        assertTrue(flag("Object.isFrozen(Object.freeze({a: 1}))"));
+        assertFalse(flag("Object.isFrozen({a: 1})"));
+    }
+
+    // seal blocks adding keys but allows modifying existing ones; isSealed reports true
+    @Test
+    public void test_seal() {
+        assertEquals(5, num("let o = Object.seal({a: 1}); o.a = 5; o.a"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let o = Object.seal({a: 1}); o.b = 9; o.b"));
+        assertEquals(1, num("let o = Object.seal({a: 1}); delete o.a; o.a"));
+        assertTrue(flag("Object.isSealed(Object.seal({a: 1}))"));
+        assertFalse(flag("Object.isSealed({a: 1})"));
+        assertFalse(flag("Object.isFrozen(Object.seal({a: 1}))"));
+    }
+
+    // preventExtensions blocks new keys but keeps existing ones mutable; isExtensible reports the flag
+    @Test
+    public void test_prevent_extensions() {
+        assertTrue(flag("Object.isExtensible({})"));
+        assertFalse(flag("Object.isExtensible(Object.preventExtensions({}))"));
+        assertEquals(5, num("let o = Object.preventExtensions({a: 1}); o.a = 5; o.a"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("let o = Object.preventExtensions({a: 1}); o.b = 9; o.b"));
+    }
+
+    // an empty non-extensible object is both sealed and frozen
+    @Test
+    public void test_empty_non_extensible_is_frozen() {
+        assertTrue(flag("Object.isFrozen(Object.preventExtensions({}))"));
+        assertTrue(flag("Object.isSealed(Object.preventExtensions({}))"));
+    }
+
+    // redefining a non-configurable property in an incompatible way throws
+    @Test
+    public void test_redefine_non_configurable_throws() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'v', {value: 1, configurable: false});"
+                        + "Object.defineProperty(o, 'v', {value: 2});"));
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'v', {value: 1, configurable: false});"
+                        + "Object.defineProperty(o, 'v', {configurable: true});"));
+    }
+
+    // redefining a configurable property is allowed
+    @Test
+    public void test_redefine_configurable_allowed() {
+        assertEquals(2, num("let o = {}; Object.defineProperty(o, 'v', {value: 1, configurable: true});"
+                + "Object.defineProperty(o, 'v', {value: 2}); o.v"));
+    }
+
+    // getOwnPropertyDescriptor reports the real flags of a defined property
+    @Test
+    public void test_get_own_property_descriptor_flags() {
+        final var setup = "let o = {}; Object.defineProperty(o, 'v', "
+                + "{value: 7, writable: false, enumerable: false, configurable: false}); ";
+        assertFalse(flag(setup + "Object.getOwnPropertyDescriptor(o, 'v').writable"));
+        assertFalse(flag(setup + "Object.getOwnPropertyDescriptor(o, 'v').enumerable"));
+        assertFalse(flag(setup + "Object.getOwnPropertyDescriptor(o, 'v').configurable"));
+        assertEquals(7, num(setup + "Object.getOwnPropertyDescriptor(o, 'v').value"));
+    }
+
+    // a normally-assigned property stays writable and enumerable (no regression)
+    @Test
+    public void test_normal_property_defaults() {
+        final var setup = "let o = {}; o.x = 1; ";
+        assertTrue(flag(setup + "Object.getOwnPropertyDescriptor(o, 'x').writable"));
+        assertTrue(flag(setup + "Object.getOwnPropertyDescriptor(o, 'x').enumerable"));
+        assertTrue(flag(setup + "Object.getOwnPropertyDescriptor(o, 'x').configurable"));
+        assertTrue(flag(setup + "o.propertyIsEnumerable('x')"));
+        assertEquals(5, num(setup + "o.x = 5; o.x"));
+    }
+
+    // defineProperty defaults unspecified attributes to false for a new property
+    @Test
+    public void test_define_property_defaults_false() {
+        final var setup = "let o = {}; Object.defineProperty(o, 'v', {value: 1}); ";
+        assertFalse(flag(setup + "Object.getOwnPropertyDescriptor(o, 'v').writable"));
+        assertFalse(flag(setup + "Object.getOwnPropertyDescriptor(o, 'v').enumerable"));
+        assertFalse(flag(setup + "Object.getOwnPropertyDescriptor(o, 'v').configurable"));
+    }
+
+    // delete returns false for a non-configurable property and true for a configurable one
+    @Test
+    public void test_delete_configurability() {
+        assertFalse(flag("let o = {}; Object.defineProperty(o, 'v', {value: 1}); delete o.v"));
+        assertTrue(flag("let o = {a: 1}; delete o.a"));
     }
 }

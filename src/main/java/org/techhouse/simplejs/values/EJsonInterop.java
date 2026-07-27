@@ -55,6 +55,9 @@ public final class EJsonInterop {
         guardCycle(object, visited);
         final var result = new JsonObject();
         for (final var entry : object.getProperties().entrySet()) {
+            if (!object.isEnumerable(entry.getKey())) {
+                continue;
+            }
             final var converted = toEjson(entry.getValue(), visited);
             if (converted != null) {
                 result.add(entry.getKey(), converted);

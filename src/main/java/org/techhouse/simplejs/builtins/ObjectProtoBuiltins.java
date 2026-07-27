@@ -18,12 +18,20 @@ public final class ObjectProtoBuiltins {
                     (_, args) -> JsBoolean.of(!args.isEmpty() && receiver.has(JsCoercion.toStr(args.getFirst()))));
             case "isPrototypeOf" ->
                 new JsNativeFunction("isPrototypeOf", (_, args) -> JsBoolean.of(isPrototypeOf(receiver, args)));
-            case "propertyIsEnumerable" -> new JsNativeFunction("propertyIsEnumerable",
-                    (_, args) -> JsBoolean.of(!args.isEmpty() && receiver.has(JsCoercion.toStr(args.getFirst()))));
+            case "propertyIsEnumerable" ->
+                new JsNativeFunction("propertyIsEnumerable", (_, args) -> JsBoolean.of(isEnumerable(receiver, args)));
             case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString("[object Object]"));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> receiver);
             default -> null;
         };
+    }
+
+    private static boolean isEnumerable(JsObject receiver, List<JsValue> args) {
+        if (args.isEmpty()) {
+            return false;
+        }
+        final var key = JsCoercion.toStr(args.getFirst());
+        return receiver.has(key) && receiver.isEnumerable(key);
     }
 
     private static boolean isPrototypeOf(JsObject receiver, List<JsValue> args) {

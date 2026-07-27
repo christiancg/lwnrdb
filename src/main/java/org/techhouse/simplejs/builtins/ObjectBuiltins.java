@@ -1,13 +1,16 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.List;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -23,6 +26,12 @@ public final class ObjectBuiltins {
         object.set("entries", new JsNativeFunction("entries", (_, args) -> entries(args)));
         object.set("assign", new JsNativeFunction("assign", (_, args) -> assign(args)));
         object.set("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
+        object.set("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
+        object.set("seal", new JsNativeFunction("seal", (_, args) -> seal(args)));
+        object.set("isSealed", new JsNativeFunction("isSealed", (_, args) -> isSealed(args)));
+        object.set("preventExtensions",
+                new JsNativeFunction("preventExtensions", (_, args) -> preventExtensions(args)));
+        object.set("isExtensible", new JsNativeFunction("isExtensible", (_, args) -> isExtensible(args)));
         object.set("create", new JsNativeFunction("create", (_, args) -> createObject(args)));
         object.set("getPrototypeOf", new JsNativeFunction("getPrototypeOf", (_, args) -> getPrototypeOf(args)));
         object.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> setPrototypeOf(args)));
@@ -41,7 +50,9 @@ public final class ObjectBuiltins {
         final var target = first(args);
         if (target instanceof JsObject object) {
             for (final var key : object.keys()) {
-                result.push(new JsString(key));
+                if (object.isEnumerable(key)) {
+                    result.push(new JsString(key));
+                }
             }
         } else if (target instanceof JsArray array) {
             for (var i = 0; i < array.length(); i++) {
@@ -55,8 +66,10 @@ public final class ObjectBuiltins {
         final var result = new JsArray();
         final var target = first(args);
         if (target instanceof JsObject object) {
-            for (final var value : object.getProperties().values()) {
-                result.push(value);
+            for (final var entry : object.getProperties().entrySet()) {
+                if (object.isEnumerable(entry.getKey())) {
+                    result.push(entry.getValue());
+                }
             }
         } else if (target instanceof JsArray array) {
             for (final var value : array.getElements()) {
@@ -71,7 +84,9 @@ public final class ObjectBuiltins {
         final var target = first(args);
         if (target instanceof JsObject object) {
             for (final var entry : object.getProperties().entrySet()) {
-                result.push(new JsArray(List.of(new JsString(entry.getKey()), entry.getValue())));
+                if (object.isEnumerable(entry.getKey())) {
+                    result.push(new JsArray(List.of(new JsString(entry.getKey()), entry.getValue())));
+                }
             }
         } else if (target instanceof JsArray array) {
             final var elements = array.getElements();
@@ -89,7 +104,9 @@ public final class ObjectBuiltins {
         for (var i = 1; i < args.size(); i++) {
             if (args.get(i) instanceof JsObject source) {
                 for (final var entry : source.getProperties().entrySet()) {
-                    target.set(entry.getKey(), entry.getValue());
+                    if (source.isEnumerable(entry.getKey())) {
+                        target.set(entry.getKey(), entry.getValue());
+                    }
                 }
             }
         }
@@ -102,6 +119,34 @@ public final class ObjectBuiltins {
             object.freeze();
         }
         return target;
+    }
+
+    private static JsValue isFrozen(List<JsValue> args) {
+        return JsBoolean.of(!(first(args) instanceof JsObject object) || object.isFrozen());
+    }
+
+    private static JsValue seal(List<JsValue> args) {
+        final var target = first(args);
+        if (target instanceof JsObject object) {
+            object.seal();
+        }
+        return target;
+    }
+
+    private static JsValue isSealed(List<JsValue> args) {
+        return JsBoolean.of(!(first(args) instanceof JsObject object) || object.isSealed());
+    }
+
+    private static JsValue preventExtensions(List<JsValue> args) {
+        final var target = first(args);
+        if (target instanceof JsObject object) {
+            object.preventExtensions();
+        }
+        return target;
+    }
+
+    private static JsValue isExtensible(List<JsValue> args) {
+        return JsBoolean.of(first(args) instanceof JsObject object && object.isExtensible());
     }
 
     private static JsValue createObject(List<JsValue> args) {
@@ -156,16 +201,62 @@ public final class ObjectBuiltins {
     }
 
     private static void applyDescriptor(JsObject object, String key, JsObject descriptor) {
-        if (object.isFrozen()) {
-            return;
+        final var exists = object.has(key) || object.hasAccessor(key);
+        if (!exists && !object.isExtensible()) {
+            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
         }
+        if (exists && object.isNotConfigurable(key)) {
+            checkNonConfigurableRedefine(object, key, descriptor);
+        }
+        final var flags = flagsFrom(descriptor, object, key, exists);
         final var getter = descriptor.has("get") ? descriptor.get("get") : null;
         final var setter = descriptor.has("set") ? descriptor.get("set") : null;
         if (getter != null || setter != null) {
+            object.getProperties().remove(key);
             object.defineAccessor(key, isCallable(getter) ? getter : null, isCallable(setter) ? setter : null);
         } else {
-            object.set(key, descriptor.has("value") ? descriptor.get("value") : JsUndefined.getInstance());
+            object.defineValue(key,
+                    descriptor.has("value")
+                            ? descriptor.get("value")
+                            : exists && object.has(key) ? object.get(key) : JsUndefined.getInstance());
         }
+        object.setFlags(key, flags);
+    }
+
+    private static PropertyFlags flagsFrom(JsObject descriptor, JsObject object, String key, boolean exists) {
+        final var current = exists ? object.getFlags(key) : new PropertyFlags(false, false, false);
+        final var writable = descriptor.has("writable")
+                ? JsCoercion.toBoolean(descriptor.get("writable"))
+                : current.writable();
+        final var enumerable = descriptor.has("enumerable")
+                ? JsCoercion.toBoolean(descriptor.get("enumerable"))
+                : current.enumerable();
+        final var configurable = descriptor.has("configurable")
+                ? JsCoercion.toBoolean(descriptor.get("configurable"))
+                : current.configurable();
+        return new PropertyFlags(writable, enumerable, configurable);
+    }
+
+    private static void checkNonConfigurableRedefine(JsObject object, String key, JsObject descriptor) {
+        if (descriptor.has("configurable") && JsCoercion.toBoolean(descriptor.get("configurable"))) {
+            throw redefineError(key);
+        }
+        if (descriptor.has("enumerable")
+                && JsCoercion.toBoolean(descriptor.get("enumerable")) != object.isEnumerable(key)) {
+            throw redefineError(key);
+        }
+        if (object.has(key) && !object.isWritable(key)) {
+            if (descriptor.has("writable") && JsCoercion.toBoolean(descriptor.get("writable"))) {
+                throw redefineError(key);
+            }
+            if (descriptor.has("value") && !JsOperators.strictEquals(object.get(key), descriptor.get("value"))) {
+                throw redefineError(key);
+            }
+        }
+    }
+
+    private static TypeErrorException redefineError(String key) {
+        return new TypeErrorException("Cannot redefine property: " + key);
     }
 
     private static boolean isCallable(JsValue value) {
@@ -193,22 +284,23 @@ public final class ObjectBuiltins {
             return JsUndefined.getInstance();
         }
         final var key = JsCoercion.toStr(args.get(1));
+        final var flags = object.getFlags(key);
         final var getter = object.getAccessorGetter(key);
         final var setter = object.getAccessorSetter(key);
         if (getter != null || setter != null) {
             final var descriptor = new JsObject();
             descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
             descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
-            descriptor.set("enumerable", JsBoolean.of(true));
-            descriptor.set("configurable", JsBoolean.of(!object.isFrozen()));
+            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
             return descriptor;
         }
         if (object.has(key)) {
             final var descriptor = new JsObject();
             descriptor.set("value", object.get(key));
-            descriptor.set("writable", JsBoolean.of(!object.isFrozen()));
-            descriptor.set("enumerable", JsBoolean.of(true));
-            descriptor.set("configurable", JsBoolean.of(!object.isFrozen()));
+            descriptor.set("writable", JsBoolean.of(flags.writable()));
+            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
             return descriptor;
         }
         return JsUndefined.getInstance();
