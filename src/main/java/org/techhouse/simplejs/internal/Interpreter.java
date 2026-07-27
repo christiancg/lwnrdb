@@ -14,6 +14,7 @@ import org.techhouse.simplejs.builtins.DbModule;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.MapBuiltins;
 import org.techhouse.simplejs.builtins.NumberBuiltins;
 import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
@@ -113,6 +114,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
@@ -146,6 +148,43 @@ public final class Interpreter {
     private final EventLoop eventLoop = new EventLoop();
     private final ThreadLocal<Coroutine> currentCoroutine = new ThreadLocal<>();
     private final List<Coroutine> coroutines = new ArrayList<>();
+    private final InterpreterOps ops = new InterpreterOps() {
+        @Override
+        public JsValue getMember(JsValue target, JsValue key) {
+            return getMemberByKey(target, key);
+        }
+
+        @Override
+        public boolean setMember(JsValue target, JsValue key, JsValue value) {
+            setMemberByKey(target, key, value);
+            return true;
+        }
+
+        @Override
+        public boolean has(JsValue target, JsValue key) {
+            return hasMember(target, key);
+        }
+
+        @Override
+        public boolean deleteMember(JsValue target, JsValue key) {
+            return deleteMemberValue(target, key);
+        }
+
+        @Override
+        public List<JsValue> ownKeys(JsValue target) {
+            return ownKeysOf(target);
+        }
+
+        @Override
+        public JsValue call(JsValue fn, JsValue thisArg, List<JsValue> args) {
+            return callValue(fn, thisArg, args);
+        }
+
+        @Override
+        public JsValue construct(JsValue fn, List<JsValue> args) {
+            return constructValue(fn, args);
+        }
+    };
 
     private final HostBindings host;
     private final int maxDepth;
@@ -197,7 +236,7 @@ public final class Interpreter {
 
     private ProgramOutcome runModule(Program program) {
         final var env = Environment.global();
-        GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console());
+        GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console(), ops);
         for (final var statement : program.getBody()) {
             if (statement instanceof ImportDeclaration importDeclaration) {
                 bindImport(importDeclaration, env);
@@ -809,6 +848,15 @@ public final class Interpreter {
     }
 
     private List<String> enumerateKeys(JsValue target) {
+        if (target instanceof JsProxy proxy) {
+            final var keys = new ArrayList<String>();
+            for (final var key : proxyOwnKeys(proxy)) {
+                if (key instanceof JsString string) {
+                    keys.add(string.getValue());
+                }
+            }
+            return keys;
+        }
         if (target instanceof JsObject object) {
             final var keys = new ArrayList<String>();
             for (final var key : object.keys()) {
@@ -1197,19 +1245,17 @@ public final class Interpreter {
     }
 
     private JsValue evalDelete(Expression argument, Environment env) {
-        if (argument instanceof MemberExpression member) {
-            final var target = eval(member.getObject(), env);
-            final var key = memberKey(member, env);
-            if (target instanceof JsObject object) {
-                return JsBoolean.of(object.delete(key));
-            } else if (target instanceof JsArray array) {
-                final var index = arrayIndex(key);
-                if (index != null && index < array.length()) {
-                    array.set(index, JsUndefined.getInstance());
-                }
-            }
+        if (!(argument instanceof MemberExpression member)) {
+            return JsBoolean.TRUE;
         }
-        return JsBoolean.TRUE;
+        final var target = eval(member.getObject(), env);
+        final var key = memberKey(member, env);
+        return switch (target) {
+            case JsProxy proxy -> JsBoolean.of(proxyDelete(proxy, new JsString(key)));
+            case JsObject object -> JsBoolean.of(object.delete(key));
+            case JsArray array -> JsBoolean.of(deleteArrayElement(array, key));
+            default -> JsBoolean.TRUE;
+        };
     }
 
     private JsValue evalUpdate(UpdateExpression update, Environment env) {
@@ -1261,17 +1307,23 @@ public final class Interpreter {
     }
 
     private JsValue evalIn(BinaryExpression binary, Environment env) {
-        final var key = JsCoercion.toStr(eval(binary.getLeft(), env));
-        final var container = eval(binary.getRight(), env);
+        return JsBoolean.of(hasMember(eval(binary.getRight(), env), eval(binary.getLeft(), env)));
+    }
+
+    private boolean hasMember(JsValue container, JsValue keyValue) {
+        if (container instanceof JsProxy proxy) {
+            return proxyHas(proxy, keyValue);
+        }
+        final var key = JsCoercion.toStr(keyValue);
         if (container instanceof JsObject object) {
-            return JsBoolean.of(object.has(key));
+            return object.has(key);
         }
         if (container instanceof JsArray array) {
             if ("length".equals(key)) {
-                return JsBoolean.TRUE;
+                return true;
             }
             final var index = arrayIndex(key);
-            return JsBoolean.of(index != null && index < array.length());
+            return index != null && index < array.length();
         }
         throw new TypeErrorException("Cannot use 'in' operator to search for '" + key + "'");
     }
@@ -1422,6 +1474,9 @@ public final class Interpreter {
     }
 
     private JsValue getMemberByKey(JsValue target, JsValue keyValue) {
+        if (target instanceof JsProxy proxy) {
+            return proxyGet(proxy, keyValue);
+        }
         if (keyValue instanceof JsSymbol symbol) {
             return getSymbolMember(target, symbol);
         }
@@ -1469,6 +1524,10 @@ public final class Interpreter {
     }
 
     private void setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
+        if (target instanceof JsProxy proxy) {
+            proxySet(proxy, keyValue, value);
+            return;
+        }
         if (keyValue instanceof JsSymbol symbol) {
             if (target instanceof JsObject object) {
                 final var cls = object.getKlass();
@@ -1488,6 +1547,7 @@ public final class Interpreter {
 
     private JsValue getMember(JsValue target, String key) {
         return switch (target) {
+            case JsProxy proxy -> proxyGet(proxy, new JsString(key));
             case JsObject object -> getObjectMember(object, key);
             case JsClass cls -> getStaticMember(cls, key);
             case JsArray array -> getArrayMember(array, key);
@@ -1607,6 +1667,7 @@ public final class Interpreter {
 
     private void setMember(JsValue target, String key, JsValue value) {
         switch (target) {
+            case JsProxy proxy -> proxySet(proxy, new JsString(key), value);
             case JsObject object -> {
                 final var cls = object.getKlass();
                 if (cls != null && !object.has(key)) {
@@ -1718,6 +1779,7 @@ public final class Interpreter {
 
     private JsValue constructValue(JsValue callee, List<JsValue> args) {
         return switch (callee) {
+            case JsProxy proxy -> proxyConstruct(proxy, args);
             case JsClass cls -> construct(cls, args);
             case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
                 constructValue(nativeFunction.getBoundTarget(), boundArgs(nativeFunction, args));
@@ -1759,13 +1821,12 @@ public final class Interpreter {
 
     private JsValue callValue(JsValue callee, JsValue thisArg, List<JsValue> args) {
         tick();
-        if (callee instanceof JsFunction function) {
-            return callFunction(function, thisArg, args);
-        }
-        if (callee instanceof JsNativeFunction nativeFunction) {
-            return nativeFunction.invoke(thisArg, args);
-        }
-        throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
+        return switch (callee) {
+            case JsProxy proxy -> proxyApply(proxy, thisArg, args);
+            case JsFunction function -> callFunction(function, thisArg, args);
+            case JsNativeFunction nativeFunction -> nativeFunction.invoke(thisArg, args);
+            default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
+        };
     }
 
     private JsValue callFunction(JsFunction function, JsValue thisArg, List<JsValue> args) {
@@ -2434,6 +2495,120 @@ public final class Interpreter {
             }
         }
         return false;
+    }
+
+    private JsValue trapOf(JsProxy proxy, String name) {
+        final var trap = getMember(proxy.getHandler(), name);
+        if (isNullish(trap)) {
+            return null;
+        }
+        if (!(trap instanceof JsFunction) && !(trap instanceof JsNativeFunction)) {
+            throw new TypeErrorException("Proxy handler's '" + name + "' trap is not a function");
+        }
+        return trap;
+    }
+
+    private JsValue proxyGet(JsProxy proxy, JsValue key) {
+        final var trap = trapOf(proxy, "get");
+        if (trap == null) {
+            return getMemberByKey(proxy.getTarget(), key);
+        }
+        return callValue(trap, proxy.getHandler(), List.of(proxy.getTarget(), key, proxy));
+    }
+
+    private void proxySet(JsProxy proxy, JsValue key, JsValue value) {
+        final var trap = trapOf(proxy, "set");
+        if (trap == null) {
+            setMemberByKey(proxy.getTarget(), key, value);
+            return;
+        }
+        callValue(trap, proxy.getHandler(), List.of(proxy.getTarget(), key, value, proxy));
+    }
+
+    private boolean proxyHas(JsProxy proxy, JsValue key) {
+        final var trap = trapOf(proxy, "has");
+        if (trap == null) {
+            return hasMember(proxy.getTarget(), key);
+        }
+        return JsCoercion.toBoolean(callValue(trap, proxy.getHandler(), List.of(proxy.getTarget(), key)));
+    }
+
+    private boolean proxyDelete(JsProxy proxy, JsValue key) {
+        final var trap = trapOf(proxy, "deleteProperty");
+        if (trap == null) {
+            return deleteMemberValue(proxy.getTarget(), key);
+        }
+        return JsCoercion.toBoolean(callValue(trap, proxy.getHandler(), List.of(proxy.getTarget(), key)));
+    }
+
+    private List<JsValue> proxyOwnKeys(JsProxy proxy) {
+        final var trap = trapOf(proxy, "ownKeys");
+        if (trap == null) {
+            return ownKeysOf(proxy.getTarget());
+        }
+        final var result = callValue(trap, proxy.getHandler(), List.of(proxy.getTarget()));
+        return result instanceof JsArray array ? new ArrayList<>(array.getElements()) : new ArrayList<>();
+    }
+
+    private JsValue proxyApply(JsProxy proxy, JsValue thisArg, List<JsValue> args) {
+        final var trap = trapOf(proxy, "apply");
+        if (trap == null) {
+            return callValue(proxy.getTarget(), thisArg, args);
+        }
+        return callValue(trap, proxy.getHandler(),
+                List.of(proxy.getTarget(), thisArg, new JsArray(new ArrayList<>(args))));
+    }
+
+    private JsValue proxyConstruct(JsProxy proxy, List<JsValue> args) {
+        final var trap = trapOf(proxy, "construct");
+        if (trap == null) {
+            return constructValue(proxy.getTarget(), args);
+        }
+        return callValue(trap, proxy.getHandler(),
+                List.of(proxy.getTarget(), new JsArray(new ArrayList<>(args)), proxy));
+    }
+
+    private List<JsValue> ownKeysOf(JsValue target) {
+        return switch (target) {
+            case JsProxy proxy -> proxyOwnKeys(proxy);
+            case JsObject object -> objectOwnKeys(object);
+            case JsArray array -> arrayOwnKeys(array);
+            default -> new ArrayList<>();
+        };
+    }
+
+    private List<JsValue> objectOwnKeys(JsObject object) {
+        final var keys = new ArrayList<JsValue>();
+        for (final var key : object.keys()) {
+            keys.add(new JsString(key));
+        }
+        return keys;
+    }
+
+    private List<JsValue> arrayOwnKeys(JsArray array) {
+        final var keys = new ArrayList<JsValue>();
+        for (var i = 0; i < array.length(); i++) {
+            keys.add(new JsString(Integer.toString(i)));
+        }
+        keys.add(new JsString("length"));
+        return keys;
+    }
+
+    private boolean deleteMemberValue(JsValue target, JsValue keyValue) {
+        return switch (target) {
+            case JsProxy proxy -> proxyDelete(proxy, keyValue);
+            case JsObject object -> object.delete(JsCoercion.toStr(keyValue));
+            case JsArray array -> deleteArrayElement(array, JsCoercion.toStr(keyValue));
+            default -> true;
+        };
+    }
+
+    private boolean deleteArrayElement(JsArray array, String key) {
+        final var index = arrayIndex(key);
+        if (index != null && index < array.length()) {
+            array.set(index, JsUndefined.getInstance());
+        }
+        return true;
     }
 
     private JsValue generatorMethod(JsGenerator generator, String key) {

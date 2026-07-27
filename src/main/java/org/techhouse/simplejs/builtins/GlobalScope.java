@@ -13,10 +13,10 @@ public final class GlobalScope {
     }
 
     public static void install(Environment global, EventLoop eventLoop, Invoker invoker, IterableToList iterableToList,
-            Consumer<String> consoleSink) {
+            Consumer<String> consoleSink, InterpreterOps ops) {
         final var globalObject = new JsObject();
         ErrorBuiltins.install(global);
-        define(global, globalObject, "Object", ObjectBuiltins.create(iterableToList));
+        define(global, globalObject, "Object", ObjectBuiltins.create(iterableToList, ops));
         define(global, globalObject, "Array", ArrayBuiltins.create(invoker, iterableToList));
         define(global, globalObject, "String", StringBuiltins.create());
         define(global, globalObject, "Number", NumberBuiltins.create());
@@ -34,6 +34,8 @@ public final class GlobalScope {
         define(global, globalObject, "Set", SetBuiltins.create(iterableToList, false));
         define(global, globalObject, "WeakSet", SetBuiltins.create(iterableToList, true));
         define(global, globalObject, "Date", DateBuiltins.create());
+        define(global, globalObject, "Reflect", ReflectBuiltins.create(ops));
+        define(global, globalObject, "Proxy", ProxyBuiltins.create());
         define(global, globalObject, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, globalObject, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, globalObject, "isNaN", NumberBuiltins.isNaNFunction());

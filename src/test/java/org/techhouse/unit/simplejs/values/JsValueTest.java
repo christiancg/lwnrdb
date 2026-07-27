@@ -52,6 +52,23 @@ public class JsValueTest {
         assertEquals(JsValue.JsValueType.MAP, new org.techhouse.simplejs.values.JsMap().getType());
         assertEquals(JsValue.JsValueType.SET, new org.techhouse.simplejs.values.JsSet().getType());
         assertEquals(JsValue.JsValueType.DATE, new org.techhouse.simplejs.values.JsDate(0).getType());
+        assertEquals(JsValue.JsValueType.PROXY,
+                new org.techhouse.simplejs.values.JsProxy(new JsObject(), new JsObject()).getType());
+    }
+
+    // A proxy mirrors its target's typeof and string coercion, and reports callability
+    @Test
+    public void test_proxy_value() {
+        final var objectProxy = new org.techhouse.simplejs.values.JsProxy(new JsObject(), new JsObject());
+        assertEquals("object", JsCoercion.typeOf(objectProxy));
+        assertEquals("[object Object]", JsCoercion.toStr(objectProxy));
+        assertFalse(objectProxy.isCallable());
+        final var fnProxy = new org.techhouse.simplejs.values.JsProxy(
+                new JsNativeFunction("id", (_, _) -> JsUndefined.getInstance()), new JsObject());
+        assertEquals("function", JsCoercion.typeOf(fnProxy));
+        assertTrue(fnProxy.isCallable());
+        assertSame(JsValue.JsValueType.FUNCTION, fnProxy.getTarget().getType());
+        assertInstanceOf(JsObject.class, fnProxy.getHandler());
     }
 
     // Map/Set/Date are typeof "object" and stringify per spec

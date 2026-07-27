@@ -16,6 +16,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
@@ -72,6 +73,7 @@ public final class JsCoercion {
             case JsMap ignored -> "[object Map]";
             case JsSet ignored -> "[object Set]";
             case JsDate d -> d.toDateString();
+            case JsProxy proxy -> toStr(proxy.getTarget());
             default -> throw new TypeErrorException("Cannot convert value to string");
         };
     }
@@ -94,6 +96,7 @@ public final class JsCoercion {
             case JsNativeFunction ignored -> "function";
             case JsClass ignored -> "function";
             case JsSymbol ignored -> "symbol";
+            case JsProxy proxy -> typeOf(proxy.getTarget());
             default -> "object";
         };
     }

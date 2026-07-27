@@ -36,6 +36,7 @@ public final class EJsonInterop {
             case JsDate date -> date.toISOString() == null ? JsonNull.INSTANCE : new JsonString(date.toISOString());
             case JsMap ignored -> new JsonObject();
             case JsSet ignored -> new JsonObject();
+            case JsProxy proxy -> toEjson(proxy.getTarget(), visited);
             default -> null;
         };
     }

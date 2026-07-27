@@ -432,6 +432,29 @@ completes the set (an empty non-extensible object is both sealed and frozen). `d
 `false` for a non-configurable property. Redefinition compatibility is a pragmatic subset, not
 the full `[[DefineOwnProperty]]` state machine.
 
+**`Reflect` & `Proxy` (spec-gap Phase D).** `builtins/ReflectBuiltins` installs the `Reflect`
+namespace — `get`/`set`/`has`/`deleteProperty`/`ownKeys`/`apply`/`construct`/`getPrototypeOf`/
+`setPrototypeOf`/`defineProperty`/`getOwnPropertyDescriptor`. Each delegates back into the
+interpreter through a single `builtins/InterpreterOps` seam (`getMember`/`setMember`/`has`/
+`deleteMember`/`ownKeys`/`call`/`construct`, implemented by the `Interpreter` and threaded via
+`GlobalScope.install`); the descriptor/prototype statics reuse `ObjectBuiltins`. `Reflect.set`
+returns `true`, `Reflect.defineProperty` returns `false` instead of throwing on an illegal
+redefine, and a missing arguments-list argument is treated as empty. `values/JsProxy` is a new
+`JsValue` (`JsValueType.PROXY`) holding a `target` + `handler`; its `typeof`/string coercion
+mirror the target (`EJsonInterop`/`JsCoercion` delegate through). `new Proxy(target, handler)`
+(`builtins/ProxyBuiltins`) requires both to be objects (else `TypeError`). Trap dispatch lives
+in the interpreter's member choke points — `getMemberByKey`/`getMember` (`get`),
+`setMemberByKey`/`setMember` (`set`), `hasMember`/`in` (`has`), `evalDelete`/`delete`
+(`deleteProperty`), `enumerateKeys`/`for-in` + `Object.keys`/`values`/`entries`/
+`getOwnPropertyNames` (`ownKeys`), `callValue` (`apply`), and `constructValue`/`new`
+(`construct`) — each in a small `proxyGet`/`proxySet`/… helper that falls back to the target
+when the trap is absent. A non-function trap throws a `TypeError`. **Deliberate limitations**:
+the `getPrototypeOf`/`setPrototypeOf`/`isExtensible`/`preventExtensions`/`defineProperty`/
+`getOwnPropertyDescriptor` traps and `Proxy.revocable` are not implemented (those operations
+act on the target directly); the `get`/`set` `receiver` argument is passed but accessor
+dispatch ignores it; proxy `ownKeys` enumeration does not re-filter through a
+`getOwnPropertyDescriptor` trap for enumerability.
+
 **Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
 fresh per-iteration binding (unobservable until closures arrive in 6b).
 

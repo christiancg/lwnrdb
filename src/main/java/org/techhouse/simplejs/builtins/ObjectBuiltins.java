@@ -11,6 +11,7 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -19,11 +20,11 @@ public final class ObjectBuiltins {
     private ObjectBuiltins() {
     }
 
-    public static JsObject create(IterableToList iterableToList) {
+    public static JsObject create(IterableToList iterableToList, InterpreterOps ops) {
         final var object = new JsObject();
-        object.set("keys", new JsNativeFunction("keys", (_, args) -> keys(args)));
-        object.set("values", new JsNativeFunction("values", (_, args) -> values(args)));
-        object.set("entries", new JsNativeFunction("entries", (_, args) -> entries(args)));
+        object.set("keys", new JsNativeFunction("keys", (_, args) -> keys(args, ops)));
+        object.set("values", new JsNativeFunction("values", (_, args) -> values(args, ops)));
+        object.set("entries", new JsNativeFunction("entries", (_, args) -> entries(args, ops)));
         object.set("assign", new JsNativeFunction("assign", (_, args) -> assign(args)));
         object.set("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
         object.set("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
@@ -38,60 +39,87 @@ public final class ObjectBuiltins {
         object.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> defineProperty(args)));
         object.set("defineProperties", new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args)));
         object.set("getOwnPropertyNames",
-                new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args)));
+                new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args, ops)));
         object.set("getOwnPropertyDescriptor",
                 new JsNativeFunction("getOwnPropertyDescriptor", (_, args) -> getOwnPropertyDescriptor(args)));
         object.set("fromEntries", new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
         return object;
     }
 
-    private static JsValue keys(List<JsValue> args) {
+    private static JsValue keys(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
-        final var target = first(args);
-        if (target instanceof JsObject object) {
-            for (final var key : object.keys()) {
-                if (object.isEnumerable(key)) {
-                    result.push(new JsString(key));
+        switch (first(args)) {
+            case JsProxy proxy -> {
+                for (final var key : ops.ownKeys(proxy)) {
+                    result.push(key);
                 }
             }
-        } else if (target instanceof JsArray array) {
-            for (var i = 0; i < array.length(); i++) {
-                result.push(new JsString(Integer.toString(i)));
+            case JsObject object -> {
+                for (final var key : object.keys()) {
+                    if (object.isEnumerable(key)) {
+                        result.push(new JsString(key));
+                    }
+                }
+            }
+            case JsArray array -> {
+                for (var i = 0; i < array.length(); i++) {
+                    result.push(new JsString(Integer.toString(i)));
+                }
+            }
+            default -> {
             }
         }
         return result;
     }
 
-    private static JsValue values(List<JsValue> args) {
+    private static JsValue values(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
-        final var target = first(args);
-        if (target instanceof JsObject object) {
-            for (final var entry : object.getProperties().entrySet()) {
-                if (object.isEnumerable(entry.getKey())) {
-                    result.push(entry.getValue());
+        switch (first(args)) {
+            case JsProxy proxy -> {
+                for (final var key : ops.ownKeys(proxy)) {
+                    result.push(ops.getMember(proxy, key));
                 }
             }
-        } else if (target instanceof JsArray array) {
-            for (final var value : array.getElements()) {
-                result.push(value);
+            case JsObject object -> {
+                for (final var entry : object.getProperties().entrySet()) {
+                    if (object.isEnumerable(entry.getKey())) {
+                        result.push(entry.getValue());
+                    }
+                }
+            }
+            case JsArray array -> {
+                for (final var value : array.getElements()) {
+                    result.push(value);
+                }
+            }
+            default -> {
             }
         }
         return result;
     }
 
-    private static JsValue entries(List<JsValue> args) {
+    private static JsValue entries(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
-        final var target = first(args);
-        if (target instanceof JsObject object) {
-            for (final var entry : object.getProperties().entrySet()) {
-                if (object.isEnumerable(entry.getKey())) {
-                    result.push(new JsArray(List.of(new JsString(entry.getKey()), entry.getValue())));
+        switch (first(args)) {
+            case JsProxy proxy -> {
+                for (final var key : ops.ownKeys(proxy)) {
+                    result.push(new JsArray(List.of(key, ops.getMember(proxy, key))));
                 }
             }
-        } else if (target instanceof JsArray array) {
-            final var elements = array.getElements();
-            for (var i = 0; i < elements.size(); i++) {
-                result.push(new JsArray(List.of(new JsString(Integer.toString(i)), elements.get(i))));
+            case JsObject object -> {
+                for (final var entry : object.getProperties().entrySet()) {
+                    if (object.isEnumerable(entry.getKey())) {
+                        result.push(new JsArray(List.of(new JsString(entry.getKey()), entry.getValue())));
+                    }
+                }
+            }
+            case JsArray array -> {
+                final var elements = array.getElements();
+                for (var i = 0; i < elements.size(); i++) {
+                    result.push(new JsArray(List.of(new JsString(Integer.toString(i)), elements.get(i))));
+                }
+            }
+            default -> {
             }
         }
         return result;
@@ -161,14 +189,14 @@ public final class ObjectBuiltins {
         return object;
     }
 
-    private static JsValue getPrototypeOf(List<JsValue> args) {
+    public static JsValue getPrototypeOf(List<JsValue> args) {
         if (first(args) instanceof JsObject object && object.getProto() != null) {
             return object.getProto();
         }
         return JsNull.getInstance();
     }
 
-    private static JsValue setPrototypeOf(List<JsValue> args) {
+    public static JsValue setPrototypeOf(List<JsValue> args) {
         final var target = first(args);
         if (target instanceof JsObject object) {
             object.setProto(args.size() > 1 && args.get(1) instanceof JsObject proto ? proto : null);
@@ -176,7 +204,7 @@ public final class ObjectBuiltins {
         return target;
     }
 
-    private static JsValue defineProperty(List<JsValue> args) {
+    public static JsValue defineProperty(List<JsValue> args) {
         final var target = first(args);
         if (target instanceof JsObject object && args.size() > 2 && args.get(2) instanceof JsObject descriptor) {
             applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor);
@@ -263,23 +291,32 @@ public final class ObjectBuiltins {
         return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
-    private static JsValue getOwnPropertyNames(List<JsValue> args) {
+    private static JsValue getOwnPropertyNames(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
-        final var target = first(args);
-        if (target instanceof JsObject object) {
-            for (final var key : object.keys()) {
-                result.push(new JsString(key));
+        switch (first(args)) {
+            case JsProxy proxy -> {
+                for (final var key : ops.ownKeys(proxy)) {
+                    result.push(key);
+                }
             }
-        } else if (target instanceof JsArray array) {
-            for (var i = 0; i < array.length(); i++) {
-                result.push(new JsString(Integer.toString(i)));
+            case JsObject object -> {
+                for (final var key : object.keys()) {
+                    result.push(new JsString(key));
+                }
             }
-            result.push(new JsString("length"));
+            case JsArray array -> {
+                for (var i = 0; i < array.length(); i++) {
+                    result.push(new JsString(Integer.toString(i)));
+                }
+                result.push(new JsString("length"));
+            }
+            default -> {
+            }
         }
         return result;
     }
 
-    private static JsValue getOwnPropertyDescriptor(List<JsValue> args) {
+    public static JsValue getOwnPropertyDescriptor(List<JsValue> args) {
         if (!(first(args) instanceof JsObject object) || args.size() < 2) {
             return JsUndefined.getInstance();
         }
