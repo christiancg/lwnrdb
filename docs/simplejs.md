@@ -455,6 +455,55 @@ act on the target directly); the `get`/`set` `receiver` argument is passed but a
 dispatch ignores it; proxy `ownKeys` enumeration does not re-filter through a
 `getOwnPropertyDescriptor` trap for enumerability.
 
+**Mapped `arguments` & live `globalThis` (spec-gap Phase F).** A non-arrow function now
+receives a purpose-built `values/JsArguments` instead of a plain-array copy. When every
+parameter is a plain `Identifier` (no rest/default/destructured param) the object is
+**mapped**: numeric-index get/set proxy to the activation `Environment` binding for the
+corresponding parameter (built by `Interpreter.makeArguments`), so `arguments[0] = 9` writes
+the named parameter and reassigning the parameter is observed through `arguments[0]`. A
+rest/default/pattern parameter makes it **unmapped** (a plain backing store, no aliasing).
+`length` counts the passed arguments; the object is iterable (`for-of`, spread) via an
+`arrayLikeElements` snapshot. Arrows still inherit `arguments` lexically. **Deliberate
+limitation**: `arguments.callee` is `undefined` (not a strict-mode throwing accessor).
+`globalThis` is a distinguished `values/JsGlobalObject` backed by the global `Environment`:
+member reads fall through to the global binding (`Environment.tryGet`), writes assign the
+global binding declaring it if absent (`Environment.setGlobal`), and `in` consults it
+(`Environment.isDeclared`), so top-level `var`/function declarations and later global
+assignments are visible on `globalThis` and `globalThis.x = …` creates a global. **Deliberate
+limitations**: `Object.keys(globalThis)`/`for-in` do not enumerate global bindings (builtins
+have no enumerability metadata to hide), and symbol-keyed properties on `globalThis` are not
+stored.
+
+**Dynamic `import()` / `import.meta` & host-gated `fetch` (spec-gap Phase G).** Dynamic
+import and the `import.meta` meta-property are recognised without un-keywording `import`:
+the parser emits `nodes/ImportExpression` for `import(specifier[, options])` and
+`nodes/MetaProperty` for `import.meta`, both from `parseKeywordPrimary` (and at statement
+position via `isDynamicImportOrMeta`, which peeks for `(` or `.`). At runtime
+`import(spec)` returns a `JsPromise` resolving to a **module namespace object** — the
+resolved host module's own members plus a `default` binding mirroring the default import —
+so both `ns.member` and `ns.default` work; an unknown specifier **rejects** with a
+catchable `Cannot find module '…'` (parity with static import, still restricted to the
+`args`/`db` host built-ins). `import.meta` resolves to `{ url: "simplejs:main" }`.
+
+`fetch` is a host-gated, secure-by-default async global. Network access is a host
+capability routed through the `host/` seam exactly like `db`: `host/NetworkAccess`
+(`FetchRequest`/`FetchResponse` records) plus `HostBindings.network()` (**default `null`**
+→ fetch unavailable). `builtins/FetchBuiltins` installs `fetch(url[, init])` returning a
+`JsPromise` of a `Response`-like `JsObject` (`ok`/`status`/`statusText`/`headers` +
+async `text()`/`json()`, the latter reusing EJson via `EJsonInterop`). The blocking host
+call runs **off the interpreter thread** on a virtual thread and settles the promise via a
+new `EventLoop` async-job mechanism (`beginAsyncJob`/`completeAsyncJob`): the drain loop
+stays alive while async jobs are outstanding and runs each settlement back on the loop
+thread, so single-threaded JS semantics hold and microtasks still order before a fetch
+settlement. `host/ResourceLimits` gains `fetchEnabled`, `fetchHostAllowlist`,
+`maxResponseBytes`, `fetchTimeoutMillis`; `FetchBuiltins` enforces availability, the host
+allowlist (rejected before any call), the response-size cap and a per-call timeout (a
+bounded worker join), all producing a catchable `TypeError`. `host/JdkNetworkAccess`
+(`java.net.http.HttpClient`) is the only place performing real network I/O and is never
+wired by default — a host opts in by supplying it via `network()`. **Deliberate
+limitations**: dynamic import resolves only the `args`/`db` built-ins (import options are
+ignored), and the `Response` is a plain object (no streaming body, single-value headers).
+
 **Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
 fresh per-iteration binding (unobservable until closures arrive in 6b).
 

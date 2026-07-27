@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.function.Consumer;
+import org.techhouse.simplejs.host.NetworkAccess;
+import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -13,7 +15,7 @@ public final class GlobalScope {
     }
 
     public static void install(Environment global, EventLoop eventLoop, Invoker invoker, IterableToList iterableToList,
-            Consumer<String> consoleSink, InterpreterOps ops) {
+            Consumer<String> consoleSink, InterpreterOps ops, NetworkAccess network, ResourceLimits limits) {
         final var globalThis = new JsGlobalObject(global);
         ErrorBuiltins.install(global);
         define(global, "Object", ObjectBuiltins.create(iterableToList, ops));
@@ -39,6 +41,7 @@ public final class GlobalScope {
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());
         define(global, "isFinite", NumberBuiltins.isFiniteFunction());
+        FetchBuiltins.install(global, eventLoop, network, limits);
         define(global, "globalThis", globalThis);
     }
 

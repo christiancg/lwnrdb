@@ -41,12 +41,14 @@ import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.ImportAttribute;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
+import org.techhouse.simplejs.nodes.ImportExpression;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode.NodeType;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MetaProperty;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
@@ -159,6 +161,8 @@ public class JsNodeTest {
         assertEquals(NodeType.IMPORT_SPECIFIER, new ImportSpecifier(id, id).getType());
         assertEquals(NodeType.IMPORT_DEFAULT_SPECIFIER, new ImportDefaultSpecifier(id).getType());
         assertEquals(NodeType.IMPORT_NAMESPACE_SPECIFIER, new ImportNamespaceSpecifier(id).getType());
+        assertEquals(NodeType.IMPORT_EXPRESSION, new ImportExpression(src, null).getType());
+        assertEquals(NodeType.META_PROPERTY, new MetaProperty("import", "meta").getType());
         assertEquals(NodeType.EXPORT_NAMED_DECLARATION,
                 new ExportNamedDeclaration(null, List.of(), null, List.of()).getType());
         assertEquals(NodeType.EXPORT_SPECIFIER, new ExportSpecifier(id, id).getType());

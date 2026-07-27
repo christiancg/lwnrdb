@@ -66,6 +66,7 @@ import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
+import org.techhouse.simplejs.nodes.ImportExpression;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode;
@@ -238,7 +239,8 @@ public final class Interpreter {
 
     private ProgramOutcome runModule(Program program) {
         final var env = Environment.global();
-        GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console(), ops);
+        GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console(), ops, host.network(),
+                host.limits());
         for (final var statement : program.getBody()) {
             if (statement instanceof ImportDeclaration importDeclaration) {
                 bindImport(importDeclaration, env);
@@ -344,6 +346,37 @@ public final class Interpreter {
             default ->
                 throw new JsThrowException(ErrorBuiltins.makeError("Error", "Cannot find module '" + source + "'"));
         };
+    }
+
+    // A module namespace object: the resolved module's own members plus a `default` binding that
+    // mirrors what a default import would bind, so both `ns.default` and `ns.member` work.
+    private JsValue moduleNamespace(String source) {
+        final var module = resolveModule(source);
+        final var namespace = new JsObject();
+        if (module instanceof JsObject object) {
+            for (final var key : object.keys()) {
+                namespace.set(key, object.get(key));
+            }
+        }
+        namespace.set("default", module);
+        return namespace;
+    }
+
+    private JsValue evalImportExpression(ImportExpression expression, Environment env) {
+        final var promise = new JsPromise(eventLoop);
+        try {
+            final var specifier = JsCoercion.toStr(eval(expression.getSource(), env));
+            promise.resolve(moduleNamespace(specifier));
+        } catch (JsThrowException error) {
+            promise.reject(error.getValue());
+        }
+        return promise;
+    }
+
+    private JsValue evalMetaProperty() {
+        final var meta = new JsObject();
+        meta.set("url", new JsString("simplejs:main"));
+        return meta;
     }
 
     private void bindImport(ImportDeclaration declaration, Environment env) {
@@ -1058,6 +1091,8 @@ public final class Interpreter {
             case CLASS_EXPRESSION -> evalClassExpression((ClassExpression) expression, env);
             case YIELD_EXPRESSION -> evalYield((YieldExpression) expression, env);
             case AWAIT_EXPRESSION -> evalAwait((AwaitExpression) expression, env);
+            case IMPORT_EXPRESSION -> evalImportExpression((ImportExpression) expression, env);
+            case META_PROPERTY -> evalMetaProperty();
             case SUPER_EXPRESSION -> throw new SyntaxErrorException("'super' keyword unexpected here");
             default -> throw new UnsupportedNodeException(expression.getType().name());
         };

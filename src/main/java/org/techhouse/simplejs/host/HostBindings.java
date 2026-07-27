@@ -11,4 +11,9 @@ public interface HostBindings {
     Consumer<String> console();
 
     ResourceLimits limits();
+
+    // Network access is opt-in and off by default: a null binding means `fetch` is unavailable.
+    default NetworkAccess network() {
+        return null;
+    }
 }

@@ -7,6 +7,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
@@ -44,11 +46,29 @@ public final class EventLoop {
             Comparator.comparingLong(Timer::due).thenComparingLong(Timer::seq));
     private final Set<Long> cancelled = new HashSet<>();
     private final List<JsPromise> promises = new ArrayList<>();
+    private final ConcurrentLinkedQueue<Runnable> asyncCompletions = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger pendingAsyncJobs = new AtomicInteger();
+    private volatile Thread drainThread;
     private long nextTimerId = 1;
     private long nextSeq;
 
     public void queueMicrotask(Runnable task) {
         microtasks.add(task);
+    }
+
+    // Off-thread async work (e.g. fetch): beginAsyncJob keeps the loop alive while the work runs on
+    // another thread; completeAsyncJob hands a settlement back to the loop thread and wakes it.
+    public void beginAsyncJob() {
+        pendingAsyncJobs.incrementAndGet();
+    }
+
+    public void completeAsyncJob(Runnable onLoopThread) {
+        asyncCompletions.add(onLoopThread);
+        pendingAsyncJobs.decrementAndGet();
+        final var thread = drainThread;
+        if (thread != null) {
+            LockSupport.unpark(thread);
+        }
     }
 
     public void registerPromise(JsPromise promise) {
@@ -76,15 +96,36 @@ public final class EventLoop {
     }
 
     public void drain(long deadlineNanos) {
+        drainThread = Thread.currentThread();
+        try {
+            drainLoop(deadlineNanos);
+        } finally {
+            drainThread = null;
+        }
+    }
+
+    private void drainLoop(long deadlineNanos) {
         while (true) {
             while (!microtasks.isEmpty()) {
                 microtasks.poll().run();
             }
+            final var completion = asyncCompletions.poll();
+            if (completion != null) {
+                completion.run();
+                continue;
+            }
             final var timer = pollNextLiveTimer();
             if (timer == null) {
+                if (pendingAsyncJobs.get() > 0) {
+                    awaitAsyncCompletion(deadlineNanos);
+                    continue;
+                }
                 return;
             }
-            awaitUntil(timer.dueNanos, deadlineNanos);
+            if (!awaitUntil(timer.dueNanos, deadlineNanos)) {
+                timers.add(timer);
+                continue;
+            }
             if (timer.repeat) {
                 timer.dueNanos = System.nanoTime() + timer.intervalNanos;
                 timers.add(timer);
@@ -98,6 +139,20 @@ public final class EventLoop {
         }
     }
 
+    private void awaitAsyncCompletion(long deadlineNanos) {
+        while (asyncCompletions.isEmpty()) {
+            if (deadlineNanos >= 0) {
+                final var remaining = deadlineNanos - System.nanoTime();
+                if (remaining <= 0) {
+                    throw new ScriptTimeoutException("Script exceeded its time limit");
+                }
+                LockSupport.parkNanos(remaining);
+            } else {
+                LockSupport.park();
+            }
+        }
+    }
+
     private Timer pollNextLiveTimer() {
         var timer = timers.poll();
         while (timer != null && cancelled.remove(timer.id)) {
@@ -106,14 +161,20 @@ public final class EventLoop {
         return timer;
     }
 
-    private void awaitUntil(long dueNanos, long deadlineNanos) {
+    // Returns true once the timer's due time is reached; false if an async completion arrived first
+    // (so the caller re-queues the timer and processes the completion).
+    private boolean awaitUntil(long dueNanos, long deadlineNanos) {
         final var target = deadlineNanos >= 0 ? Math.min(dueNanos, deadlineNanos) : dueNanos;
         long now;
         while ((now = System.nanoTime()) < target) {
+            if (!asyncCompletions.isEmpty()) {
+                return false;
+            }
             LockSupport.parkNanos(target - now);
         }
         if (deadlineNanos >= 0 && dueNanos > deadlineNanos) {
             throw new ScriptTimeoutException("Script exceeded its time limit");
         }
+        return true;
     }
 }

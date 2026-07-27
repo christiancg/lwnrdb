@@ -60,12 +60,14 @@ import org.techhouse.simplejs.nodes.IfStatement;
 import org.techhouse.simplejs.nodes.ImportAttribute;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.nodes.ImportDefaultSpecifier;
+import org.techhouse.simplejs.nodes.ImportExpression;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MetaProperty;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NullLiteral;
@@ -201,6 +203,9 @@ public final class Parser {
                         return parseClassDeclaration();
                     }
                     case "import" -> {
+                        if (isDynamicImportOrMeta()) {
+                            return parseExpressionStatement();
+                        }
                         return parseImportDeclaration();
                     }
                     case "export" -> {
@@ -1219,8 +1224,38 @@ public final class Parser {
                     advance();
                     yield new SuperExpression();
                 }
+                case "import" -> parseImportExpressionOrMeta();
                 default -> throw error();
             };
+        }
+
+        // Dynamic `import(specifier)` and the `import.meta` meta-property. Reached from expression
+        // position (and statement position via `isDynamicImportOrMeta`); static `import ...` declarations
+        // never get here.
+        private Expression parseImportExpressionOrMeta() {
+            expectKeyword("import");
+            if (matchOperator(".")) {
+                if (!isContextualKeyword("meta")) {
+                    throw error();
+                }
+                advance();
+                return new MetaProperty("import", "meta");
+            }
+            expectSeparator('(');
+            final var source = withInAllowed(this::parseAssignment);
+            Expression options = null;
+            if (matchSeparator(',') && !isSeparator(')')) {
+                options = withInAllowed(this::parseAssignment);
+                matchSeparator(',');
+            }
+            expectSeparator(')');
+            return new ImportExpression(source, options);
+        }
+
+        private boolean isDynamicImportOrMeta() {
+            final var next = peek();
+            return (next.getType() == JsType.SEPARATOR && ((JsSeparator) next).getValue() == '(')
+                    || (next.getType() == JsType.OPERATOR && ".".equals(((JsOperator) next).getValue()));
         }
 
         private Expression parseAsyncPrimary() {
