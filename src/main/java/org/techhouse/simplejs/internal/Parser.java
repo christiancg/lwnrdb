@@ -1,12 +1,7 @@
 package org.techhouse.simplejs.internal;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.function.Supplier;
 import org.techhouse.simplejs.elements.JsBaseElement;
 import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsBigInt;
@@ -21,8 +16,9 @@ import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.SourcePosition;
-import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
-import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
+import org.techhouse.simplejs.internal.parser.ParserTables;
+import org.techhouse.simplejs.internal.parser.PatternConverter;
+import org.techhouse.simplejs.internal.parser.TokenStream;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
@@ -101,20 +97,6 @@ import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.nodes.YieldExpression;
 
 public final class Parser {
-    private static final Set<String> ASSIGNMENT_OPERATORS = Set.of("=", "+=", "-=", "*=", "/=", "%=", "**=", "<<=",
-            ">>=", ">>>=", "&=", "|=", "^=", "&&=", "||=", "??=");
-
-    private static final Set<String> PREFIX_UNARY_OPERATORS = Set.of("!", "~", "+", "-");
-
-    private static final Set<String> LOGICAL_OPERATORS = Set.of("&&", "||", "??");
-
-    private static final Map<String, Integer> BINARY_PRECEDENCE = Map.ofEntries(Map.entry("??", 1), Map.entry("||", 2),
-            Map.entry("&&", 3), Map.entry("|", 4), Map.entry("^", 5), Map.entry("&", 6), Map.entry("==", 7),
-            Map.entry("!=", 7), Map.entry("===", 7), Map.entry("!==", 7), Map.entry("<", 8), Map.entry("<=", 8),
-            Map.entry(">", 8), Map.entry(">=", 8), Map.entry("instanceof", 8), Map.entry("in", 8), Map.entry("<<", 9),
-            Map.entry(">>", 9), Map.entry(">>>", 9), Map.entry("+", 10), Map.entry("-", 10), Map.entry("*", 11),
-            Map.entry("/", 11), Map.entry("%", 11), Map.entry("**", 12));
-
     private Parser() {
     }
 
@@ -126,18 +108,15 @@ public final class Parser {
         return new State(lexed.tokens(), lexed.positions()).parseProgram();
     }
 
-    // The recursive-descent walk is inherently stateful (a moving cursor over the token
-    // stream), so the mutable parsing state lives in this nested type while Parser stays a
-    // stateless utility. The shared precedence tables above are reachable as enclosing statics.
-    private static final class State {
-        private final List<JsBaseElement> tokens;
-        private final List<SourcePosition> positions;
-        private final Deque<Boolean> noInStack = new ArrayDeque<>();
-        private int pos;
+    // The recursive-descent walk is inherently stateful (a moving cursor over the token stream),
+    // so the grammar productions live in this nested type. The cursor and token-level primitives
+    // are inherited from TokenStream; the shared precedence tables live in ParserTables and the
+    // cover-grammar reinterpretation in PatternConverter.
+    private static final class State extends TokenStream {
+        private final PatternConverter patterns = new PatternConverter(this);
 
         private State(List<JsBaseElement> tokens, List<SourcePosition> positions) {
-            this.tokens = tokens;
-            this.positions = positions;
+            super(tokens, positions);
         }
 
         private Program parseProgram() {
@@ -389,9 +368,9 @@ public final class Parser {
 
         private Statement parseForInOf(JsNode left, boolean isAwait) {
             final var target = left instanceof ArrayExpression || left instanceof ObjectExpression
-                    ? toAssignmentPattern((Expression) left)
+                    ? patterns.toAssignmentPattern((Expression) left)
                     : left;
-            validateForInOfTarget(target);
+            patterns.validateForInOfTarget(target);
             final var isOf = "of".equals(((JsKeyword) current()).getValue());
             if (isAwait && !isOf) {
                 throw error();
@@ -401,20 +380,6 @@ public final class Parser {
             expectSeparator(')');
             final var body = parseStatement();
             return isOf ? new ForOfStatement(target, right, body, isAwait) : new ForInStatement(target, right, body);
-        }
-
-        private void validateForInOfTarget(JsNode left) {
-            if (left instanceof VariableDeclaration declaration) {
-                final var declarations = declaration.getDeclarations();
-                if (declarations.size() != 1 || declarations.getFirst().getInit() != null) {
-                    throw error();
-                }
-                return;
-            }
-            if (!(left instanceof Identifier) && !(left instanceof MemberExpression) && !(left instanceof ArrayPattern)
-                    && !(left instanceof ObjectPattern)) {
-                throw error();
-            }
         }
 
         private ForStatement parseClassicForRest(JsNode init) {
@@ -697,25 +662,6 @@ public final class Parser {
             throw error();
         }
 
-        private boolean isContextualKeyword(String word) {
-            final var t = current();
-            return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(word);
-        }
-
-        private boolean matchContextualKeyword(String word) {
-            if (isContextualKeyword(word)) {
-                advance();
-                return true;
-            }
-            return false;
-        }
-
-        private void expectContextualKeyword(String word) {
-            if (!matchContextualKeyword(word)) {
-                throw error();
-            }
-        }
-
         private ExpressionStatement parseExpressionStatement() {
             final var expr = parseExpression();
             consumeOptionalSemicolon();
@@ -837,77 +783,6 @@ public final class Parser {
             return new Property(key, key, false, true);
         }
 
-        private JsNode resolveAssignmentTarget(Expression left, String op) {
-            if (left instanceof Identifier || left instanceof MemberExpression) {
-                return left;
-            }
-            if ("=".equals(op) && (left instanceof ArrayExpression || left instanceof ObjectExpression)) {
-                return toAssignmentPattern(left);
-            }
-            throw error();
-        }
-
-        // Cover grammar: an array/object expression parsed on an assignment LHS is reinterpreted into
-        // the equivalent binding pattern once the `=` proves the intent.
-        private JsNode toAssignmentPattern(Expression expr) {
-            if (expr instanceof Identifier || expr instanceof MemberExpression) {
-                return expr;
-            }
-            if (expr instanceof ArrayExpression array) {
-                final var elements = new ArrayList<JsNode>();
-                for (final var element : array.getElements()) {
-                    elements.add(toPatternElement(element));
-                }
-                return new ArrayPattern(elements);
-            }
-            if (expr instanceof ObjectExpression object) {
-                final var properties = new ArrayList<JsNode>();
-                for (final var property : object.getProperties()) {
-                    properties.add(toPatternProperty(property));
-                }
-                return new ObjectPattern(properties);
-            }
-            throw error();
-        }
-
-        private JsNode toPatternElement(Expression element) {
-            if (element == null) {
-                return null;
-            }
-            if (element instanceof SpreadElement spread) {
-                return new RestElement(toAssignmentPattern(spread.getArgument()));
-            }
-            return toPatternDefault(element);
-        }
-
-        private JsNode toPatternProperty(JsNode property) {
-            if (property instanceof SpreadElement spread) {
-                return new RestElement(toAssignmentPattern(spread.getArgument()));
-            }
-            final var prop = (Property) property;
-            final var value = prop.getValue();
-            if (!(value instanceof Expression valueExpr)) {
-                throw error();
-            }
-            return new Property(prop.getKey(), toPatternDefault(valueExpr), prop.isComputed(), prop.isShorthand());
-        }
-
-        private JsNode toPatternDefault(Expression expr) {
-            if (expr instanceof AssignmentExpression assignment && "=".equals(assignment.getOperator())) {
-                return new AssignmentPattern(toBindingTarget(assignment.getTarget()), assignment.getValue());
-            }
-            return toAssignmentPattern(expr);
-        }
-
-        // An assignment LHS may already be a reinterpreted pattern (e.g. `{a: [x] = d}`); only a raw
-        // array/object expression still needs converting.
-        private JsNode toBindingTarget(JsNode node) {
-            if (node instanceof Expression expr) {
-                return toAssignmentPattern(expr);
-            }
-            return node;
-        }
-
         private Expression parseExpression() {
             return parseAssignment();
         }
@@ -919,8 +794,8 @@ public final class Parser {
             final var left = parseConditional();
             if (current().getType() == JsType.OPERATOR) {
                 final var op = ((JsOperator) current()).getValue();
-                if (ASSIGNMENT_OPERATORS.contains(op)) {
-                    final var target = resolveAssignmentTarget(left, op);
+                if (ParserTables.ASSIGNMENT_OPERATORS.contains(op)) {
+                    final var target = patterns.resolveAssignmentTarget(left, op);
                     advance();
                     return new AssignmentExpression(op, target, parseAssignment());
                 }
@@ -967,12 +842,12 @@ public final class Parser {
         private Expression parseBinary(int minPrec) {
             var left = parseUnary();
             var op = currentBinaryOperator();
-            while (op != null && BINARY_PRECEDENCE.get(op) >= minPrec) {
-                final int prec = BINARY_PRECEDENCE.get(op);
+            while (op != null && ParserTables.BINARY_PRECEDENCE.get(op) >= minPrec) {
+                final int prec = ParserTables.BINARY_PRECEDENCE.get(op);
                 advance();
                 final int nextMinPrec = "**".equals(op) ? prec : prec + 1;
                 final var right = parseBinary(nextMinPrec);
-                left = LOGICAL_OPERATORS.contains(op)
+                left = ParserTables.LOGICAL_OPERATORS.contains(op)
                         ? new LogicalExpression(op, left, right)
                         : new BinaryExpression(op, left, right);
                 op = currentBinaryOperator();
@@ -985,7 +860,7 @@ public final class Parser {
             final var t = current();
             if (t.getType() == JsType.OPERATOR) {
                 final var op = ((JsOperator) t).getValue();
-                return BINARY_PRECEDENCE.containsKey(op) ? op : null;
+                return ParserTables.BINARY_PRECEDENCE.containsKey(op) ? op : null;
             }
             if (t.getType() == JsType.KEYWORD) {
                 final var kw = ((JsKeyword) t).getValue();
@@ -1001,7 +876,7 @@ public final class Parser {
             final var t = current();
             if (t.getType() == JsType.OPERATOR) {
                 final var op = ((JsOperator) t).getValue();
-                if (PREFIX_UNARY_OPERATORS.contains(op)) {
+                if (ParserTables.PREFIX_UNARY_OPERATORS.contains(op)) {
                     advance();
                     return new UnaryExpression(op, parseUnary(), true);
                 }
@@ -1621,143 +1496,6 @@ public final class Parser {
                 throw error();
             }
             return expr;
-        }
-
-        private JsBaseElement current() {
-            return tokens.get(pos);
-        }
-
-        private JsBaseElement peek() {
-            return peekAt(1);
-        }
-
-        private JsBaseElement peekAt(int offset) {
-            return tokens.get(Math.min(pos + offset, tokens.size() - 1));
-        }
-
-        private JsBaseElement advance() {
-            final var t = current();
-            if (t.getType() != JsType.EOF) {
-                pos++;
-            }
-            return t;
-        }
-
-        private boolean atEnd() {
-            return current().getType() == JsType.EOF;
-        }
-
-        private void consumeOptionalSemicolon() {
-            matchSeparator(';');
-        }
-
-        // The for-header left-hand side is parsed under the no-in production: `in` is not a
-        // binary operator there, so `for (a in b)` reads `in` as the loop keyword. A bracketed
-        // sub-expression re-enters the [+In] grammar (innermost context wins via the stack),
-        // so the `in` in `for ((a in b); ;)` is still a binary operator.
-        private <T> T withNoIn(Supplier<T> parse) {
-            return withInContext(Boolean.TRUE, parse);
-        }
-
-        private <T> T withInAllowed(Supplier<T> parse) {
-            return withInContext(Boolean.FALSE, parse);
-        }
-
-        private <T> T withInContext(Boolean suppressIn, Supplier<T> parse) {
-            noInStack.push(suppressIn);
-            try {
-                return parse.get();
-            } finally {
-                noInStack.pop();
-            }
-        }
-
-        private boolean isSeparator(char c) {
-            final var t = current();
-            return t.getType() == JsType.SEPARATOR && ((JsSeparator) t).getValue() == c;
-        }
-
-        private boolean matchSeparator(char c) {
-            if (isSeparator(c)) {
-                advance();
-                return true;
-            }
-            return false;
-        }
-
-        private void expectSeparator(char c) {
-            if (!matchSeparator(c)) {
-                throw error();
-            }
-        }
-
-        private boolean isOperator(String op) {
-            final var t = current();
-            return t.getType() == JsType.OPERATOR && ((JsOperator) t).getValue().equals(op);
-        }
-
-        private boolean matchOperator(String op) {
-            if (isOperator(op)) {
-                advance();
-                return true;
-            }
-            return false;
-        }
-
-        private void expectOperator(String op) {
-            if (!matchOperator(op)) {
-                throw error();
-            }
-        }
-
-        private boolean isKeyword(String kw) {
-            final var t = current();
-            return t.getType() == JsType.KEYWORD && ((JsKeyword) t).getValue().equals(kw);
-        }
-
-        private boolean matchKeyword(String kw) {
-            if (isKeyword(kw)) {
-                advance();
-                return true;
-            }
-            return false;
-        }
-
-        private void expectKeyword(String kw) {
-            if (!matchKeyword(kw)) {
-                throw error();
-            }
-        }
-
-        private RuntimeException error() {
-            final var position = positions != null ? positions.get(pos) : null;
-            if (atEnd()) {
-                return position != null
-                        ? new UnexpectedEndOfInputException(position.getLine(), position.getColumn())
-                        : new UnexpectedEndOfInputException();
-            }
-            return position != null
-                    ? new UnexpectedTokenException(describe(current()), position.getLine(), position.getColumn())
-                    : new UnexpectedTokenException(describe(current()), pos);
-        }
-
-        private String describe(JsBaseElement t) {
-            return switch (t.getType()) {
-                case KEYWORD -> ((JsKeyword) t).getValue();
-                case IDENTIFIER -> ((JsIdentifier) t).getValue();
-                case PRIVATE_IDENTIFIER -> "#" + ((JsPrivateIdentifier) t).getValue();
-                case NUMBER -> String.valueOf(((JsNumber) t).getValue());
-                case BIGINT -> ((JsBigInt) t).getValue() + "n";
-                case STRING -> '"' + ((JsString) t).getValue() + '"';
-                case BOOLEAN -> String.valueOf(((JsBoolean) t).getValue());
-                case NULL -> "null";
-                case UNDEFINED -> "undefined";
-                case OPERATOR -> ((JsOperator) t).getValue();
-                case SEPARATOR -> String.valueOf(((JsSeparator) t).getValue());
-                case REGEX -> "/" + ((JsRegex) t).getPattern() + "/" + ((JsRegex) t).getFlags();
-                case TEMPLATE_STRING -> "template literal";
-                case EOF -> "<eof>";
-            };
         }
     }
 }
