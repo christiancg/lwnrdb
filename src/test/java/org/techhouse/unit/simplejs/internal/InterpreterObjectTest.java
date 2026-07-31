@@ -189,4 +189,17 @@ public class InterpreterObjectTest {
         assertEquals(4,
                 ((JsNumber) ((org.techhouse.simplejs.values.JsArray) Interpreter.run(source)).get(0)).getValue());
     }
+
+    // A string-valued [Symbol.toStringTag] customizes Object.prototype.toString
+    @Test
+    public void test_symbol_to_string_tag() {
+        assertEquals("[object Tag]", str("let o = { [Symbol.toStringTag]: 'Tag' }; o.toString()"));
+        assertEquals("[object Object]", str("({}).toString()"));
+    }
+
+    // A non-string [Symbol.toStringTag] is ignored, falling back to the default tag
+    @Test
+    public void test_symbol_to_string_tag_non_string_ignored() {
+        assertEquals("[object Object]", str("let o = { [Symbol.toStringTag]: 42 }; o.toString()"));
+    }
 }

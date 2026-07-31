@@ -366,6 +366,21 @@ user code (`EJsonInterop`, `JSON.stringify`, console). Arrays keep their join-ba
 `ops` path intercepts only plain `JsObject`s, so exotic objects (`Date`, `Map`, typed arrays)
 retain their dedicated `toStr`/`toNumber` arms.
 
+**Well-known symbol hooks (ES2026 conformance Phase 2).** Four more well-known symbols are real
+`JsSymbol` constants (`Symbol.hasInstance`/`toStringTag`/`match`/`replace`/`search`/`split`) and
+wired at their choke points: `instanceof` (`ClassEvaluator.evalInstanceof`) consults a callable
+`[Symbol.hasInstance]` on the right-hand side before the ordinary heritage/prototype walk (the tested
+value is passed as its argument); `Object.prototype.toString` (`ObjectProtoBuiltins`) reads a
+string-valued `[Symbol.toStringTag]` and emits `[object <tag>]` (non-string tags are ignored, default
+`[object Object]`); and the `String` methods `split`/`replace`/`replaceAll`/`match`/`search` delegate
+to a `[Symbol.split]`/`[Symbol.replace]`/`[Symbol.match]`/`[Symbol.search]` method on their argument
+when the argument is a plain object exposing one (the `JsRegExp` fast path and plain string/regex
+arguments are unchanged). All lookups go through the `InterpreterOps` seam, so absent hooks fall back
+to the existing behavior. **`Symbol.species` is intentionally not implemented:** `JsArray`/`JsTypedArray`
+carry no constructor/prototype/`klass` linkage and cannot be subclassed (`class X extends Array {}`
+requires a `JsClass` superclass), so a user array/typed array can never carry a custom species — the
+by-copy methods always allocate the default type. This is a known limitation, not a bug.
+
 **Iterator protocol, symbol keys & object-literal methods (engine-completion Phase 2).**
 The well-known `Symbol.iterator`/`Symbol.asyncIterator` are real `JsSymbol` constants, and
 `Symbol.for(key)`/`Symbol.keyFor(sym)` provide a process-wide registry of shared symbols.

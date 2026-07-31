@@ -359,4 +359,26 @@ public class InterpreterClassTest {
                 """;
         assertTrue(bool(source));
     }
+
+    // A static [Symbol.hasInstance] method overrides the default instanceof behavior
+    @Test
+    public void test_symbol_has_instance_override() {
+        assertTrue(bool("class C { static [Symbol.hasInstance](x) { return true; } } ({}) instanceof C"));
+        assertFalse(bool("class C { static [Symbol.hasInstance](x) { return false; } } new C() instanceof C"));
+    }
+
+    // The value being tested is passed as the argument to [Symbol.hasInstance]
+    @Test
+    public void test_symbol_has_instance_receives_left() {
+        final var even = "class Even { static [Symbol.hasInstance](n) { return n % 2 === 0; } }";
+        assertTrue(bool(even + " 4 instanceof Even"));
+        assertFalse(bool(even + " 3 instanceof Even"));
+    }
+
+    // Without a hasInstance override, ordinary heritage-based instanceof still applies
+    @Test
+    public void test_instanceof_without_override() {
+        assertTrue(bool("class A {} class B extends A {} new B() instanceof A"));
+        assertFalse(bool("class A {} class B {} new B() instanceof A"));
+    }
 }

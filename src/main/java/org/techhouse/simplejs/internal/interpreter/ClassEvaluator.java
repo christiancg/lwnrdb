@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.hasInPrototypeChain;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
 
 import java.util.ArrayList;
@@ -277,6 +279,12 @@ public final class ClassEvaluator {
     }
 
     public JsValue evalInstanceof(JsValue left, JsValue right) {
+        if (isObjectLike(right)) {
+            final var hasInstance = interp.getMemberByKey(right, JsSymbol.HAS_INSTANCE);
+            if (isCallable(hasInstance)) {
+                return JsBoolean.of(JsCoercion.toBoolean(interp.callValue(hasInstance, right, List.of(left))));
+            }
+        }
         return switch (right) {
             case JsClass cls -> JsBoolean.of(left instanceof JsObject object && object.getKlass() != null
                     && object.getKlass().isSubclassOf(cls));

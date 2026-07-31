@@ -183,7 +183,7 @@ public final class MemberEvaluator {
                     return proto.get(key);
                 }
             }
-            final var builtin = ObjectProtoBuiltins.getMethod(object, key);
+            final var builtin = ObjectProtoBuiltins.getMethod(object, key, interp.ops());
             if (builtin != null) {
                 return builtin;
             }
@@ -287,7 +287,7 @@ public final class MemberEvaluator {
                     ? new JsString(String.valueOf(string.getValue().charAt(index)))
                     : JsUndefined.getInstance();
         }
-        final var method = StringBuiltins.getMethod(string, key, interp::callValue);
+        final var method = StringBuiltins.getMethod(string, key, interp::callValue, interp.ops());
         return method == null ? JsUndefined.getInstance() : method;
     }
 

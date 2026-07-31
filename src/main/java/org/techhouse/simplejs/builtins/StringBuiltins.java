@@ -15,11 +15,31 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class StringBuiltins {
     private StringBuiltins() {
+    }
+
+    private static JsValue delegateToSymbol(String value, List<JsValue> args, JsSymbol symbol, InterpreterOps ops,
+            List<JsValue> extra) {
+        if (ops == null || args.isEmpty() || !(args.getFirst() instanceof JsObject pattern)) {
+            return null;
+        }
+        final var method = ops.getMember(pattern, symbol);
+        if (!(method instanceof JsFunction) && !(method instanceof JsNativeFunction)) {
+            return null;
+        }
+        final var callArgs = new ArrayList<JsValue>();
+        callArgs.add(new JsString(value));
+        callArgs.addAll(extra);
+        return ops.call(method, pattern, callArgs);
+    }
+
+    private static List<JsValue> tail(List<JsValue> args) {
+        return args.size() > 1 ? args.subList(1, args.size()) : List.of();
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
@@ -79,17 +99,32 @@ public final class StringBuiltins {
         return raw instanceof JsArray array ? array : null;
     }
 
-    public static JsNativeFunction getMethod(JsString receiver, String name, Invoker invoker) {
+    public static JsNativeFunction getMethod(JsString receiver, String name, Invoker invoker, InterpreterOps ops) {
         final var value = receiver.getValue();
         return switch (name) {
             case "slice" -> new JsNativeFunction("slice", (_, args) -> new JsString(slice(value, args)));
             case "substring" -> new JsNativeFunction("substring", (_, args) -> new JsString(substring(value, args)));
-            case "split" -> new JsNativeFunction("split", (_, args) -> split(value, args));
-            case "replace" -> new JsNativeFunction("replace", (_, args) -> replace(value, args, invoker, false));
-            case "replaceAll" -> new JsNativeFunction("replaceAll", (_, args) -> replace(value, args, invoker, true));
-            case "match" -> new JsNativeFunction("match", (_, args) -> match(value, args));
+            case "split" -> new JsNativeFunction("split", (_, args) -> {
+                final var delegated = delegateToSymbol(value, args, JsSymbol.SPLIT, ops, tail(args));
+                return delegated != null ? delegated : split(value, args);
+            });
+            case "replace" -> new JsNativeFunction("replace", (_, args) -> {
+                final var delegated = delegateToSymbol(value, args, JsSymbol.REPLACE, ops, tail(args));
+                return delegated != null ? delegated : replace(value, args, invoker, false);
+            });
+            case "replaceAll" -> new JsNativeFunction("replaceAll", (_, args) -> {
+                final var delegated = delegateToSymbol(value, args, JsSymbol.REPLACE, ops, tail(args));
+                return delegated != null ? delegated : replace(value, args, invoker, true);
+            });
+            case "match" -> new JsNativeFunction("match", (_, args) -> {
+                final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH, ops, List.of());
+                return delegated != null ? delegated : match(value, args);
+            });
             case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> matchAll(value, args));
-            case "search" -> new JsNativeFunction("search", (_, args) -> new JsNumber(search(value, args)));
+            case "search" -> new JsNativeFunction("search", (_, args) -> {
+                final var delegated = delegateToSymbol(value, args, JsSymbol.SEARCH, ops, List.of());
+                return delegated != null ? delegated : new JsNumber(search(value, args));
+            });
             case "toUpperCase" ->
                 new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
             case "toLowerCase" ->

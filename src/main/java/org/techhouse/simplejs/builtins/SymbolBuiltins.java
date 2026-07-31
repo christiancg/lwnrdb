@@ -26,6 +26,12 @@ public final class SymbolBuiltins {
         symbol.setProperty("iterator", JsSymbol.ITERATOR);
         symbol.setProperty("asyncIterator", JsSymbol.ASYNC_ITERATOR);
         symbol.setProperty("toPrimitive", JsSymbol.TO_PRIMITIVE);
+        symbol.setProperty("hasInstance", JsSymbol.HAS_INSTANCE);
+        symbol.setProperty("toStringTag", JsSymbol.TO_STRING_TAG);
+        symbol.setProperty("match", JsSymbol.MATCH);
+        symbol.setProperty("replace", JsSymbol.REPLACE);
+        symbol.setProperty("search", JsSymbol.SEARCH);
+        symbol.setProperty("split", JsSymbol.SPLIT);
         symbol.setProperty("for",
                 new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args), JsSymbol::new)));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));

@@ -54,4 +54,17 @@ public class SymbolBuiltinsTest {
         assertEquals("symbol", str("typeof Symbol.iterator"));
         assertTrue(bool("Symbol.iterator === Symbol.iterator"));
     }
+
+    // The Phase 2 well-known symbols are registered as stable, distinct symbol values
+    @Test
+    public void test_well_known_symbols_registered() {
+        assertEquals("symbol", str("typeof Symbol.hasInstance"));
+        assertEquals("symbol", str("typeof Symbol.toStringTag"));
+        assertEquals("symbol", str("typeof Symbol.match"));
+        assertEquals("symbol", str("typeof Symbol.replace"));
+        assertEquals("symbol", str("typeof Symbol.search"));
+        assertEquals("symbol", str("typeof Symbol.split"));
+        assertTrue(bool("Symbol.match !== Symbol.replace && Symbol.search !== Symbol.split"));
+        assertTrue(bool("Symbol.hasInstance !== Symbol.toStringTag"));
+    }
 }

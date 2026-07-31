@@ -297,4 +297,31 @@ public class StringBuiltinsTest {
         assertEquals(3, num("('a' + String.fromCharCode(0xDC00) + 'b').toWellFormed().length"));
         assertEquals(2, num("String.fromCharCode(0xD83D, 0xDE00).toWellFormed().length"));
     }
+
+    // replace/replaceAll delegate to a [Symbol.replace] method on the argument, receiving (string, replacement)
+    @Test
+    public void test_symbol_replace_delegation() {
+        assertEquals("abc/x", str("let p = { [Symbol.replace](s, r) { return s + '/' + r; } }; 'abc'.replace(p, 'x')"));
+        assertEquals("R", str("let p = { [Symbol.replace](s, r) { return 'R'; } }; 'abc'.replaceAll(p, 'x')"));
+    }
+
+    // split delegates to a [Symbol.split] method on the argument
+    @Test
+    public void test_symbol_split_delegation() {
+        assertEquals("HI", str("let p = { [Symbol.split](s) { return s.toUpperCase(); } }; 'hi'.split(p)"));
+    }
+
+    // match and search delegate to their well-known-symbol methods on the argument
+    @Test
+    public void test_symbol_match_and_search_delegation() {
+        assertEquals(7, num("let p = { [Symbol.match](s) { return 7; } }; 'abc'.match(p)"));
+        assertEquals(9, num("let p = { [Symbol.search](s) { return 9; } }; 'abc'.search(p)"));
+    }
+
+    // A plain string/regex argument keeps the built-in behavior (no symbol method present)
+    @Test
+    public void test_plain_argument_not_delegated() {
+        assertEquals("axc", str("'abc'.replace('b', 'x')"));
+        assertEquals(1, num("'abc'.search(/b/)"));
+    }
 }
