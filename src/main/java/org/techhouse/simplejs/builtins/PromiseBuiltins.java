@@ -29,6 +29,38 @@ public final class PromiseBuiltins {
                 new JsNativeFunction("allSettled", (_, args) -> allSettled(eventLoop, arg0(args), iterableToList)));
         promise.setProperty("any",
                 new JsNativeFunction("any", (_, args) -> any(eventLoop, arg0(args), iterableToList)));
+        promise.setProperty("withResolvers", new JsNativeFunction("withResolvers", (_, _) -> withResolvers(eventLoop)));
+        promise.setProperty("try", new JsNativeFunction("try", (_, args) -> tryCall(eventLoop, invoker, args)));
+        return promise;
+    }
+
+    private static JsValue withResolvers(EventLoop eventLoop) {
+        final var promise = new JsPromise(eventLoop);
+        final var resolve = new JsNativeFunction("resolve", (_, a) -> {
+            promise.resolve(arg0(a));
+            return JsUndefined.getInstance();
+        });
+        final var reject = new JsNativeFunction("reject", (_, a) -> {
+            promise.reject(arg0(a));
+            return JsUndefined.getInstance();
+        });
+        final var result = new JsObject();
+        result.set("promise", promise);
+        result.set("resolve", resolve);
+        result.set("reject", reject);
+        return result;
+    }
+
+    private static JsValue tryCall(EventLoop eventLoop, Invoker invoker, List<JsValue> args) {
+        final var callback = arg0(args);
+        final var rest = args.isEmpty() ? List.<JsValue>of() : args.subList(1, args.size());
+        final var promise = new JsPromise(eventLoop);
+        try {
+            resolved(eventLoop, invoker.call(callback, JsUndefined.getInstance(), rest)).subscribe(promise::resolve,
+                    promise::reject);
+        } catch (JsThrowException error) {
+            promise.reject(error.getValue());
+        }
         return promise;
     }
 

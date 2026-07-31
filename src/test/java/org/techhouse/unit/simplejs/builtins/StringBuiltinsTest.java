@@ -1,6 +1,7 @@
 package org.techhouse.unit.simplejs.builtins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -276,5 +277,24 @@ public class StringBuiltinsTest {
     public void test_at_charcode_out_of_range() {
         assertTrue(bool("'abc'.at(-9) === undefined"));
         assertTrue(Double.isNaN(num("'abc'.charCodeAt(-1)")));
+    }
+
+    // isWellFormed is true for normal strings and valid surrogate pairs, false for lone surrogates
+    @Test
+    public void test_is_well_formed() {
+        assertTrue(bool("'abc'.isWellFormed()"));
+        assertTrue(bool("String.fromCharCode(0xD83D, 0xDE00).isWellFormed()"));
+        assertFalse(bool("String.fromCharCode(0xD800).isWellFormed()"));
+        assertFalse(bool("String.fromCharCode(0xDC00).isWellFormed()"));
+        assertFalse(bool("('a' + String.fromCharCode(0xD800) + 'b').isWellFormed()"));
+    }
+
+    // toWellFormed replaces lone surrogates with U+FFFD and leaves valid text untouched
+    @Test
+    public void test_to_well_formed() {
+        assertEquals("abc", str("'abc'.toWellFormed()"));
+        assertEquals(65533, num("String.fromCharCode(0xD800).toWellFormed().charCodeAt(0)"));
+        assertEquals(3, num("('a' + String.fromCharCode(0xDC00) + 'b').toWellFormed().length"));
+        assertEquals(2, num("String.fromCharCode(0xD83D, 0xDE00).toWellFormed().length"));
     }
 }

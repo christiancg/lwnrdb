@@ -1,6 +1,7 @@
 package org.techhouse.unit.simplejs.builtins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Assertions;
@@ -120,5 +121,46 @@ public class SetBuiltinsTest {
     @Test
     public void test_weakset_object() {
         assertTrue(bool("let o = {}; let w = new WeakSet(); w.add(o); w.has(o)"));
+    }
+
+    // union yields every element of either set, without duplicates, in encounter order
+    @Test
+    public void test_union() {
+        assertEquals("1,2,3,4", str("[...new Set([1, 2, 3]).union(new Set([3, 4]))].join(',')"));
+    }
+
+    // intersection yields elements present in both sets
+    @Test
+    public void test_intersection() {
+        assertEquals("2,3", str("[...new Set([1, 2, 3]).intersection(new Set([2, 3, 5]))].join(',')"));
+    }
+
+    // difference yields elements in this set but not the other
+    @Test
+    public void test_difference() {
+        assertEquals("1", str("[...new Set([1, 2, 3]).difference(new Set([2, 3]))].join(',')"));
+    }
+
+    // symmetricDifference yields elements in exactly one of the two sets
+    @Test
+    public void test_symmetric_difference() {
+        assertEquals("1,4", str("[...new Set([1, 2, 3]).symmetricDifference(new Set([2, 3, 4]))].join(',')"));
+    }
+
+    // isSubsetOf / isSupersetOf / isDisjointFrom answer the set relations
+    @Test
+    public void test_relations() {
+        assertTrue(bool("new Set([1, 2]).isSubsetOf(new Set([1, 2, 3]))"));
+        assertFalse(bool("new Set([1, 4]).isSubsetOf(new Set([1, 2, 3]))"));
+        assertTrue(bool("new Set([1, 2, 3]).isSupersetOf(new Set([1, 2]))"));
+        assertFalse(bool("new Set([1, 2]).isSupersetOf(new Set([1, 4]))"));
+        assertTrue(bool("new Set([1, 2]).isDisjointFrom(new Set([3, 4]))"));
+        assertFalse(bool("new Set([1, 2]).isDisjointFrom(new Set([2, 3]))"));
+    }
+
+    // a set method rejects a non-Set argument
+    @Test
+    public void test_non_set_argument_throws() {
+        Assertions.assertThrows(TypeErrorException.class, () -> Interpreter.run("new Set([1]).union([2])"));
     }
 }

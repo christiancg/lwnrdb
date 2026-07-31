@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -18,12 +19,71 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class RegexBuiltins {
     private static final Pattern NAMED_GROUP = Pattern.compile("\\(\\?<([a-zA-Z][a-zA-Z0-9]*)>");
+    private static final String SYNTAX_CHARACTERS = "^$\\.*+?()[]{}|/";
+    private static final String OTHER_PUNCTUATORS = ",-=<>#&!%:;@~'`\"";
+    private static final char VERTICAL_TAB = '\u000B';
+    private static final char LINE_SEPARATOR = '\u2028';
+    private static final char PARAGRAPH_SEPARATOR = '\u2029';
 
     private RegexBuiltins() {
     }
 
     public static JsNativeFunction create() {
-        return new JsNativeFunction("RegExp", (_, args) -> construct(args));
+        final var regExp = new JsNativeFunction("RegExp", (_, args) -> construct(args));
+        regExp.setProperty("escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(args))));
+        return regExp;
+    }
+
+    private static String escape(List<JsValue> args) {
+        if (args.isEmpty() || !(args.getFirst() instanceof JsString first)) {
+            throw new TypeErrorException("RegExp.escape argument must be a string");
+        }
+        final var value = first.getValue();
+        final var result = new StringBuilder(value.length());
+        for (var i = 0; i < value.length(); i++) {
+            final var ch = value.charAt(i);
+            if (i == 0 && isAlphanumeric(ch)) {
+                appendHex(result, ch);
+            } else if (SYNTAX_CHARACTERS.indexOf(ch) >= 0) {
+                result.append('\\').append(ch);
+            } else {
+                appendNamedOrLiteral(result, ch);
+            }
+        }
+        return result.toString();
+    }
+
+    private static void appendNamedOrLiteral(StringBuilder result, char ch) {
+        switch (ch) {
+            case '\t' -> result.append("\\t");
+            case '\n' -> result.append("\\n");
+            case VERTICAL_TAB -> result.append("\\v");
+            case '\f' -> result.append("\\f");
+            case '\r' -> result.append("\\r");
+            default -> {
+                if (OTHER_PUNCTUATORS.indexOf(ch) >= 0 || Character.isWhitespace(ch) || isLineTerminator(ch)) {
+                    appendHex(result, ch);
+                } else {
+                    result.append(ch);
+                }
+            }
+        }
+    }
+
+    private static boolean isAlphanumeric(char ch) {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+    }
+
+    private static boolean isLineTerminator(char ch) {
+        return ch == LINE_SEPARATOR || ch == PARAGRAPH_SEPARATOR;
+    }
+
+    private static void appendHex(StringBuilder result, char ch) {
+        if (ch <= 0xFF) {
+            result.append("\\x").append(String.format("%02x", (int) ch));
+        } else {
+            result.append("\\u").append(String.format("%04x", (int) ch));
+        }
     }
 
     private static JsValue construct(List<JsValue> args) {

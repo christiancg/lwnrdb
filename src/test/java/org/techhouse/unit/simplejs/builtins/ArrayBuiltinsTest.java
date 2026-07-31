@@ -166,4 +166,41 @@ public class ArrayBuiltinsTest {
         assertEquals("1,2", str("[1, 2].flatMap(x => x).join(',')"));
         assertEquals("4,2,3,4,5", str("let a = [1, 2, 3, 4, 5]; a.copyWithin(0, 3, 4); a.join(',')"));
     }
+
+    // toReversed returns a reversed copy and leaves the original untouched
+    @Test
+    public void test_to_reversed() {
+        assertEquals("3,2,1", str("[1, 2, 3].toReversed().join(',')"));
+        assertEquals("1,2,3", str("let a = [1, 2, 3]; a.toReversed(); a.join(',')"));
+    }
+
+    // toSorted returns a sorted copy without mutating the original
+    @Test
+    public void test_to_sorted() {
+        assertEquals("1,2,3", str("[3, 1, 2].toSorted().join(',')"));
+        assertEquals("3,1,2", str("let a = [3, 1, 2]; a.toSorted(); a.join(',')"));
+        assertEquals("3,2,1", str("[1, 2, 3].toSorted((x, y) => y - x).join(',')"));
+    }
+
+    // toSpliced returns a copy with the splice applied, leaving the original intact
+    @Test
+    public void test_to_spliced() {
+        assertEquals("1,9,4", str("[1, 2, 3, 4].toSpliced(1, 2, 9).join(',')"));
+        assertEquals("1,2,3,4", str("let a = [1, 2, 3, 4]; a.toSpliced(1, 2, 9); a.join(',')"));
+    }
+
+    // with returns a copy with one index replaced; negative indices count from the end
+    @Test
+    public void test_with() {
+        assertEquals("1,9,3", str("[1, 2, 3].with(1, 9).join(',')"));
+        assertEquals("1,2,9", str("[1, 2, 3].with(-1, 9).join(',')"));
+        assertEquals("1,2,3", str("let a = [1, 2, 3]; a.with(0, 9); a.join(',')"));
+    }
+
+    // with throws a RangeError for an out-of-bounds index
+    @Test
+    public void test_with_out_of_range_throws() {
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("[1, 2, 3].with(5, 9)"));
+    }
 }

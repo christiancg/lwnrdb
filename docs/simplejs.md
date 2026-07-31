@@ -529,6 +529,22 @@ its numeric elements (an `ArrayBuffer`/`DataView` → `[object …]` / `{}`). **
 simplification**: `JSON.stringify` emits a plain JSON array of the elements rather than V8's
 index-keyed object form.
 
+**ES2022–2026 standard-library additions (quick wins).** A batch of pure library additions,
+no new syntax: `Object.hasOwn(obj, key)` (own-property check over objects and arrays);
+`Object.groupBy(items, cb)` and `Map.groupBy(items, cb)` (bucket an iterable by a callback key
+into a plain object / a `Map` keyed by SameValueZero — `WeakMap` has no `groupBy`);
+`Promise.withResolvers()` (returns `{promise, resolve, reject}`) and `Promise.try(fn, ...args)`
+(runs `fn`, adopting a returned promise and turning a synchronous throw into a rejection);
+`RegExp.escape(str)` (hex-escapes an alphanumeric first character, backslash-escapes syntax
+characters, named-escapes whitespace controls; throws `TypeError` on a non-string);
+`Error.isError(x)` (brand check — error objects are tagged internally by `ErrorBuiltins.makeError`,
+so a plain `{name, message}` object is **not** an error); the Array by-copy methods
+`toReversed`/`toSorted`/`toSpliced`/`with` (return a new array, leaving the receiver intact;
+`with` throws `RangeError` out of bounds); `String.prototype.isWellFormed`/`toWellFormed`
+(lone-surrogate detection / replacement with U+FFFD); and the seven Set methods
+`union`/`intersection`/`difference`/`symmetricDifference`/`isSubsetOf`/`isSupersetOf`/
+`isDisjointFrom` (each takes another `Set`; a non-`Set` argument throws `TypeError`).
+
 **Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
 fresh per-iteration binding (unobservable until closures arrive in 6b).
 

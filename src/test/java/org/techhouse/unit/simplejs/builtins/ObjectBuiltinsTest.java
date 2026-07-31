@@ -318,4 +318,32 @@ public class ObjectBuiltinsTest {
         assertFalse(flag("let o = {}; Object.defineProperty(o, 'v', {value: 1}); delete o.v"));
         assertTrue(flag("let o = {a: 1}; delete o.a"));
     }
+
+    // Object.hasOwn reports own (not inherited) properties on objects and arrays
+    @Test
+    public void test_has_own() {
+        assertTrue(flag("Object.hasOwn({a: 1}, 'a')"));
+        assertFalse(flag("Object.hasOwn({a: 1}, 'b')"));
+        assertFalse(flag("let p = {a: 1}; let o = Object.create(p); Object.hasOwn(o, 'a')"));
+        assertTrue(flag("Object.hasOwn([9], 0)"));
+        assertTrue(flag("Object.hasOwn([9], 'length')"));
+        assertFalse(flag("Object.hasOwn([9], 1)"));
+        assertFalse(flag("Object.hasOwn(5, 'x')"));
+    }
+
+    // Object.groupBy buckets items by the callback's stringified key, in encounter order
+    @Test
+    public void test_group_by() {
+        final var setup = "let g = Object.groupBy([1, 2, 3, 4], n => n % 2 === 0 ? 'even' : 'odd'); ";
+        assertEquals("1,3", str(setup + "g.odd.join(',')"));
+        assertEquals("2,4", str(setup + "g.even.join(',')"));
+    }
+
+    // Object.groupBy consumes any iterable and exposes the callback index
+    @Test
+    public void test_group_by_iterable_index() {
+        final var source = "let g = Object.groupBy(new Set(['a', 'b', 'c']), (_, i) => i < 2 ? 'lo' : 'hi'); "
+                + "g.lo.join(',') + '|' + g.hi.join(',')";
+        assertEquals("a,b|c", str(source));
+    }
 }

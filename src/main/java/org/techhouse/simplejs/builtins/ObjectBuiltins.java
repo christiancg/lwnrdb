@@ -9,6 +9,7 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsProxy;
@@ -20,7 +21,7 @@ public final class ObjectBuiltins {
     private ObjectBuiltins() {
     }
 
-    public static JsObject create(IterableToList iterableToList, InterpreterOps ops) {
+    public static JsObject create(IterableToList iterableToList, InterpreterOps ops, Invoker invoker) {
         final var object = new JsObject();
         object.set("keys", new JsNativeFunction("keys", (_, args) -> keys(args, ops)));
         object.set("values", new JsNativeFunction("values", (_, args) -> values(args, ops)));
@@ -43,7 +44,50 @@ public final class ObjectBuiltins {
         object.set("getOwnPropertyDescriptor",
                 new JsNativeFunction("getOwnPropertyDescriptor", (_, args) -> getOwnPropertyDescriptor(args)));
         object.set("fromEntries", new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
+        object.set("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args)));
+        object.set("groupBy", new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
         return object;
+    }
+
+    private static JsValue hasOwn(List<JsValue> args) {
+        if (args.size() < 2) {
+            return JsBoolean.of(false);
+        }
+        final var key = JsCoercion.toStr(args.get(1));
+        return switch (args.getFirst()) {
+            case JsObject object -> JsBoolean.of(object.has(key) || object.hasAccessor(key));
+            case JsArray array -> JsBoolean.of("length".equals(key) || arrayHasIndex(array, key));
+            default -> JsBoolean.of(false);
+        };
+    }
+
+    private static boolean arrayHasIndex(JsArray array, String key) {
+        try {
+            final var index = Integer.parseInt(key);
+            return index >= 0 && index < array.length();
+        } catch (NumberFormatException ignored) {
+            return array.getProperty(key) != null;
+        }
+    }
+
+    private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
+        final var source = first(args);
+        final var callback = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        final var result = new JsObject();
+        final var items = source instanceof JsArray array ? array.getElements() : iterableToList.drain(source);
+        for (var i = 0; i < items.size(); i++) {
+            final var key = JsCoercion
+                    .toStr(invoker.call(callback, JsUndefined.getInstance(), List.of(items.get(i), new JsNumber(i))));
+            final JsArray bucket;
+            if (result.get(key) instanceof JsArray existing) {
+                bucket = existing;
+            } else {
+                bucket = new JsArray();
+                result.defineValue(key, bucket);
+            }
+            bucket.push(items.get(i));
+        }
+        return result;
     }
 
     private static JsValue keys(List<JsValue> args, InterpreterOps ops) {

@@ -115,8 +115,45 @@ public final class StringBuiltins {
             case "localeCompare" ->
                 new JsNativeFunction("localeCompare", (_, args) -> new JsNumber(localeCompare(value, args)));
             case "concat" -> new JsNativeFunction("concat", (_, args) -> new JsString(concat(value, args)));
+            case "isWellFormed" -> new JsNativeFunction("isWellFormed", (_, _) -> JsBoolean.of(isWellFormed(value)));
+            case "toWellFormed" -> new JsNativeFunction("toWellFormed", (_, _) -> new JsString(toWellFormed(value)));
             default -> null;
         };
+    }
+
+    private static boolean isWellFormed(String value) {
+        for (var i = 0; i < value.length(); i++) {
+            final var ch = value.charAt(i);
+            if (Character.isHighSurrogate(ch)) {
+                if (i + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(i + 1))) {
+                    return false;
+                }
+                i++;
+            } else if (Character.isLowSurrogate(ch)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String toWellFormed(String value) {
+        final var result = new StringBuilder(value.length());
+        for (var i = 0; i < value.length(); i++) {
+            final var ch = value.charAt(i);
+            if (Character.isHighSurrogate(ch)) {
+                if (i + 1 < value.length() && Character.isLowSurrogate(value.charAt(i + 1))) {
+                    result.append(ch).append(value.charAt(i + 1));
+                    i++;
+                } else {
+                    result.append('�');
+                }
+            } else if (Character.isLowSurrogate(ch)) {
+                result.append('�');
+            } else {
+                result.append(ch);
+            }
+        }
+        return result.toString();
     }
 
     private static JsValue charCodeAt(String value, List<JsValue> args) {

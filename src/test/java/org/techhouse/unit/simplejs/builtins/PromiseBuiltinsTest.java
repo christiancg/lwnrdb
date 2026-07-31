@@ -200,4 +200,63 @@ public class PromiseBuiltinsTest {
                 """;
         assertEquals("1,2", string(arr(source)));
     }
+
+    // Promise.withResolvers exposes the promise and its resolve function; resolving settles it
+    @Test
+    public void test_with_resolvers_resolve() {
+        final var source = """
+                let out = [];
+                let { promise, resolve } = Promise.withResolvers();
+                promise.then(v => out.push(v));
+                resolve(7);
+                out
+                """;
+        assertEquals(7, num(arr(source), 0));
+    }
+
+    // Promise.withResolvers exposes a reject function that rejects the promise
+    @Test
+    public void test_with_resolvers_reject() {
+        final var source = """
+                let out = [];
+                let { promise, reject } = Promise.withResolvers();
+                promise.catch(e => out.push(e));
+                reject('boom');
+                out
+                """;
+        assertEquals("boom", string(arr(source)));
+    }
+
+    // Promise.try runs the callback and fulfils with its return value, passing extra args
+    @Test
+    public void test_try_fulfils() {
+        final var source = """
+                let out = [];
+                Promise.try((a, b) => a + b, 2, 3).then(v => out.push(v));
+                out
+                """;
+        assertEquals(5, num(arr(source), 0));
+    }
+
+    // Promise.try turns a synchronous throw into a rejection
+    @Test
+    public void test_try_rejects_on_throw() {
+        final var source = """
+                let out = [];
+                Promise.try(() => { throw 'nope'; }).catch(e => out.push(e));
+                out
+                """;
+        assertEquals("nope", string(arr(source)));
+    }
+
+    // Promise.try adopts a promise returned by the callback
+    @Test
+    public void test_try_adopts_promise() {
+        final var source = """
+                let out = [];
+                Promise.try(() => Promise.resolve(11)).then(v => out.push(v));
+                out
+                """;
+        assertEquals(11, num(arr(source), 0));
+    }
 }

@@ -18,7 +18,7 @@ public final class GlobalScope {
             Consumer<String> consoleSink, InterpreterOps ops, NetworkAccess network, ResourceLimits limits) {
         final var globalThis = new JsGlobalObject(global);
         ErrorBuiltins.install(global);
-        define(global, "Object", ObjectBuiltins.create(iterableToList, ops));
+        define(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker));
         define(global, "Array", ArrayBuiltins.create(invoker, iterableToList));
         define(global, "String", StringBuiltins.create());
         define(global, "Number", NumberBuiltins.create());
@@ -30,8 +30,8 @@ public final class GlobalScope {
         TimerBuiltins.install(global, eventLoop, invoker);
         define(global, "RegExp", RegexBuiltins.create());
         define(global, "Symbol", SymbolBuiltins.create());
-        define(global, "Map", MapBuiltins.create(iterableToList, false));
-        define(global, "WeakMap", MapBuiltins.create(iterableToList, true));
+        define(global, "Map", MapBuiltins.create(iterableToList, invoker, false));
+        define(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true));
         define(global, "Set", SetBuiltins.create(iterableToList, false));
         define(global, "WeakSet", SetBuiltins.create(iterableToList, true));
         define(global, "Date", DateBuiltins.create());

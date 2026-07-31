@@ -134,4 +134,26 @@ public class MapBuiltinsTest {
     public void test_weakmap_object_key() {
         assertEquals(5, num("let k = {}; let w = new WeakMap(); w.set(k, 5); w.get(k)"));
     }
+
+    // Map.groupBy buckets items into a real Map, keyed by the callback's return value (not a string)
+    @Test
+    public void test_group_by() {
+        final var setup = "let g = Map.groupBy([1, 2, 3, 4], n => n % 2); ";
+        assertEquals("1,3", str(setup + "g.get(1).join(',')"));
+        assertEquals("2,4", str(setup + "g.get(0).join(',')"));
+        assertEquals(2, num(setup + "g.size"));
+    }
+
+    // Map.groupBy keys by object identity (SameValueZero), unlike Object.groupBy
+    @Test
+    public void test_group_by_object_key() {
+        final var source = "let k = {}; let g = Map.groupBy([1, 2], () => k); g.get(k).join(',')";
+        assertEquals("1,2", str(source));
+    }
+
+    // WeakMap has no groupBy static
+    @Test
+    public void test_weakmap_no_group_by() {
+        assertEquals("undefined", str("typeof WeakMap.groupBy"));
+    }
 }

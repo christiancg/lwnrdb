@@ -49,8 +49,100 @@ public final class SetBuiltins {
             case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
             case "keys", "values" -> new JsNativeFunction(name, (_, _) -> valuesIterator(receiver));
             case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(receiver));
+            case "union" -> new JsNativeFunction("union", (_, args) -> union(receiver, other(args)));
+            case "intersection" ->
+                new JsNativeFunction("intersection", (_, args) -> intersection(receiver, other(args)));
+            case "difference" -> new JsNativeFunction("difference", (_, args) -> difference(receiver, other(args)));
+            case "symmetricDifference" ->
+                new JsNativeFunction("symmetricDifference", (_, args) -> symmetricDifference(receiver, other(args)));
+            case "isSubsetOf" ->
+                new JsNativeFunction("isSubsetOf", (_, args) -> JsBoolean.of(isSubsetOf(receiver, other(args))));
+            case "isSupersetOf" ->
+                new JsNativeFunction("isSupersetOf", (_, args) -> JsBoolean.of(isSupersetOf(receiver, other(args))));
+            case "isDisjointFrom" -> new JsNativeFunction("isDisjointFrom",
+                    (_, args) -> JsBoolean.of(isDisjointFrom(receiver, other(args))));
             default -> null;
         };
+    }
+
+    private static JsSet other(List<JsValue> args) {
+        if (arg(args, 0) instanceof JsSet set) {
+            return set;
+        }
+        throw new TypeErrorException("Set method argument is not a Set");
+    }
+
+    private static JsSet union(JsSet receiver, JsSet other) {
+        final var result = new JsSet();
+        for (final var value : receiver.values()) {
+            result.add(value);
+        }
+        for (final var value : other.values()) {
+            result.add(value);
+        }
+        return result;
+    }
+
+    private static JsSet intersection(JsSet receiver, JsSet other) {
+        final var result = new JsSet();
+        for (final var value : receiver.values()) {
+            if (other.has(value)) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private static JsSet difference(JsSet receiver, JsSet other) {
+        final var result = new JsSet();
+        for (final var value : receiver.values()) {
+            if (!other.has(value)) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private static JsSet symmetricDifference(JsSet receiver, JsSet other) {
+        final var result = new JsSet();
+        for (final var value : receiver.values()) {
+            if (!other.has(value)) {
+                result.add(value);
+            }
+        }
+        for (final var value : other.values()) {
+            if (!receiver.has(value)) {
+                result.add(value);
+            }
+        }
+        return result;
+    }
+
+    private static boolean isSubsetOf(JsSet receiver, JsSet other) {
+        for (final var value : receiver.values()) {
+            if (!other.has(value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isSupersetOf(JsSet receiver, JsSet other) {
+        for (final var value : other.values()) {
+            if (!receiver.has(value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isDisjointFrom(JsSet receiver, JsSet other) {
+        for (final var value : receiver.values()) {
+            if (other.has(value)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public static void add(JsSet set, JsValue value) {

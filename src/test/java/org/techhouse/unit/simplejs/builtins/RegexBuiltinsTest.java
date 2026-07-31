@@ -152,4 +152,32 @@ public class RegexBuiltinsTest {
                 """;
         assertEquals(0, num(source));
     }
+
+    // RegExp.escape escapes syntax characters so the result matches the literal string
+    @Test
+    public void test_escape_syntax_characters() {
+        assertEquals("\\.\\*\\+", str("RegExp.escape('.*+')"));
+        assertTrue(bool("new RegExp(RegExp.escape('a.b')).test('a.b')"));
+        assertFalse(bool("new RegExp(RegExp.escape('a.b')).test('axb')"));
+    }
+
+    // RegExp.escape hex-escapes an alphanumeric first character so concatenation stays safe
+    @Test
+    public void test_escape_first_char() {
+        assertEquals("\\x61bc", str("RegExp.escape('abc')"));
+        assertTrue(bool("new RegExp(RegExp.escape('abc')).test('abc')"));
+    }
+
+    // RegExp.escape rejects a non-string argument
+    @Test
+    public void test_escape_non_string_throws() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("RegExp.escape(5)"));
+    }
+
+    // RegExp.escape emits named escapes for whitespace control characters
+    @Test
+    public void test_escape_whitespace() {
+        assertEquals("\\tx", str("RegExp.escape(String.fromCharCode(9) + 'x')"));
+    }
 }

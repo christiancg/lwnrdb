@@ -12,6 +12,7 @@ public final class JsObject extends JsValue {
 
     private final Map<String, JsValue> properties = new LinkedHashMap<>();
     private boolean extensible = true;
+    private boolean errorData;
     private JsClass klass;
     private Map<String, JsValue> privateFields;
     private Map<JsSymbol, JsValue> symbolProperties;
@@ -163,6 +164,14 @@ public final class JsObject extends JsValue {
 
     public Map<String, JsValue> getProperties() {
         return properties;
+    }
+
+    public boolean isErrorData() {
+        return errorData;
+    }
+
+    public void markErrorData() {
+        errorData = true;
     }
 
     public JsClass getKlass() {

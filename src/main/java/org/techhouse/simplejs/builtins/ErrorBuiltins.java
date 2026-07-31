@@ -4,6 +4,7 @@ import java.util.List;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
@@ -20,6 +21,7 @@ public final class ErrorBuiltins {
         final var error = new JsObject();
         error.set("name", new JsString(name));
         error.set("message", new JsString(message));
+        error.markErrorData();
         return error;
     }
 
@@ -43,7 +45,12 @@ public final class ErrorBuiltins {
     public static void install(Environment global) {
         for (final var name : NAMES) {
             global.declareVar(name);
-            global.assign(name, new JsNativeFunction(name, (_, args) -> makeError(name, message(args))));
+            final var constructor = new JsNativeFunction(name, (_, args) -> makeError(name, message(args)));
+            if ("Error".equals(name)) {
+                constructor.setProperty("isError",
+                        new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
+            }
+            global.assign(name, constructor);
         }
         global.declareVar("SuppressedError");
         global.assign("SuppressedError",
@@ -54,6 +61,10 @@ public final class ErrorBuiltins {
             final var errors = arg(args, 0) instanceof JsArray array ? array.getElements() : List.<JsValue>of();
             return makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : "");
         }));
+    }
+
+    private static boolean isError(JsValue value) {
+        return value instanceof JsObject object && object.isErrorData();
     }
 
     private static JsValue arg(List<JsValue> args, int index) {

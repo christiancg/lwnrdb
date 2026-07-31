@@ -17,8 +17,33 @@ public final class MapBuiltins {
     private MapBuiltins() {
     }
 
-    public static JsNativeFunction create(IterableToList iterableToList, boolean weak) {
-        return new JsNativeFunction(weak ? "WeakMap" : "Map", (_, args) -> construct(args, iterableToList, weak));
+    public static JsNativeFunction create(IterableToList iterableToList, Invoker invoker, boolean weak) {
+        final var constructor = new JsNativeFunction(weak ? "WeakMap" : "Map",
+                (_, args) -> construct(args, iterableToList, weak));
+        if (!weak) {
+            constructor.setProperty("groupBy",
+                    new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
+        }
+        return constructor;
+    }
+
+    private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
+        final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        final var callback = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        final var map = new JsMap(false);
+        final var items = iterableToList.drain(source);
+        for (var i = 0; i < items.size(); i++) {
+            final var key = invoker.call(callback, JsUndefined.getInstance(), List.of(items.get(i), new JsNumber(i)));
+            final JsArray bucket;
+            if (map.get(key) instanceof JsArray existing) {
+                bucket = existing;
+            } else {
+                bucket = new JsArray();
+                map.set(key, bucket);
+            }
+            bucket.push(items.get(i));
+        }
+        return map;
     }
 
     private static JsValue construct(List<JsValue> args, IterableToList iterableToList, boolean weak) {

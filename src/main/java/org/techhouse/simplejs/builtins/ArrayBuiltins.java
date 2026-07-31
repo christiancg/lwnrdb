@@ -2,6 +2,7 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
@@ -101,8 +102,42 @@ public final class ArrayBuiltins {
             case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(receiver));
             case "values" -> new JsNativeFunction("values", (_, _) -> valuesIterator(receiver));
             case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(receiver));
+            case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(receiver));
+            case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker));
+            case "toSpliced" -> new JsNativeFunction("toSpliced", (_, args) -> toSpliced(receiver, args));
+            case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, args));
             default -> null;
         };
+    }
+
+    private static JsValue toReversed(JsArray receiver) {
+        final var copy = new JsArray(receiver.getElements());
+        return reverse(copy);
+    }
+
+    private static JsValue toSorted(JsArray receiver, List<JsValue> args, Invoker invoker) {
+        return sort(new JsArray(receiver.getElements()), args, invoker);
+    }
+
+    private static JsValue toSpliced(JsArray receiver, List<JsValue> args) {
+        final var copy = new JsArray(receiver.getElements());
+        splice(copy, args);
+        return copy;
+    }
+
+    private static JsValue with(JsArray receiver, List<JsValue> args) {
+        final var elements = receiver.getElements();
+        final var length = elements.size();
+        var index = intArg(args, 0, 0);
+        if (index < 0) {
+            index += length;
+        }
+        if (index < 0 || index >= length) {
+            throw new RangeErrorException("Invalid index : " + intArg(args, 0, 0));
+        }
+        final var copy = new JsArray(elements);
+        copy.set(index, args.size() > 1 ? args.get(1) : JsUndefined.getInstance());
+        return copy;
     }
 
     private static int findIndex(JsArray receiver, List<JsValue> args, Invoker invoker) {

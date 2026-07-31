@@ -1,5 +1,7 @@
 package org.techhouse.unit.simplejs.internal;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -7,8 +9,6 @@ import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class TypedArrayProgramTest {
     private static double num(String source) {
