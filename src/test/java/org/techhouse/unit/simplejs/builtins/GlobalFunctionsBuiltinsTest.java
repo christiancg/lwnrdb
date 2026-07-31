@@ -26,7 +26,8 @@ public class GlobalFunctionsBuiltinsTest {
 
     // joins an accumulator array read after the event loop has drained
     private static String joinDrained() {
-        final var array = (JsArray) Interpreter.run("let order = [];\nsetTimeout(() => order.push('timer'), 0);\nqueueMicrotask(() => order.push('micro'));\norder\n");
+        final var array = (JsArray) Interpreter.run(
+                "let order = [];\nsetTimeout(() => order.push('timer'), 0);\nqueueMicrotask(() => order.push('micro'));\norder\n");
         final var sb = new StringBuilder();
         for (var i = 0; i < array.length(); i++) {
             if (i > 0) {

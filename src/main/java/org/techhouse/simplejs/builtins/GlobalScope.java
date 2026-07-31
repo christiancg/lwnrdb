@@ -20,7 +20,7 @@ public final class GlobalScope {
         ErrorBuiltins.install(global);
         define(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker));
         define(global, "Array", ArrayBuiltins.create(invoker, iterableToList));
-        define(global, "String", StringBuiltins.create());
+        define(global, "String", StringBuiltins.create(ops));
         define(global, "Number", NumberBuiltins.create());
         define(global, "Boolean", booleanFunction());
         define(global, "Math", MathBuiltins.create());

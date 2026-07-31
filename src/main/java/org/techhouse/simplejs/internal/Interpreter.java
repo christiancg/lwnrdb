@@ -895,7 +895,7 @@ public final class Interpreter {
             setPrivateMember(target, name, value, env);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, eval(assignment.getValue(), env));
+        final var value = JsOperators.binary(baseOperator(operator), current, eval(assignment.getValue(), env), ops);
         setPrivateMember(target, name, value, env);
         return value;
     }

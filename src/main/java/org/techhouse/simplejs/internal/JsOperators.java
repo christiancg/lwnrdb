@@ -2,6 +2,7 @@ package org.techhouse.simplejs.internal;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArray;
@@ -21,13 +22,17 @@ public final class JsOperators {
     }
 
     public static JsValue binary(String operator, JsValue left, JsValue right) {
+        return binary(operator, left, right, null);
+    }
+
+    public static JsValue binary(String operator, JsValue left, JsValue right, InterpreterOps ops) {
         return switch (operator) {
-            case "+" -> add(left, right);
-            case "-", "*", "/", "%", "**" -> arithmetic(operator, left, right);
-            case "&", "|", "^", "<<", ">>", ">>>" -> bitwise(operator, left, right);
-            case "<", "<=", ">", ">=" -> JsBoolean.of(relational(operator, left, right));
-            case "==" -> JsBoolean.of(looseEquals(left, right));
-            case "!=" -> JsBoolean.of(!looseEquals(left, right));
+            case "+" -> add(left, right, ops);
+            case "-", "*", "/", "%", "**" -> arithmetic(operator, left, right, ops);
+            case "&", "|", "^", "<<", ">>", ">>>" -> bitwise(operator, left, right, ops);
+            case "<", "<=", ">", ">=" -> JsBoolean.of(relational(operator, left, right, ops));
+            case "==" -> JsBoolean.of(looseEquals(left, right, ops));
+            case "!=" -> JsBoolean.of(!looseEquals(left, right, ops));
             case "===" -> JsBoolean.of(strictEquals(left, right));
             case "!==" -> JsBoolean.of(!strictEquals(left, right));
             default -> throw new TypeErrorException("Unknown binary operator: " + operator);
@@ -49,7 +54,7 @@ public final class JsOperators {
         };
     }
 
-    public static boolean looseEquals(JsValue left, JsValue right) {
+    public static boolean looseEquals(JsValue left, JsValue right, InterpreterOps ops) {
         if (left.getType() == right.getType()) {
             return strictEquals(left, right);
         }
@@ -59,16 +64,16 @@ public final class JsOperators {
             return leftNullish && rightNullish;
         }
         if (left instanceof JsBoolean) {
-            return looseEquals(new JsNumber(JsCoercion.toNumber(left)), right);
+            return looseEquals(new JsNumber(JsCoercion.toNumber(left)), right, ops);
         }
         if (right instanceof JsBoolean) {
-            return looseEquals(left, new JsNumber(JsCoercion.toNumber(right)));
+            return looseEquals(left, new JsNumber(JsCoercion.toNumber(right)), ops);
         }
         if (left instanceof JsObject || left instanceof JsArray) {
-            return looseEquals(JsCoercion.toPrimitive(left), right);
+            return looseEquals(JsCoercion.toPrimitive(left, "default", ops), right, ops);
         }
         if (right instanceof JsObject || right instanceof JsArray) {
-            return looseEquals(left, JsCoercion.toPrimitive(right));
+            return looseEquals(left, JsCoercion.toPrimitive(right, "default", ops), ops);
         }
         return looseEqualsPrimitive(left, right);
     }
@@ -96,11 +101,15 @@ public final class JsOperators {
     }
 
     public static JsValue unary(String operator, JsValue operand) {
+        return unary(operator, operand, null);
+    }
+
+    public static JsValue unary(String operator, JsValue operand, InterpreterOps ops) {
         return switch (operator) {
             case "!" -> JsBoolean.of(!JsCoercion.toBoolean(operand));
-            case "-" -> negate(operand);
-            case "+" -> new JsNumber(JsCoercion.toNumber(operand));
-            case "~" -> bitwiseNot(operand);
+            case "-" -> negate(operand, ops);
+            case "+" -> new JsNumber(JsCoercion.toNumber(operand, ops));
+            case "~" -> bitwiseNot(operand, ops);
             case "typeof" -> new JsString(JsCoercion.typeOf(operand));
             case "void" -> JsUndefined.getInstance();
             default -> throw new TypeErrorException("Unknown unary operator: " + operator);
@@ -108,31 +117,35 @@ public final class JsOperators {
     }
 
     public static JsValue delta(JsValue operand, boolean increment) {
+        return delta(operand, increment, null);
+    }
+
+    public static JsValue delta(JsValue operand, boolean increment, InterpreterOps ops) {
         if (operand instanceof JsBigInt b) {
             final var one = BigInteger.ONE;
             return new JsBigInt(increment ? b.getValue().add(one) : b.getValue().subtract(one));
         }
-        final var current = JsCoercion.toNumber(operand);
+        final var current = JsCoercion.toNumber(operand, ops);
         return new JsNumber(increment ? current + 1 : current - 1);
     }
 
-    private static JsValue negate(JsValue operand) {
+    private static JsValue negate(JsValue operand, InterpreterOps ops) {
         if (operand instanceof JsBigInt b) {
             return new JsBigInt(b.getValue().negate());
         }
-        return new JsNumber(-JsCoercion.toNumber(operand));
+        return new JsNumber(-JsCoercion.toNumber(operand, ops));
     }
 
-    private static JsValue bitwiseNot(JsValue operand) {
+    private static JsValue bitwiseNot(JsValue operand, InterpreterOps ops) {
         if (operand instanceof JsBigInt b) {
             return new JsBigInt(b.getValue().not());
         }
-        return new JsNumber(~toInt32(operand));
+        return new JsNumber(~toInt32(operand, ops));
     }
 
-    private static JsValue add(JsValue left, JsValue right) {
-        final var leftPrim = JsCoercion.toPrimitive(left);
-        final var rightPrim = JsCoercion.toPrimitive(right);
+    private static JsValue add(JsValue left, JsValue right, InterpreterOps ops) {
+        final var leftPrim = JsCoercion.toPrimitive(left, "default", ops);
+        final var rightPrim = JsCoercion.toPrimitive(right, "default", ops);
         if (leftPrim instanceof JsString || rightPrim instanceof JsString) {
             return new JsString(JsCoercion.toStr(leftPrim) + JsCoercion.toStr(rightPrim));
         }
@@ -143,13 +156,13 @@ public final class JsOperators {
         return new JsNumber(JsCoercion.toNumber(leftPrim) + JsCoercion.toNumber(rightPrim));
     }
 
-    private static JsValue arithmetic(String operator, JsValue left, JsValue right) {
+    private static JsValue arithmetic(String operator, JsValue left, JsValue right, InterpreterOps ops) {
         if (left instanceof JsBigInt && right instanceof JsBigInt) {
             return bigIntArithmetic(operator, ((JsBigInt) left).getValue(), ((JsBigInt) right).getValue());
         }
         requireNoMixedBigInt(left, right);
-        final var a = JsCoercion.toNumber(left);
-        final var b = JsCoercion.toNumber(right);
+        final var a = JsCoercion.toNumber(left, ops);
+        final var b = JsCoercion.toNumber(right, ops);
         return new JsNumber(switch (operator) {
             case "-" -> a - b;
             case "*" -> a * b;
@@ -185,17 +198,17 @@ public final class JsOperators {
         return a.pow(b.intValueExact());
     }
 
-    private static JsValue bitwise(String operator, JsValue left, JsValue right) {
+    private static JsValue bitwise(String operator, JsValue left, JsValue right, InterpreterOps ops) {
         if (left instanceof JsBigInt && right instanceof JsBigInt) {
             return bigIntBitwise(operator, ((JsBigInt) left).getValue(), ((JsBigInt) right).getValue());
         }
         requireNoMixedBigInt(left, right);
         if (">>>".equals(operator)) {
-            final var result = toUint32(left) >>> (toUint32(right) & 0x1f);
+            final var result = toUint32(left, ops) >>> (toUint32(right, ops) & 0x1f);
             return new JsNumber(result);
         }
-        final var a = toInt32(left);
-        final var b = toInt32(right);
+        final var a = toInt32(left, ops);
+        final var b = toInt32(right, ops);
         return new JsNumber(switch (operator) {
             case "&" -> a & b;
             case "|" -> a | b;
@@ -217,9 +230,9 @@ public final class JsOperators {
         });
     }
 
-    private static boolean relational(String operator, JsValue left, JsValue right) {
-        final var leftPrim = JsCoercion.toPrimitive(left);
-        final var rightPrim = JsCoercion.toPrimitive(right);
+    private static boolean relational(String operator, JsValue left, JsValue right, InterpreterOps ops) {
+        final var leftPrim = JsCoercion.toPrimitive(left, "number", ops);
+        final var rightPrim = JsCoercion.toPrimitive(right, "number", ops);
         final int sign;
         if (leftPrim instanceof JsString && rightPrim instanceof JsString) {
             sign = Integer.signum(((JsString) leftPrim).getValue().compareTo(((JsString) rightPrim).getValue()));
@@ -290,15 +303,15 @@ public final class JsOperators {
         }
     }
 
-    private static int toInt32(JsValue value) {
-        final var d = JsCoercion.toNumber(value);
+    private static int toInt32(JsValue value, InterpreterOps ops) {
+        final var d = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(d) || Double.isInfinite(d)) {
             return 0;
         }
         return (int) (long) d;
     }
 
-    private static long toUint32(JsValue value) {
-        return toInt32(value) & 0xffffffffL;
+    private static long toUint32(JsValue value, InterpreterOps ops) {
+        return toInt32(value, ops) & 0xffffffffL;
     }
 }

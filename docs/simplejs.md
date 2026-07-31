@@ -352,6 +352,20 @@ enclosing `arguments` lexically. `globalThis` is a backing object that reflects 
 builtins and top-level values written through `GlobalScope.define` — it is **not** a fully live
 mirror of every lexical binding.
 
+**ToPrimitive protocol (ES2026 conformance Phase 1).** Object-to-primitive coercion is a real
+`OrdinaryToPrimitive`: `JsCoercion.toPrimitive(value, hint, ops)` first consults a callable
+`[Symbol.toPrimitive]` (passed the hint), then falls back to `valueOf`/`toString` ordered by the
+hint (`"string"` tries `toString` first, `"number"`/`"default"` try `valueOf` first), accepting
+the first primitive result and throwing `TypeError` when none is produced. It runs user code, so
+it takes an `InterpreterOps ops` seam; the ops-aware `toNumber(value, ops)`/`toStr(value, ops)`
+overloads (and `JsOperators.binary`/`unary`/`delta`, whose object operands are coerced with the
+right hint — `"number"` for arithmetic/relational/bitwise, `"default"` for `+`/`==`, `"string"`
+for template interpolation and `String(x)`) route through it. The legacy no-`ops` overloads
+(`ops == null`) keep the old string-only coercion and are used by paths that must **not** call
+user code (`EJsonInterop`, `JSON.stringify`, console). Arrays keep their join-based coercion; the
+`ops` path intercepts only plain `JsObject`s, so exotic objects (`Date`, `Map`, typed arrays)
+retain their dedicated `toStr`/`toNumber` arms.
+
 **Iterator protocol, symbol keys & object-literal methods (engine-completion Phase 2).**
 The well-known `Symbol.iterator`/`Symbol.asyncIterator` are real `JsSymbol` constants, and
 `Symbol.for(key)`/`Symbol.keyFor(sym)` provide a process-wide registry of shared symbols.

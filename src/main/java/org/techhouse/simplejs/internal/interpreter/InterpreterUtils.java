@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -81,11 +82,11 @@ public final class InterpreterUtils {
         }
     }
 
-    public static JsValue numericOld(JsValue oldValue) {
+    public static JsValue numericOld(JsValue oldValue, InterpreterOps ops) {
         if (oldValue instanceof JsBigInt) {
             return oldValue;
         }
-        return new JsNumber(JsCoercion.toNumber(oldValue));
+        return new JsNumber(JsCoercion.toNumber(oldValue, ops));
     }
 
     public static String baseOperator(String assignmentOperator) {

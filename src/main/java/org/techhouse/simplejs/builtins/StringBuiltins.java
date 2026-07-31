@@ -22,9 +22,9 @@ public final class StringBuiltins {
     private StringBuiltins() {
     }
 
-    public static JsNativeFunction create() {
+    public static JsNativeFunction create(InterpreterOps ops) {
         final var string = new JsNativeFunction("String",
-                (_, args) -> new JsString(args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst())));
+                (_, args) -> new JsString(args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst(), ops)));
         string.setProperty("raw", new JsNativeFunction("raw", (_, args) -> new JsString(raw(args))));
         string.setProperty("fromCharCode",
                 new JsNativeFunction("fromCharCode", (_, args) -> new JsString(fromCharCode(args))));

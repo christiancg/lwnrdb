@@ -121,4 +121,14 @@ public class JsCoercionTest {
         assertEquals("function n() { }", JsCoercion.toStr(nativeFunction));
         assertTrue(JsCoercion.toBoolean(function));
     }
+
+    // The ops-aware overloads fall back to the primitive/string coercion when ops is null (no user code)
+    @Test
+    public void test_ops_aware_overloads_null_ops() {
+        assertEquals(5, JsCoercion.toNumber(new JsNumber(5), null));
+        assertEquals("[object Object]", JsCoercion.toStr(new JsObject(), null));
+        final var primitive = JsCoercion.toPrimitive(new JsObject(), "number", null);
+        assertEquals("[object Object]", ((JsString) primitive).getValue());
+        assertEquals("1,2", JsCoercion.toStr(new JsArray(List.of(new JsNumber(1), new JsNumber(2))), null));
+    }
 }

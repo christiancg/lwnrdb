@@ -67,7 +67,7 @@ public final class ExpressionEvaluator {
         final var expressions = template.getExpressions();
         final var sb = new StringBuilder(quasis.getFirst());
         for (var i = 0; i < expressions.size(); i++) {
-            sb.append(JsCoercion.toStr(interp.eval(expressions.get(i), env)));
+            sb.append(JsCoercion.toStr(interp.eval(expressions.get(i), env), interp.ops()));
             sb.append(quasis.get(i + 1));
         }
         return new JsString(sb.toString());
@@ -197,7 +197,7 @@ public final class ExpressionEvaluator {
         if ("delete".equals(operator)) {
             return evalDelete(unary.getArgument(), env);
         }
-        return JsOperators.unary(operator, interp.eval(unary.getArgument(), env));
+        return JsOperators.unary(operator, interp.eval(unary.getArgument(), env), interp.ops());
     }
 
     private JsValue evalTypeof(Expression argument, Environment env) {
@@ -230,24 +230,24 @@ public final class ExpressionEvaluator {
         final var argument = update.getArgument();
         if (argument instanceof Identifier id) {
             final var oldValue = env.get(id.getName());
-            final var newValue = JsOperators.delta(oldValue, increment);
+            final var newValue = JsOperators.delta(oldValue, increment, interp.ops());
             env.assign(id.getName(), newValue);
-            return update.isPrefix() ? newValue : numericOld(oldValue);
+            return update.isPrefix() ? newValue : numericOld(oldValue, interp.ops());
         }
         if (argument instanceof MemberExpression member) {
             if (member.getProperty() instanceof PrivateIdentifier priv) {
                 final var object = interp.eval(member.getObject(), env);
                 final var oldValue = interp.getPrivateMember(object, priv.getName(), env);
-                final var newValue = JsOperators.delta(oldValue, increment);
+                final var newValue = JsOperators.delta(oldValue, increment, interp.ops());
                 interp.setPrivateMember(object, priv.getName(), newValue, env);
-                return update.isPrefix() ? newValue : numericOld(oldValue);
+                return update.isPrefix() ? newValue : numericOld(oldValue, interp.ops());
             }
             final var target = interp.eval(member.getObject(), env);
             final var key = interp.memberKeyValue(member, env);
             final var oldValue = interp.getMemberByKey(target, key);
-            final var newValue = JsOperators.delta(oldValue, increment);
+            final var newValue = JsOperators.delta(oldValue, increment, interp.ops());
             interp.setMemberByKey(target, key, newValue);
-            return update.isPrefix() ? newValue : numericOld(oldValue);
+            return update.isPrefix() ? newValue : numericOld(oldValue, interp.ops());
         }
         throw new UnsupportedNodeException(argument.getType().name());
     }
@@ -263,7 +263,8 @@ public final class ExpressionEvaluator {
             }
             return evalIn(binary, env);
         }
-        return JsOperators.binary(operator, interp.eval(binary.getLeft(), env), interp.eval(binary.getRight(), env));
+        return JsOperators.binary(operator, interp.eval(binary.getLeft(), env), interp.eval(binary.getRight(), env),
+                interp.ops());
     }
 
     private JsValue evalIn(BinaryExpression binary, Environment env) {
@@ -319,7 +320,8 @@ public final class ExpressionEvaluator {
             env.assign(name, value);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env));
+        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
+                interp.ops());
         env.assign(name, value);
         return value;
     }
@@ -345,7 +347,8 @@ public final class ExpressionEvaluator {
             interp.setMemberByKey(target, key, value);
             return value;
         }
-        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env));
+        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
+                interp.ops());
         interp.setMemberByKey(target, key, value);
         return value;
     }

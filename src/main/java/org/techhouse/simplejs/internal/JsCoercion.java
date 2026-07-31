@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.internal;
 
 import java.math.BigInteger;
+import java.util.List;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
@@ -88,11 +90,62 @@ public final class JsCoercion {
         };
     }
 
+    public static double toNumber(JsValue value, InterpreterOps ops) {
+        if (ops != null && value instanceof JsObject) {
+            return toNumber(toPrimitive(value, "number", ops));
+        }
+        return toNumber(value);
+    }
+
+    public static String toStr(JsValue value, InterpreterOps ops) {
+        if (ops != null && value instanceof JsObject) {
+            return toStr(toPrimitive(value, "string", ops));
+        }
+        return toStr(value);
+    }
+
     public static JsValue toPrimitive(JsValue value) {
         if (value instanceof JsObject || value instanceof JsArray) {
             return new JsString(toStr(value));
         }
         return value;
+    }
+
+    public static JsValue toPrimitive(JsValue value, String hint, InterpreterOps ops) {
+        if (ops == null || !(value instanceof JsObject)) {
+            return toPrimitive(value);
+        }
+        final var exotic = ops.getMember(value, JsSymbol.TO_PRIMITIVE);
+        if (isCallable(exotic)) {
+            final var result = ops.call(exotic, value, List.of(new JsString(hint)));
+            if (isPrimitive(result)) {
+                return result;
+            }
+            throw new TypeErrorException("Cannot convert object to primitive value");
+        }
+        final var methods = "string".equals(hint)
+                ? new String[]{"toString", "valueOf"}
+                : new String[]{"valueOf", "toString"};
+        for (final var name : methods) {
+            final var method = ops.getMember(value, new JsString(name));
+            if (isCallable(method)) {
+                final var result = ops.call(method, value, List.of());
+                if (isPrimitive(result)) {
+                    return result;
+                }
+            }
+        }
+        throw new TypeErrorException("Cannot convert object to primitive value");
+    }
+
+    private static boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction;
+    }
+
+    private static boolean isPrimitive(JsValue value) {
+        return value instanceof JsNumber || value instanceof JsString || value instanceof JsBoolean
+                || value instanceof JsBigInt || value instanceof JsNull || value instanceof JsUndefined
+                || value instanceof JsSymbol;
     }
 
     public static String typeOf(JsValue value) {

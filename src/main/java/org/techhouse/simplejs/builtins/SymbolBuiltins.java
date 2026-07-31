@@ -25,6 +25,7 @@ public final class SymbolBuiltins {
         symbol.setProperty("asyncDispose", JsSymbol.ASYNC_DISPOSE);
         symbol.setProperty("iterator", JsSymbol.ITERATOR);
         symbol.setProperty("asyncIterator", JsSymbol.ASYNC_ITERATOR);
+        symbol.setProperty("toPrimitive", JsSymbol.TO_PRIMITIVE);
         symbol.setProperty("for",
                 new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args), JsSymbol::new)));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));

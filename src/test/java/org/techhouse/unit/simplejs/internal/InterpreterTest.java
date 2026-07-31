@@ -533,4 +533,59 @@ public class InterpreterTest {
         assertTrue(bool("globalThis.Math === Math"));
         assertEquals(4, num("globalThis.Math.max(1, 4)"));
     }
+
+    // ToPrimitive honors valueOf in numeric contexts and toString in string contexts
+    @Test
+    public void test_to_primitive_value_of_and_to_string() {
+        assertEquals(6, num("let o = { valueOf() { return 5; } }; o + 1"));
+        assertEquals("xy", str("let o = { toString() { return 'x'; } }; o + 'y'"));
+        assertEquals(9, num("+{ valueOf() { return 9; } }"));
+        assertEquals(1, num("let o = { valueOf() { return 5; } }; o & 3"));
+        assertTrue(bool("let o = { valueOf() { return 5; } }; o < 10"));
+    }
+
+    // @@toPrimitive takes precedence and receives the correct hint
+    @Test
+    public void test_symbol_to_primitive_hints() {
+        final var src = "let o = { [Symbol.toPrimitive](hint) { return hint === 'number' ? 42 : 'str'; } };";
+        assertEquals(42, num(src + " o * 1"));
+        assertEquals("str", str(src + " `${o}`"));
+        assertEquals("str!", str(src + " o + '!'"));
+    }
+
+    // Hint ordering: string context tries toString first, numeric context tries valueOf first
+    @Test
+    public void test_to_primitive_hint_ordering() {
+        final var both = "let o = { toString() { return 'S'; }, valueOf() { return 7; } };";
+        assertEquals("S", str(both + " `${o}`"));
+        assertEquals(14, num(both + " o * 2"));
+    }
+
+    // Loose equality against a primitive coerces the object with the default hint
+    @Test
+    public void test_to_primitive_loose_equals() {
+        assertTrue(bool("let o = { valueOf() { return 3; } }; o == 3"));
+    }
+
+    // A non-primitive valueOf result falls through to toString; two object results throw
+    @Test
+    public void test_to_primitive_fallthrough_and_error() {
+        assertEquals("T", str("let o = { valueOf() { return {}; }, toString() { return 'T'; } }; o + ''"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let o = { valueOf() { return {}; }, toString() { return {}; } }; o + ''"));
+    }
+
+    // Postfix update coerces the returned old value through valueOf
+    @Test
+    public void test_to_primitive_postfix_update() {
+        assertEquals(5, num("let o = { x: { valueOf() { return 5; } } }; let r = o.x++; r"));
+    }
+
+    // Objects and arrays with no user hooks keep their default coercions
+    @Test
+    public void test_to_primitive_defaults_unchanged() {
+        assertEquals("[object Object]", str("({}) + ''"));
+        assertEquals("1,2", str("[1, 2] + ''"));
+        assertTrue(Double.isNaN(num("({}) * 2")));
+    }
 }

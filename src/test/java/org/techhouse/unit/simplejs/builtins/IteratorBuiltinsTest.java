@@ -9,7 +9,8 @@ import org.techhouse.simplejs.values.JsString;
 
 public class IteratorBuiltinsTest {
     private static double num() {
-        return ((JsNumber) Interpreter.run("function* g(){yield 1;yield 2;yield 3;} g().reduce((a, b) => a + b)")).getValue();
+        return ((JsNumber) Interpreter.run("function* g(){yield 1;yield 2;yield 3;} g().reduce((a, b) => a + b)"))
+                .getValue();
     }
 
     private static String str(String source) {

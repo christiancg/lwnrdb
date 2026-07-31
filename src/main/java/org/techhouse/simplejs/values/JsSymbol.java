@@ -5,6 +5,7 @@ public final class JsSymbol extends JsValue {
     public static final JsSymbol ASYNC_DISPOSE = new JsSymbol("Symbol.asyncDispose");
     public static final JsSymbol ITERATOR = new JsSymbol("Symbol.iterator");
     public static final JsSymbol ASYNC_ITERATOR = new JsSymbol("Symbol.asyncIterator");
+    public static final JsSymbol TO_PRIMITIVE = new JsSymbol("Symbol.toPrimitive");
 
     private final String description;
 
