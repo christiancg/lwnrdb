@@ -1,8 +1,13 @@
 package org.techhouse.simplejs.builtins;
 
+import java.math.BigInteger;
 import java.util.List;
 import java.util.Locale;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
@@ -32,6 +37,38 @@ public final class NumberBuiltins {
         number.setProperty("NEGATIVE_INFINITY", new JsNumber(Double.NEGATIVE_INFINITY));
         number.setProperty("NaN", new JsNumber(Double.NaN));
         return number;
+    }
+
+    public static JsNativeFunction bigIntFunction() {
+        return new JsNativeFunction("BigInt",
+                (_, args) -> toBigInt(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst()));
+    }
+
+    private static JsBigInt toBigInt(JsValue value) {
+        return switch (value) {
+            case JsBigInt bigInt -> bigInt;
+            case JsBoolean bool -> new JsBigInt(bool.getValue() ? BigInteger.ONE : BigInteger.ZERO);
+            case JsNumber number -> fromNumber(number.getValue());
+            case JsString string -> fromString(string.getValue());
+            default -> throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(value) + " to a BigInt");
+        };
+    }
+
+    private static JsBigInt fromNumber(double value) {
+        if (!Double.isFinite(value) || value != Math.rint(value)) {
+            throw new RangeErrorException("The number " + JsCoercion.toStr(new JsNumber(value))
+                    + " cannot be converted to a BigInt because it is not an integer");
+        }
+        return new JsBigInt(java.math.BigDecimal.valueOf(value).toBigIntegerExact());
+    }
+
+    private static JsBigInt fromString(String value) {
+        final var trimmed = value.trim();
+        try {
+            return new JsBigInt(trimmed.isEmpty() ? BigInteger.ZERO : new BigInteger(trimmed));
+        } catch (NumberFormatException ex) {
+            throw new SyntaxErrorException("Cannot convert " + value + " to a BigInt");
+        }
     }
 
     public static JsNativeFunction getMethod(JsNumber receiver, String name) {

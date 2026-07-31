@@ -14,6 +14,7 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -24,10 +25,22 @@ public final class TypedArrayBuiltins {
     }
 
     public static JsNativeFunction arrayBuffer() {
-        final var ctor = new JsNativeFunction("ArrayBuffer", (_, args) -> new JsArrayBuffer((int) intArg(args, 0, 0)));
+        final var ctor = new JsNativeFunction("ArrayBuffer", (_, args) -> constructArrayBuffer(args));
         ctor.setProperty("isView", new JsNativeFunction("isView",
                 (_, args) -> JsBoolean.of(!args.isEmpty() && args.getFirst() instanceof JsTypedArray)));
         return ctor;
+    }
+
+    private static JsValue constructArrayBuffer(List<JsValue> args) {
+        final var byteLength = (int) intArg(args, 0, 0);
+        if (args.size() > 1 && args.get(1) instanceof JsObject options && options.has("maxByteLength")) {
+            final var maxByteLength = (int) JsCoercion.toNumber(options.get("maxByteLength"));
+            if (maxByteLength < byteLength) {
+                throw new RangeErrorException("ArrayBuffer maxByteLength must be >= byteLength");
+            }
+            return new JsArrayBuffer(byteLength, maxByteLength, true);
+        }
+        return new JsArrayBuffer(byteLength);
     }
 
     public static JsNativeFunction dataView() {
@@ -140,8 +153,23 @@ public final class TypedArrayBuiltins {
     public static JsValue bufferMethod(JsArrayBuffer buffer, String name) {
         return switch (name) {
             case "byteLength" -> new JsNumber(buffer.byteLength());
+            case "maxByteLength" -> new JsNumber(buffer.maxByteLength());
+            case "resizable" -> JsBoolean.of(buffer.isResizable());
+            case "detached" -> JsBoolean.of(buffer.isDetached());
             case "slice" -> new JsNativeFunction("slice",
                     (_, args) -> buffer.slice((int) intArg(args, 0, 0), (int) intArg(args, 1, buffer.byteLength())));
+            case "resize" -> new JsNativeFunction("resize", (_, args) -> {
+                buffer.resize((int) intArg(args, 0, 0));
+                return JsUndefined.getInstance();
+            });
+            case "transfer" -> new JsNativeFunction("transfer",
+                    (_, args) -> buffer.transfer(
+                            args.isEmpty() || args.getFirst() instanceof JsUndefined ? -1 : (int) intArg(args, 0, 0),
+                            false));
+            case "transferToFixedLength" -> new JsNativeFunction("transferToFixedLength",
+                    (_, args) -> buffer.transfer(
+                            args.isEmpty() || args.getFirst() instanceof JsUndefined ? -1 : (int) intArg(args, 0, 0),
+                            true));
             default -> null;
         };
     }

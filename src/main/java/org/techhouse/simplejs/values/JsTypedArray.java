@@ -16,8 +16,9 @@ import org.techhouse.simplejs.internal.JsCoercion;
 public final class JsTypedArray extends JsValue {
     public enum Kind {
         INT8("Int8Array", 1), UINT8("Uint8Array", 1), UINT8CLAMPED("Uint8ClampedArray", 1), INT16("Int16Array",
-                2), UINT16("Uint16Array", 2), INT32("Int32Array", 4), UINT32("Uint32Array", 4), FLOAT32("Float32Array",
-                        4), FLOAT64("Float64Array", 8), BIGINT64("BigInt64Array", 8), BIGUINT64("BigUint64Array", 8);
+                2), UINT16("Uint16Array", 2), INT32("Int32Array", 4), UINT32("Uint32Array", 4), FLOAT16("Float16Array",
+                        2), FLOAT32("Float32Array", 4), FLOAT64("Float64Array",
+                                8), BIGINT64("BigInt64Array", 8), BIGUINT64("BigUint64Array", 8);
 
         private final String ctorName;
         private final int bytesPerElement;
@@ -73,10 +74,10 @@ public final class JsTypedArray extends JsValue {
     }
 
     public JsValue getElement(int index) {
-        if (index < 0 || index >= length) {
+        final var pos = byteOffset + index * kind.bytesPerElement;
+        if (index < 0 || index >= length || pos + kind.bytesPerElement > buffer.byteLength()) {
             return JsUndefined.getInstance();
         }
-        final var pos = byteOffset + index * kind.bytesPerElement;
         final var bb = view();
         return switch (kind) {
             case INT8 -> new JsNumber(bb.get(pos));
@@ -85,6 +86,7 @@ public final class JsTypedArray extends JsValue {
             case UINT16 -> new JsNumber(bb.getShort(pos) & 0xFFFF);
             case INT32 -> new JsNumber(bb.getInt(pos));
             case UINT32 -> new JsNumber(bb.getInt(pos) & 0xFFFFFFFFL);
+            case FLOAT16 -> new JsNumber(Float.float16ToFloat(bb.getShort(pos)));
             case FLOAT32 -> new JsNumber(bb.getFloat(pos));
             case FLOAT64 -> new JsNumber(bb.getDouble(pos));
             case BIGINT64 -> new JsBigInt(BigInteger.valueOf(bb.getLong(pos)));
@@ -93,16 +95,17 @@ public final class JsTypedArray extends JsValue {
     }
 
     public void setElement(int index, JsValue value) {
-        if (index < 0 || index >= length) {
+        final var pos = byteOffset + index * kind.bytesPerElement;
+        if (index < 0 || index >= length || pos + kind.bytesPerElement > buffer.byteLength()) {
             return;
         }
-        final var pos = byteOffset + index * kind.bytesPerElement;
         final var bb = view();
         switch (kind) {
             case INT8, UINT8 -> bb.put(pos, (byte) reduce(JsCoercion.toNumber(value), 8));
             case UINT8CLAMPED -> bb.put(pos, (byte) clamp(JsCoercion.toNumber(value)));
             case INT16, UINT16 -> bb.putShort(pos, (short) reduce(JsCoercion.toNumber(value), 16));
             case INT32, UINT32 -> bb.putInt(pos, (int) reduce(JsCoercion.toNumber(value), 32));
+            case FLOAT16 -> bb.putShort(pos, Float.floatToFloat16((float) JsCoercion.toNumber(value)));
             case FLOAT32 -> bb.putFloat(pos, (float) JsCoercion.toNumber(value));
             case BIGINT64, BIGUINT64 -> bb.putLong(pos, reduceBig(value).longValue());
             default -> bb.putDouble(pos, JsCoercion.toNumber(value));

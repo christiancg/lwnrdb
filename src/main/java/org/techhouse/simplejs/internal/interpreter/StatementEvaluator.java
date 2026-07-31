@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.internal.interpreter;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.LEXICAL_KINDS;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.USING_KINDS;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.collectBoundNames;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.matchesLabel;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
@@ -184,15 +186,22 @@ public final class StatementEvaluator {
     public Completion evalFor(ForStatement statement, Environment env, String label) {
         final var loopEnv = env.child();
         final var init = statement.getInit();
+        final var perIterationNames = new ArrayList<String>();
         if (init instanceof VariableDeclaration declaration) {
             interp.hoist(List.of(declaration), loopEnv);
             interp.evalVariableDeclaration(declaration, loopEnv);
+            if (LEXICAL_KINDS.contains(declaration.getKind())) {
+                for (final var declarator : declaration.getDeclarations()) {
+                    collectBoundNames(declarator.getId(), perIterationNames);
+                }
+            }
         } else if (init instanceof Expression expression) {
             interp.eval(expression, loopEnv);
         }
-        while (statement.getTest() == null || JsCoercion.toBoolean(interp.eval(statement.getTest(), loopEnv))) {
+        var current = perIterationNames.isEmpty() ? loopEnv : copyForwardLoopEnv(env, loopEnv, perIterationNames);
+        while (statement.getTest() == null || JsCoercion.toBoolean(interp.eval(statement.getTest(), current))) {
             interp.tick();
-            final var completion = interp.evalStatement(statement.getBody(), loopEnv);
+            final var completion = interp.evalStatement(statement.getBody(), current);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 return completion;
@@ -200,11 +209,23 @@ public final class StatementEvaluator {
             if (action == LoopAction.BREAK_LOOP) {
                 break;
             }
+            if (!perIterationNames.isEmpty()) {
+                current = copyForwardLoopEnv(env, current, perIterationNames);
+            }
             if (statement.getUpdate() != null) {
-                interp.eval(statement.getUpdate(), loopEnv);
+                interp.eval(statement.getUpdate(), current);
             }
         }
         return Completion.empty();
+    }
+
+    private Environment copyForwardLoopEnv(Environment parent, Environment source, List<String> names) {
+        final var next = parent.child();
+        for (final var name : names) {
+            next.declareLexical(name, "let");
+            next.initialize(name, source.get(name));
+        }
+        return next;
     }
 
     public Completion evalForOf(ForOfStatement statement, Environment env, String label) {

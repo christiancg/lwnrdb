@@ -545,8 +545,46 @@ so a plain `{name, message}` object is **not** an error); the Array by-copy meth
 `union`/`intersection`/`difference`/`symmetricDifference`/`isSubsetOf`/`isSupersetOf`/
 `isDisjointFrom` (each takes another `Set`; a non-`Set` argument throws `TypeError`).
 
-**Deliberate simplification**: `for (let …)` uses a single loop scope rather than a
-fresh per-iteration binding (unobservable until closures arrive in 6b).
+**Per-iteration loop bindings.** A classic `for (let …; …; …)` creates a fresh lexical
+environment for each iteration (spec `CreatePerIterationEnvironment`): after the init runs
+in the loop environment, `StatementEvaluator.evalFor` copies the bound `let`/`const` names
+forward into a new child environment before each update, so a closure created in the body
+captures that iteration's binding (`for (let i = 0; i < 3; i++) fns.push(() => i)` yields
+`0, 1, 2`). A `var` (or expression) init keeps the single-scope behaviour. `for-of`/`for-in`
+already bound per iteration.
+
+**ES2025 iterator helpers.** The `Iterator` global (`builtins/IteratorBuiltins`) exposes
+`Iterator.from` plus a `prototype` carrying `map`/`filter`/`take`/`drop`/`flatMap`/`reduce`/
+`toArray`/`forEach`/`some`/`every`/`find`. Calling `Iterator()` directly throws (abstract).
+`map`/`filter`/`take`/`drop`/`flatMap` are lazy (return a new iterator whose own result
+chains through the same dispatch), the rest consume eagerly. Helpers drive their receiver
+directly through the `InterpreterOps` seam (GetIteratorDirect — no `Symbol.iterator`
+re-invocation). The interpreter routes helper names on generators (`MemberEvaluator.generatorMethod`)
+and on any iterator-like object (own callable `next`) to the helpers, and arrays/strings now
+answer `Symbol.iterator` (`getSymbolMember`), so `[1,2,3].values().map(...).toArray()` works.
+Async iterator helpers are deferred.
+
+**Small stdlib globals.** `BigInt(x)` (coerces integer numbers/booleans/integer strings —
+`RangeError` on a non-integer number, `SyntaxError` on a bad string, `TypeError` on an
+object; `NumberBuiltins.bigIntFunction`); `queueMicrotask(fn)` (enqueues on the existing
+`EventLoop` microtask queue); the URI functions `encodeURI`/`decodeURI`/`encodeURIComponent`/
+`decodeURIComponent` (RFC-3986 unreserved sets, UTF-8 percent-encoding, `decodeURI` preserves
+reserved-character escapes, malformed input throws `URIError`); the Annex-B `escape`/`unescape`
+(`%XX`/`%uXXXX`); and `structuredClone(x)` (deep-copy of objects/arrays/Map/Set/Date/typed
+arrays/ArrayBuffer with cycle handling; functions/symbols/proxies throw a `DataCloneError`-style
+`TypeError`). All live in `builtins/GlobalFunctionsBuiltins` except `BigInt`. `URIError` is
+installed by `ErrorBuiltins`.
+
+**Regex `/v`, Float16, resizable buffers.** The regex `v` (unicodeSets) flag is accepted
+(`RegexTranslator`, mutually exclusive with `u`) and behaves as Unicode mode — `/v` set
+notation and string-property escapes are not translated. `Float16Array`, `Math.f16round` and
+`DataView` `getFloat16`/`setFloat16` use the JDK `Float.float16ToFloat`/`floatToFloat16`
+half-precision conversions. `ArrayBuffer` supports resizable/growable buffers: the
+`{ maxByteLength }` constructor option, `resize`/`transfer`/`transferToFixedLength` and the
+`maxByteLength`/`resizable`/`detached` accessors; typed-array element access is bounds-checked
+against the buffer's current byte length so a shrunk buffer reads out-of-range indexes as
+`undefined`. Length-tracking auto-length views are not supported (a view keeps its
+construction-time element length).
 
 ## Testing conventions
 

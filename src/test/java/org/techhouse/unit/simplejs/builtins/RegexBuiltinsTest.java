@@ -180,4 +180,17 @@ public class RegexBuiltinsTest {
     public void test_escape_whitespace() {
         assertEquals("\\tx", str("RegExp.escape(String.fromCharCode(9) + 'x')"));
     }
+
+    // the v (unicodeSets) flag compiles and matches
+    @Test
+    public void test_v_flag_matches() {
+        assertTrue(bool("/[a-z]+/v.test('abc')"));
+        assertEquals("v", str("/x/v.flags"));
+    }
+
+    // the u and v flags are mutually exclusive
+    @Test
+    public void test_u_and_v_flags_conflict() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("new RegExp('x', 'uv')"));
+    }
 }

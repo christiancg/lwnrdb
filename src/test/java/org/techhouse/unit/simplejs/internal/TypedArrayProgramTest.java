@@ -363,4 +363,164 @@ public class TypedArrayProgramTest {
         assertTrue(bool("new DataView(new ArrayBuffer(4)).nope === undefined"));
         assertTrue(bool("new ArrayBuffer(4).nope === undefined"));
     }
+
+    // Float16Array round-trips exact half-precision values and quantizes others
+    @Test
+    public void test_float16_array() {
+        assertEquals(1.5, num("new Float16Array([1.5, 2.25])[0]"));
+        assertEquals(2.25, num("new Float16Array([1.5, 2.25])[1]"));
+        assertEquals(2, num("Float16Array.BYTES_PER_ELEMENT"));
+        assertEquals(1, num("new Float16Array(4).length - 3"));
+    }
+
+    // Math.f16round quantizes to half precision
+    @Test
+    public void test_math_f16round() {
+        assertEquals(num("new Float16Array([1.337])[0]"), num("Math.f16round(1.337)"));
+    }
+
+    // DataView getFloat16/setFloat16 round-trip with explicit endianness
+    @Test
+    public void test_dataview_float16() {
+        final var source = """
+                const dv = new DataView(new ArrayBuffer(8));
+                dv.setFloat16(0, 1.5, true);
+                dv.getFloat16(0, true)
+                """;
+        assertEquals(1.5, num(source));
+    }
+
+    // a resizable ArrayBuffer grows and shrinks within maxByteLength
+    @Test
+    public void test_array_buffer_resize() {
+        final var source = """
+                const buf = new ArrayBuffer(4, { maxByteLength: 8 });
+                const before = buf.byteLength;
+                buf.resize(8);
+                before * 100 + buf.byteLength + (buf.resizable ? 1000 : 0) + buf.maxByteLength
+                """;
+        assertEquals(400 + 8 + 1000 + 8, num(source));
+    }
+
+    // resizing past maxByteLength throws a RangeError
+    @Test
+    public void test_array_buffer_resize_past_max_throws() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    const buf = new ArrayBuffer(4, { maxByteLength: 8 });
+                    buf.resize(16);
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("RangeError", str(source));
+    }
+
+    // resizing a non-resizable buffer throws a TypeError
+    @Test
+    public void test_array_buffer_resize_non_resizable_throws() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    new ArrayBuffer(4).resize(2);
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("TypeError", str(source));
+    }
+
+    // transfer detaches the source buffer
+    @Test
+    public void test_array_buffer_transfer_detaches() {
+        final var source = """
+                const buf = new ArrayBuffer(4);
+                const moved = buf.transfer();
+                (buf.detached ? 10 : 0) + moved.byteLength
+                """;
+        assertEquals(14, num(source));
+    }
+
+    // transfer with an explicit new length grows the moved buffer
+    @Test
+    public void test_array_buffer_transfer_explicit_length() {
+        assertEquals(8, num("new ArrayBuffer(4).transfer(8).byteLength"));
+        assertEquals(2, num("new ArrayBuffer(4).transferToFixedLength(2).byteLength"));
+    }
+
+    // transfer of a resizable buffer yields another resizable buffer
+    @Test
+    public void test_array_buffer_transfer_keeps_resizable() {
+        final var source = """
+                const buf = new ArrayBuffer(4, { maxByteLength: 16 });
+                const moved = buf.transfer();
+                (moved.resizable ? 100 : 0) + moved.maxByteLength
+                """;
+        assertEquals(116, num(source));
+    }
+
+    // operations on a detached buffer throw a TypeError
+    @Test
+    public void test_array_buffer_detached_operations_throw() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    const buf = new ArrayBuffer(4, { maxByteLength: 8 });
+                    buf.transfer();
+                    buf.resize(8);
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("TypeError", str(source));
+    }
+
+    // transfer of an already-detached buffer throws a TypeError
+    @Test
+    public void test_array_buffer_double_transfer_throws() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    const buf = new ArrayBuffer(4);
+                    buf.transfer();
+                    buf.transfer();
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("TypeError", str(source));
+    }
+
+    // constructing a resizable buffer with maxByteLength below byteLength throws a RangeError
+    @Test
+    public void test_array_buffer_bad_max_throws() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    new ArrayBuffer(8, { maxByteLength: 4 });
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("RangeError", str(source));
+    }
+
+    // a typed array over a shrunk resizable buffer reads out-of-range indexes as undefined
+    @Test
+    public void test_typed_array_shrunk_buffer_bounds_safe() {
+        final var source = """
+                const buf = new ArrayBuffer(8, { maxByteLength: 8 });
+                const view = new Int32Array(buf);
+                view[1] = 42;
+                buf.resize(4);
+                view[1] === undefined
+                """;
+        assertTrue(bool(source));
+    }
 }

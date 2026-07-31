@@ -397,4 +397,48 @@ public class InterpreterProgramTest {
     public void test_string_raw_tag() {
         assertEquals("a\\n1b", str("String.raw`a\\n${1}b`"));
     }
+
+    // classic for (let ...) closures capture a fresh per-iteration binding
+    @Test
+    public void test_classic_for_let_per_iteration_binding() {
+        final var source = """
+                let fns = [];
+                for (let i = 0; i < 3; i++) fns.push(() => i);
+                fns[0]() + fns[1]() + fns[2]()
+                """;
+        assertEquals(3, num(source));
+    }
+
+    // classic for (var ...) shares one binding across iterations
+    @Test
+    public void test_classic_for_var_shares_binding() {
+        final var source = """
+                let fns = [];
+                for (var i = 0; i < 3; i++) fns.push(() => i);
+                fns[0]() + fns[1]() + fns[2]()
+                """;
+        assertEquals(9, num(source));
+    }
+
+    // break and continue still work with per-iteration bindings
+    @Test
+    public void test_classic_for_break_continue() {
+        final var source = """
+                let s = 0;
+                for (let i = 0; i < 10; i++) {
+                    if (i === 2) continue;
+                    if (i === 5) break;
+                    s += i;
+                }
+                s
+                """;
+        assertEquals(8, num(source));
+    }
+
+    // an empty-header and lexical-header loop that immediately breaks does not crash
+    @Test
+    public void test_classic_for_empty_and_lexical_headers() {
+        assertEquals(1, num("let n = 0; for (;;) { n = 1; break; } n"));
+        assertEquals(1, num("let n = 0; for (let i = 0;;) { n = 1; break; } n"));
+    }
 }

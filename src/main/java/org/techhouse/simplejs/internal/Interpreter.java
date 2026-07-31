@@ -505,6 +505,10 @@ public final class Interpreter {
         return members.getMember(target, key);
     }
 
+    public InterpreterOps ops() {
+        return ops;
+    }
+
     public Coroutine currentCoroutine() {
         return currentCoroutine.get();
     }

@@ -45,6 +45,7 @@ public final class JsDataView extends JsValue {
             case "getUint16" -> bb.getShort(pos) & 0xFFFF;
             case "getInt32" -> bb.getInt(pos);
             case "getUint32" -> bb.getInt(pos) & 0xFFFFFFFFL;
+            case "getFloat16" -> Float.float16ToFloat(bb.getShort(pos));
             case "getFloat32" -> bb.getFloat(pos);
             default -> bb.getDouble(pos);
         };
@@ -57,6 +58,7 @@ public final class JsDataView extends JsValue {
             case "setInt8", "setUint8" -> bb.put(pos, (byte) (long) value);
             case "setInt16", "setUint16" -> bb.putShort(pos, (short) (long) value);
             case "setInt32", "setUint32" -> bb.putInt(pos, (int) (long) value);
+            case "setFloat16" -> bb.putShort(pos, Float.floatToFloat16((float) value));
             case "setFloat32" -> bb.putFloat(pos, (float) value);
             default -> bb.putDouble(pos, value);
         }

@@ -29,6 +29,7 @@ public final class MathBuiltins {
         unary(math, "sin", Math::sin);
         unary(math, "cos", Math::cos);
         unary(math, "tan", Math::tan);
+        unary(math, "f16round", value -> (double) Float.float16ToFloat(Float.floatToFloat16((float) value)));
         math.set("pow", new JsNativeFunction("pow", (_, args) -> new JsNumber(Math.pow(arg(args, 0), arg(args, 1)))));
         math.set("random", new JsNativeFunction("random", (_, _) -> new JsNumber(Math.random())));
         math.set("min", new JsNativeFunction("min", (_, args) -> reduce(args, Double.POSITIVE_INFINITY, true)));

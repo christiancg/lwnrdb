@@ -6,7 +6,7 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.values.JsRegExp;
 
 public final class RegexTranslator {
-    private static final String VALID_FLAGS = "dgimsuy";
+    private static final String VALID_FLAGS = "dgimsuvy";
 
     private RegexTranslator() {
     }
@@ -31,6 +31,9 @@ public final class RegexTranslator {
             if (flags.indexOf(flag, i + 1) >= 0) {
                 throw new SyntaxErrorException("Invalid regular expression flags: " + flags);
             }
+        }
+        if (flags.indexOf('u') >= 0 && flags.indexOf('v') >= 0) {
+            throw new SyntaxErrorException("Invalid regular expression flags: " + flags);
         }
     }
 

@@ -18,6 +18,10 @@ public class InterpreterIterationTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
+    private static boolean bool(String source) {
+        return ((JsBoolean) Interpreter.run(source)).getValue();
+    }
+
     // for-of sums array elements
     @Test
     public void test_for_of_array() {
@@ -168,5 +172,68 @@ public class InterpreterIterationTest {
     @Test
     public void test_for_of_plain_object_not_iterable() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("for (const x of {a: 1}) {}"));
+    }
+
+    // iterator helpers chain lazily over a generator
+    @Test
+    public void test_iterator_map_filter_take_chain() {
+        final var source = """
+                function* g() { yield 1; yield 2; yield 3; yield 4; }
+                [...g().map(x => x * 2).filter(x => x > 4).take(1)][0]
+                """;
+        assertEquals(6, num(source));
+    }
+
+    // toArray, reduce and forEach consume a generator eagerly
+    @Test
+    public void test_iterator_to_array_reduce_for_each() {
+        assertEquals("2,4,6", str("function* g(){yield 1;yield 2;yield 3;} g().map(x=>x*2).toArray().join(',')"));
+        assertEquals(6, num("function* g(){yield 1;yield 2;yield 3;} g().reduce((a, b) => a + b, 0)"));
+        assertEquals(6, num("function* g(){yield 1;yield 2;yield 3;} let s=0; g().forEach(x=>s+=x); s"));
+    }
+
+    // drop skips a prefix and flatMap flattens one level
+    @Test
+    public void test_iterator_drop_flat_map() {
+        assertEquals("3,4", str("function* g(){yield 1;yield 2;yield 3;yield 4;} g().drop(2).toArray().join(',')"));
+        assertEquals("1,10,2,20",
+                str("function* g(){yield 1;yield 2;} g().flatMap(x => [x, x * 10]).toArray().join(',')"));
+    }
+
+    // some, every and find short-circuit
+    @Test
+    public void test_iterator_some_every_find() {
+        assertTrue(bool("function* g(){yield 1;yield 2;yield 3;} g().some(x => x === 2)"));
+        assertFalse(bool("function* g(){yield 1;yield 2;yield 3;} g().every(x => x < 3)"));
+        assertEquals(4, num("function* g(){yield 2;yield 4;yield 6;} g().find(x => x > 3)"));
+    }
+
+    // helpers are lazy: take(2) does not pull the whole source
+    @Test
+    public void test_iterator_helpers_are_lazy() {
+        final var source = """
+                let pulled = 0;
+                function* g() { while (true) { pulled++; yield pulled; } }
+                let taken = [...g().take(2)];
+                taken.length * 100 + pulled
+                """;
+        assertEquals(202, num(source));
+    }
+
+    // built-in array iterators inherit the helpers
+    @Test
+    public void test_array_values_inherits_helpers() {
+        assertEquals("2,3,4", str("[1,2,3].values().map(x => x + 1).toArray().join(',')"));
+    }
+
+    // Iterator.from wraps a plain iterator object
+    @Test
+    public void test_iterator_from_plain_iterator() {
+        final var source = """
+                let i = 0;
+                const it = { next() { i++; return i <= 3 ? {value: i, done: false} : {value: undefined, done: true}; } };
+                Iterator.from(it).map(x => x * x).toArray().join(',')
+                """;
+        assertEquals("1,4,9", str(source));
     }
 }

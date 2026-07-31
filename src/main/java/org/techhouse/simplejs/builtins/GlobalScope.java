@@ -29,6 +29,7 @@ public final class GlobalScope {
         define(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, iterableToList));
         TimerBuiltins.install(global, eventLoop, invoker);
         define(global, "RegExp", RegexBuiltins.create());
+        define(global, "Iterator", IteratorBuiltins.create(ops));
         define(global, "Symbol", SymbolBuiltins.create());
         define(global, "Map", MapBuiltins.create(iterableToList, invoker, false));
         define(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true));
@@ -42,10 +43,12 @@ public final class GlobalScope {
         for (final var kind : org.techhouse.simplejs.values.JsTypedArray.Kind.values()) {
             define(global, kind.ctorName(), TypedArrayBuiltins.create(kind, invoker, iterableToList));
         }
+        define(global, "BigInt", NumberBuiltins.bigIntFunction());
         define(global, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());
         define(global, "isFinite", NumberBuiltins.isFiniteFunction());
+        GlobalFunctionsBuiltins.install(global, eventLoop, invoker);
         FetchBuiltins.install(global, eventLoop, network, limits);
         define(global, "globalThis", globalThis);
     }

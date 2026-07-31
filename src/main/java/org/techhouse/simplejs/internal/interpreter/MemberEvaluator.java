@@ -3,7 +3,9 @@ package org.techhouse.simplejs.internal.interpreter;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arg0;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arg1;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayIndex;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayLikeElements;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.cannotReadProperties;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.orUndefined;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stepResult;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
@@ -12,6 +14,7 @@ import java.util.List;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.DateBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
+import org.techhouse.simplejs.builtins.IteratorBuiltins;
 import org.techhouse.simplejs.builtins.JsIterators;
 import org.techhouse.simplejs.builtins.MapBuiltins;
 import org.techhouse.simplejs.builtins.NumberBuiltins;
@@ -82,6 +85,10 @@ public final class MemberEvaluator {
                     (_, _) -> JsIterators.of(TypedArrayBuiltins.elements(typed).iterator()));
             case JsSet set when symbol == JsSymbol.ITERATOR ->
                 new JsNativeFunction("[Symbol.iterator]", (_, _) -> SetBuiltins.valuesIterator(set));
+            case JsArray array when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
+                    (_, _) -> JsIterators.of(arrayLikeElements(array).iterator()));
+            case JsString string when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
+                    (_, _) -> JsIterators.of(arrayLikeElements(string).iterator()));
             case JsObject object -> objectSymbolMember(object, symbol);
             case JsClass cls -> classSymbolMember(cls, symbol);
             default -> JsUndefined.getInstance();
@@ -179,6 +186,9 @@ public final class MemberEvaluator {
             final var builtin = ObjectProtoBuiltins.getMethod(object, key);
             if (builtin != null) {
                 return builtin;
+            }
+            if (IteratorBuiltins.isHelperName(key) && isIteratorLike(object)) {
+                return IteratorBuiltins.helper(interp.ops(), key);
             }
         }
         return object.get(key);
@@ -354,8 +364,14 @@ public final class MemberEvaluator {
             case "return" ->
                 new JsNativeFunction("return", (_, args) -> stepResult(coroutine.resumeReturn(arg0(args))));
             case "throw" -> new JsNativeFunction("throw", (_, args) -> stepResult(coroutine.resumeThrow(arg0(args))));
-            default -> JsUndefined.getInstance();
+            default -> IteratorBuiltins.isHelperName(key)
+                    ? IteratorBuiltins.helper(interp.ops(), key)
+                    : JsUndefined.getInstance();
         };
+    }
+
+    private boolean isIteratorLike(JsObject object) {
+        return object.has("next") && isCallable(object.get("next"));
     }
 
     private JsValue asyncGeneratorMethod(JsAsyncGenerator generator, String key) {

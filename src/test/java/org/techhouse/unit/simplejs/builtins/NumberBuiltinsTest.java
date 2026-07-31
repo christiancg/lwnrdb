@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
@@ -136,5 +138,36 @@ public class NumberBuiltinsTest {
         assertTrue(bool("Number.POSITIVE_INFINITY === 1 / 0"));
         assertTrue(bool("Number.isNaN(Number.NaN)"));
         assertTrue(num("Number.EPSILON") > 0);
+    }
+
+    // BigInt coerces integers, booleans and integer strings
+    @Test
+    public void test_bigint_coercion() {
+        assertTrue(bool("BigInt(10) === 10n"));
+        assertTrue(bool("BigInt(-7) === -7n"));
+        assertTrue(bool("BigInt(0) === 0n"));
+        assertTrue(bool("BigInt('42') === 42n"));
+        assertTrue(bool("BigInt('  -3  ') === -3n"));
+        assertTrue(bool("BigInt(false) === 0n"));
+        assertTrue(bool("BigInt(true) === 1n"));
+        assertTrue(bool("typeof BigInt(5) === 'bigint'"));
+    }
+
+    // BigInt rejects a non-integer number with a RangeError
+    @Test
+    public void test_bigint_non_integer_throws() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("BigInt(1.5)"));
+    }
+
+    // BigInt rejects an unparseable string with a SyntaxError
+    @Test
+    public void test_bigint_bad_string_throws() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("BigInt('x')"));
+    }
+
+    // BigInt rejects an object argument with a TypeError
+    @Test
+    public void test_bigint_object_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt({})"));
     }
 }
