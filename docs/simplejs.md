@@ -625,6 +625,24 @@ installed by `ErrorBuiltins`.
 **Regex `/v`, Float16, resizable buffers.** The regex `v` (unicodeSets) flag is accepted
 (`RegexTranslator`, mutually exclusive with `u`) and behaves as Unicode mode — `/v` set
 notation and string-property escapes are not translated. `Float16Array`, `Math.f16round` and
+
+**Unicode property escapes (ES2026 conformance Phase 4).** Under the `u`/`v` flag,
+`RegexTranslator` translates `\p{…}`/`\P{…}` property escapes from ECMAScript names to their
+`java.util.regex` equivalents: general-category **short codes** (`\p{L}`, `\p{Nd}`) pass through,
+**long category names** (`\p{Letter}`, `\p{Decimal_Number}`, and `General_Category=`/`gc=`) map to
+the short code, **scripts** (`Script=`/`sc=`/`Script_Extensions=`/`scx=`) map to Java's
+`script=` (script-extensions approximated to script), and a supported subset of **binary
+properties** (`Alphabetic`, `White_Space`, `Uppercase`, `Lowercase`, `Hex_Digit`, `Ideographic`,
+`Assigned`, `Noncharacter_Code_Point`, `Join_Control`) map to the Java `Is…` form. Anything
+outside these tables (e.g. `\p{Emoji}`, an unknown key, an invalid script) throws a JS
+`SyntaxError`. `Pattern.UNICODE_CHARACTER_CLASS` is **deliberately not** enabled, so `\d`/`\w`/`\s`/
+`\b` stay ASCII in `u`-mode exactly as ECMAScript requires (enabling it would make them Unicode-
+aware, a conformance regression). **ASI is a known remaining gap** (not planned): the lexer
+discards newlines, so newline-based automatic semicolon insertion and the restricted productions
+(`return`/`throw`/`break`/`continue`/`++`/`--`/`yield` with a following newline) are not enforced —
+a statement ends only at `;`, `}`, or EOF. `Intl` and `Temporal` remain out of scope.
+
+`Float16Array`, `Math.f16round` and
 `DataView` `getFloat16`/`setFloat16` use the JDK `Float.float16ToFloat`/`floatToFloat16`
 half-precision conversions. `ArrayBuffer` supports resizable/growable buffers: the
 `{ maxByteLength }` constructor option, `resize`/`transfer`/`transferToFixedLength` and the

@@ -193,4 +193,47 @@ public class RegexBuiltinsTest {
     public void test_u_and_v_flags_conflict() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("new RegExp('x', 'uv')"));
     }
+
+    // general-category property escapes: short codes pass through, long names translate to short
+    @Test
+    public void test_unicode_property_general_category() {
+        assertTrue(bool("/\\p{L}/u.test('a')"));
+        assertFalse(bool("/\\p{L}/u.test('3')"));
+        assertTrue(bool("/\\p{Letter}/u.test('a')"));
+        assertTrue(bool("/\\p{Decimal_Number}/u.test('7')"));
+        assertTrue(bool("/\\p{gc=Nd}/u.test('5')"));
+    }
+
+    // Script= / sc= and binary properties are translated to their java.util.regex equivalents
+    @Test
+    public void test_unicode_property_scripts_and_binary() {
+        assertTrue(bool("/\\p{Script=Greek}/u.test('\\u03B1')"));
+        assertFalse(bool("/\\p{Script=Greek}/u.test('a')"));
+        assertTrue(bool("/\\p{sc=Latin}/u.test('a')"));
+        assertTrue(bool("/\\p{Alphabetic}/u.test('a')"));
+        assertTrue(bool("/\\p{White_Space}/u.test(' ')"));
+        assertTrue(bool("/\\p{L}/v.test('a')"));
+    }
+
+    // \P negates the property; the whole class still resolves
+    @Test
+    public void test_unicode_property_negation() {
+        assertTrue(bool("/\\P{L}/u.test('3')"));
+        assertFalse(bool("/\\P{L}/u.test('a')"));
+    }
+
+    // \d stays ASCII in u-mode (UNICODE_CHARACTER_CLASS deliberately not enabled)
+    @Test
+    public void test_predefined_classes_stay_ascii_in_unicode_mode() {
+        assertTrue(bool("/^\\d$/u.test('3')"));
+        assertFalse(bool("/^\\d$/u.test('\\u0663')"));
+    }
+
+    // unsupported or unknown Unicode properties are rejected with a SyntaxError
+    @Test
+    public void test_unsupported_unicode_property_throws() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Emoji}/u"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Foo=Bar}/u"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Script=Nonsense}/u"));
+    }
 }
