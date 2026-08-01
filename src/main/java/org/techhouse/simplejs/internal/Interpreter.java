@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.ObjectBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
@@ -151,6 +152,54 @@ public final class Interpreter {
         @Override
         public JsValue construct(JsValue fn, List<JsValue> args) {
             return constructValue(fn, args);
+        }
+
+        @Override
+        public JsValue getPrototypeOf(JsValue target) {
+            return target instanceof JsProxy proxy
+                    ? proxies.getPrototypeOf(proxy)
+                    : ObjectBuiltins.getPrototypeOf(List.of(target));
+        }
+
+        @Override
+        public boolean setPrototypeOf(JsValue target, JsValue proto) {
+            if (target instanceof JsProxy proxy) {
+                return proxies.setPrototypeOf(proxy, proto);
+            }
+            ObjectBuiltins.setPrototypeOf(List.of(target, proto));
+            return true;
+        }
+
+        @Override
+        public boolean isExtensible(JsValue target) {
+            return target instanceof JsProxy proxy
+                    ? proxies.isExtensible(proxy)
+                    : JsCoercion.toBoolean(ObjectBuiltins.isExtensible(List.of(target)));
+        }
+
+        @Override
+        public boolean preventExtensions(JsValue target) {
+            if (target instanceof JsProxy proxy) {
+                return proxies.preventExtensions(proxy);
+            }
+            ObjectBuiltins.preventExtensions(List.of(target));
+            return true;
+        }
+
+        @Override
+        public boolean defineProperty(JsValue target, JsValue key, JsValue descriptor) {
+            if (target instanceof JsProxy proxy) {
+                return proxies.defineProperty(proxy, key, descriptor);
+            }
+            ObjectBuiltins.defineProperty(List.of(target, key, descriptor));
+            return true;
+        }
+
+        @Override
+        public JsValue getOwnPropertyDescriptor(JsValue target, JsValue key) {
+            return target instanceof JsProxy proxy
+                    ? proxies.getOwnPropertyDescriptor(proxy, key)
+                    : ObjectBuiltins.getOwnPropertyDescriptor(List.of(target, key));
         }
     };
     private final ProxyDispatch proxies = new ProxyDispatch(ops);

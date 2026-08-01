@@ -273,7 +273,7 @@ public final class MemberEvaluator {
         if (array.hasProperty(key)) {
             return array.getProperty(key);
         }
-        final var method = ArrayBuiltins.getMethod(array, key, interp::callValue);
+        final var method = ArrayBuiltins.getMethod(array, key, interp::callValue, interp.ops());
         return method == null ? JsUndefined.getInstance() : method;
     }
 

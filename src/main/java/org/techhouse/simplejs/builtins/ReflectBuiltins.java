@@ -26,14 +26,16 @@ public final class ReflectBuiltins {
         reflect.set("apply", new JsNativeFunction("apply", (_, args) -> apply(ops, args)));
         reflect.set("construct", new JsNativeFunction("construct", (_, args) -> construct(ops, args)));
         reflect.set("getPrototypeOf",
-                new JsNativeFunction("getPrototypeOf", (_, args) -> ObjectBuiltins.getPrototypeOf(args)));
-        reflect.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
-            ObjectBuiltins.setPrototypeOf(args);
-            return JsBoolean.TRUE;
-        }));
-        reflect.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> defineProperty(args)));
+                new JsNativeFunction("getPrototypeOf", (_, args) -> ops.getPrototypeOf(arg(args, 0))));
+        reflect.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf",
+                (_, args) -> JsBoolean.of(ops.setPrototypeOf(arg(args, 0), arg(args, 1)))));
+        reflect.set("isExtensible",
+                new JsNativeFunction("isExtensible", (_, args) -> JsBoolean.of(ops.isExtensible(arg(args, 0)))));
+        reflect.set("preventExtensions", new JsNativeFunction("preventExtensions",
+                (_, args) -> JsBoolean.of(ops.preventExtensions(arg(args, 0)))));
+        reflect.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> defineProperty(ops, args)));
         reflect.set("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
-                (_, args) -> ObjectBuiltins.getOwnPropertyDescriptor(args)));
+                (_, args) -> ops.getOwnPropertyDescriptor(arg(args, 0), arg(args, 1))));
         return reflect;
     }
 
@@ -45,9 +47,9 @@ public final class ReflectBuiltins {
         return ops.construct(arg(args, 0), toList(arg(args, 1)));
     }
 
-    private static JsValue defineProperty(List<JsValue> args) {
+    private static JsValue defineProperty(InterpreterOps ops, List<JsValue> args) {
         try {
-            ObjectBuiltins.defineProperty(args);
+            ops.defineProperty(arg(args, 0), arg(args, 1), arg(args, 2));
             return JsBoolean.TRUE;
         } catch (TypeErrorException ignored) {
             return JsBoolean.FALSE;

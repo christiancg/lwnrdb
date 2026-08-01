@@ -16,16 +16,29 @@ public final class ProxyBuiltins {
     }
 
     public static JsNativeFunction create() {
-        return new JsNativeFunction("Proxy", (_, args) -> construct(args));
+        final var proxy = new JsNativeFunction("Proxy", (_, args) -> construct(args));
+        proxy.setProperty("revocable", new JsNativeFunction("revocable", (_, args) -> revocable(args)));
+        return proxy;
     }
 
-    private static JsValue construct(List<JsValue> args) {
+    private static JsProxy construct(List<JsValue> args) {
         final var target = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var handler = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         if (!isObject(target) || !(handler instanceof JsObject handlerObject)) {
             throw new TypeErrorException("Cannot create proxy with a non-object as target or handler");
         }
         return new JsProxy(target, handlerObject);
+    }
+
+    private static JsValue revocable(List<JsValue> args) {
+        final var proxy = construct(args);
+        final var result = new JsObject();
+        result.set("proxy", proxy);
+        result.set("revoke", new JsNativeFunction("revoke", (_, _) -> {
+            proxy.revoke();
+            return JsUndefined.getInstance();
+        }));
+        return result;
     }
 
     private static boolean isObject(JsValue value) {

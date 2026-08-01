@@ -5,6 +5,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNul
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.ObjectBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
@@ -84,7 +85,61 @@ public final class ProxyDispatch {
                 List.of(proxy.getTarget(), new JsArray(new ArrayList<>(args)), proxy));
     }
 
+    public JsValue getPrototypeOf(JsProxy proxy) {
+        final var trap = trapOf(proxy, "getPrototypeOf");
+        if (trap == null) {
+            return ObjectBuiltins.getPrototypeOf(List.of(proxy.getTarget()));
+        }
+        return ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget()));
+    }
+
+    public boolean setPrototypeOf(JsProxy proxy, JsValue proto) {
+        final var trap = trapOf(proxy, "setPrototypeOf");
+        if (trap == null) {
+            ObjectBuiltins.setPrototypeOf(List.of(proxy.getTarget(), proto));
+            return true;
+        }
+        return JsCoercion.toBoolean(ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget(), proto)));
+    }
+
+    public boolean isExtensible(JsProxy proxy) {
+        final var trap = trapOf(proxy, "isExtensible");
+        if (trap == null) {
+            return JsCoercion.toBoolean(ObjectBuiltins.isExtensible(List.of(proxy.getTarget())));
+        }
+        return JsCoercion.toBoolean(ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget())));
+    }
+
+    public boolean preventExtensions(JsProxy proxy) {
+        final var trap = trapOf(proxy, "preventExtensions");
+        if (trap == null) {
+            ObjectBuiltins.preventExtensions(List.of(proxy.getTarget()));
+            return true;
+        }
+        return JsCoercion.toBoolean(ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget())));
+    }
+
+    public boolean defineProperty(JsProxy proxy, JsValue key, JsValue descriptor) {
+        final var trap = trapOf(proxy, "defineProperty");
+        if (trap == null) {
+            ObjectBuiltins.defineProperty(List.of(proxy.getTarget(), key, descriptor));
+            return true;
+        }
+        return JsCoercion.toBoolean(ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget(), key, descriptor)));
+    }
+
+    public JsValue getOwnPropertyDescriptor(JsProxy proxy, JsValue key) {
+        final var trap = trapOf(proxy, "getOwnPropertyDescriptor");
+        if (trap == null) {
+            return ObjectBuiltins.getOwnPropertyDescriptor(List.of(proxy.getTarget(), key));
+        }
+        return ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget(), key));
+    }
+
     private JsValue trapOf(JsProxy proxy, String name) {
+        if (proxy.isRevoked()) {
+            throw new TypeErrorException("Cannot perform '" + name + "' on a proxy that has been revoked");
+        }
         final var trap = ops.getMember(proxy.getHandler(), new JsString(name));
         if (isNullish(trap)) {
             return null;

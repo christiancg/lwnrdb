@@ -203,4 +203,11 @@ public class ArrayBuiltinsTest {
         assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
                 () -> Interpreter.run("[1, 2, 3].with(5, 9)"));
     }
+
+    // toLocaleString joins per-element toLocaleString results; null/undefined become empty
+    @Test
+    public void test_to_locale_string() {
+        assertEquals("1,2,3", str("[1, 2, 3].toLocaleString()"));
+        assertEquals("a,,b", str("['a', null, 'b'].toLocaleString()"));
+    }
 }

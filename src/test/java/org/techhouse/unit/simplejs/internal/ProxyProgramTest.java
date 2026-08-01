@@ -211,4 +211,58 @@ public class ProxyProgramTest {
                 """;
         assertEquals(11, num(source));
     }
+
+    // getPrototypeOf trap intercepts Object.getPrototypeOf; absent trap falls through to the target
+    @Test
+    public void test_proxy_get_prototype_of() {
+        assertEquals("P", str("""
+                let proto = { tag: 'P' };
+                let p = new Proxy({}, { getPrototypeOf(t) { return proto; } });
+                Object.getPrototypeOf(p).tag
+                """));
+        assertTrue(bool("""
+                let proto = {};
+                let t = Object.create(proto);
+                let p = new Proxy(t, {});
+                Object.getPrototypeOf(p) === proto
+                """));
+    }
+
+    // isExtensible / preventExtensions traps are consulted by the Object.* operations
+    @Test
+    public void test_proxy_extensibility_traps() {
+        assertFalse(bool("let p = new Proxy({}, { isExtensible(t) { return false; } }); Object.isExtensible(p)"));
+        assertTrue(bool("""
+                let hit = false;
+                let p = new Proxy({}, { preventExtensions(t) { hit = true; return true; } });
+                Object.preventExtensions(p);
+                hit
+                """));
+    }
+
+    // defineProperty and getOwnPropertyDescriptor traps intercept the reflective operations
+    @Test
+    public void test_proxy_define_and_descriptor_traps() {
+        assertEquals("x", str("""
+                let log = [];
+                let p = new Proxy({}, { defineProperty(t, k, d) { log.push(k); return true; } });
+                Object.defineProperty(p, 'x', { value: 1 });
+                log[0]
+                """));
+        assertEquals(42, num("""
+                let p = new Proxy({}, {
+                    getOwnPropertyDescriptor(t, k) { return { value: 42, configurable: true }; }
+                });
+                Object.getOwnPropertyDescriptor(p, 'x').value
+                """));
+    }
+
+    // Proxy.revocable returns a proxy usable until revoke(), after which any operation throws
+    @Test
+    public void test_proxy_revocable() {
+        assertEquals(1,
+                num("let { proxy, revoke } = Proxy.revocable({ x: 1 }, {}); let before = proxy.x; revoke(); before"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let r = Proxy.revocable({ x: 1 }, {}); r.revoke(); r.proxy.x"));
+    }
 }

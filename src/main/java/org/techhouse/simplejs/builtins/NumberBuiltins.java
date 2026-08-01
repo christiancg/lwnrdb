@@ -80,9 +80,21 @@ public final class NumberBuiltins {
             case "toExponential" ->
                 new JsNativeFunction("toExponential", (_, args) -> new JsString(toExponential(value, args)));
             case "toString" -> new JsNativeFunction("toString", (_, args) -> new JsString(toStringRadix(value, args)));
+            case "toLocaleString" ->
+                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(value)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> new JsNumber(value));
             default -> null;
         };
+    }
+
+    private static String toLocaleString(double value) {
+        if (Double.isNaN(value)) {
+            return "NaN";
+        }
+        if (Double.isInfinite(value)) {
+            return value > 0 ? "∞" : "-∞";
+        }
+        return java.text.NumberFormat.getInstance(java.util.Locale.getDefault()).format(value);
     }
 
     private static String toFixed(double value, List<JsValue> args) {

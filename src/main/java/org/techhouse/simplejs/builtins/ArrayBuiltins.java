@@ -8,7 +8,9 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -63,8 +65,10 @@ public final class ArrayBuiltins {
         return new JsArray(new ArrayList<>(args));
     }
 
-    public static JsNativeFunction getMethod(JsArray receiver, String name, Invoker invoker) {
+    public static JsNativeFunction getMethod(JsArray receiver, String name, Invoker invoker, InterpreterOps ops) {
         return switch (name) {
+            case "toLocaleString" ->
+                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(receiver, ops)));
             case "map" -> new JsNativeFunction("map", (_, args) -> map(receiver, args, invoker));
             case "filter" -> new JsNativeFunction("filter", (_, args) -> filter(receiver, args, invoker));
             case "reduce" -> new JsNativeFunction("reduce", (_, args) -> reduce(receiver, args, invoker));
@@ -108,6 +112,27 @@ public final class ArrayBuiltins {
             case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, args));
             default -> null;
         };
+    }
+
+    private static String toLocaleString(JsArray receiver, InterpreterOps ops) {
+        final var sb = new StringBuilder();
+        final var elements = receiver.getElements();
+        for (var i = 0; i < elements.size(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            final var element = elements.get(i);
+            if (element instanceof JsNull || element instanceof JsUndefined) {
+                continue;
+            }
+            final var method = ops.getMember(element, new JsString("toLocaleString"));
+            if (method instanceof JsFunction || method instanceof JsNativeFunction) {
+                sb.append(JsCoercion.toStr(ops.call(method, element, List.of())));
+            } else {
+                sb.append(JsCoercion.toStr(element));
+            }
+        }
+        return sb.toString();
     }
 
     private static JsValue toReversed(JsArray receiver) {

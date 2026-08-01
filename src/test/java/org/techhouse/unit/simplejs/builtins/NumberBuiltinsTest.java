@@ -170,4 +170,13 @@ public class NumberBuiltinsTest {
     public void test_bigint_object_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt({})"));
     }
+
+    // toLocaleString formats with the default locale; digits survive grouping, specials stay readable
+    @Test
+    public void test_to_locale_string() {
+        assertEquals("1234", str("(1234).toLocaleString().replace(/[^0-9]/g, '')"));
+        assertEquals("NaN", str("(Number.NaN).toLocaleString()"));
+        assertEquals("∞", str("(Number.POSITIVE_INFINITY).toLocaleString()"));
+        assertEquals("-∞", str("(Number.NEGATIVE_INFINITY).toLocaleString()"));
+    }
 }

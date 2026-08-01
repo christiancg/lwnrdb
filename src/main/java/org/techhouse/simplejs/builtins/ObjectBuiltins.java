@@ -31,18 +31,28 @@ public final class ObjectBuiltins {
         object.set("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
         object.set("seal", new JsNativeFunction("seal", (_, args) -> seal(args)));
         object.set("isSealed", new JsNativeFunction("isSealed", (_, args) -> isSealed(args)));
-        object.set("preventExtensions",
-                new JsNativeFunction("preventExtensions", (_, args) -> preventExtensions(args)));
-        object.set("isExtensible", new JsNativeFunction("isExtensible", (_, args) -> isExtensible(args)));
+        object.set("preventExtensions", new JsNativeFunction("preventExtensions", (_, args) -> {
+            ops.preventExtensions(first(args));
+            return first(args);
+        }));
+        object.set("isExtensible",
+                new JsNativeFunction("isExtensible", (_, args) -> JsBoolean.of(ops.isExtensible(first(args)))));
         object.set("create", new JsNativeFunction("create", (_, args) -> createObject(args)));
-        object.set("getPrototypeOf", new JsNativeFunction("getPrototypeOf", (_, args) -> getPrototypeOf(args)));
-        object.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> setPrototypeOf(args)));
-        object.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> defineProperty(args)));
+        object.set("getPrototypeOf",
+                new JsNativeFunction("getPrototypeOf", (_, args) -> ops.getPrototypeOf(first(args))));
+        object.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
+            ops.setPrototypeOf(first(args), argAt(args, 1));
+            return first(args);
+        }));
+        object.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> {
+            ops.defineProperty(first(args), argAt(args, 1), argAt(args, 2));
+            return first(args);
+        }));
         object.set("defineProperties", new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args)));
         object.set("getOwnPropertyNames",
                 new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args, ops)));
-        object.set("getOwnPropertyDescriptor",
-                new JsNativeFunction("getOwnPropertyDescriptor", (_, args) -> getOwnPropertyDescriptor(args)));
+        object.set("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
+                (_, args) -> ops.getOwnPropertyDescriptor(first(args), argAt(args, 1))));
         object.set("fromEntries", new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
         object.set("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args)));
         object.set("groupBy", new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
@@ -209,7 +219,7 @@ public final class ObjectBuiltins {
         return JsBoolean.of(!(first(args) instanceof JsObject object) || object.isSealed());
     }
 
-    private static JsValue preventExtensions(List<JsValue> args) {
+    public static JsValue preventExtensions(List<JsValue> args) {
         final var target = first(args);
         if (target instanceof JsObject object) {
             object.preventExtensions();
@@ -217,7 +227,7 @@ public final class ObjectBuiltins {
         return target;
     }
 
-    private static JsValue isExtensible(List<JsValue> args) {
+    public static JsValue isExtensible(List<JsValue> args) {
         return JsBoolean.of(first(args) instanceof JsObject object && object.isExtensible());
     }
 
@@ -402,5 +412,9 @@ public final class ObjectBuiltins {
 
     private static JsValue first(List<JsValue> args) {
         return args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+    }
+
+    private static JsValue argAt(List<JsValue> args, int index) {
+        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
     }
 }

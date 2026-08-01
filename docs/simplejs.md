@@ -381,6 +381,23 @@ carry no constructor/prototype/`klass` linkage and cannot be subclassed (`class 
 requires a `JsClass` superclass), so a user array/typed array can never carry a custom species — the
 by-copy methods always allocate the default type. This is a known limitation, not a bug.
 
+**Locale methods & Proxy/Reflect completion (ES2026 conformance Phase 3).** `toLocaleString`
+defaults are installed on `Number` (`java.text.NumberFormat` with `Locale.getDefault()`; `NaN`/
+`±Infinity` render as `NaN`/`∞`/`-∞`), `Date` (`toLocaleString`/`toLocaleDateString`/
+`toLocaleTimeString` via `DateFormat`, UTC zone to match the UTC component model, `Invalid Date`
+for a `NaN` time), and `Array` (joins each element's `toLocaleString`, `null`/`undefined` → empty),
+and `String.prototype.localeCompare` is now backed by `java.text.Collator` (accent-aware ordering
+rather than code-point comparison) — no `Intl` object. The `Proxy` trap set is completed:
+`getPrototypeOf`/`setPrototypeOf`/`isExtensible`/`preventExtensions`/`defineProperty`/
+`getOwnPropertyDescriptor` are added to `ProxyDispatch` (trap-or-fallback like the existing traps)
+and exposed through six new `InterpreterOps` methods so the `Object.*`/`Reflect.*` choke points are
+proxy-aware; `Reflect` gains `isExtensible`/`preventExtensions` and routes the prototype/descriptor
+statics through the same seam. `values/JsProxy` carries a `revoked` flag and `Proxy.revocable(target,
+handler)` returns `{proxy, revoke}` — after `revoke()` every trap (guarded centrally in `trapOf`)
+throws `TypeError`. **Not done (deferred):** the `get`/`set` accessor-`receiver` for a trap-less
+proxy fallback (the trap receiver itself is already correct) — an invasive member-path change for
+negligible observable effect.
+
 **Iterator protocol, symbol keys & object-literal methods (engine-completion Phase 2).**
 The well-known `Symbol.iterator`/`Symbol.asyncIterator` are real `JsSymbol` constants, and
 `Symbol.for(key)`/`Symbol.keyFor(sym)` provide a process-wide registry of shared symbols.
@@ -477,12 +494,13 @@ in the interpreter's member choke points — `getMemberByKey`/`getMember` (`get`
 (`deleteProperty`), `enumerateKeys`/`for-in` + `Object.keys`/`values`/`entries`/
 `getOwnPropertyNames` (`ownKeys`), `callValue` (`apply`), and `constructValue`/`new`
 (`construct`) — each in a small `proxyGet`/`proxySet`/… helper that falls back to the target
-when the trap is absent. A non-function trap throws a `TypeError`. **Deliberate limitations**:
-the `getPrototypeOf`/`setPrototypeOf`/`isExtensible`/`preventExtensions`/`defineProperty`/
-`getOwnPropertyDescriptor` traps and `Proxy.revocable` are not implemented (those operations
-act on the target directly); the `get`/`set` `receiver` argument is passed but accessor
-dispatch ignores it; proxy `ownKeys` enumeration does not re-filter through a
-`getOwnPropertyDescriptor` trap for enumerability.
+when the trap is absent. A non-function trap throws a `TypeError`. The
+`getPrototypeOf`/`setPrototypeOf`/`isExtensible`/`preventExtensions`/`defineProperty`/
+`getOwnPropertyDescriptor` traps and `Proxy.revocable` are added in ES2026 conformance Phase 3
+(see below). **Remaining limitations**: the `get`/`set` `receiver` argument is passed to the
+trap (correct), but when a trap-less proxy falls back to an accessor on the target the accessor's
+`this` is the target rather than the proxy; proxy `ownKeys` enumeration does not re-filter through
+a `getOwnPropertyDescriptor` trap for enumerability.
 
 **Mapped `arguments` & live `globalThis` (spec-gap Phase F).** A non-arrow function now
 receives a purpose-built `values/JsArguments` instead of a plain-array copy. When every

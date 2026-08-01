@@ -174,4 +174,13 @@ public class DateBuiltinsTest {
     public void test_invalid_getters() {
         assertTrue(bool("isNaN(new Date('nope').getUTCFullYear())"));
     }
+
+    // toLocaleString/Date/Time produce a non-empty locale string, and "Invalid Date" for NaN
+    @Test
+    public void test_to_locale_string() {
+        assertTrue(bool("new Date(0).toLocaleString().length > 0"));
+        assertTrue(bool("new Date(0).toLocaleDateString().length > 0"));
+        assertTrue(bool("new Date(0).toLocaleTimeString().length > 0"));
+        assertEquals("Invalid Date", str("new Date(Number.NaN).toLocaleString()"));
+    }
 }

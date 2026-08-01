@@ -240,7 +240,7 @@ public final class StringBuiltins {
     }
 
     private static int localeCompare(String value, List<JsValue> args) {
-        return Integer.signum(value.compareTo(str(args, 0)));
+        return Integer.signum(java.text.Collator.getInstance(Locale.getDefault()).compare(value, str(args, 0)));
     }
 
     private static String concat(String value, List<JsValue> args) {

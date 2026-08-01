@@ -103,6 +103,8 @@ public final class DateBuiltins {
             case "toJSON" -> new JsNativeFunction("toJSON", (_, _) -> toJSON(receiver));
             case "toString", "toDateString", "toUTCString" ->
                 new JsNativeFunction(name, (_, _) -> new JsString(receiver.toDateString()));
+            case "toLocaleString", "toLocaleDateString", "toLocaleTimeString" ->
+                new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(receiver, name)));
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(0));
             default -> setter(receiver, name);
         };
@@ -177,6 +179,20 @@ public final class DateBuiltins {
             throw new RangeErrorException("Invalid time value");
         }
         return new JsString(iso);
+    }
+
+    private static String toLocaleString(JsDate receiver, String name) {
+        if (!receiver.isValid()) {
+            return "Invalid Date";
+        }
+        final var style = java.time.format.FormatStyle.MEDIUM;
+        final var formatter = switch (name) {
+            case "toLocaleDateString" -> java.time.format.DateTimeFormatter.ofLocalizedDate(style);
+            case "toLocaleTimeString" -> java.time.format.DateTimeFormatter.ofLocalizedTime(style);
+            default -> java.time.format.DateTimeFormatter.ofLocalizedDateTime(style);
+        };
+        final var zoned = Instant.ofEpochMilli((long) receiver.getTime()).atZone(ZoneOffset.UTC);
+        return zoned.format(formatter.withLocale(java.util.Locale.getDefault()));
     }
 
     private static JsValue toJSON(JsDate receiver) {

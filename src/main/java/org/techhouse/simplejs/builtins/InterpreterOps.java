@@ -17,4 +17,16 @@ public interface InterpreterOps {
     JsValue call(JsValue fn, JsValue thisArg, List<JsValue> args);
 
     JsValue construct(JsValue fn, List<JsValue> args);
+
+    JsValue getPrototypeOf(JsValue target);
+
+    boolean setPrototypeOf(JsValue target, JsValue proto);
+
+    boolean isExtensible(JsValue target);
+
+    boolean preventExtensions(JsValue target);
+
+    boolean defineProperty(JsValue target, JsValue key, JsValue descriptor);
+
+    JsValue getOwnPropertyDescriptor(JsValue target, JsValue key);
 }

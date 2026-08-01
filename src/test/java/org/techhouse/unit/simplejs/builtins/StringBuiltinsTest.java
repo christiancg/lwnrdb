@@ -259,6 +259,13 @@ public class StringBuiltinsTest {
         assertEquals("abcd", str("'ab'.concat('c', 'd')"));
     }
 
+    // Collator-backed localeCompare orders an accented character next to its base, not by code point
+    @Test
+    public void test_locale_compare_collation() {
+        assertTrue(num("'á'.localeCompare('b')") < 0);
+        assertTrue(num("'a'.localeCompare('á')") < 0);
+    }
+
     // String.fromCharCode and fromCodePoint build strings from code units/points
     @Test
     public void test_fromcharcode_fromcodepoint() {

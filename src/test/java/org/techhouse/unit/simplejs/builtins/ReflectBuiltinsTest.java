@@ -148,4 +148,17 @@ public class ReflectBuiltinsTest {
                 """;
         assertTrue(bool(source));
     }
+
+    // Reflect.isExtensible / preventExtensions mirror the Object.* extensibility state
+    @Test
+    public void test_reflect_extensibility() {
+        assertTrue(bool("Reflect.isExtensible({})"));
+        assertFalse(bool("let o = {}; Reflect.preventExtensions(o); Reflect.isExtensible(o)"));
+    }
+
+    // Reflect.getPrototypeOf reports the object's prototype
+    @Test
+    public void test_reflect_get_prototype_of() {
+        assertTrue(bool("let p = {}; let o = Object.create(p); Reflect.getPrototypeOf(o) === p"));
+    }
 }
