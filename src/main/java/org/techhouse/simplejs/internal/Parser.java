@@ -1,7 +1,9 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.simplejs.elements.JsBaseElement;
 import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsBigInt;
@@ -16,6 +18,7 @@ import org.techhouse.simplejs.elements.JsSeparator;
 import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.SourcePosition;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.parser.ParserTables;
 import org.techhouse.simplejs.internal.parser.PatternConverter;
 import org.techhouse.simplejs.internal.parser.TokenStream;
@@ -101,11 +104,11 @@ public final class Parser {
     }
 
     public static Program parse(List<JsBaseElement> tokens) {
-        return new State(tokens, null).parseProgram();
+        return new State(tokens, null, null).parseProgram();
     }
 
     public static Program parse(Lexer.LexResult lexed) {
-        return new State(lexed.tokens(), lexed.positions()).parseProgram();
+        return new State(lexed.tokens(), lexed.positions(), lexed.newlineBefore()).parseProgram();
     }
 
     // The recursive-descent walk is inherently stateful (a moving cursor over the token stream),
@@ -115,8 +118,8 @@ public final class Parser {
     private static final class State extends TokenStream {
         private final PatternConverter patterns = new PatternConverter(this);
 
-        private State(List<JsBaseElement> tokens, List<SourcePosition> positions) {
-            super(tokens, positions);
+        private State(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore) {
+            super(tokens, positions, newlineBefore);
         }
 
         private Program parseProgram() {
@@ -194,6 +197,10 @@ public final class Parser {
                     }
                 }
             }
+            if (isContextualKeyword("with") && peek().getType() == JsType.SEPARATOR
+                    && ((JsSeparator) peek()).getValue() == '(') {
+                throw new SyntaxErrorException("Strict mode code may not include a with statement");
+            }
             if (isUsingDeclarationStart()) {
                 return parseUsingDeclaration();
             }
@@ -238,7 +245,7 @@ public final class Parser {
                 expectOperator("=");
                 declarations.add(new VariableDeclarator(id, parseAssignment()));
             } while (matchSeparator(','));
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return declarations;
         }
 
@@ -269,7 +276,7 @@ public final class Parser {
                 }
                 declarations.add(new VariableDeclarator(id, init));
             } while (matchSeparator(','));
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new VariableDeclaration(kind, declarations);
         }
 
@@ -302,7 +309,7 @@ public final class Parser {
             expectSeparator('(');
             final var test = parseExpression();
             expectSeparator(')');
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new DoWhileStatement(body, test);
         }
 
@@ -428,8 +435,11 @@ public final class Parser {
 
         private ThrowStatement parseThrow() {
             expectKeyword("throw");
+            if (newlineBeforeCurrent()) {
+                throw error();
+            }
             final var argument = parseExpression();
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new ThrowStatement(argument);
         }
 
@@ -465,24 +475,28 @@ public final class Parser {
         private ReturnStatement parseReturn() {
             expectKeyword("return");
             Expression argument = null;
-            if (!isSeparator(';') && !isSeparator('}') && !atEnd()) {
+            if (!isSeparator(';') && !isSeparator('}') && !atEnd() && !newlineBeforeCurrent()) {
                 argument = parseExpression();
             }
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new ReturnStatement(argument);
         }
 
         private BreakStatement parseBreak() {
             expectKeyword("break");
-            final var label = current().getType() == JsType.IDENTIFIER ? parseIdentifier() : null;
-            consumeOptionalSemicolon();
+            final var label = current().getType() == JsType.IDENTIFIER && !newlineBeforeCurrent()
+                    ? parseIdentifier()
+                    : null;
+            consumeSemicolon();
             return new BreakStatement(label);
         }
 
         private ContinueStatement parseContinue() {
             expectKeyword("continue");
-            final var label = current().getType() == JsType.IDENTIFIER ? parseIdentifier() : null;
-            consumeOptionalSemicolon();
+            final var label = current().getType() == JsType.IDENTIFIER && !newlineBeforeCurrent()
+                    ? parseIdentifier()
+                    : null;
+            consumeSemicolon();
             return new ContinueStatement(label);
         }
 
@@ -501,7 +515,7 @@ public final class Parser {
             if (current().getType() == JsType.STRING) {
                 final var source = parseModuleSource();
                 final var attributes = parseImportAttributes();
-                consumeOptionalSemicolon();
+                consumeSemicolon();
                 return new ImportDeclaration(List.of(), source, attributes);
             }
             final var specifiers = new ArrayList<JsNode>();
@@ -522,7 +536,7 @@ public final class Parser {
             expectContextualKeyword("from");
             final var source = parseModuleSource();
             final var attributes = parseImportAttributes();
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new ImportDeclaration(specifiers, source, attributes);
         }
 
@@ -568,7 +582,7 @@ public final class Parser {
             expectKeyword("export");
             if (matchKeyword("default")) {
                 final var declaration = parseAssignment();
-                consumeOptionalSemicolon();
+                consumeSemicolon();
                 return new ExportDefaultDeclaration(declaration);
             }
             if (matchOperator("*")) {
@@ -588,7 +602,7 @@ public final class Parser {
             expectContextualKeyword("from");
             final var source = parseModuleSource();
             final var attributes = parseImportAttributes();
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new ExportAllDeclaration(exported, source, attributes);
         }
 
@@ -610,7 +624,7 @@ public final class Parser {
                 source = parseModuleSource();
                 attributes = parseImportAttributes();
             }
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new ExportNamedDeclaration(null, specifiers, source, attributes);
         }
 
@@ -664,7 +678,7 @@ public final class Parser {
 
         private ExpressionStatement parseExpressionStatement() {
             final var expr = parseExpression();
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new ExpressionStatement(expr);
         }
 
@@ -684,7 +698,35 @@ public final class Parser {
                 } while (matchSeparator(','));
             }
             expectSeparator(')');
+            checkNoDuplicateParams(params);
             return params;
+        }
+
+        // Strict mode forbids duplicate bound names across a parameter list, including inside patterns.
+        private void checkNoDuplicateParams(List<JsNode> params) {
+            final Set<String> names = new HashSet<>();
+            for (final var param : params) {
+                collectBoundNames(param, names);
+            }
+        }
+
+        private void collectBoundNames(JsNode node, Set<String> names) {
+            switch (node) {
+                case null -> {
+                }
+                case Identifier id -> {
+                    if (!names.add(id.getName())) {
+                        throw new SyntaxErrorException("Duplicate parameter name not allowed in this context");
+                    }
+                }
+                case RestElement rest -> collectBoundNames(rest.getArgument(), names);
+                case AssignmentPattern assignment -> collectBoundNames(assignment.getLeft(), names);
+                case ArrayPattern array -> array.getElements().forEach(element -> collectBoundNames(element, names));
+                case ObjectPattern object -> object.getProperties().forEach(prop -> collectBoundNames(prop, names));
+                case Property prop -> collectBoundNames(prop.getValue(), names);
+                default -> {
+                }
+            }
         }
 
         private Identifier parseIdentifier() {
@@ -805,6 +847,9 @@ public final class Parser {
 
         private Expression parseYield() {
             expectKeyword("yield");
+            if (newlineBeforeCurrent()) {
+                return new YieldExpression(null, false);
+            }
             final var delegate = matchOperator("*");
             Expression argument = null;
             if (delegate) {
@@ -887,7 +932,19 @@ public final class Parser {
             }
             if (t.getType() == JsType.KEYWORD) {
                 final var kw = ((JsKeyword) t).getValue();
-                if ("typeof".equals(kw) || "void".equals(kw) || "delete".equals(kw)) {
+                if ("delete".equals(kw)) {
+                    advance();
+                    final var argument = parseUnary();
+                    if (argument instanceof Identifier) {
+                        throw new SyntaxErrorException("Delete of an unqualified identifier in strict mode");
+                    }
+                    if (argument instanceof MemberExpression member
+                            && member.getProperty() instanceof PrivateIdentifier) {
+                        throw new SyntaxErrorException("Private fields can not be deleted");
+                    }
+                    return new UnaryExpression(kw, argument, true);
+                }
+                if ("typeof".equals(kw) || "void".equals(kw)) {
                     advance();
                     return new UnaryExpression(kw, parseUnary(), true);
                 }
@@ -901,7 +958,7 @@ public final class Parser {
 
         private Expression parsePostfix() {
             final var expr = parseCallMember();
-            if (isOperator("++") || isOperator("--")) {
+            if ((isOperator("++") || isOperator("--")) && !newlineBeforeCurrent()) {
                 final var op = ((JsOperator) advance()).getValue();
                 return new UpdateExpression(op, expr, false);
             }
@@ -1077,6 +1134,9 @@ public final class Parser {
         private Expression parseIdentifierOrArrow() {
             final var t = (JsIdentifier) current();
             if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
+                if (newlineBeforePeek()) {
+                    throw error();
+                }
                 advance();
                 advance();
                 return parseArrowBody(List.of(new Identifier(t.getValue())), false);
@@ -1140,12 +1200,18 @@ public final class Parser {
             }
             if (current().getType() == JsType.IDENTIFIER && peek().getType() == JsType.OPERATOR
                     && "=>".equals(((JsOperator) peek()).getValue())) {
+                if (newlineBeforePeek()) {
+                    throw error();
+                }
                 final var param = parseIdentifier();
                 expectOperator("=>");
                 return parseArrowBody(List.of(param), true);
             }
             if (isSeparator('(') && matchingParenFollowedByArrow()) {
                 final var params = parseParams();
+                if (newlineBeforeCurrent()) {
+                    throw error();
+                }
                 expectOperator("=>");
                 return parseArrowBody(params, true);
             }
@@ -1226,7 +1292,7 @@ public final class Parser {
             if (matchOperator("=")) {
                 value = parseAssignment();
             }
-            consumeOptionalSemicolon();
+            consumeSemicolon();
             return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
         }
 
@@ -1330,6 +1396,9 @@ public final class Parser {
         private Expression parseParenOrArrow() {
             if (matchingParenFollowedByArrow()) {
                 final var params = parseParams();
+                if (newlineBeforeCurrent()) {
+                    throw error();
+                }
                 expectOperator("=>");
                 return parseArrowBody(params, false);
             }
@@ -1485,7 +1554,7 @@ public final class Parser {
         private TemplateLiteral parseTemplate(JsTemplateString template) {
             final var expressions = new ArrayList<Expression>();
             for (final var expressionTokens : template.getExpressions()) {
-                expressions.add(new State(expressionTokens, null).parseTemplateExpression());
+                expressions.add(new State(expressionTokens, null, null).parseTemplateExpression());
             }
             return new TemplateLiteral(template.getQuasis(), template.getRawQuasis(), expressions);
         }

@@ -21,6 +21,7 @@ import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.JsUndefined;
 import org.techhouse.simplejs.elements.SourcePosition;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
@@ -50,8 +51,10 @@ public final class Lexer {
 
     // Tokens plus the parallel list of source positions (one per token, EOF included) and the
     // original source. Positions live here rather than on the tokens so the shared
-    // JsNull/JsUndefined/JsEOF singletons stay singletons.
-    public record LexResult(String source, List<JsBaseElement> tokens, List<SourcePosition> positions) {
+    // JsNull/JsUndefined/JsEOF singletons stay singletons. newlineBefore[i] records whether a
+    // line terminator was skipped in the trivia immediately before token i (drives ASI).
+    public record LexResult(String source, List<JsBaseElement> tokens, List<SourcePosition> positions,
+            List<Boolean> newlineBefore) {
     }
 
     public static List<JsBaseElement> lex(String sourceCode) {
@@ -61,18 +64,27 @@ public final class Lexer {
     public static LexResult lexWithPositions(String sourceCode) {
         final var tokens = new ArrayList<JsBaseElement>();
         final var positions = new ArrayList<SourcePosition>();
+        final var newlineBefore = new ArrayList<Boolean>();
         final var lineStarts = computeLineStarts(sourceCode);
         final var n = sourceCode.length();
         var pos = skipHashbang(sourceCode, n);
+        var sawNewline = false;
         JsBaseElement last = null;
         while (pos < n) {
             final var c = sourceCode.charAt(pos);
             if (Character.isWhitespace(c)) {
+                if (isLineTerminator(c)) {
+                    sawNewline = true;
+                }
                 pos++;
                 continue;
             }
             if (c == '/' && pos + 1 < n && (sourceCode.charAt(pos + 1) == '/' || sourceCode.charAt(pos + 1) == '*')) {
+                final var commentStart = pos;
                 pos = skipComment(sourceCode, pos);
+                if (!sawNewline && containsLineTerminator(sourceCode, commentStart, pos)) {
+                    sawNewline = true;
+                }
                 continue;
             }
             final Lexed lexed;
@@ -101,12 +113,28 @@ public final class Lexer {
             }
             tokens.add(lexed.token());
             positions.add(positionOf(pos, lexed.next() - pos, lineStarts));
+            newlineBefore.add(sawNewline);
+            sawNewline = false;
             last = lexed.token();
             pos = lexed.next();
         }
         tokens.add(JsEOF.getInstance());
         positions.add(positionOf(n, 0, lineStarts));
-        return new LexResult(sourceCode, tokens, positions);
+        newlineBefore.add(sawNewline);
+        return new LexResult(sourceCode, tokens, positions, newlineBefore);
+    }
+
+    private static boolean isLineTerminator(char c) {
+        return c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029';
+    }
+
+    private static boolean containsLineTerminator(String src, int from, int to) {
+        for (var i = from; i < to; i++) {
+            if (isLineTerminator(src.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int[] computeLineStarts(String src) {
@@ -191,7 +219,14 @@ public final class Lexer {
             case 'b' -> builder.append('\b');
             case 'f' -> builder.append('\f');
             case 'v' -> builder.append('\u000B');
-            case '0' -> builder.append('\0');
+            case '0' -> {
+                if (i + 1 < src.length() && Character.isDigit(src.charAt(i + 1))) {
+                    throw new SyntaxErrorException("Octal escape sequences are not allowed in strict mode");
+                }
+                builder.append('\0');
+            }
+            case '1', '2', '3', '4', '5', '6', '7', '8', '9' ->
+                throw new SyntaxErrorException("Octal escape sequences are not allowed in strict mode");
             case '\n' -> {
                 return i + 1;
             }
@@ -245,6 +280,9 @@ public final class Lexer {
                     return new Lexed(new JsBigInt(new BigInteger(digits, radix)), end + 1);
                 }
                 return new Lexed(new JsNumber((double) Long.parseLong(digits, radix)), end);
+            }
+            if (Character.isDigit(src.charAt(start + 1))) {
+                throw new SyntaxErrorException("Octal literals are not allowed in strict mode; use the 0o prefix");
             }
         }
         var j = scanDigits(src, start, n, 10);

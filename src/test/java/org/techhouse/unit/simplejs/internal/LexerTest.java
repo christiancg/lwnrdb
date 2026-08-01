@@ -21,6 +21,7 @@ import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.JsUndefined;
 import org.techhouse.simplejs.elements.SourcePosition;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
@@ -463,5 +464,67 @@ public class LexerTest {
         assertEquals(13, eof.getOffset());
         assertEquals(0, eof.getLength());
         assertEquals(2, eof.getLine());
+    }
+
+    // newlineBefore is true only for a token whose preceding trivia contained a line terminator
+    @Test
+    public void test_newline_before_flag_across_line_break() {
+        final Lexer.LexResult result = Lexer.lexWithPositions("a\nb c");
+        // tokens: a(0) b(1) c(2) EOF(3)
+        assertFalse(result.newlineBefore().get(0));
+        assertTrue(result.newlineBefore().get(1));
+        assertFalse(result.newlineBefore().get(2));
+    }
+
+    // A multi-line block comment counts as a line terminator between tokens
+    @Test
+    public void test_newline_before_flag_multiline_block_comment() {
+        final Lexer.LexResult result = Lexer.lexWithPositions("a /*\n*/ b");
+        assertTrue(result.newlineBefore().get(1));
+    }
+
+    // A single-line block comment on one line does not set newlineBefore
+    @Test
+    public void test_newline_before_flag_single_line_block_comment() {
+        final Lexer.LexResult result = Lexer.lexWithPositions("a /* x */ b");
+        assertFalse(result.newlineBefore().get(1));
+    }
+
+    // Legacy octal integer literals are rejected in strict mode
+    @Test
+    public void test_legacy_octal_literal_rejected() {
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("0755"));
+    }
+
+    // A leading-zero non-octal decimal (08) is rejected
+    @Test
+    public void test_non_octal_decimal_literal_rejected() {
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("08"));
+    }
+
+    // 0, 0.5, 0n and the radix-prefixed literals remain valid
+    @Test
+    public void test_zero_and_prefixed_literals_still_valid() {
+        assertDoesNotThrow(() -> Lexer.lex("0"));
+        assertDoesNotThrow(() -> Lexer.lex("0.5"));
+        assertDoesNotThrow(() -> Lexer.lex("0n"));
+        assertDoesNotThrow(() -> Lexer.lex("0x1F"));
+        assertDoesNotThrow(() -> Lexer.lex("0o17"));
+        assertDoesNotThrow(() -> Lexer.lex("0b10"));
+    }
+
+    // Octal escape sequences in string literals are rejected in strict mode
+    @Test
+    public void test_octal_string_escape_rejected() {
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("'\\07'"));
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("'\\1'"));
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("'\\8'"));
+    }
+
+    // A lone \0 (not followed by a digit) stays valid
+    @Test
+    public void test_null_escape_still_valid() {
+        assertDoesNotThrow(() -> Lexer.lex("'\\0'"));
+        assertDoesNotThrow(() -> Lexer.lex("'\\0a'"));
     }
 }

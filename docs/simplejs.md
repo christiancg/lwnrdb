@@ -637,10 +637,33 @@ properties** (`Alphabetic`, `White_Space`, `Uppercase`, `Lowercase`, `Hex_Digit`
 outside these tables (e.g. `\p{Emoji}`, an unknown key, an invalid script) throws a JS
 `SyntaxError`. `Pattern.UNICODE_CHARACTER_CLASS` is **deliberately not** enabled, so `\d`/`\w`/`\s`/
 `\b` stay ASCII in `u`-mode exactly as ECMAScript requires (enabling it would make them Unicode-
-aware, a conformance regression). **ASI is a known remaining gap** (not planned): the lexer
-discards newlines, so newline-based automatic semicolon insertion and the restricted productions
-(`return`/`throw`/`break`/`continue`/`++`/`--`/`yield` with a following newline) are not enforced —
-a statement ends only at `;`, `}`, or EOF. `Intl` and `Temporal` remain out of scope.
+aware, a conformance regression). `Intl` and `Temporal` remain out of scope.
+
+**Automatic Semicolon Insertion.** The lexer records, parallel to the token stream, a
+`newlineBefore` flag per token (`Lexer.LexResult.newlineBefore`) — true when the trivia skipped
+immediately before a token contained a line terminator (`\n`/`\r`/U+2028/U+2029), including inside
+a multi-line block comment. `TokenStream.newlineBeforeCurrent`/`newlineBeforePeek` expose it, and
+`consumeSemicolon` implements the three ASI rules: a terminator is an explicit `;`, or is inserted
+before `}`, end-of-input, or a token a line terminator precedes; otherwise a missing terminator on
+the same line is a syntax error (so `a = 1 b = 2` is rejected). The **restricted productions** are
+enforced: a line terminator makes `return`/`break`/`continue` argument/label-less, makes a postfix
+`++`/`--` start a new statement, gives `yield` no argument, is a syntax error after `throw`, and is
+a syntax error between arrow parameters and `=>`. ASI runs only on the position-aware parse path
+(`Parser.parse(LexResult)`); the token-list overload (`Parser.parse(List)`, test-only) has no
+newline information and stays permissive.
+
+**Strict mode (always on).** A script is always a strict module — there is no sloppy mode and no
+`"use strict"` directive handling. Two strict runtime behaviors already held before this: assigning
+to an undeclared name throws `ReferenceError` (never creates an implicit global,
+`Environment.assign`) and `this` in a plain function call is `undefined` (never the global object).
+The strict **early errors** are enforced at lex/parse time: legacy-octal and leading-zero
+non-octal-decimal integer literals (`0755`, `08`), octal/non-octal string escapes (`\07`, `\1`,
+`\8`), duplicate bound parameter names (including inside destructuring patterns), `delete` of an
+unqualified identifier or a private reference (`delete x`, `delete this.#p`), and the `with`
+statement. *Intentionally not enforced* (too obscure to matter for a database script, cheap to add
+later): future-reserved words (`implements`/`interface`/`package`/`private`/`protected`/`public`)
+as binding identifiers, `eval`/`arguments` as binding/assignment targets, and the poison
+`arguments.callee` accessor (it is simply `undefined`).
 
 `Float16Array`, `Math.f16round` and
 `DataView` `getFloat16`/`setFloat16` use the JDK `Float.float16ToFloat`/`floatToFloat16`
@@ -650,6 +673,36 @@ half-precision conversions. `ArrayBuffer` supports resizable/growable buffers: t
 against the buffer's current byte length so a shrunk buffer reads out-of-range indexes as
 `undefined`. Length-tracking auto-length views are not supported (a view keeps its
 construction-time element length).
+
+## Deliberately unimplemented ES2026 features (out of scope for a database interpreter)
+
+The engine targets ES2026 semantics for code that runs inside the database. The following
+standard features are intentionally **not** implemented — each is either a sandbox/security
+boundary or unobservable in a single-threaded, per-request interpreter, so omitting them is a
+design decision, not a bug:
+
+- **`eval` / the `Function` constructor** — no runtime code generation from strings. Allowing it
+  would defeat the instruction-budget/deadline sandbox and open an injection surface.
+- **`Intl`** — the internationalization API is enormous; only ad-hoc `toLocaleString`/
+  `localeCompare` defaults (backed by `java.text`) are provided.
+- **`Temporal`** — the date/time proposal is out of scope; `Date` is the only temporal type.
+- **`SharedArrayBuffer` + `Atomics`** — shared-memory multithreading is meaningless in a
+  single-threaded per-connection VM.
+- **`WeakRef` / `FinalizationRegistry`** — GC-observable behavior cannot be exposed safely or
+  deterministically; `WeakMap`/`WeakSet` exist but are strong (weakness is unobservable in-sandbox).
+- **Arbitrary module resolution** — `import` resolves only the host `args`/`db` built-ins;
+  filesystem/URL module loading would be a sandbox escape.
+- **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;
+  by-copy methods always allocate the default type.
+- **Async iterator helpers** — the sync `Iterator.prototype` helpers are implemented;
+  `AsyncIterator.prototype` equivalents are not.
+- **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
+- **Length-tracking typed-array views** — an auto-length view over a resizable buffer keeps its
+  construction-time element length.
+- **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
+- **`globalThis` enumeration & the trap-less `Proxy` `get`/`set` receiver** — `Object.keys(globalThis)`/
+  `for-in` do not enumerate global bindings, and a trap-less proxy accessor fallback does not thread
+  the original receiver.
 
 ## Testing conventions
 

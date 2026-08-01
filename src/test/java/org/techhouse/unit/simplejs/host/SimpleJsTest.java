@@ -150,4 +150,20 @@ public class SimpleJsTest {
         engine.run("Promise.reject('boom');", host);
         assertTrue(captured.isEmpty());
     }
+
+    // Strict mode: assignment to an undeclared name is a ReferenceError, not an implicit global
+    @Test
+    public void test_assignment_to_undeclared_is_reference_error() {
+        final var result = run("undeclaredName = 1; return undeclaredName;");
+        assertTrue(result.isError());
+        assertEquals("ReferenceError", result.getErrorName());
+    }
+
+    // Strict mode: `this` inside a plain function call is undefined, not the global object
+    @Test
+    public void test_plain_call_this_is_undefined() {
+        final var result = run("function f() { return this === undefined; } return f();");
+        assertFalse(result.isError());
+        assertTrue(result.getValue().asJsonBoolean().getValue());
+    }
 }

@@ -28,12 +28,23 @@ import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 public abstract class TokenStream {
     protected final List<JsBaseElement> tokens;
     protected final List<SourcePosition> positions;
+    protected final List<Boolean> newlineBefore;
     protected final Deque<Boolean> noInStack = new ArrayDeque<>();
     protected int pos;
 
-    protected TokenStream(List<JsBaseElement> tokens, List<SourcePosition> positions) {
+    protected TokenStream(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore) {
         this.tokens = tokens;
         this.positions = positions;
+        this.newlineBefore = newlineBefore;
+    }
+
+    protected boolean newlineBeforeCurrent() {
+        return newlineBefore != null && Boolean.TRUE.equals(newlineBefore.get(pos));
+    }
+
+    protected boolean newlineBeforePeek() {
+        return newlineBefore != null
+                && Boolean.TRUE.equals(newlineBefore.get(Math.min(pos + 1, newlineBefore.size() - 1)));
     }
 
     protected JsBaseElement current() {
@@ -60,8 +71,17 @@ public abstract class TokenStream {
         return current().getType() == JsType.EOF;
     }
 
-    protected void consumeOptionalSemicolon() {
-        matchSeparator(';');
+    // Automatic Semicolon Insertion: a statement terminator is an explicit `;`, or is inserted
+    // before `}`, end-of-input, or a token that a line terminator precedes. Otherwise the missing
+    // terminator is a syntax error.
+    protected void consumeSemicolon() {
+        if (matchSeparator(';')) {
+            return;
+        }
+        if (newlineBefore == null || isSeparator('}') || atEnd() || newlineBeforeCurrent()) {
+            return;
+        }
+        throw error();
     }
 
     // The for-header left-hand side is parsed under the no-in production: `in` is not a
