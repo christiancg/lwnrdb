@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.internal.parser;
 
 import java.util.ArrayList;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrayPattern;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
@@ -28,34 +29,47 @@ public final class PatternConverter {
     }
 
     public JsNode resolveAssignmentTarget(Expression left, String op) {
-        if (left instanceof Identifier || left instanceof MemberExpression) {
-            return left;
+        return switch (left) {
+            case Identifier id -> {
+                checkAssignable(id);
+                yield id;
+            }
+            case MemberExpression member -> member;
+            case ArrayExpression ignored when "=".equals(op) -> toAssignmentPattern(left);
+            case ObjectExpression ignored when "=".equals(op) -> toAssignmentPattern(left);
+            default -> throw stream.error();
+        };
+    }
+
+    private void checkAssignable(Identifier id) {
+        if (ParserTables.RESTRICTED_BINDINGS.contains(id.getName())) {
+            throw new SyntaxErrorException("'" + id.getName() + "' cannot be assigned to in strict mode");
         }
-        if ("=".equals(op) && (left instanceof ArrayExpression || left instanceof ObjectExpression)) {
-            return toAssignmentPattern(left);
-        }
-        throw stream.error();
     }
 
     public JsNode toAssignmentPattern(Expression expr) {
-        if (expr instanceof Identifier || expr instanceof MemberExpression) {
-            return expr;
-        }
-        if (expr instanceof ArrayExpression array) {
-            final var elements = new ArrayList<JsNode>();
-            for (final var element : array.getElements()) {
-                elements.add(toPatternElement(element));
+        return switch (expr) {
+            case Identifier id -> {
+                checkAssignable(id);
+                yield id;
             }
-            return new ArrayPattern(elements);
-        }
-        if (expr instanceof ObjectExpression object) {
-            final var properties = new ArrayList<JsNode>();
-            for (final var property : object.getProperties()) {
-                properties.add(toPatternProperty(property));
+            case MemberExpression member -> member;
+            case ArrayExpression array -> {
+                final var elements = new ArrayList<JsNode>();
+                for (final var element : array.getElements()) {
+                    elements.add(toPatternElement(element));
+                }
+                yield new ArrayPattern(elements);
             }
-            return new ObjectPattern(properties);
-        }
-        throw stream.error();
+            case ObjectExpression object -> {
+                final var properties = new ArrayList<JsNode>();
+                for (final var property : object.getProperties()) {
+                    properties.add(toPatternProperty(property));
+                }
+                yield new ObjectPattern(properties);
+            }
+            default -> throw stream.error();
+        };
     }
 
     public void validateForInOfTarget(JsNode left) {

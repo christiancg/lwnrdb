@@ -93,16 +93,36 @@ public class ProxyProgramTest {
         assertFalse(bool("const t = { a: 1 }; const p = new Proxy(t, {}); delete p.a; 'a' in t"));
     }
 
-    // An ownKeys trap drives Object.keys and for-in
+    // An ownKeys trap drives Object.keys and for-in; enumerable descriptors keep every key
     @Test
     public void test_own_keys_trap() {
         final var source = """
-                const p = new Proxy({}, { ownKeys(target) { return ["a", "b", "c"]; } });
+                const p = new Proxy({}, {
+                    ownKeys(target) { return ["a", "b", "c"]; },
+                    getOwnPropertyDescriptor(target, key) { return { value: 1, enumerable: true, configurable: true }; }
+                });
                 let count = 0;
                 for (const k in p) { count++; }
                 Object.keys(p).length + count
                 """;
         assertEquals(6, num(source));
+    }
+
+    // Object.keys / for-in filter ownKeys-trap keys down to enumerable ones
+    @Test
+    public void test_own_keys_trap_filters_non_enumerable() {
+        final var source = """
+                const p = new Proxy({}, {
+                    ownKeys(target) { return ["a", "b"]; },
+                    getOwnPropertyDescriptor(target, key) {
+                        return { value: 1, enumerable: key === "a", configurable: true };
+                    }
+                });
+                let count = 0;
+                for (const k in p) { count++; }
+                Object.keys(p).length + count
+                """;
+        assertEquals(2, num(source));
     }
 
     // An apply trap intercepts calls on a callable proxy
@@ -264,5 +284,57 @@ public class ProxyProgramTest {
                 num("let { proxy, revoke } = Proxy.revocable({ x: 1 }, {}); let before = proxy.x; revoke(); before"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("let r = Proxy.revocable({ x: 1 }, {}); r.revoke(); r.proxy.x"));
+    }
+
+    // A trap-less proxy runs a target getter with the proxy as the receiver
+    @Test
+    public void test_get_accessor_receiver_is_proxy() {
+        final var source = """
+                const t = { get x() { return this === p ? 'proxy' : 'target'; } };
+                const p = new Proxy(t, {});
+                p.x
+                """;
+        assertEquals("proxy", str(source));
+    }
+
+    // A trap-less proxy runs a target setter with the proxy as the receiver
+    @Test
+    public void test_set_accessor_receiver_is_proxy() {
+        final var source = """
+                let seen = 'none';
+                const t = { set x(v) { seen = this === p ? 'proxy' : 'target'; } };
+                const p = new Proxy(t, {});
+                p.x = 1;
+                seen
+                """;
+        assertEquals("proxy", str(source));
+    }
+
+    // Object.keys drops non-enumerable keys returned by an ownKeys trap
+    @Test
+    public void test_object_keys_filters_proxy_non_enumerable() {
+        final var source = """
+                const t = {};
+                Object.defineProperty(t, 'a', { value: 1, enumerable: true });
+                Object.defineProperty(t, 'b', { value: 2, enumerable: false });
+                const p = new Proxy(t, {});
+                Object.keys(p).join(',')
+                """;
+        assertEquals("a", str(source));
+    }
+
+    // for-in drops non-enumerable keys returned by an ownKeys trap
+    @Test
+    public void test_for_in_filters_proxy_non_enumerable() {
+        final var source = """
+                const t = {};
+                Object.defineProperty(t, 'a', { value: 1, enumerable: true });
+                Object.defineProperty(t, 'b', { value: 2, enumerable: false });
+                const p = new Proxy(t, {});
+                let out = [];
+                for (const k in p) { out.push(k); }
+                out.join(',')
+                """;
+        assertEquals("a", str(source));
     }
 }

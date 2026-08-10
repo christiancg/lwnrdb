@@ -28,7 +28,7 @@ public final class ProxyDispatch {
     public JsValue get(JsProxy proxy, JsValue key) {
         final var trap = trapOf(proxy, "get");
         if (trap == null) {
-            return ops.getMember(proxy.getTarget(), key);
+            return ops.getMemberWithReceiver(proxy.getTarget(), key, proxy);
         }
         return ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget(), key, proxy));
     }
@@ -36,7 +36,7 @@ public final class ProxyDispatch {
     public void set(JsProxy proxy, JsValue key, JsValue value) {
         final var trap = trapOf(proxy, "set");
         if (trap == null) {
-            ops.setMember(proxy.getTarget(), key, value);
+            ops.setMemberWithReceiver(proxy.getTarget(), key, value, proxy);
             return;
         }
         ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget(), key, value, proxy));

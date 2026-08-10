@@ -523,4 +523,84 @@ public class TypedArrayProgramTest {
                 """;
         assertTrue(bool(source));
     }
+
+    // an auto-length view over a resizable buffer tracks the buffer's current length when it grows
+    @Test
+    public void test_auto_length_view_grows() {
+        final var source = """
+                const buf = new ArrayBuffer(8, { maxByteLength: 16 });
+                const view = new Int32Array(buf);
+                const before = view.length;
+                buf.resize(16);
+                before * 100 + view.length
+                """;
+        assertEquals(2 * 100 + 4, num(source));
+    }
+
+    // an auto-length view shrinks with the buffer
+    @Test
+    public void test_auto_length_view_shrinks() {
+        final var source = """
+                const buf = new ArrayBuffer(16, { maxByteLength: 16 });
+                const view = new Int32Array(buf);
+                const before = view.length;
+                buf.resize(4);
+                before * 100 + view.length
+                """;
+        assertEquals(4 * 100 + 1, num(source));
+    }
+
+    // an explicit-length view does not track buffer resizes
+    @Test
+    public void test_explicit_length_view_fixed() {
+        final var source = """
+                const buf = new ArrayBuffer(16, { maxByteLength: 16 });
+                const view = new Int32Array(buf, 0, 2);
+                buf.resize(4);
+                view.length
+                """;
+        assertEquals(2, num(source));
+    }
+
+    // a view over a non-resizable buffer keeps its construction-time length
+    @Test
+    public void test_non_resizable_view_fixed() {
+        final var source = """
+                const buf = new ArrayBuffer(16);
+                const view = new Int32Array(buf);
+                view.length
+                """;
+        assertEquals(4, num(source));
+    }
+
+    // an auto-length view's byteLength tracks the buffer too
+    @Test
+    public void test_auto_length_view_byte_length_tracks() {
+        final var source = """
+                const buf = new ArrayBuffer(8, { maxByteLength: 16 });
+                const view = new Float64Array(buf);
+                buf.resize(16);
+                view.byteLength
+                """;
+        assertEquals(16, num(source));
+    }
+
+    // an auto-length DataView tracks the buffer and re-clamps reads past its current length
+    @Test
+    public void test_auto_length_data_view_reclamps() {
+        final var source = """
+                let result = 'no throw';
+                const buf = new ArrayBuffer(8, { maxByteLength: 8 });
+                const view = new DataView(buf);
+                view.setInt32(4, 7);
+                buf.resize(4);
+                try {
+                    view.getInt32(4);
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("RangeError", str(source));
+    }
 }

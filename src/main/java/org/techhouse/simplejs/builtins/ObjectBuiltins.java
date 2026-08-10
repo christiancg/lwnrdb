@@ -1,12 +1,16 @@
 package org.techhouse.simplejs.builtins;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
@@ -104,8 +108,8 @@ public final class ObjectBuiltins {
         final var result = new JsArray();
         switch (first(args)) {
             case JsProxy proxy -> {
-                for (final var key : ops.ownKeys(proxy)) {
-                    result.push(key);
+                for (final var key : enumerableProxyStringKeys(proxy, ops)) {
+                    result.push(new JsString(key));
                 }
             }
             case JsObject object -> {
@@ -120,6 +124,11 @@ public final class ObjectBuiltins {
                     result.push(new JsString(Integer.toString(i)));
                 }
             }
+            case JsGlobalObject global -> {
+                for (final var name : global.getEnv().enumerableGlobalNames()) {
+                    result.push(new JsString(name));
+                }
+            }
             default -> {
             }
         }
@@ -130,8 +139,8 @@ public final class ObjectBuiltins {
         final var result = new JsArray();
         switch (first(args)) {
             case JsProxy proxy -> {
-                for (final var key : ops.ownKeys(proxy)) {
-                    result.push(ops.getMember(proxy, key));
+                for (final var key : enumerableProxyStringKeys(proxy, ops)) {
+                    result.push(ops.getMember(proxy, new JsString(key)));
                 }
             }
             case JsObject object -> {
@@ -146,6 +155,11 @@ public final class ObjectBuiltins {
                     result.push(value);
                 }
             }
+            case JsGlobalObject global -> {
+                for (final var name : global.getEnv().enumerableGlobalNames()) {
+                    result.push(global.getEnv().tryGet(name));
+                }
+            }
             default -> {
             }
         }
@@ -156,8 +170,8 @@ public final class ObjectBuiltins {
         final var result = new JsArray();
         switch (first(args)) {
             case JsProxy proxy -> {
-                for (final var key : ops.ownKeys(proxy)) {
-                    result.push(new JsArray(List.of(key, ops.getMember(proxy, key))));
+                for (final var key : enumerableProxyStringKeys(proxy, ops)) {
+                    result.push(new JsArray(List.of(new JsString(key), ops.getMember(proxy, new JsString(key)))));
                 }
             }
             case JsObject object -> {
@@ -171,6 +185,11 @@ public final class ObjectBuiltins {
                 final var elements = array.getElements();
                 for (var i = 0; i < elements.size(); i++) {
                     result.push(new JsArray(List.of(new JsString(Integer.toString(i)), elements.get(i))));
+                }
+            }
+            case JsGlobalObject global -> {
+                for (final var name : global.getEnv().enumerableGlobalNames()) {
+                    result.push(new JsArray(List.of(new JsString(name), Objects.requireNonNull(global.getEnv().tryGet(name)))));
                 }
             }
             default -> {
@@ -327,18 +346,65 @@ public final class ObjectBuiltins {
                 && JsCoercion.toBoolean(descriptor.get("enumerable")) != object.isEnumerable(key)) {
             throw redefineError(key);
         }
+        final var currentIsAccessor = object.hasAccessor(key);
+        final var descriptorIsAccessor = descriptor.has("get") || descriptor.has("set");
+        final var descriptorIsData = descriptor.has("value") || descriptor.has("writable");
+        if ((descriptorIsAccessor && !currentIsAccessor) || (descriptorIsData && currentIsAccessor)) {
+            throw redefineError(key);
+        }
+        if (currentIsAccessor) {
+            if (descriptor.has("get")
+                    && isNotSameValue(descriptor.get("get"), orUndefined(object.getAccessorGetter(key)))) {
+                throw redefineError(key);
+            }
+            if (descriptor.has("set")
+                    && isNotSameValue(descriptor.get("set"), orUndefined(object.getAccessorSetter(key)))) {
+                throw redefineError(key);
+            }
+            return;
+        }
         if (object.has(key) && !object.isWritable(key)) {
             if (descriptor.has("writable") && JsCoercion.toBoolean(descriptor.get("writable"))) {
                 throw redefineError(key);
             }
-            if (descriptor.has("value") && !JsOperators.strictEquals(object.get(key), descriptor.get("value"))) {
+            if (descriptor.has("value") && isNotSameValue(object.get(key), descriptor.get("value"))) {
                 throw redefineError(key);
             }
         }
     }
 
+    private static JsValue orUndefined(JsValue value) {
+        return value == null ? JsUndefined.getInstance() : value;
+    }
+
+    private static boolean isNotSameValue(JsValue a, JsValue b) {
+        if (a instanceof JsNumber na && b instanceof JsNumber nb) {
+            // Double.compare implements SameValue for numbers: it distinguishes +0/-0 and treats
+            // NaN as equal to NaN.
+            return Double.compare(na.getValue(), nb.getValue()) != 0;
+        }
+        return !JsOperators.strictEquals(a, b);
+    }
+
     private static TypeErrorException redefineError(String key) {
         return new TypeErrorException("Cannot redefine property: " + key);
+    }
+
+    // Re-filters a proxy's ownKeys trap result down to enumerable string keys, so Object.keys/values/
+    // entries (and for-in) honour enumerability for proxies as they do for plain objects.
+    private static List<String> enumerableProxyStringKeys(JsValue proxy, InterpreterOps ops) {
+        final var keys = new ArrayList<String>();
+        for (final var key : ops.ownKeys(proxy)) {
+            if (!(key instanceof JsString string)) {
+                continue;
+            }
+            final var descriptor = ops.getOwnPropertyDescriptor(proxy, key);
+            if (descriptor instanceof JsObject desc && desc.has("enumerable")
+                    && JsCoercion.toBoolean(desc.get("enumerable"))) {
+                keys.add(string.getValue());
+            }
+        }
+        return keys;
     }
 
     private static boolean isCallable(JsValue value) {
@@ -363,6 +429,11 @@ public final class ObjectBuiltins {
                     result.push(new JsString(Integer.toString(i)));
                 }
                 result.push(new JsString("length"));
+            }
+            case JsGlobalObject global -> {
+                for (final var name : global.getEnv().allGlobalNames()) {
+                    result.push(new JsString(name));
+                }
             }
             default -> {
             }

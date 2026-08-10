@@ -46,7 +46,6 @@ public final class TimerBuiltins {
     }
 
     private static void define(Environment global, String name, JsValue value) {
-        global.declareVar(name);
-        global.assign(name, value);
+        global.declareBuiltin(name, value);
     }
 }

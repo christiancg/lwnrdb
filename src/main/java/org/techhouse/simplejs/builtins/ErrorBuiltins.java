@@ -44,20 +44,17 @@ public final class ErrorBuiltins {
 
     public static void install(Environment global) {
         for (final var name : NAMES) {
-            global.declareVar(name);
             final var constructor = new JsNativeFunction(name, (_, args) -> makeError(name, message(args)));
             if ("Error".equals(name)) {
                 constructor.setProperty("isError",
                         new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
             }
-            global.assign(name, constructor);
+            global.declareBuiltin(name, constructor);
         }
-        global.declareVar("SuppressedError");
-        global.assign("SuppressedError",
+        global.declareBuiltin("SuppressedError",
                 new JsNativeFunction("SuppressedError", (_, args) -> makeSuppressedError(arg(args, 0), arg(args, 1),
                         args.size() > 2 ? message(List.of(args.get(2))) : "")));
-        global.declareVar("AggregateError");
-        global.assign("AggregateError", new JsNativeFunction("AggregateError", (_, args) -> {
+        global.declareBuiltin("AggregateError", new JsNativeFunction("AggregateError", (_, args) -> {
             final var errors = arg(args, 0) instanceof JsArray array ? array.getElements() : List.<JsValue>of();
             return makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : "");
         }));

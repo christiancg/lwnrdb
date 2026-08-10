@@ -286,7 +286,6 @@ public final class GlobalFunctionsBuiltins {
     }
 
     private static void define(Environment global, String name, JsValue value) {
-        global.declareVar(name);
-        global.assign(name, value);
+        global.declareBuiltin(name, value);
     }
 }

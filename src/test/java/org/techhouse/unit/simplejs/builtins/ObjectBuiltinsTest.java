@@ -346,4 +346,62 @@ public class ObjectBuiltinsTest {
                 + "g.lo.join(',') + '|' + g.hi.join(',')";
         assertEquals("a,b|c", str(source));
     }
+
+    // Redefining a non-configurable data property as an accessor is rejected
+    @Test
+    public void test_redefine_data_to_accessor_rejected() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'x', { value: 1, configurable: false }); "
+                        + "Object.defineProperty(o, 'x', { get() { return 2; } });"));
+    }
+
+    // Redefining a non-configurable accessor as a data property is rejected
+    @Test
+    public void test_redefine_accessor_to_data_rejected() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'x', { get() { return 1; }, "
+                        + "configurable: false }); Object.defineProperty(o, 'x', { value: 2 });"));
+    }
+
+    // Changing the getter of a non-configurable accessor is rejected
+    @Test
+    public void test_redefine_accessor_getter_change_rejected() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; let g = function () { return 1; }; "
+                        + "Object.defineProperty(o, 'x', { get: g, configurable: false }); "
+                        + "Object.defineProperty(o, 'x', { get() { return 2; } });"));
+    }
+
+    // Redefining a non-configurable accessor with the same getter is allowed
+    @Test
+    public void test_redefine_accessor_same_getter_allowed() {
+        assertEquals(1,
+                num("let o = {}; let g = function () { return 1; }; "
+                        + "Object.defineProperty(o, 'x', { get: g, configurable: false }); "
+                        + "Object.defineProperty(o, 'x', { get: g }); o.x"));
+    }
+
+    // Changing +0 to -0 on a non-writable property is rejected under SameValue
+    @Test
+    public void test_redefine_value_signed_zero_rejected() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'x', "
+                        + "{ value: 0, writable: false, configurable: false }); "
+                        + "Object.defineProperty(o, 'x', { value: -0 });"));
+    }
+
+    // Redefining a non-writable NaN value with NaN is allowed under SameValue
+    @Test
+    public void test_redefine_value_nan_allowed() {
+        assertTrue(flag("let o = {}; Object.defineProperty(o, 'x', "
+                + "{ value: Number.NaN, writable: false, configurable: false }); "
+                + "Object.defineProperty(o, 'x', { value: Number.NaN }); true"));
+    }
+
+    // A configurable property may freely switch between data and accessor forms
+    @Test
+    public void test_configurable_redefine_allowed() {
+        assertEquals(9, num("let o = {}; Object.defineProperty(o, 'x', { value: 1, configurable: true }); "
+                + "Object.defineProperty(o, 'x', { get() { return 9; } }); o.x"));
+    }
 }

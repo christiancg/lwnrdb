@@ -60,13 +60,12 @@ public final class TypedArrayBuiltins {
             throw new TypeErrorException("First argument to DataView constructor must be an ArrayBuffer");
         }
         final var byteOffset = (int) intArg(args, 1, 0);
-        final var byteLength = args.size() > 2 && !(args.get(2) instanceof JsUndefined)
-                ? (int) intArg(args, 2, 0)
-                : buffer.byteLength() - byteOffset;
+        final var explicitLength = args.size() > 2 && !(args.get(2) instanceof JsUndefined);
+        final var byteLength = explicitLength ? (int) intArg(args, 2, 0) : buffer.byteLength() - byteOffset;
         if (byteOffset < 0 || byteLength < 0 || byteOffset + byteLength > buffer.byteLength()) {
             throw new RangeErrorException("Invalid DataView length");
         }
-        return new JsDataView(buffer, byteOffset, byteLength);
+        return new JsDataView(buffer, byteOffset, byteLength, !explicitLength && buffer.isResizable());
     }
 
     private static JsValue constructTyped(JsTypedArray.Kind kind, List<JsValue> args, IterableToList iterableToList) {
@@ -90,18 +89,21 @@ public final class TypedArrayBuiltins {
             throw new RangeErrorException("Invalid typed array offset");
         }
         final int length;
+        final boolean lengthTracking;
         if (args.size() > 2 && !(args.get(2) instanceof JsUndefined)) {
             length = (int) intArg(args, 2, 0);
+            lengthTracking = false;
         } else {
             if ((buffer.byteLength() - byteOffset) % bpe != 0) {
                 throw new RangeErrorException("Buffer length is not a multiple of the element size");
             }
             length = (buffer.byteLength() - byteOffset) / bpe;
+            lengthTracking = buffer.isResizable();
         }
         if (length < 0 || byteOffset + length * bpe > buffer.byteLength()) {
             throw new RangeErrorException("Invalid typed array length");
         }
-        return new JsTypedArray(kind, buffer, byteOffset, length);
+        return new JsTypedArray(kind, buffer, byteOffset, length, lengthTracking);
     }
 
     private static JsTypedArray allocate(JsTypedArray.Kind kind, int length) {

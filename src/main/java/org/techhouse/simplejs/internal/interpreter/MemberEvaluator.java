@@ -12,6 +12,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErr
 
 import java.util.List;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
+import org.techhouse.simplejs.builtins.AsyncIteratorBuiltins;
 import org.techhouse.simplejs.builtins.DateBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.IteratorBuiltins;
@@ -128,6 +129,13 @@ public final class MemberEvaluator {
         return JsUndefined.getInstance();
     }
 
+    public JsValue getMember(JsValue target, String key, JsValue receiver) {
+        if (target instanceof JsObject object) {
+            return getObjectMember(object, key, receiver);
+        }
+        return getMember(target, key);
+    }
+
     public JsValue getMember(JsValue target, String key) {
         return switch (target) {
             case JsProxy proxy -> proxies.get(proxy, new JsString(key));
@@ -158,11 +166,15 @@ public final class MemberEvaluator {
     }
 
     private JsValue getObjectMember(JsObject object, String key) {
+        return getObjectMember(object, key, object);
+    }
+
+    private JsValue getObjectMember(JsObject object, String key, JsValue receiver) {
         final var cls = object.getKlass();
         if (cls != null && !object.has(key)) {
             final var getter = cls.findInstanceGetter(key);
             if (getter != null) {
-                return interp.callFunction(getter, object, List.of());
+                return interp.callFunction(getter, receiver, List.of());
             }
             final var method = cls.findInstanceMethod(key);
             if (method != null) {
@@ -172,12 +184,12 @@ public final class MemberEvaluator {
         if (!object.has(key)) {
             final var accessorGetter = object.getAccessorGetter(key);
             if (accessorGetter != null) {
-                return interp.callValue(accessorGetter, object, List.of());
+                return interp.callValue(accessorGetter, receiver, List.of());
             }
             for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
                 final var protoGetter = proto.getAccessorGetter(key);
                 if (protoGetter != null) {
-                    return interp.callValue(protoGetter, object, List.of());
+                    return interp.callValue(protoGetter, receiver, List.of());
                 }
                 if (proto.has(key)) {
                     return proto.get(key);
@@ -186,6 +198,9 @@ public final class MemberEvaluator {
             final var builtin = ObjectProtoBuiltins.getMethod(object, key, interp.ops());
             if (builtin != null) {
                 return builtin;
+            }
+            if (AsyncIteratorBuiltins.isHelperName(key) && isAsyncIteratorLike(object)) {
+                return AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key);
             }
             if (IteratorBuiltins.isHelperName(key) && isIteratorLike(object)) {
                 return IteratorBuiltins.helper(interp.ops(), key);
@@ -202,6 +217,9 @@ public final class MemberEvaluator {
     private JsValue getArgumentsMember(JsArguments arguments, String key) {
         if ("length".equals(key)) {
             return new JsNumber(arguments.length());
+        }
+        if ("callee".equals(key) || "caller".equals(key)) {
+            throw new TypeErrorException("'" + key + "' may not be accessed on a strict mode arguments object");
         }
         final var index = arrayIndex(key);
         return index == null ? JsUndefined.getInstance() : arguments.get(index);
@@ -291,6 +309,36 @@ public final class MemberEvaluator {
         return method == null ? JsUndefined.getInstance() : method;
     }
 
+    public void setMember(JsValue target, String key, JsValue value, JsValue receiver) {
+        if (target instanceof JsObject object) {
+            setObjectMember(object, key, value, receiver);
+            return;
+        }
+        setMember(target, key, value);
+    }
+
+    private void setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
+        final var cls = object.getKlass();
+        if (cls != null && !object.has(key)) {
+            final var setter = cls.findInstanceSetter(key);
+            if (setter != null) {
+                interp.callFunction(setter, receiver, List.of(value));
+                return;
+            }
+        }
+        if (!object.has(key)) {
+            final var accessorSetter = object.getAccessorSetter(key);
+            if (accessorSetter != null) {
+                interp.callValue(accessorSetter, receiver, List.of(value));
+                return;
+            }
+            if (object.hasAccessor(key)) {
+                return;
+            }
+        }
+        object.set(key, value);
+    }
+
     public void setMember(JsValue target, String key, JsValue value) {
         switch (target) {
             case JsProxy proxy -> proxies.set(proxy, new JsString(key), value);
@@ -301,27 +349,7 @@ public final class MemberEvaluator {
                     arguments.set(index, value);
                 }
             }
-            case JsObject object -> {
-                final var cls = object.getKlass();
-                if (cls != null && !object.has(key)) {
-                    final var setter = cls.findInstanceSetter(key);
-                    if (setter != null) {
-                        interp.callFunction(setter, object, List.of(value));
-                        return;
-                    }
-                }
-                if (!object.has(key)) {
-                    final var accessorSetter = object.getAccessorSetter(key);
-                    if (accessorSetter != null) {
-                        interp.callValue(accessorSetter, object, List.of(value));
-                        return;
-                    }
-                    if (object.hasAccessor(key)) {
-                        return;
-                    }
-                }
-                object.set(key, value);
-            }
+            case JsObject object -> setObjectMember(object, key, value, object);
             case JsClass cls -> {
                 final var setter = cls.findStaticSetter(key);
                 if (setter != null) {
@@ -374,6 +402,10 @@ public final class MemberEvaluator {
         return object.has("next") && isCallable(object.get("next"));
     }
 
+    private boolean isAsyncIteratorLike(JsObject object) {
+        return isIteratorLike(object) && object.hasSymbol(JsSymbol.ASYNC_ITERATOR);
+    }
+
     private JsValue asyncGeneratorMethod(JsAsyncGenerator generator, String key) {
         return switch (key) {
             case "next" ->
@@ -382,7 +414,9 @@ public final class MemberEvaluator {
                     (_, args) -> driveAsyncGenerator(generator, AsyncStep.RETURN, arg0(args)));
             case "throw" ->
                 new JsNativeFunction("throw", (_, args) -> driveAsyncGenerator(generator, AsyncStep.THROW, arg0(args)));
-            default -> JsUndefined.getInstance();
+            default -> AsyncIteratorBuiltins.isHelperName(key)
+                    ? AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key)
+                    : JsUndefined.getInstance();
         };
     }
 

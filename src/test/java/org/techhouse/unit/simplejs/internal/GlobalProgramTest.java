@@ -61,4 +61,59 @@ public class GlobalProgramTest {
     public void test_missing_global_property_is_undefined() {
         assertTrue(bool("globalThis.definitelyMissing === undefined"));
     }
+
+    // Object.keys(globalThis) lists user-declared globals
+    @Test
+    public void test_object_keys_lists_user_globals() {
+        assertTrue(bool("var userGlobal = 1; Object.keys(globalThis).includes('userGlobal')"));
+    }
+
+    // Object.keys(globalThis) does not enumerate builtins
+    @Test
+    public void test_object_keys_excludes_builtins() {
+        assertFalse(bool("Object.keys(globalThis).includes('Array')"));
+        assertFalse(bool("Object.keys(globalThis).includes('globalThis')"));
+    }
+
+    // for-in over globalThis iterates user-declared globals
+    @Test
+    public void test_for_in_iterates_user_globals() {
+        final var source = """
+                var picked = 7;
+                let found = false;
+                for (const k in globalThis) { if (k === 'picked') found = true; }
+                found
+                """;
+        assertTrue(bool(source));
+    }
+
+    // A property added through globalThis is enumerable
+    @Test
+    public void test_global_this_assignment_enumerable() {
+        assertTrue(bool("globalThis.added = 5; Object.keys(globalThis).includes('added')"));
+    }
+
+    // Object.values(globalThis) reads the values of user globals
+    @Test
+    public void test_object_values_reads_user_globals() {
+        assertEquals(42, num("var single = 42; Object.values(globalThis).filter(v => v === 42).length * 42"));
+    }
+
+    // Object.entries(globalThis) pairs user global names with values
+    @Test
+    public void test_object_entries_user_globals() {
+        final var source = """
+                var pairKey = 9;
+                let sum = 0;
+                for (const [k, v] of Object.entries(globalThis)) { if (k === 'pairKey') sum += v; }
+                sum
+                """;
+        assertEquals(9, num(source));
+    }
+
+    // a lexical let is not a property of the global object
+    @Test
+    public void test_lexical_global_not_enumerated() {
+        assertFalse(bool("let lexicalOnly = 1; Object.keys(globalThis).includes('lexicalOnly')"));
+    }
 }

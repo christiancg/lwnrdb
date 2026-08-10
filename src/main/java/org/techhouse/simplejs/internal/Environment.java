@@ -1,7 +1,7 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
@@ -17,17 +17,19 @@ public final class Environment {
         private JsValue value;
         private final String kind;
         private boolean initialized;
+        private final boolean enumerable;
 
-        private Binding(JsValue value, String kind, boolean initialized) {
+        private Binding(JsValue value, String kind, boolean initialized, boolean enumerable) {
             this.value = value;
             this.kind = kind;
             this.initialized = initialized;
+            this.enumerable = enumerable;
         }
     }
 
     private final Environment parent;
     private final boolean functionScope;
-    private final Map<String, Binding> bindings = new HashMap<>();
+    private final Map<String, Binding> bindings = new LinkedHashMap<>();
     private JsValue thisValue;
     private boolean hasThis;
     private JsValue homeClass;
@@ -84,7 +86,13 @@ public final class Environment {
     }
 
     public void declareFunction(String name, JsValue value) {
-        bindings.put(name, new Binding(value, "var", true));
+        bindings.put(name, new Binding(value, "var", true, true));
+    }
+
+    // Installs a host builtin as a non-enumerable global binding, so it is not reported by
+    // Object.keys(globalThis)/for-in (spec: global-object builtins are non-enumerable).
+    public void declareBuiltin(String name, JsValue value) {
+        bindings.put(name, new Binding(value, "var", true, false));
     }
 
     public boolean hasLocal(String name) {
@@ -93,11 +101,11 @@ public final class Environment {
 
     public void declareVar(String name) {
         final var target = functionScope();
-        target.bindings.computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", true));
+        target.bindings.computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", true, true));
     }
 
     public void declareLexical(String name, String kind) {
-        bindings.put(name, new Binding(JsUndefined.getInstance(), kind, false));
+        bindings.put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
     }
 
     public void initialize(String name, JsValue value) {
@@ -136,6 +144,30 @@ public final class Environment {
 
     public boolean isDeclared(String name) {
         return resolve(name) != null;
+    }
+
+    public List<String> enumerableGlobalNames() {
+        final var names = new ArrayList<String>();
+        for (final var entry : bindings.entrySet()) {
+            final var binding = entry.getValue();
+            if (binding.initialized && binding.enumerable) {
+                names.add(entry.getKey());
+            }
+        }
+        return names;
+    }
+
+    // Own property names of the global object: var/function/builtin bindings (not lexical
+    // let/const, which are not properties of the global object).
+    public List<String> allGlobalNames() {
+        final var names = new ArrayList<String>();
+        for (final var entry : bindings.entrySet()) {
+            final var binding = entry.getValue();
+            if (binding.initialized && "var".equals(binding.kind)) {
+                names.add(entry.getKey());
+            }
+        }
+        return names;
     }
 
     public void setGlobal(String name, JsValue value) {

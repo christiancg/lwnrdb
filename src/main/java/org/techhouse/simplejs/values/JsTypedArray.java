@@ -41,12 +41,18 @@ public final class JsTypedArray extends JsValue {
     private final JsArrayBuffer buffer;
     private final int byteOffset;
     private final int length;
+    private final boolean lengthTracking;
 
     public JsTypedArray(Kind kind, JsArrayBuffer buffer, int byteOffset, int length) {
+        this(kind, buffer, byteOffset, length, false);
+    }
+
+    public JsTypedArray(Kind kind, JsArrayBuffer buffer, int byteOffset, int length, boolean lengthTracking) {
         this.kind = kind;
         this.buffer = buffer;
         this.byteOffset = byteOffset;
         this.length = length;
+        this.lengthTracking = lengthTracking;
     }
 
     public Kind kind() {
@@ -62,10 +68,14 @@ public final class JsTypedArray extends JsValue {
     }
 
     public int byteLength() {
-        return length * kind.bytesPerElement;
+        return length() * kind.bytesPerElement;
     }
 
     public int length() {
+        if (lengthTracking) {
+            final var available = buffer.byteLength() - byteOffset;
+            return available <= 0 ? 0 : available / kind.bytesPerElement;
+        }
         return length;
     }
 
@@ -75,7 +85,7 @@ public final class JsTypedArray extends JsValue {
 
     public JsValue getElement(int index) {
         final var pos = byteOffset + index * kind.bytesPerElement;
-        if (index < 0 || index >= length || pos + kind.bytesPerElement > buffer.byteLength()) {
+        if (index < 0 || index >= length() || pos + kind.bytesPerElement > buffer.byteLength()) {
             return JsUndefined.getInstance();
         }
         final var bb = view();
@@ -96,7 +106,7 @@ public final class JsTypedArray extends JsValue {
 
     public void setElement(int index, JsValue value) {
         final var pos = byteOffset + index * kind.bytesPerElement;
-        if (index < 0 || index >= length || pos + kind.bytesPerElement > buffer.byteLength()) {
+        if (index < 0 || index >= length() || pos + kind.bytesPerElement > buffer.byteLength()) {
             return;
         }
         final var bb = view();

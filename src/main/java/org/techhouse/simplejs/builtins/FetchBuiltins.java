@@ -31,8 +31,7 @@ public final class FetchBuiltins {
 
     public static void install(Environment global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits) {
         final var fetch = new JsNativeFunction("fetch", (_, args) -> fetch(eventLoop, network, limits, args));
-        global.declareVar("fetch");
-        global.assign("fetch", fetch);
+        global.declareBuiltin("fetch", fetch);
     }
 
     private static JsValue fetch(EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,

@@ -16,9 +16,16 @@ public final class ReflectBuiltins {
 
     public static JsObject create(InterpreterOps ops) {
         final var reflect = new JsObject();
-        reflect.set("get", new JsNativeFunction("get", (_, args) -> ops.getMember(arg(args, 0), arg(args, 1))));
-        reflect.set("set", new JsNativeFunction("set",
-                (_, args) -> JsBoolean.of(ops.setMember(arg(args, 0), arg(args, 1), arg(args, 2)))));
+        reflect.set("get",
+                new JsNativeFunction("get",
+                        (_, args) -> args.size() > 2
+                                ? ops.getMemberWithReceiver(arg(args, 0), arg(args, 1), arg(args, 2))
+                                : ops.getMember(arg(args, 0), arg(args, 1))));
+        reflect.set("set",
+                new JsNativeFunction("set",
+                        (_, args) -> JsBoolean.of(args.size() > 3
+                                ? ops.setMemberWithReceiver(arg(args, 0), arg(args, 1), arg(args, 2), arg(args, 3))
+                                : ops.setMember(arg(args, 0), arg(args, 1), arg(args, 2)))));
         reflect.set("has", new JsNativeFunction("has", (_, args) -> JsBoolean.of(ops.has(arg(args, 0), arg(args, 1)))));
         reflect.set("deleteProperty", new JsNativeFunction("deleteProperty",
                 (_, args) -> JsBoolean.of(ops.deleteMember(arg(args, 0), arg(args, 1)))));

@@ -4,6 +4,8 @@ import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import org.techhouse.simplejs.exceptions.RangeErrorException;
+
 /**
  * A JavaScript {@code DataView} over a {@link JsArrayBuffer}. Unlike a typed array, each getter/setter
  * takes an explicit {@code littleEndian} flag (default big-endian per spec).
@@ -12,11 +14,17 @@ public final class JsDataView extends JsValue {
     private final JsArrayBuffer buffer;
     private final int byteOffset;
     private final int byteLength;
+    private final boolean lengthTracking;
 
     public JsDataView(JsArrayBuffer buffer, int byteOffset, int byteLength) {
+        this(buffer, byteOffset, byteLength, false);
+    }
+
+    public JsDataView(JsArrayBuffer buffer, int byteOffset, int byteLength, boolean lengthTracking) {
         this.buffer = buffer;
         this.byteOffset = byteOffset;
         this.byteLength = byteLength;
+        this.lengthTracking = lengthTracking;
     }
 
     public JsArrayBuffer getBuffer() {
@@ -28,7 +36,17 @@ public final class JsDataView extends JsValue {
     }
 
     public int byteLength() {
+        if (lengthTracking) {
+            final var available = buffer.byteLength() - byteOffset;
+            return Math.max(available, 0);
+        }
         return byteLength;
+    }
+
+    private void checkBounds(int offset, int size) {
+        if (offset < 0 || offset + size > byteLength()) {
+            throw new RangeErrorException("Offset is outside the bounds of the DataView");
+        }
     }
 
     private ByteBuffer view(boolean littleEndian) {
@@ -36,6 +54,7 @@ public final class JsDataView extends JsValue {
     }
 
     public double getNumber(String kind, int offset, boolean littleEndian) {
+        checkBounds(offset, elementSize(kind));
         final var pos = byteOffset + offset;
         final var bb = view(littleEndian);
         return switch (kind) {
@@ -52,6 +71,7 @@ public final class JsDataView extends JsValue {
     }
 
     public void setNumber(String kind, int offset, double value, boolean littleEndian) {
+        checkBounds(offset, elementSize(kind));
         final var pos = byteOffset + offset;
         final var bb = view(littleEndian);
         switch (kind) {
@@ -65,6 +85,7 @@ public final class JsDataView extends JsValue {
     }
 
     public BigInteger getBigInt(boolean unsigned, int offset, boolean littleEndian) {
+        checkBounds(offset, 8);
         final var raw = view(littleEndian).getLong(byteOffset + offset);
         if (!unsigned || raw >= 0) {
             return BigInteger.valueOf(raw);
@@ -73,6 +94,20 @@ public final class JsDataView extends JsValue {
     }
 
     public void setBigInt(int offset, BigInteger value, boolean littleEndian) {
+        checkBounds(offset, 8);
         view(littleEndian).putLong(byteOffset + offset, value.mod(BigInteger.ONE.shiftLeft(64)).longValue());
+    }
+
+    private static int elementSize(String kind) {
+        if (kind.endsWith("8")) {
+            return 1;
+        }
+        if (kind.endsWith("16")) {
+            return 2;
+        }
+        if (kind.endsWith("32")) {
+            return 4;
+        }
+        return 8;
     }
 }

@@ -124,8 +124,19 @@ public final class Interpreter {
         }
 
         @Override
+        public JsValue getMemberWithReceiver(JsValue target, JsValue key, JsValue receiver) {
+            return getMemberByKey(target, key, receiver);
+        }
+
+        @Override
         public boolean setMember(JsValue target, JsValue key, JsValue value) {
             setMemberByKey(target, key, value);
+            return true;
+        }
+
+        @Override
+        public boolean setMemberWithReceiver(JsValue target, JsValue key, JsValue value, JsValue receiver) {
+            setMemberByKey(target, key, value, receiver);
             return true;
         }
 
@@ -550,6 +561,16 @@ public final class Interpreter {
         return members.getMember(target, JsCoercion.toStr(keyValue));
     }
 
+    public JsValue getMemberByKey(JsValue target, JsValue keyValue, JsValue receiver) {
+        if (target instanceof JsProxy proxy) {
+            return proxies.get(proxy, keyValue);
+        }
+        if (keyValue instanceof JsSymbol symbol) {
+            return members.getSymbolMember(target, symbol);
+        }
+        return members.getMember(target, JsCoercion.toStr(keyValue), receiver);
+    }
+
     public JsValue getMember(JsValue target, String key) {
         return members.getMember(target, key);
     }
@@ -582,6 +603,18 @@ public final class Interpreter {
             return;
         }
         members.setMember(target, JsCoercion.toStr(keyValue), value);
+    }
+
+    public void setMemberByKey(JsValue target, JsValue keyValue, JsValue value, JsValue receiver) {
+        if (target instanceof JsProxy proxy) {
+            proxies.set(proxy, keyValue, value);
+            return;
+        }
+        if (keyValue instanceof JsSymbol) {
+            setMemberByKey(target, keyValue, value);
+            return;
+        }
+        members.setMember(target, JsCoercion.toStr(keyValue), value, receiver);
     }
 
     private JsValue evalFunctionExpression(FunctionExpression expression, Environment env) {

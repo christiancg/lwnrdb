@@ -609,7 +609,7 @@ directly through the `InterpreterOps` seam (GetIteratorDirect — no `Symbol.ite
 re-invocation). The interpreter routes helper names on generators (`MemberEvaluator.generatorMethod`)
 and on any iterator-like object (own callable `next`) to the helpers, and arrays/strings now
 answer `Symbol.iterator` (`getSymbolMember`), so `[1,2,3].values().map(...).toArray()` works.
-Async iterator helpers are deferred.
+The async equivalents live in `AsyncIteratorBuiltins` (see the ES2026 conformance closers below).
 
 **Small stdlib globals.** `BigInt(x)` (coerces integer numbers/booleans/integer strings —
 `RangeError` on a non-integer number, `SyntaxError` on a bad string, `TypeError` on an
@@ -623,8 +623,9 @@ arrays/ArrayBuffer with cycle handling; functions/symbols/proxies throw a `DataC
 installed by `ErrorBuiltins`.
 
 **Regex `/v`, Float16, resizable buffers.** The regex `v` (unicodeSets) flag is accepted
-(`RegexTranslator`, mutually exclusive with `u`) and behaves as Unicode mode — `/v` set
-notation and string-property escapes are not translated. `Float16Array`, `Math.f16round` and
+(`RegexTranslator`, mutually exclusive with `u`) and its set notation is translated (see the
+ES2026 conformance closers below); multi-code-point `\q{}` string alternatives remain a documented
+limitation. `Float16Array`, `Math.f16round` and
 
 **Unicode property escapes (ES2026 conformance Phase 4).** Under the `u`/`v` flag,
 `RegexTranslator` translates `\p{…}`/`\P{…}` property escapes from ECMAScript names to their
@@ -659,11 +660,11 @@ to an undeclared name throws `ReferenceError` (never creates an implicit global,
 The strict **early errors** are enforced at lex/parse time: legacy-octal and leading-zero
 non-octal-decimal integer literals (`0755`, `08`), octal/non-octal string escapes (`\07`, `\1`,
 `\8`), duplicate bound parameter names (including inside destructuring patterns), `delete` of an
-unqualified identifier or a private reference (`delete x`, `delete this.#p`), and the `with`
-statement. *Intentionally not enforced* (too obscure to matter for a database script, cheap to add
-later): future-reserved words (`implements`/`interface`/`package`/`private`/`protected`/`public`)
-as binding identifiers, `eval`/`arguments` as binding/assignment targets, and the poison
-`arguments.callee` accessor (it is simply `undefined`).
+unqualified identifier or a private reference (`delete x`, `delete this.#p`), the `with`
+statement, future-reserved words (`implements`/`interface`/`package`/`private`/`protected`/`public`)
+as binding identifiers, and `eval`/`arguments` as binding or assignment/update targets. At runtime
+the poisoned `arguments.callee`/`arguments.caller` accessors throw a `TypeError` (see the ES2026
+conformance closers below).
 
 `Float16Array`, `Math.f16round` and
 `DataView` `getFloat16`/`setFloat16` use the JDK `Float.float16ToFloat`/`floatToFloat16`
@@ -671,8 +672,9 @@ half-precision conversions. `ArrayBuffer` supports resizable/growable buffers: t
 `{ maxByteLength }` constructor option, `resize`/`transfer`/`transferToFixedLength` and the
 `maxByteLength`/`resizable`/`detached` accessors; typed-array element access is bounds-checked
 against the buffer's current byte length so a shrunk buffer reads out-of-range indexes as
-`undefined`. Length-tracking auto-length views are not supported (a view keeps its
-construction-time element length).
+`undefined`. Length-tracking auto-length views are supported (see the ES2026 conformance closers
+below): a view constructed over a resizable buffer with no explicit length tracks the buffer's
+current length.
 
 ## Deliberately unimplemented ES2026 features (out of scope for a database interpreter)
 
@@ -694,15 +696,45 @@ design decision, not a bug:
   filesystem/URL module loading would be a sandbox escape.
 - **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;
   by-copy methods always allocate the default type.
-- **Async iterator helpers** — the sync `Iterator.prototype` helpers are implemented;
-  `AsyncIterator.prototype` equivalents are not.
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
-- **Length-tracking typed-array views** — an auto-length view over a resizable buffer keeps its
-  construction-time element length.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
-- **`globalThis` enumeration & the trap-less `Proxy` `get`/`set` receiver** — `Object.keys(globalThis)`/
-  `for-in` do not enumerate global bindings, and a trap-less proxy accessor fallback does not thread
-  the original receiver.
+
+### ES2026 conformance closers (recently completed)
+
+The following were previously listed as gaps and are now implemented:
+
+- **Strict early errors** — future-reserved words (`implements`/`interface`/`package`/`private`/
+  `protected`/`public`) as binding identifiers, `eval`/`arguments` as binding or assignment/update
+  targets, and the poisoned `arguments.callee`/`caller` accessors are all rejected (parse-time for
+  the binding/assignment errors, a `TypeError` at runtime for `callee`/`caller`). Reserved words
+  remain valid as property keys.
+- **Regex `v` (unicodeSets) set notation** — `RegexTranslator` now parses `v`-mode character classes
+  and rewrites the set notation to `java.util.regex` form: subtraction `A--B` → `[A&&[^B]]`,
+  intersection `A&&B`, nested-class union, and single-code-point `\q{…}` string alternatives (a
+  multi-code-point `\q{}` member throws a `SyntaxError` — documented limitation). Property escapes
+  are still translated inside `v`-mode classes.
+- **Length-tracking typed-array views** — a typed array (or `DataView`) constructed over a resizable
+  `ArrayBuffer` with **no** explicit length now recomputes its element `length`/`byteLength` from the
+  buffer's current byte length on every access, so it grows and shrinks with `resize`. An
+  explicit-length view or a view over a non-resizable buffer keeps its construction-time length. A
+  `DataView` read past the current length throws a `RangeError`.
+- **`globalThis` enumeration** — `Object.keys`/`values`/`entries`/`getOwnPropertyNames` and `for-in`
+  enumerate user-declared global bindings (`var`/function declarations and `globalThis.x = …`
+  assignments). Host builtins are installed as non-enumerable, so they are not reported. Lexical
+  top-level `let`/`const` are not properties of the global object.
+- **Async iterator helpers** — `AsyncIterator.prototype` supplies `map`/`filter`/`take`/`drop`/
+  `flatMap`/`reduce`/`toArray`/`forEach`/`some`/`every`/`find` plus `AsyncIterator.from`; the first
+  five are lazy. They are routed onto async generators and async-iterator-like objects and drive the
+  receiver through promises on the event loop (awaiting both a promise-returning `next()` and a
+  promise-returning callback result). `for await` also consumes a plain async iterator via
+  `Symbol.asyncIterator`.
+- **`[[DefineOwnProperty]]` completeness** — `Object.defineProperty` now rejects a non-configurable
+  property's data↔accessor kind change, an accessor `get`/`set` identity change, and a non-writable
+  data-property value change under **SameValue** (so `+0`→`-0` throws while `NaN`→`NaN` is allowed).
+- **`Proxy` `get`/`set` receiver + `ownKeys` enumerability** — a trap-less proxy's accessor fallback
+  now threads the proxy as the `this`/receiver (and `Reflect.get`/`Reflect.set` honour an explicit
+  receiver), and `Object.keys`/`values`/`entries` + `for-in` re-filter an `ownKeys` trap's result
+  down to enumerable string keys.
 
 ## Testing conventions
 

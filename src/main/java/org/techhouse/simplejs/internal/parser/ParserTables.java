@@ -11,6 +11,13 @@ public final class ParserTables {
 
     public static final Set<String> PREFIX_UNARY_OPERATORS = Set.of("!", "~", "+", "-");
 
+    // Strict-mode future-reserved words that may never be used as a binding identifier.
+    public static final Set<String> STRICT_RESERVED = Set.of("implements", "interface", "package", "private",
+            "protected", "public");
+
+    // Illegal as a binding identifier and as an assignment/update target in strict mode.
+    public static final Set<String> RESTRICTED_BINDINGS = Set.of("eval", "arguments");
+
     public static final Set<String> LOGICAL_OPERATORS = Set.of("&&", "||", "??");
 
     public static final Map<String, Integer> BINARY_PRECEDENCE = Map.ofEntries(Map.entry("??", 1), Map.entry("||", 2),

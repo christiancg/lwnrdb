@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.internal;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -41,8 +43,16 @@ public final class RegexTranslator {
     public static JsRegExp compile(String source, String flags) {
         final var normalizedFlags = flags == null ? "" : flags;
         validateFlags(normalizedFlags);
-        final var unicode = normalizedFlags.indexOf('u') >= 0 || normalizedFlags.indexOf('v') >= 0;
-        final var translated = unicode ? translateUnicodeProperties(source) : source;
+        final var unicodeSets = normalizedFlags.indexOf('v') >= 0;
+        final var unicode = normalizedFlags.indexOf('u') >= 0 || unicodeSets;
+        final String translated;
+        if (unicodeSets) {
+            translated = new SetTranslator(source).translate();
+        } else if (unicode) {
+            translated = translateUnicodeProperties(source);
+        } else {
+            translated = source;
+        }
         try {
             final var pattern = Pattern.compile(inlineFlags(normalizedFlags) + translated);
             return new JsRegExp(source, normalizedFlags, pattern);
@@ -145,5 +155,180 @@ public final class RegexTranslator {
             inline.append('s');
         }
         return inline.isEmpty() ? "" : "(?" + inline + ")";
+    }
+
+    // Translates a `v`-mode (unicodeSets) source to a java.util.regex-compatible pattern. Outside a
+    // character class it behaves like the `u`-mode property translator; inside a class it parses the
+    // v-mode set notation (nested classes, `&&` intersection, `--` subtraction, `\q{}` string
+    // literals) and rewrites subtraction to Java's intersection-with-negation form.
+    private static final class SetTranslator {
+        private final String source;
+        private int pos;
+
+        SetTranslator(String source) {
+            this.source = source;
+        }
+
+        private String translate() {
+            final var out = new StringBuilder();
+            while (pos < source.length()) {
+                final var c = source.charAt(pos);
+                if (c == '\\') {
+                    out.append(readEscapeOutsideClass());
+                } else if (c == '[') {
+                    out.append(readClass());
+                } else {
+                    out.append(c);
+                    pos++;
+                }
+            }
+            return out.toString();
+        }
+
+        private String readEscapeOutsideClass() {
+            if (pos + 1 >= source.length()) {
+                pos++;
+                return "\\";
+            }
+            final var next = source.charAt(pos + 1);
+            if ((next == 'p' || next == 'P') && pos + 2 < source.length() && source.charAt(pos + 2) == '{') {
+                return readProperty();
+            }
+            final var escape = source.substring(pos, pos + 2);
+            pos += 2;
+            return escape;
+        }
+
+        private String readProperty() {
+            final var kind = source.charAt(pos + 1);
+            final var close = source.indexOf('}', pos + 3);
+            if (close < 0) {
+                throw new SyntaxErrorException("Invalid regular expression: unterminated \\" + kind + "{ property");
+            }
+            final var body = source.substring(pos + 3, close);
+            pos = close + 1;
+            return "\\" + kind + "{" + translateProperty(body) + "}";
+        }
+
+        private String readClass() {
+            pos++;
+            var negated = false;
+            if (pos < source.length() && source.charAt(pos) == '^') {
+                negated = true;
+                pos++;
+            }
+            final List<String> operands = new ArrayList<>();
+            final var current = new StringBuilder();
+            String operator = null;
+            while (pos < source.length() && source.charAt(pos) != ']') {
+                final var c = source.charAt(pos);
+                if (c == '[') {
+                    current.append(stripBrackets(readClass()));
+                } else if (c == '&' && source.startsWith("&&", pos)) {
+                    operator = pushOperand(operands, current, operator, "&&");
+                    pos += 2;
+                } else if (c == '-' && source.startsWith("--", pos)) {
+                    operator = pushOperand(operands, current, operator, "--");
+                    pos += 2;
+                } else if (c == '\\') {
+                    current.append(readClassEscape());
+                } else {
+                    current.append(c);
+                    pos++;
+                }
+            }
+            if (pos >= source.length()) {
+                throw new SyntaxErrorException("Invalid regular expression: unterminated character class");
+            }
+            pos++;
+            operands.add(current.toString());
+            return buildClass(negated, operator, operands);
+        }
+
+        private String readClassEscape() {
+            if (pos + 1 >= source.length()) {
+                pos++;
+                return "\\";
+            }
+            final var next = source.charAt(pos + 1);
+            if ((next == 'p' || next == 'P') && pos + 2 < source.length() && source.charAt(pos + 2) == '{') {
+                return readProperty();
+            }
+            if (next == 'q' && pos + 2 < source.length() && source.charAt(pos + 2) == '{') {
+                return readStringLiteral();
+            }
+            final var escape = source.substring(pos, pos + 2);
+            pos += 2;
+            return escape;
+        }
+
+        private String readStringLiteral() {
+            final var close = source.indexOf('}', pos + 3);
+            if (close < 0) {
+                throw new SyntaxErrorException("Invalid regular expression: unterminated \\q{ string literal");
+            }
+            final var body = source.substring(pos + 3, close);
+            pos = close + 1;
+            final var out = new StringBuilder();
+            for (final var part : body.split("\\|", -1)) {
+                if (part.isEmpty() || part.codePointCount(0, part.length()) != 1) {
+                    throw new SyntaxErrorException(
+                            "Invalid regular expression: multi-character \\q{} string literals are not supported");
+                }
+                out.append(escapeClassChar(part));
+            }
+            return out.toString();
+        }
+
+        private String pushOperand(List<String> operands, StringBuilder current, String existing, String operator) {
+            if (existing != null && !existing.equals(operator)) {
+                throw new SyntaxErrorException(
+                        "Invalid regular expression: cannot mix set operators in a character class");
+            }
+            operands.add(current.toString());
+            current.setLength(0);
+            return operator;
+        }
+
+        private String buildClass(boolean negated, String operator, List<String> operands) {
+            final var prefix = negated ? "^" : "";
+            if (operator == null) {
+                return "[" + prefix + operands.getFirst() + "]";
+            }
+            if ("&&".equals(operator)) {
+                final var out = new StringBuilder("[").append(prefix);
+                for (var i = 0; i < operands.size(); i++) {
+                    out.append('[').append(operands.get(i)).append(']');
+                    if (i < operands.size() - 1) {
+                        out.append("&&");
+                    }
+                }
+                return out.append(']').toString();
+            }
+            final var rest = new StringBuilder();
+            for (var i = 1; i < operands.size(); i++) {
+                rest.append(operands.get(i));
+            }
+            return "[" + prefix + "[" + operands.getFirst() + "]&&[^" + rest + "]]";
+        }
+
+        private static String stripBrackets(String cls) {
+            if (cls.length() >= 2 && cls.charAt(0) == '[' && cls.charAt(cls.length() - 1) == ']') {
+                return cls.substring(1, cls.length() - 1);
+            }
+            return cls;
+        }
+
+        private static String escapeClassChar(String member) {
+            final var out = new StringBuilder();
+            for (var i = 0; i < member.length(); i++) {
+                final var c = member.charAt(i);
+                if ("\\]^-[&".indexOf(c) >= 0) {
+                    out.append('\\');
+                }
+                out.append(c);
+            }
+            return out.toString();
+        }
     }
 }

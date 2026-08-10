@@ -241,7 +241,7 @@ public final class Parser {
         private List<VariableDeclarator> parseUsingDeclarators() {
             final var declarations = new ArrayList<VariableDeclarator>();
             do {
-                final var id = parseIdentifier();
+                final var id = parseBindingIdentifier();
                 expectOperator("=");
                 declarations.add(new VariableDeclarator(id, parseAssignment()));
             } while (matchSeparator(','));
@@ -353,7 +353,7 @@ public final class Parser {
 
         private VariableDeclaration parseForUsingDeclaration() {
             expectContextualKeyword("using");
-            final var id = parseIdentifier();
+            final var id = parseBindingIdentifier();
             return new VariableDeclaration("using", List.of(new VariableDeclarator(id, null)));
         }
 
@@ -503,7 +503,7 @@ public final class Parser {
         private FunctionDeclaration parseFunctionDeclaration(boolean async) {
             expectKeyword("function");
             final var generator = matchOperator("*");
-            final var name = parseIdentifier();
+            final var name = parseBindingIdentifier();
             final var params = parseParams();
             final var body = parseBlock();
             return new FunctionDeclaration(name, params, body, async, generator);
@@ -524,7 +524,7 @@ public final class Parser {
             } else if (isSeparator('{')) {
                 parseNamedImportSpecifiers(specifiers);
             } else {
-                specifiers.add(new ImportDefaultSpecifier(parseIdentifier()));
+                specifiers.add(new ImportDefaultSpecifier(parseBindingIdentifier()));
                 if (matchSeparator(',')) {
                     if (matchOperator("*")) {
                         specifiers.add(parseImportNamespaceSpecifier());
@@ -562,14 +562,20 @@ public final class Parser {
 
         private ImportNamespaceSpecifier parseImportNamespaceSpecifier() {
             expectContextualKeyword("as");
-            return new ImportNamespaceSpecifier(parseIdentifier());
+            return new ImportNamespaceSpecifier(parseBindingIdentifier());
         }
 
         private void parseNamedImportSpecifiers(List<JsNode> specifiers) {
             expectSeparator('{');
             while (!isSeparator('}')) {
                 final var imported = parseModuleExportName();
-                final var local = matchContextualKeyword("as") ? parseIdentifier() : asBindingIdentifier(imported);
+                final Identifier local;
+                if (matchContextualKeyword("as")) {
+                    local = parseBindingIdentifier();
+                } else {
+                    local = asBindingIdentifier(imported);
+                    validateBindingName(local.getName());
+                }
                 specifiers.add(new ImportSpecifier(imported, local));
                 if (!isSeparator('}')) {
                     expectSeparator(',');
@@ -745,7 +751,19 @@ public final class Parser {
             if (isSeparator('{')) {
                 return parseObjectPattern();
             }
-            return parseIdentifier();
+            return parseBindingIdentifier();
+        }
+
+        private Identifier parseBindingIdentifier() {
+            final var id = parseIdentifier();
+            validateBindingName(id.getName());
+            return id;
+        }
+
+        private static void validateBindingName(String name) {
+            if (ParserTables.STRICT_RESERVED.contains(name) || ParserTables.RESTRICTED_BINDINGS.contains(name)) {
+                throw new SyntaxErrorException("'" + name + "' cannot be used as a binding identifier in strict mode");
+            }
         }
 
         // A binding target with an optional default (`x`, `x = 1`, `{a} = {}`), used for pattern
@@ -819,6 +837,8 @@ public final class Parser {
             if (t.getType() != JsType.IDENTIFIER) {
                 throw error();
             }
+            assert key instanceof Identifier;
+            validateBindingName(((Identifier) key).getName());
             if (matchOperator("=")) {
                 return new Property(key, new AssignmentPattern(key, parseAssignment()), false, true);
             }
@@ -927,7 +947,9 @@ public final class Parser {
                 }
                 if ("++".equals(op) || "--".equals(op)) {
                     advance();
-                    return new UpdateExpression(op, parseUnary(), true);
+                    final var argument = parseUnary();
+                    checkUpdateTarget(argument);
+                    return new UpdateExpression(op, argument, true);
                 }
             }
             if (t.getType() == JsType.KEYWORD) {
@@ -960,9 +982,16 @@ public final class Parser {
             final var expr = parseCallMember();
             if ((isOperator("++") || isOperator("--")) && !newlineBeforeCurrent()) {
                 final var op = ((JsOperator) advance()).getValue();
+                checkUpdateTarget(expr);
                 return new UpdateExpression(op, expr, false);
             }
             return expr;
+        }
+
+        private static void checkUpdateTarget(Expression argument) {
+            if (argument instanceof Identifier id && ParserTables.RESTRICTED_BINDINGS.contains(id.getName())) {
+                throw new SyntaxErrorException("'" + id.getName() + "' cannot be updated in strict mode");
+            }
         }
 
         private Expression parseCallMember() {
@@ -1139,6 +1168,7 @@ public final class Parser {
                 }
                 advance();
                 advance();
+                validateBindingName(t.getValue());
                 return parseArrowBody(List.of(new Identifier(t.getValue())), false);
             }
             advance();
@@ -1203,7 +1233,7 @@ public final class Parser {
                 if (newlineBeforePeek()) {
                     throw error();
                 }
-                final var param = parseIdentifier();
+                final var param = parseBindingIdentifier();
                 expectOperator("=>");
                 return parseArrowBody(List.of(param), true);
             }
@@ -1223,7 +1253,7 @@ public final class Parser {
             final var generator = matchOperator("*");
             Identifier name = null;
             if (current().getType() == JsType.IDENTIFIER) {
-                name = parseIdentifier();
+                name = parseBindingIdentifier();
             }
             final var params = parseParams();
             final var body = parseBlock();
@@ -1232,7 +1262,7 @@ public final class Parser {
 
         private ClassDeclaration parseClassDeclaration() {
             expectKeyword("class");
-            final var id = parseIdentifier();
+            final var id = parseBindingIdentifier();
             final var superClass = parseClassHeritage();
             return new ClassDeclaration(id, superClass, parseClassBody());
         }
@@ -1241,7 +1271,7 @@ public final class Parser {
             expectKeyword("class");
             Identifier id = null;
             if (current().getType() == JsType.IDENTIFIER) {
-                id = parseIdentifier();
+                id = parseBindingIdentifier();
             }
             final var superClass = parseClassHeritage();
             return new ClassExpression(id, superClass, parseClassBody());

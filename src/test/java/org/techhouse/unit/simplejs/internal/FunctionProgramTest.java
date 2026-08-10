@@ -2,9 +2,11 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
@@ -147,5 +149,17 @@ public class FunctionProgramTest {
     @Test
     public void test_arguments_spread() {
         assertEquals(6, num("function f(){ return [...arguments].reduce((a, b) => a + b, 0); } f(1, 2, 3)"));
+    }
+
+    // arguments.callee is a poisoned accessor in strict mode
+    @Test
+    public void test_arguments_callee_poisoned() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("function f(){ return arguments.callee; } f()"));
+    }
+
+    // arguments.caller is a poisoned accessor in strict mode
+    @Test
+    public void test_arguments_caller_poisoned() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("function f(){ return arguments.caller; } f()"));
     }
 }

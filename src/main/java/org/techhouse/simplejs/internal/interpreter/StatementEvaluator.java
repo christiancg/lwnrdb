@@ -39,9 +39,13 @@ import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
+import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGlobalObject;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -262,7 +266,43 @@ public final class StatementEvaluator {
         if (source instanceof JsAsyncGenerator generator) {
             return iterateAsyncGenerator(statement, env, label, coroutine, generator);
         }
+        final var asyncIterFn = interp.getMemberByKey(source, JsSymbol.ASYNC_ITERATOR);
+        if (asyncIterFn instanceof JsFunction || asyncIterFn instanceof JsNativeFunction) {
+            final var iterator = interp.callValue(asyncIterFn, source, List.of());
+            return iterateAsyncIterator(statement, env, label, coroutine, iterator);
+        }
         return iterateAsyncValues(statement, env, label, coroutine, new Iteration(interp, source));
+    }
+
+    private Completion iterateAsyncIterator(ForOfStatement statement, Environment env, String label,
+            Coroutine coroutine, JsValue iterator) {
+        while (true) {
+            interp.tick();
+            final var nextFn = members.getMember(iterator, "next");
+            final var step = coroutine.await(interp.toPromise(interp.callValue(nextFn, iterator, List.of())));
+            if (JsCoercion.toBoolean(members.getMember(step, "done"))) {
+                break;
+            }
+            final var iterationEnv = env.child();
+            interp.bindForTarget(statement.getLeft(), members.getMember(step, "value"), iterationEnv);
+            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
+            final var action = classify(completion, label);
+            if (action == LoopAction.PROPAGATE || action == LoopAction.BREAK_LOOP) {
+                closeAsyncIterator(iterator);
+                if (action == LoopAction.PROPAGATE) {
+                    return completion;
+                }
+                break;
+            }
+        }
+        return Completion.empty();
+    }
+
+    private void closeAsyncIterator(JsValue iterator) {
+        final var returnFn = members.getMember(iterator, "return");
+        if (returnFn instanceof JsFunction || returnFn instanceof JsNativeFunction) {
+            interp.callValue(returnFn, iterator, List.of());
+        }
     }
 
     private Completion iterateAsyncGenerator(ForOfStatement statement, Environment env, String label,
@@ -331,11 +371,20 @@ public final class StatementEvaluator {
         return Completion.empty();
     }
 
+    private boolean isEnumerableProxyKey(JsProxy proxy, JsValue key) {
+        final var descriptor = proxies.getOwnPropertyDescriptor(proxy, key);
+        return descriptor instanceof JsObject desc && desc.has("enumerable")
+                && JsCoercion.toBoolean(desc.get("enumerable"));
+    }
+
     private List<String> enumerateKeys(JsValue target) {
+        if (target instanceof JsGlobalObject global) {
+            return new ArrayList<>(global.getEnv().enumerableGlobalNames());
+        }
         if (target instanceof JsProxy proxy) {
             final var keys = new ArrayList<String>();
             for (final var key : proxies.ownKeys(proxy)) {
-                if (key instanceof JsString string) {
+                if (key instanceof JsString string && isEnumerableProxyKey(proxy, key)) {
                     keys.add(string.getValue());
                 }
             }

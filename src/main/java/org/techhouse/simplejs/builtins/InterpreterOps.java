@@ -6,7 +6,11 @@ import org.techhouse.simplejs.values.JsValue;
 public interface InterpreterOps {
     JsValue getMember(JsValue target, JsValue key);
 
+    JsValue getMemberWithReceiver(JsValue target, JsValue key, JsValue receiver);
+
     boolean setMember(JsValue target, JsValue key, JsValue value);
+
+    boolean setMemberWithReceiver(JsValue target, JsValue key, JsValue value, JsValue receiver);
 
     boolean has(JsValue target, JsValue key);
 

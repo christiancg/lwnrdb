@@ -161,4 +161,16 @@ public class ReflectBuiltinsTest {
     public void test_reflect_get_prototype_of() {
         assertTrue(bool("let p = {}; let o = Object.create(p); Reflect.getPrototypeOf(o) === p"));
     }
+
+    // Reflect.get invokes a getter with the supplied receiver
+    @Test
+    public void test_get_with_receiver() {
+        assertEquals(42, num("let t = { get x() { return this.y; } }; let r = { y: 42 }; Reflect.get(t, 'x', r)"));
+    }
+
+    // Reflect.set invokes a setter with the supplied receiver
+    @Test
+    public void test_set_with_receiver() {
+        assertEquals(9, num("let t = { set x(v) { this._w = v; } }; let r = {}; Reflect.set(t, 'x', 9, r); r._w"));
+    }
 }

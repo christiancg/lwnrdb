@@ -30,6 +30,7 @@ public final class GlobalScope {
         TimerBuiltins.install(global, eventLoop, invoker);
         define(global, "RegExp", RegexBuiltins.create());
         define(global, "Iterator", IteratorBuiltins.create(ops));
+        define(global, "AsyncIterator", AsyncIteratorBuiltins.create(ops, eventLoop));
         define(global, "Symbol", SymbolBuiltins.create());
         define(global, "Map", MapBuiltins.create(iterableToList, invoker, false));
         define(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true));
@@ -59,7 +60,6 @@ public final class GlobalScope {
     }
 
     private static void define(Environment global, String name, JsValue value) {
-        global.declareVar(name);
-        global.assign(name, value);
+        global.declareBuiltin(name, value);
     }
 }
