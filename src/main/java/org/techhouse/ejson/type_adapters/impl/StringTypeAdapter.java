@@ -1,13 +1,14 @@
 package org.techhouse.ejson.type_adapters.impl;
 
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 
 public class StringTypeAdapter implements TypeAdapter<String> {
 
     @Override
     public String toJson(String value) {
-        return value == null ? "null" : "\"" + value + "\"";
+        return value == null ? "null" : "\"" + JsonStrings.escape(value) + "\"";
     }
 
     @Override

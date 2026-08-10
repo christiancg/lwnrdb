@@ -23,6 +23,7 @@ public final class Lexer {
     private static final int FALSE_LEN = "false".length();
     private static final int TRUE_LEN = "true".length();
     private static final int NULL_LEN = "null".length();
+    private static final int UNICODE_ESCAPE_DIGITS = 4;
     private static final Set<Character> NUMBER_CHARACTERS = Set.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
             '-', '.');
 
@@ -32,12 +33,13 @@ public final class Lexer {
             final var ss = input.substring(i);
             final var ls = lexString(ss);
             if (ls != null) {
-                if (JsonCustom.isJsonCustom(ls)) {
-                    tokens.add(CustomTypeFactory.getCustomTypeInstance(ls));
+                final var str = ls.value();
+                if (JsonCustom.isJsonCustom(str)) {
+                    tokens.add(CustomTypeFactory.getCustomTypeInstance(str));
                 } else {
-                    tokens.add(ls);
+                    tokens.add(str);
                 }
-                i += ls.getValue().length() + 1;
+                i += ls.rawLength() + 1;
                 continue;
             }
             final var ld = lexNumber(ss);
@@ -71,21 +73,67 @@ public final class Lexer {
         return tokens;
     }
 
-    private static JsonString lexString(String input) {
-        final var builder = new StringBuilder();
-        if (input.charAt(0) == '"') {
-            input = input.substring(1);
-        } else {
+    private record LexedString(JsonString value, int rawLength) {
+    }
+
+    private static LexedString lexString(String input) {
+        if (input.charAt(0) != '"') {
             return null;
         }
-        for (var c : input.toCharArray()) {
+        final var builder = new StringBuilder();
+        final var length = input.length();
+        var i = 1;
+        while (i < length) {
+            final var c = input.charAt(i);
             if (c == '"') {
-                return new JsonString(builder.toString());
+                return new LexedString(new JsonString(builder.toString()), i - 1);
+            }
+            if (c == '\\' && i + 1 < length) {
+                i = appendEscape(builder, input, i + 1);
             } else {
                 builder.append(c);
+                i++;
             }
         }
         throw new MissingEndOfStringException();
+    }
+
+    private static int appendEscape(StringBuilder builder, String input, int position) {
+        final var c = input.charAt(position);
+        switch (c) {
+            case '"' -> builder.append('"');
+            case '\\' -> builder.append('\\');
+            case '/' -> builder.append('/');
+            case 'b' -> builder.append('\b');
+            case 'f' -> builder.append('\f');
+            case 'n' -> builder.append('\n');
+            case 'r' -> builder.append('\r');
+            case 't' -> builder.append('\t');
+            case 'u' -> {
+                return appendUnicodeEscape(builder, input, position + 1);
+            }
+            // An unrecognised escape is kept verbatim so pre-escaping content degrades instead of failing
+            default -> builder.append('\\').append(c);
+        }
+        return position + 1;
+    }
+
+    private static int appendUnicodeEscape(StringBuilder builder, String input, int position) {
+        if (position + UNICODE_ESCAPE_DIGITS > input.length()) {
+            builder.append("\\u");
+            return position;
+        }
+        var codeUnit = 0;
+        for (var i = 0; i < UNICODE_ESCAPE_DIGITS; i++) {
+            final var digit = Character.digit(input.charAt(position + i), 16);
+            if (digit < 0) {
+                builder.append("\\u");
+                return position;
+            }
+            codeUnit = codeUnit * 16 + digit;
+        }
+        builder.append((char) codeUnit);
+        return position + UNICODE_ESCAPE_DIGITS;
     }
 
     private static JsonNull lexNull(String input) {
