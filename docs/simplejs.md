@@ -16,9 +16,20 @@ source String
 ```
 
 The **lexer** and **parser** are implemented and cover the ES2020–ES2026
-syntactic surface. The **interpreter** is being built in sub-phases (see the last
-section); **Phases 6a–6d** are done. This document describes the engine as built.
-(Sub-phase numbering follows `plans/simplejs-interpreter.md`, which is authoritative.)
+syntactic surface. The **interpreter** is complete: sub-phases **6a–6f** plus every
+follow-up (async generators, regex, tagged templates, `using`, the engine-completion
+phases, spec-gap Phases A–G, the ES2022–2026 stdlib additions, ASI, always-on strict
+mode and the ES2026 conformance phases) are done, so the whole document below
+describes the engine **as built**. The engine is reachable only through
+`SimpleJs.run(source, HostBindings)`; the `RUN_SCRIPT` wire operation that would
+expose it to clients is still a deferred follow-up.
+
+Two lists bound what the engine does **not** do: the
+[verified gaps and divergences](#known-gaps-and-divergences-verified-2026-08-10)
+(things a conformant engine has that this one is missing or gets wrong — candidates
+for closing) and the
+[deliberately unimplemented features](#deliberately-unimplemented-es2026-features-out-of-scope-for-a-database-interpreter)
+(design decisions, not gaps).
 
 > **Status legend:** ✅ implemented · ⬜ not yet built.
 
@@ -28,9 +39,9 @@ section); **Phases 6a–6d** are done. This document describes the engine as bui
 |---|---|
 | `simplejs/elements/` | ✅ Token types produced by the lexer. `JsBaseElement` is the abstract base with a `JsType` enum resolved by a centralized `internalGetType` switch; each concrete token (`JsKeyword`, `JsIdentifier`, `JsPrivateIdentifier`, `JsNumber`, `JsBigInt`, `JsString`, `JsBoolean`, `JsNull`, `JsUndefined`, `JsOperator`, `JsSeparator`, `JsRegex`, `JsTemplateString`, `JsEOF`) is a small immutable class with `getX()` getters. Singletons (`JsNull`/`JsUndefined`/`JsEOF`) use `getInstance()`. `SourcePosition` (offset/length/line/column) is a token-location value held **parallel** to the token stream rather than on the tokens, so the singletons keep their identity. |
 | `simplejs/nodes/` | ✅ AST node types produced by the parser. Mirrors the `elements/` convention exactly: an abstract `JsNode` base with a `NodeType` enum resolved by a centralized `internalGetType` switch, plus `Expression`/`Statement` marker abstract subclasses for parser type-safety. |
-| `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phases 6a–6f). Phase 6f adds the host-aware `Interpreter.run(Program, HostBindings) → ProgramOutcome` (the legacy `run(Program)`/`run(String)` overloads keep returning the last value, now allowing a top-level `return`), `import`/`export` handling (module binding + the return/export result contract), and the sandbox `tick()` checked at loop back-edges and call entries plus a recursion depth cap. Async/generator execution runs on `Coroutine` (a virtual-thread cooperative coroutine) driven by an `EventLoop` microtask queue, both in this package. Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; it resolves array/string instance methods lazily via `ArrayBuiltins`/`StringBuiltins`, runs a single unified destructuring routine (declarations, params, assignment LHS, `catch`) parameterized by a leaf binder, and (phase 6d) evaluates classes — building a `JsClass`, constructing instances via the field-ordering constructor chain, dispatching methods/getters/setters and `super`, and evaluating private-member access and `instanceof`. The interpreter's runtime helpers `Environment` (scope chain, `this` binding, home-class binding for `super`, function-scope hoisting), `Completion` (control-flow signal), `JsCoercion` (type conversions), `JsOperators` (operator semantics) and `RegexTranslator` (JS regex pattern/flags → `java.util.regex.Pattern`) live here too. |
-| `simplejs/values/` | ✅ (phases 6a–6e) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map, with a `freeze` flag for `Object.freeze`, plus a nullable `klass` link + lazy private-field map for class instances), `JsArray`, `JsFunction` (a closure: params, body, captured `Environment`, arrow/expression-body flags), `JsNativeFunction` (a host/built-in function backed by a `BiFunction`, plus an optional static-property map for callable namespaces like `Number.isNaN`), and `JsClass` (phase 6d: a constructable class value holding constructor/instance/static method+accessor tables, static properties, the instance-field list, private-member tables and the shared method scope; `typeof` a class is `"function"`). `EJsonInterop` converts `JsValue ↔ org.techhouse.ejson` elements (used by `JSON.parse`/`stringify`; custom-type mapping is minimal until the DB sub-phase). A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful. Phase 6e adds `JsPromise` (a pending/fulfilled/rejected promise whose reactions are scheduled on the `EventLoop`) and `JsGenerator` (a generator object wrapping a `Coroutine`); both are `typeof "object"`. `JsAsyncGenerator` (an `async function*` object wrapping a `Coroutine` plus the in-flight next-`JsPromise`; `typeof "object"`) drives the async-iterator protocol. `JsRegExp` (a compiled `java.util.regex.Pattern` plus the JS `source`/`flags` and a mutable `lastIndex` for `g`/`y` matching; `typeof "object"`, `toStr` renders `/source/flags`) backs regex literals and the `RegExp` global. |
-| `simplejs/builtins/` | ✅ (phases 6b–6e) Standard-library values installed into the global scope by `GlobalScope.install`. `ErrorBuiltins` registers the `Error`/`TypeError`/`RangeError`/`SyntaxError` constructors and the `{name, message}` error shape. `ObjectBuiltins` (`keys`/`values`/`entries`/`assign`/`freeze`/`isFrozen`/`seal`/`isSealed`/`preventExtensions`/`isExtensible` — the enumeration methods skip non-enumerable own keys, spec-gap Phase C), `ArrayBuiltins` (callable `Array` + `isArray` and the instance methods `map`/`filter`/`reduce`/`forEach`/`find`/`some`/`every`/`includes`/`indexOf`/`slice`/`splice`/`concat`/`join`/`push`/`pop`/`shift`/`unshift`/`sort`/`flat`), `StringBuiltins` (`slice`/`substring`/`split`/`replace`/`replaceAll`/`match`/`matchAll`/`search`/`toUpperCase`/`toLowerCase`/`trim`/`includes`/`startsWith`/`endsWith`/`padStart`/`repeat`/`charAt`/`indexOf` — the `split`/`replace`/`replaceAll`/`match`/`matchAll`/`search` methods accept a `JsRegExp`; `replace`/`replaceAll` support `$1`/`$<name>`/`$&`/`` $` ``/`$'` tokens and a function replacer), `NumberBuiltins` (callable `Number` + `isNaN`/`isInteger`/`isFinite`/`parseInt`/`parseFloat`), `MathBuiltins`, `JsonBuiltins` (`JSON.parse`/`stringify`, delegating to EJson via `EJsonInterop`), and `ConsoleBuiltins` (`log`/`error`/`warn`/`info`, routed to a per-run sink supplied by `HostBindings.console()`, falling back to a redirectable static sink → stdout). `PromiseBuiltins` (phase 6e) installs `Promise` (`new Promise(executor)`, `resolve`/`reject`/`all`/`race`/`allSettled`/`any`; `any` rejects with an `ErrorBuiltins.makeAggregateError` when all reject). `DbModule` (phase 6f) builds the `db` module object over a `host/DatabaseAccess`. `RegexBuiltins` installs the `RegExp` global (constructable from a string pattern or by cloning a regex) and the `JsRegExp` `test`/`exec` methods + `source`/`flags`/`global`/`ignoreCase`/`multiline`/`dotAll`/`sticky`/`lastIndex` accessors; JS patterns compile to `java.util.regex` via `internal/RegexTranslator` (flags `dgimsuy`; `i`/`m`/`s` map to Java flags, `g`/`y` drive stateful matching, a bad pattern/flag throws a JS `SyntaxError`). `exec`/`match` (non-global)/`matchAll` return a match result object (`[0..n]`, `index`, `input`, named `groups`) rather than a real Array. Callback-taking array methods call back into user functions through the `Invoker` seam. |
+| `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phases 6a–6f). Phase 6f adds the host-aware `Interpreter.run(Program, HostBindings) → ProgramOutcome` (the legacy `run(Program)`/`run(String)` overloads keep returning the last value, now allowing a top-level `return`), `import`/`export` handling (module binding + the return/export result contract), and the sandbox `tick()` checked at loop back-edges and call entries plus a recursion depth cap. Async/generator execution runs on `Coroutine` (a virtual-thread cooperative coroutine) driven by an `EventLoop` microtask queue, both in this package. Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; it resolves array/string instance methods lazily via `ArrayBuiltins`/`StringBuiltins`, runs a single unified destructuring routine (declarations, params, assignment LHS, `catch`) parameterized by a leaf binder, and (phase 6d) evaluates classes — building a `JsClass`, constructing instances via the field-ordering constructor chain, dispatching methods/getters/setters and `super`, and evaluating private-member access and `instanceof`. The interpreter's runtime helpers `Environment` (scope chain, `this` binding, home-class binding for `super`, function-scope hoisting), `Completion` (control-flow signal), `JsCoercion` (type conversions), `JsOperators` (operator semantics) and `RegexTranslator` (JS regex pattern/flags → `java.util.regex.Pattern`) live here too. Both big classes were later split into sub-packages for maintainability: `internal/parser/` (`ParserTables` precedences, `TokenStream` cursor + `newlineBefore` access, `PatternConverter` cover-grammar conversion) and `internal/interpreter/` (`ExpressionEvaluator`, `StatementEvaluator`, `MemberEvaluator`, `BindingEvaluator`, `ClassEvaluator`, `ModuleEvaluator`, `Iteration`, `ProxyDispatch`, `InterpreterUtils`) — `Parser`/`Interpreter` remain the entry points. |
+| `simplejs/values/` | ✅ (phases 6a–6e) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map, with a `freeze` flag for `Object.freeze`, plus a nullable `klass` link + lazy private-field map for class instances), `JsArray`, `JsFunction` (a closure: params, body, captured `Environment`, arrow/expression-body flags), `JsNativeFunction` (a host/built-in function backed by a `BiFunction`, plus an optional static-property map for callable namespaces like `Number.isNaN`), and `JsClass` (phase 6d: a constructable class value holding constructor/instance/static method+accessor tables, static properties, the instance-field list, private-member tables and the shared method scope; `typeof` a class is `"function"`). `EJsonInterop` converts `JsValue ↔ org.techhouse.ejson` elements (used by `JSON.parse`/`stringify`; custom-type mapping is minimal until the DB sub-phase). A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful. Phase 6e adds `JsPromise` (a pending/fulfilled/rejected promise whose reactions are scheduled on the `EventLoop`) and `JsGenerator` (a generator object wrapping a `Coroutine`); both are `typeof "object"`. `JsAsyncGenerator` (an `async function*` object wrapping a `Coroutine` plus the in-flight next-`JsPromise`; `typeof "object"`) drives the async-iterator protocol. `JsRegExp` (a compiled `java.util.regex.Pattern` plus the JS `source`/`flags` and a mutable `lastIndex` for `g`/`y` matching; `typeof "object"`, `toStr` renders `/source/flags`) backs regex literals and the `RegExp` global. Later phases add `JsSymbol` (+ `SameValueZero`), `JsMap`/`JsSet`/`JsDate`, `JsProxy`, `JsArguments` (mapped/unmapped) and `JsGlobalObject` (the live `globalThis`), and the binary trio `JsArrayBuffer`/`JsTypedArray`/`JsDataView`; `JsObject` grows a prototype link, accessor descriptors, per-key `PropertyFlags` and an `extensible` flag, and `JsFunction` a lazy `prototype`. |
+| `simplejs/builtins/` | ✅ (phases 6b–6e) Standard-library values installed into the global scope by `GlobalScope.install`. `ErrorBuiltins` registers the `Error`/`TypeError`/`RangeError`/`SyntaxError` constructors and the `{name, message}` error shape. `ObjectBuiltins` (`keys`/`values`/`entries`/`assign`/`freeze`/`isFrozen`/`seal`/`isSealed`/`preventExtensions`/`isExtensible` — the enumeration methods skip non-enumerable own keys, spec-gap Phase C), `ArrayBuiltins` (callable `Array` + `isArray` and the instance methods `map`/`filter`/`reduce`/`forEach`/`find`/`some`/`every`/`includes`/`indexOf`/`slice`/`splice`/`concat`/`join`/`push`/`pop`/`shift`/`unshift`/`sort`/`flat`), `StringBuiltins` (`slice`/`substring`/`split`/`replace`/`replaceAll`/`match`/`matchAll`/`search`/`toUpperCase`/`toLowerCase`/`trim`/`includes`/`startsWith`/`endsWith`/`padStart`/`repeat`/`charAt`/`indexOf` — the `split`/`replace`/`replaceAll`/`match`/`matchAll`/`search` methods accept a `JsRegExp`; `replace`/`replaceAll` support `$1`/`$<name>`/`$&`/`` $` ``/`$'` tokens and a function replacer), `NumberBuiltins` (callable `Number` + `isNaN`/`isInteger`/`isFinite`/`parseInt`/`parseFloat`), `MathBuiltins`, `JsonBuiltins` (`JSON.parse`/`stringify`, delegating to EJson via `EJsonInterop`), and `ConsoleBuiltins` (`log`/`error`/`warn`/`info`, routed to a per-run sink supplied by `HostBindings.console()`, falling back to a redirectable static sink → stdout). `PromiseBuiltins` (phase 6e) installs `Promise` (`new Promise(executor)`, `resolve`/`reject`/`all`/`race`/`allSettled`/`any`; `any` rejects with an `ErrorBuiltins.makeAggregateError` when all reject). `DbModule` (phase 6f) builds the `db` module object over a `host/DatabaseAccess`. `RegexBuiltins` installs the `RegExp` global (constructable from a string pattern or by cloning a regex) and the `JsRegExp` `test`/`exec` methods + `source`/`flags`/`global`/`ignoreCase`/`multiline`/`dotAll`/`sticky`/`lastIndex` accessors; JS patterns compile to `java.util.regex` via `internal/RegexTranslator` (flags `dgimsuy`; `i`/`m`/`s` map to Java flags, `g`/`y` drive stateful matching, a bad pattern/flag throws a JS `SyntaxError`). `exec`/`match` (non-global)/`matchAll` return a match result object (`[0..n]`, `index`, `input`, named `groups`) rather than a real Array. Callback-taking array methods call back into user functions through the `Invoker` seam. Later phases add `ObjectProtoBuiltins`, `FunctionProtoBuiltins`, `SymbolBuiltins`, `MapBuiltins`/`SetBuiltins`/`DateBuiltins`, `JsIterators`, `TimerBuiltins`, `ReflectBuiltins`/`ProxyBuiltins`, `TypedArrayBuiltins`, `FetchBuiltins`, `IteratorBuiltins`/`AsyncIteratorBuiltins` and `GlobalFunctionsBuiltins` (URI functions, `queueMicrotask`, `structuredClone`, Annex-B `escape`/`unescape`), plus the `InterpreterOps` and `IterableToList` seams back into the interpreter. |
 | `simplejs/host/` | ✅ (phase 6f) The DB-integration seam and public entrypoint — the only place the interpreter touches the `ops`/`cache`/`conn`/`ioc` layers. `SimpleJs.run(String, HostBindings) → ScriptResult` is the public API. `HostBindings` carries the `args` payload, a nullable `DatabaseAccess`, a console sink and `ResourceLimits`; `SimpleHostBindings` is a record impl. `DatabaseAccess` is the EJson-typed DB interface (mockable for tests); `EnforcingDatabaseAccess` is the real impl that enforces auth + schema before calling `OperationProcessor`. `ScriptResult` holds the returned/exported EJson value or a thrown error's name+message. |
 | `simplejs/exceptions/` | ✅ Dedicated `RuntimeException` subclasses. Lexer errors: `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors: `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). Interpreter errors extend `SimpleJsRuntimeException`: `ReferenceErrorException`, `TypeErrorException`, `RangeErrorException`, `SyntaxErrorException`, `UnsupportedNodeException` (a parsed node outside the current interpreter phase's scope), and `JsThrowException` (carries the `JsValue` thrown by a `throw` statement; unwound by the nearest `try`/`catch`). Phase 6f adds `ScriptAbortException` and its subclasses `ScriptTimeoutException`/`ScriptLimitException` — resource-limit aborts that extend `RuntimeException` directly (not `SimpleJsRuntimeException`), so user `try`/`catch` cannot intercept them. |
 
@@ -55,11 +66,15 @@ extends super`. Notably **`static`, `get`, `set`, `from`, `as`, `using`, and
 `with` are *not* keywords** — they lex as identifiers and the parser treats them
 as contextual keywords, so `let from = 1` / `let with = 1` still parse.
 
-> **Lexer constraint that shapes the parser:** the lexer **discards newlines**
-> (all whitespace is skipped as token boundaries). This makes newline-sensitive
-> Automatic Semicolon Insertion (ASI) impossible from the token stream, so the
-> parser uses a pragmatic termination rule instead: a statement ends at `;`, `}`,
-> or EOF, and a trailing `;` is optional.
+> **Newlines are not tokens, but they are recorded.** The lexer skips all
+> whitespace as token boundaries, so a line terminator never reaches the parser as
+> a token. Instead the lexer records a **`newlineBefore` flag per token**, parallel
+> to the token stream, which is what makes real Automatic Semicolon Insertion
+> possible — see the *Automatic Semicolon Insertion* subsection of Phase 6
+> below. ASI is active only on the position-aware parse path
+> (`Parser.parse(LexResult)`); the test-only token-list overload has no newline
+> information and falls back to the permissive rule (a statement ends at `;`, `}`
+> or EOF, trailing `;` optional).
 
 > **Source positions.** The lexer records each token's location — 0-based
 > `offset`/`length` plus the 1-based `line`/`column` of its start
@@ -170,17 +185,24 @@ The parser covers the full modern grammar the keyword set implies. By category
   **import attributes** (`with { type: "json" }` → `ImportAttribute` on
   `ImportDeclaration`/`ExportAllDeclaration`/`ExportNamedDeclaration`).
 
-## Deliberate limitations (parsing only; deferred to the interpreter)
+## Front-end limitations and gaps
 
-The parser produces an AST but validates no semantics; the following are intentional
-non-goals of the front end:
+The parser produces an AST but validates little semantics. Most of the following are
+intentional non-goals of the front end (semantics deferred to the interpreter); the
+first two are genuine grammar gaps and are repeated in the gap list below:
 
-- **No newline-based ASI** — the lexer discards newlines, so `break\nlabel` and
-  similar newline-sensitive rules are not enforced.
-- **`import` is a keyword** — dynamic `import(...)` and `import.meta` are not parsed;
-  every `import` begins a declaration.
-- **No `with` statement** — `with` is only a contextual keyword for import attributes
-  (`with { type: "json" }`); the legacy `with (obj) { … }` statement is not parsed.
+- **No sequence (comma) operator** — `(a, b)` as an expression, and therefore the
+  common `for (…; …; i++, j++)` update clause, is a `SyntaxError`. Multiple
+  declarators (`let i = 0, j = 0`) are unaffected. This is a genuine gap, not a
+  design choice (see the gap list below).
+- **No `new.target`** — `new.target` is not parsed (`import.meta` is the only
+  meta-property recognised).
+- **`import` is a keyword** — but dynamic `import(...)` and `import.meta` **are**
+  parsed, without un-keywording it: `parseKeywordPrimary` peeks for `(` / `.` and
+  emits `ImportExpression`/`MetaProperty` (spec-gap Phase G).
+- **No `with` statement** — the contextual `with` of import attributes
+  (`with { type: "json" }`) is supported; the legacy `with (obj) { … }` statement is
+  rejected as a strict-mode early error.
 - **No `debugger` statement** — `debugger` is not a keyword, so `debugger;` parses as an
   ordinary expression statement rather than a dedicated node.
 - **`async`/`await`/`yield` are keywords** — `async(x)` is never a call (`async (…)`
@@ -197,8 +219,13 @@ non-goals of the front end:
 
 ## Phase 6 — the interpreter
 
-A tree-walking `Interpreter` over the AST. It is built in sub-phases so each
-increment is small and testable:
+A tree-walking `Interpreter` over the AST. It was built in sub-phases so each
+increment stayed small and testable. **The sub-phase entries below are historical**:
+each describes the state at the end of that phase, and a "deferred"/"limitation" note
+inside one is superseded whenever a later phase or follow-up section says otherwise
+(e.g. 6b's deferred `arguments` object and object method shorthand both landed later).
+The authoritative statement of what is *still* missing is
+[Known gaps and divergences](#known-gaps-and-divergences-verified-2026-08-10).
 
 - **6a — evaluation core ✅** — the value model (`values/`), lexical
   scopes/environments (`Environment`, with `var` hoisting to the function scope and
@@ -346,11 +373,13 @@ Phase C (see below). Functions expose
 `call`/`apply`/`bind` (`builtins/FunctionProtoBuiltins`); a bound function is a plain native
 function tagged with its target + bound args (spec-gap Phase B), so `new` on it constructs the
 underlying target with the bound args prepended.
-Non-arrow functions receive an `arguments` binding that is a **real** `JsArray` copy of the
-call arguments (not the exotic, argument-aliasing `arguments` object); arrows inherit the
-enclosing `arguments` lexically. `globalThis` is a backing object that reflects the installed
-builtins and top-level values written through `GlobalScope.define` — it is **not** a fully live
-mirror of every lexical binding.
+Non-arrow functions receive an `arguments` binding and `globalThis` is installed as a global;
+both were plain stand-ins in this phase (a `JsArray` copy of the call arguments and a static
+backing object) and were **replaced** by the real exotic objects in spec-gap Phase F — see
+*Mapped `arguments` & live `globalThis`* below for the behaviour that holds today.
+The `prototype` **objects** of the builtins are not exposed as script-visible properties:
+member dispatch is internal, so `Object.prototype`/`Array.prototype`/`String.prototype` read
+as `undefined` and builtins cannot be monkey-patched or subclassed (see the gap list).
 
 **ToPrimitive protocol (ES2026 conformance Phase 1).** Object-to-primitive coercion is a real
 `OrdinaryToPrimitive`: `JsCoercion.toPrimitive(value, hint, ops)` first consults a callable
@@ -625,7 +654,14 @@ installed by `ErrorBuiltins`.
 **Regex `/v`, Float16, resizable buffers.** The regex `v` (unicodeSets) flag is accepted
 (`RegexTranslator`, mutually exclusive with `u`) and its set notation is translated (see the
 ES2026 conformance closers below); multi-code-point `\q{}` string alternatives remain a documented
-limitation. `Float16Array`, `Math.f16round` and
+limitation. `Float16Array`, `Math.f16round` and `DataView` `getFloat16`/`setFloat16` use the JDK
+`Float.float16ToFloat`/`floatToFloat16` half-precision conversions. `ArrayBuffer` supports
+resizable/growable buffers: the `{ maxByteLength }` constructor option, `resize`/`transfer`/
+`transferToFixedLength` and the `maxByteLength`/`resizable`/`detached` accessors; typed-array
+element access is bounds-checked against the buffer's current byte length so a shrunk buffer
+reads out-of-range indexes as `undefined`. Length-tracking auto-length views are supported (see
+the ES2026 conformance closers below): a view constructed over a resizable buffer with no
+explicit length tracks the buffer's current length.
 
 **Unicode property escapes (ES2026 conformance Phase 4).** Under the `u`/`v` flag,
 `RegexTranslator` translates `\p{…}`/`\P{…}` property escapes from ECMAScript names to their
@@ -666,15 +702,60 @@ as binding identifiers, and `eval`/`arguments` as binding or assignment/update t
 the poisoned `arguments.callee`/`arguments.caller` accessors throw a `TypeError` (see the ES2026
 conformance closers below).
 
-`Float16Array`, `Math.f16round` and
-`DataView` `getFloat16`/`setFloat16` use the JDK `Float.float16ToFloat`/`floatToFloat16`
-half-precision conversions. `ArrayBuffer` supports resizable/growable buffers: the
-`{ maxByteLength }` constructor option, `resize`/`transfer`/`transferToFixedLength` and the
-`maxByteLength`/`resizable`/`detached` accessors; typed-array element access is bounds-checked
-against the buffer's current byte length so a shrunk buffer reads out-of-range indexes as
-`undefined`. Length-tracking auto-length views are supported (see the ES2026 conformance closers
-below): a view constructed over a resizable buffer with no explicit length tracks the buffer's
-current length.
+## Known gaps and divergences (verified 2026-08-10)
+
+Everything in this section is a **gap**, not a design decision: a conformant engine has it
+and SimpleJS either lacks it or gets it wrong. Each row was confirmed by running the snippet
+through `SimpleJs.run(source, SimpleHostBindings.empty())` against the built engine — none of
+them are inferred from reading the code. The next section lists the features that are missing
+*on purpose*.
+
+### Defects (a script gets a wrong answer or an unexpected error)
+
+| # | Gap | Symptom |
+|---|---|---|
+| 1 | **Static private fields** (`class A { static #x = 1 }`) | Throws `UnsupportedNodeException` (`PRIVATE_IDENTIFIER`) — instance private fields/methods/accessors and *declaring* a static private method work; a static private **field** does not. |
+| 2 | **`UnsupportedNodeException` escapes `SimpleJs.run`** | It is not in the entrypoint's catch chain, so the host receives a raw Java exception instead of an error `ScriptResult`. Same for any other `SimpleJsRuntimeException` subclass not enumerated there. |
+| 3 | **Static private method access** (`A.#m()` / `this.#m()` from a `static` method) | `TypeError: Cannot read private member #m from an object whose class did not declare it` — static private members are declared into the instance tables. |
+| 4 | **Sequence (comma) operator** | `(a, b)`, `return (1, 2)` and the very common `for (…; …; i++, j++)` are all `SyntaxError`. |
+| 5 | **`array.length` assignment** | `a.length = 0` is silently ignored (the synthetic `length` is read-only), so the truncate idiom does nothing. |
+| 6 | **`String.prototype.split` `limit`** | The second argument is ignored: `'a,b,c'.split(',', 2)` → `["a","b","c"]`. |
+| 7 | **`JSON.stringify` `replacer` / `space`** | Both extra arguments are ignored — no pretty-printing (`JSON.stringify(o, null, 2)` is compact) and no key filtering / value mapping. `JSON.parse`'s `reviver` **is** applied. |
+| 8 | **`$$` in a replacement string** | `'a'.replace('a', '$$')` → `"$$"` instead of the escaped `"$"` (the other `$` tokens are correct). |
+| 9 | **Symbol keys in copy operations** | `Object.assign({}, {[s]: 1})` and `{...{[s]: 1}}` drop symbol-keyed properties (string keys are copied correctly). |
+| 10 | **Array holes are visited** | `[1, , 3].forEach(cb)` calls back 3 times; the spec skips holes (same for `map`/`filter`/`some`/…). |
+| 11 | **`matchAll` without `g`** | Should throw `TypeError`; returns matches instead. |
+| 12 | **Object-literal `__proto__`** | `{ __proto__: p }` stores an ordinary property instead of setting the prototype (`Object.create`/`setPrototypeOf` work). |
+| 13 | **`toFixed` rounding** | `(1.005).toFixed(2)` → `"1.01"`; JS yields `"1.00"` because it rounds the binary double, not the decimal value. |
+
+### Missing library surface
+
+| # | Missing | Notes |
+|---|---|---|
+| 14 | **Global `NaN` / `Infinity`** | Not declared: `NaN` throws `ReferenceError` and `typeof Infinity` is `"undefined"`. Reachable only as `Number.NaN` / `Number.POSITIVE_INFINITY` or via arithmetic (`0/0`, `1/0`). Highest-value one-line fix in this list. |
+| 15 | **`Math`** | Missing `log2`, `log10`, `log1p`, `expm1`, `hypot`, `clz32`, `imul`, `fround`, `atan2`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` and the constants `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT2`, `SQRT1_2`. Present: `abs`/`ceil`/`floor`/`round`/`trunc`/`sign`/`sqrt`/`cbrt`/`pow`/`exp`/`log`/`sin`/`cos`/`tan`/`min`/`max`/`random`/`f16round` + `E`/`PI`. |
+| 16 | **`Object.is`, `Object.getOwnPropertySymbols`, `Number.isSafeInteger`** | Everyday statics; `Object.is` is also the natural home for the existing SameValue comparison. |
+| 17 | **`Function.prototype.name` / `.length` / `.toString`** | A function's `name` and `length` read as `undefined` and it has no `toString` (`call`/`apply`/`bind` are present). |
+| 18 | **`Error` `cause`, `stack`, `Error.prototype.toString`** | `new Error(msg, { cause })` drops the options bag, `e.stack` is `undefined`, and `e.toString()` falls through to `"[object Object]"` instead of `"TypeError: msg"`. |
+| 19 | **BigInt methods** | `(2n).toString()` / `valueOf()` are `undefined` (string **coercion** works, e.g. `` `${2n}` ``), and `BigInt.asIntN`/`asUintN` are absent. |
+| 20 | **Typed-array methods** | `sort`, `toSorted`, `toReversed`, `with`, `findLast`, `findLastIndex`, `copyWithin` are missing from the shared `%TypedArray%` set. |
+| 21 | **`Array.prototype.toString`, `Array.fromAsync`** | `[1].toString` is `undefined` (template/`+` coercion still joins correctly); `Array.fromAsync` was never built. |
+| 22 | **`Symbol.prototype.description` / `toString`** | Both `undefined` on a symbol instance. |
+| 23 | **Well-known symbols `Symbol.matchAll` / `isConcatSpreadable` / `unscopables`** | Absent (and their hooks unconsulted). `Symbol.species` is deliberate; `unscopables` is moot without `with`. |
+| 24 | **Regex `d` flag has no effect** | The flag is accepted and `hasIndices` is tracked, but `exec` results carry no `indices` array. |
+| 25 | **Annex-B string methods** | `substr`, `toLocaleUpperCase`, `toLocaleLowerCase`, `trimLeft`, `trimRight`. |
+| 26 | **`.prototype` of builtins, and builtin subclassing** | `Object.prototype`/`Array.prototype`/`String.prototype`/`Number.prototype` are `undefined` and there is no `Function` global, so `Array.prototype.slice.call(x)` and prototype monkey-patching do not work. The visible consequence is that **`class E extends Error {}` (and `extends Map`/`Array`/…) throws** `TypeError: Class extends value … is not a constructor or null` — custom error classes, a very common pattern, are unavailable. |
+| 27 | **Primitive wrapper objects** | `new String('a')`/`new Number(1)`/`new Boolean(1)` return primitives rather than objects and `new Object()` throws `TypeError: … is not a constructor`. Rarely wanted, but `new Object()` is cheap to support. |
+
+### Host-contract notes
+
+- **A promise returned at top level is not awaited.** `return f()` for an `async f` resolves the
+  script to `null`; `return await f()` returns the value. Worth either awaiting a returned
+  promise in the result contract or documenting on the `RUN_SCRIPT` surface.
+- **A caught runtime error is a plain object.** `try { null.x } catch (e) { … }` gives
+  `{name, message}`, so `e instanceof TypeError` is `false` (thrown-by-`throw` error objects
+  built by the `Error` constructors behave normally).
+- **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet.
 
 ## Deliberately unimplemented ES2026 features (out of scope for a database interpreter)
 
@@ -751,3 +832,15 @@ mirroring the main package structure, and follow the existing `LexerTest` style
 - **Program tests** (`internal/LexerProgramTest`, `internal/ParserProgramTest`) —
   full `source → Lexer.lex → Parser.parse` on realistic snippets, the end-to-end
   coverage.
+- **Interpreter tests** (`internal/Interpreter*Test` — expressions/statements,
+  `Object`, `Class`, `Generator`, `Async`, `AsyncGenerator`, `Iteration`, `Using`,
+  `Module`, `Timer`, `Sandbox` — plus `EnvironmentTest`, `CoroutineTest`,
+  `EventLoopTest`, `JsCoercionTest`, `JsOperatorsTest`) and the feature program tests
+  (`AsiProgramTest`, `StrictModeProgramTest`, `ProxyProgramTest`,
+  `TypedArrayProgramTest`, `DynamicImportProgramTest`, `GlobalProgramTest`,
+  `FunctionProgramTest`, `AsyncIteratorHelperTest`, `RegexTranslatorVFlagTest`) —
+  behaviour asserted through `Interpreter.run`/`SimpleJs.run`.
+- **Value / builtin / host tests** (`values/`, `builtins/`, `host/`) — per-type and
+  per-library-family units, `EJsonInterop` both directions, and the host seam
+  (`EnforcingDatabaseAccess` against a real `Cache`/`OperationProcessor`: an allowed
+  save, a denied save, a schema-violating save).
