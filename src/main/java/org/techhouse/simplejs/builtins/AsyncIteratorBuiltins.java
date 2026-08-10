@@ -145,19 +145,19 @@ public final class AsyncIteratorBuiltins {
         final var remaining = new long[]{count};
         return asyncIterator(() -> {
             final var out = new JsPromise(loop);
-            dropStep(loop, source, remaining, out);
+            dropStep(source, remaining, out);
             return out;
         });
     }
 
-    private static void dropStep(EventLoop loop, AsyncDriver source, long[] remaining, JsPromise out) {
+    private static void dropStep(AsyncDriver source, long[] remaining, JsPromise out) {
         source.step().subscribe(result -> {
             if (source.isDone(result) || remaining[0] <= 0) {
                 out.resolve(result);
                 return;
             }
             remaining[0]--;
-            dropStep(loop, source, remaining, out);
+            dropStep(source, remaining, out);
         }, out::reject);
     }
 
