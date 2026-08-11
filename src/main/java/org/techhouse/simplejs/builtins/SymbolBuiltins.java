@@ -36,6 +36,7 @@ public final class SymbolBuiltins {
         symbol.setProperty("split", JsSymbol.SPLIT);
         symbol.setProperty("matchAll", JsSymbol.MATCH_ALL);
         symbol.setProperty("isConcatSpreadable", JsSymbol.IS_CONCAT_SPREADABLE);
+        symbol.setProperty("unscopables", JsSymbol.UNSCOPABLES);
         symbol.setProperty("for",
                 new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args), JsSymbol::new)));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));

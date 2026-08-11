@@ -64,6 +64,7 @@ import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.LogicalExpression;
 import org.techhouse.simplejs.nodes.MemberExpression;
+import org.techhouse.simplejs.nodes.MetaProperty;
 import org.techhouse.simplejs.nodes.NewExpression;
 import org.techhouse.simplejs.nodes.NumberLiteral;
 import org.techhouse.simplejs.nodes.ObjectExpression;
@@ -132,14 +133,12 @@ public final class Interpreter {
 
         @Override
         public boolean setMember(JsValue target, JsValue key, JsValue value) {
-            setMemberByKey(target, key, value);
-            return true;
+            return setMemberByKey(target, key, value);
         }
 
         @Override
         public boolean setMemberWithReceiver(JsValue target, JsValue key, JsValue value, JsValue receiver) {
-            setMemberByKey(target, key, value, receiver);
-            return true;
+            return setMemberByKey(target, key, value, receiver);
         }
 
         @Override
@@ -169,9 +168,13 @@ public final class Interpreter {
 
         @Override
         public JsValue getPrototypeOf(JsValue target) {
-            return target instanceof JsProxy proxy
-                    ? proxies.getPrototypeOf(proxy)
-                    : ObjectBuiltins.getPrototypeOf(List.of(target));
+            if (target instanceof JsProxy proxy) {
+                return proxies.getPrototypeOf(proxy);
+            }
+            if (target instanceof JsObject || isNullish(target)) {
+                return ObjectBuiltins.getPrototypeOf(List.of(target));
+            }
+            return intrinsics.protoFor(target);
         }
 
         @Override
@@ -216,7 +219,7 @@ public final class Interpreter {
         }
     };
     private final ProxyDispatch proxies = new ProxyDispatch(ops);
-    private final Intrinsics intrinsics = new Intrinsics(this::callValue, ops);
+    private final Intrinsics intrinsics = new Intrinsics(this::callValue, ops, eventLoop, this::driveAsyncGenerator);
     private final MemberEvaluator members = new MemberEvaluator(this, eventLoop, proxies);
     private final BindingEvaluator binding = new BindingEvaluator(this, members);
     private final ClassEvaluator classes = new ClassEvaluator(this);
@@ -293,6 +296,7 @@ public final class Interpreter {
                 runModuleBody(program, env, result);
                 return JsUndefined.getInstance();
             });
+            markContractPromiseHandled(result);
             eventLoop.drain(deadlineNanos);
             reportUnhandledRejections();
         } finally {
@@ -304,6 +308,15 @@ public final class Interpreter {
         }
         return new ProgramOutcome(result.last, result.hasReturn, result.returnValue, result.exportDefault,
                 result.namedExports);
+    }
+
+    // The host contract awaits a promise returned (or default-exported) at top level, so it is
+    // already handled by the time the drain looks for unhandled rejections.
+    private static void markContractPromiseHandled(ModuleResult result) {
+        final var contract = result.hasReturn ? result.returnValue : result.exportDefault;
+        if (contract instanceof JsPromise promise) {
+            promise.markHandled();
+        }
     }
 
     private void reportUnhandledRejections() {
@@ -486,10 +499,14 @@ public final class Interpreter {
             case YIELD_EXPRESSION -> evalYield((YieldExpression) expression, env);
             case AWAIT_EXPRESSION -> evalAwait((AwaitExpression) expression, env);
             case IMPORT_EXPRESSION -> modules.evalImportExpression((ImportExpression) expression, env);
-            case META_PROPERTY -> modules.evalMetaProperty();
+            case META_PROPERTY -> evalMetaProperty((MetaProperty) expression, env);
             case SUPER_EXPRESSION -> throw new SyntaxErrorException("'super' keyword unexpected here");
             default -> throw new UnsupportedNodeException(expression.getType().name());
         };
+    }
+
+    private JsValue evalMetaProperty(MetaProperty meta, Environment env) {
+        return "new".equals(meta.getMeta()) ? env.resolveNewTarget() : modules.evalMetaProperty();
     }
 
     public boolean hasMember(JsValue container, JsValue keyValue) {
@@ -591,10 +608,10 @@ public final class Interpreter {
         return currentCoroutine.get();
     }
 
-    public void setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
+    public boolean setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
         if (target instanceof JsProxy proxy) {
             proxies.set(proxy, keyValue, value);
-            return;
+            return true;
         }
         if (keyValue instanceof JsSymbol symbol) {
             if (target instanceof JsObject object) {
@@ -603,26 +620,25 @@ public final class Interpreter {
                     final var setter = cls.findInstanceSymbolSetter(symbol);
                     if (setter != null) {
                         callFunction(setter, object, List.of(value));
-                        return;
+                        return true;
                     }
                 }
-                object.setSymbol(symbol, value);
+                return object.setSymbol(symbol, value);
             }
-            return;
+            return true;
         }
-        members.setMember(target, JsCoercion.toStr(keyValue), value);
+        return members.setMember(target, JsCoercion.toStr(keyValue), value);
     }
 
-    public void setMemberByKey(JsValue target, JsValue keyValue, JsValue value, JsValue receiver) {
+    public boolean setMemberByKey(JsValue target, JsValue keyValue, JsValue value, JsValue receiver) {
         if (target instanceof JsProxy proxy) {
             proxies.set(proxy, keyValue, value);
-            return;
+            return true;
         }
         if (keyValue instanceof JsSymbol) {
-            setMemberByKey(target, keyValue, value);
-            return;
+            return setMemberByKey(target, keyValue, value);
         }
-        members.setMember(target, JsCoercion.toStr(keyValue), value, receiver);
+        return members.setMember(target, JsCoercion.toStr(keyValue), value, receiver);
     }
 
     private JsValue evalFunctionExpression(FunctionExpression expression, Environment env) {
@@ -726,7 +742,7 @@ public final class Interpreter {
     private JsValue constructFunction(JsFunction function, List<JsValue> args) {
         final var instance = new JsObject();
         instance.setProto(function.getPrototype());
-        final var result = callFunction(function, instance, args);
+        final var result = callFunction(function, instance, args, function);
         return isObjectLike(result) ? result : instance;
     }
 
@@ -752,7 +768,15 @@ public final class Interpreter {
         };
     }
 
+    private JsValue driveAsyncGenerator(JsAsyncGenerator generator, MemberEvaluator.AsyncStep step, JsValue argument) {
+        return members.driveAsyncGenerator(generator, step, argument);
+    }
+
     public JsValue callFunction(JsFunction function, JsValue thisArg, List<JsValue> args) {
+        return callFunction(function, thisArg, args, JsUndefined.getInstance());
+    }
+
+    public JsValue callFunction(JsFunction function, JsValue thisArg, List<JsValue> args, JsValue newTarget) {
         if (maxDepth >= 0 && depth >= maxDepth) {
             throw new ScriptLimitException("Script exceeded its maximum call depth");
         }
@@ -761,6 +785,7 @@ public final class Interpreter {
             final var activation = function.getClosure().functionChild();
             if (!function.isArrow()) {
                 activation.defineThis(thisArg);
+                activation.defineNewTarget(newTarget);
                 activation.declareFunction("arguments", makeArguments(function.getParams(), args, activation));
             }
             binding.bindParams(function.getParams(), args, activation);
@@ -935,6 +960,12 @@ public final class Interpreter {
     }
 
     public JsValue getStaticMember(JsClass cls, String key) {
+        if ("prototype".equals(key)) {
+            return cls.getPrototype();
+        }
+        if ("name".equals(key) && !cls.hasStaticProp(key)) {
+            return new JsString(cls.getName() == null ? "" : cls.getName());
+        }
         final var getter = cls.findStaticGetter(key);
         if (getter != null) {
             return callFunction(getter, cls, List.of());

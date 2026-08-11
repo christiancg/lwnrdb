@@ -11,6 +11,8 @@ public final class JsArray extends JsValue {
     private final List<JsValue> elements = new ArrayList<>();
     private Map<String, JsValue> ownProperties;
     private boolean frozen;
+    private boolean sealed;
+    private boolean extensible = true;
 
     public JsArray() {
     }
@@ -48,35 +50,38 @@ public final class JsArray extends JsValue {
         return removed;
     }
 
-    public void set(int index, JsValue value) {
-        if (frozen) {
-            return;
+    public boolean set(int index, JsValue value) {
+        if (frozen || (!extensible && index >= elements.size())) {
+            return false;
         }
         while (elements.size() <= index) {
             elements.add(HOLE);
         }
         elements.set(index, value);
+        return true;
     }
 
-    public void push(JsValue value) {
-        if (frozen) {
-            return;
+    public boolean push(JsValue value) {
+        if (frozen || !extensible) {
+            return false;
         }
         elements.add(value);
+        return true;
     }
 
     public JsValue getProperty(String key) {
         return ownProperties == null ? null : ownProperties.get(key);
     }
 
-    public void setProperty(String key, JsValue value) {
-        if (frozen) {
-            return;
+    public boolean setProperty(String key, JsValue value) {
+        if (frozen || (!extensible && !hasProperty(key))) {
+            return false;
         }
         if (ownProperties == null) {
             ownProperties = new LinkedHashMap<>();
         }
         ownProperties.put(key, value);
+        return true;
     }
 
     public boolean hasProperty(String key) {
@@ -85,19 +90,41 @@ public final class JsArray extends JsValue {
 
     public void freeze() {
         frozen = true;
+        sealed = true;
+        extensible = false;
     }
 
     public boolean isFrozen() {
-        return frozen;
+        return frozen || (!extensible && elements.isEmpty());
+    }
+
+    public void seal() {
+        sealed = true;
+        extensible = false;
+    }
+
+    public boolean isSealed() {
+        return sealed || isFrozen();
+    }
+
+    public void preventExtensions() {
+        extensible = false;
+    }
+
+    public boolean isExtensible() {
+        return extensible;
     }
 
     public int length() {
         return elements.size();
     }
 
-    public void setLength(int length) {
-        if (frozen) {
-            return;
+    public boolean setLength(int length) {
+        if (frozen || (sealed && length != elements.size())) {
+            return false;
+        }
+        if (!extensible && length > elements.size()) {
+            return false;
         }
         while (elements.size() > length) {
             elements.removeLast();
@@ -105,6 +132,7 @@ public final class JsArray extends JsValue {
         while (elements.size() < length) {
             elements.add(HOLE);
         }
+        return true;
     }
 
     public List<JsValue> getElements() {

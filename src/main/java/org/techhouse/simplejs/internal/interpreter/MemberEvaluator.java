@@ -1,13 +1,12 @@
 package org.techhouse.simplejs.internal.interpreter;
 
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arg0;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arg1;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayIndex;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayLikeElements;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.cannotReadProperties;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.orUndefined;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stepResult;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stringCodePoints;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
 import java.util.List;
@@ -87,7 +86,7 @@ public final class MemberEvaluator {
             case JsArray array when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
                     (_, _) -> JsIterators.of(arrayLikeElements(array).iterator()));
             case JsString string when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
-                    (_, _) -> JsIterators.of(arrayLikeElements(string).iterator()));
+                    (_, _) -> JsIterators.of(stringCodePoints(string.getValue()).iterator()));
             case JsObject object -> objectSymbolMember(object, symbol);
             case JsClass cls -> classSymbolMember(cls, symbol);
             default -> JsUndefined.getInstance();
@@ -171,17 +170,6 @@ public final class MemberEvaluator {
     }
 
     private JsValue getObjectMember(JsObject object, String key, JsValue receiver) {
-        final var cls = object.getKlass();
-        if (cls != null && !object.has(key)) {
-            final var getter = cls.findInstanceGetter(key);
-            if (getter != null) {
-                return interp.callFunction(getter, receiver, List.of());
-            }
-            final var method = cls.findInstanceMethod(key);
-            if (method != null) {
-                return method;
-            }
-        }
         if (!object.has(key)) {
             final var accessorGetter = object.getAccessorGetter(key);
             if (accessorGetter != null) {
@@ -356,45 +344,45 @@ public final class MemberEvaluator {
         return intrinsicMember(string, key);
     }
 
-    public void setMember(JsValue target, String key, JsValue value, JsValue receiver) {
+    public boolean setMember(JsValue target, String key, JsValue value, JsValue receiver) {
         if (target instanceof JsObject object) {
-            setObjectMember(object, key, value, receiver);
-            return;
+            return setObjectMember(object, key, value, receiver);
         }
-        setMember(target, key, value);
+        return setMember(target, key, value);
     }
 
-    private void setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
-        final var cls = object.getKlass();
-        if (cls != null && !object.has(key)) {
-            final var setter = cls.findInstanceSetter(key);
-            if (setter != null) {
-                interp.callFunction(setter, receiver, List.of(value));
-                return;
-            }
-        }
+    private boolean setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
         if (!object.has(key)) {
-            final var accessorSetter = object.getAccessorSetter(key);
-            if (accessorSetter != null) {
-                interp.callValue(accessorSetter, receiver, List.of(value));
-                return;
-            }
-            if (object.hasAccessor(key)) {
-                return;
+            for (var current = object; current != null; current = current.getProto()) {
+                final var accessorSetter = current.getAccessorSetter(key);
+                if (accessorSetter != null) {
+                    interp.callValue(accessorSetter, receiver, List.of(value));
+                    return true;
+                }
+                if (current.hasAccessor(key)) {
+                    return false;
+                }
             }
         }
-        object.set(key, value);
+        return object.set(key, value);
     }
 
-    public void setMember(JsValue target, String key, JsValue value) {
-        switch (target) {
-            case JsProxy proxy -> proxies.set(proxy, new JsString(key), value);
-            case JsGlobalObject global -> global.getEnv().setGlobal(key, value);
+    public boolean setMember(JsValue target, String key, JsValue value) {
+        return switch (target) {
+            case JsProxy proxy -> {
+                proxies.set(proxy, new JsString(key), value);
+                yield true;
+            }
+            case JsGlobalObject global -> {
+                global.getEnv().setGlobal(key, value);
+                yield true;
+            }
             case JsArguments arguments -> {
                 final var index = arrayIndex(key);
                 if (index != null) {
                     arguments.set(index, value);
                 }
+                yield true;
             }
             case JsObject object -> setObjectMember(object, key, value, object);
             case JsClass cls -> {
@@ -404,36 +392,53 @@ public final class MemberEvaluator {
                 } else {
                     cls.setStaticProp(key, value);
                 }
+                yield true;
             }
-            case JsArray array -> {
-                if ("length".equals(key)) {
-                    array.setLength(requireLength(value));
-                    return;
-                }
-                final var index = arrayIndex(key);
-                if (index != null) {
-                    array.set(index, value);
-                }
-            }
+            case JsArray array -> setArrayMember(array, key, value);
             case JsTypedArray typed -> {
                 final var index = arrayIndex(key);
                 if (index != null) {
                     typed.setElement(index, value);
                 }
+                yield true;
             }
             case JsRegExp regexp -> {
                 if ("lastIndex".equals(key)) {
                     final var next = JsCoercion.toNumber(value);
                     regexp.setLastIndex(Double.isNaN(next) ? 0 : (int) next);
                 }
+                yield true;
             }
             case JsNull ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
             case JsUndefined ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
-            default -> {
+            default -> true;
+        };
+    }
+
+    public static String writeRejectionMessage(JsValue target, JsValue key) {
+        final var name = JsCoercion.toStr(key);
+        if (target instanceof JsObject object) {
+            if (object.hasAccessor(name) && object.getAccessorSetter(name) == null) {
+                return "Cannot set property " + name + " of #<Object> which has only a getter";
+            }
+            if (object.has(name)) {
+                return "Cannot assign to read only property '" + name + "' of object";
             }
         }
+        if (target instanceof JsArray array && array.isFrozen()) {
+            return "Cannot assign to read only property '" + name + "' of object";
+        }
+        return "Cannot add property " + name + ", object is not extensible";
+    }
+
+    private static boolean setArrayMember(JsArray array, String key, JsValue value) {
+        if ("length".equals(key)) {
+            return array.setLength(requireLength(value));
+        }
+        final var index = arrayIndex(key);
+        return index == null ? array.setProperty(key, value) : array.set(index, value);
     }
 
     private static int requireLength(JsValue value) {
@@ -445,16 +450,11 @@ public final class MemberEvaluator {
     }
 
     private JsValue generatorMethod(JsGenerator generator, String key) {
-        final var coroutine = generator.getCoroutine();
-        return switch (key) {
-            case "next" -> new JsNativeFunction("next", (_, args) -> stepResult(coroutine.resumeNext(arg0(args))));
-            case "return" ->
-                new JsNativeFunction("return", (_, args) -> stepResult(coroutine.resumeReturn(arg0(args))));
-            case "throw" -> new JsNativeFunction("throw", (_, args) -> stepResult(coroutine.resumeThrow(arg0(args))));
-            default -> IteratorBuiltins.isHelperName(key)
-                    ? IteratorBuiltins.helper(interp.ops(), key)
-                    : intrinsicMember(generator, key);
-        };
+        final var intrinsic = intrinsicMember(generator, key);
+        if (!(intrinsic instanceof JsUndefined) || !IteratorBuiltins.isHelperName(key)) {
+            return intrinsic;
+        }
+        return IteratorBuiltins.helper(interp.ops(), key);
     }
 
     private boolean isIteratorLike(JsObject object) {
@@ -466,17 +466,11 @@ public final class MemberEvaluator {
     }
 
     private JsValue asyncGeneratorMethod(JsAsyncGenerator generator, String key) {
-        return switch (key) {
-            case "next" ->
-                new JsNativeFunction("next", (_, args) -> driveAsyncGenerator(generator, AsyncStep.NEXT, arg0(args)));
-            case "return" -> new JsNativeFunction("return",
-                    (_, args) -> driveAsyncGenerator(generator, AsyncStep.RETURN, arg0(args)));
-            case "throw" ->
-                new JsNativeFunction("throw", (_, args) -> driveAsyncGenerator(generator, AsyncStep.THROW, arg0(args)));
-            default -> AsyncIteratorBuiltins.isHelperName(key)
-                    ? AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key)
-                    : intrinsicMember(generator, key);
-        };
+        final var intrinsic = intrinsicMember(generator, key);
+        if (!(intrinsic instanceof JsUndefined) || !AsyncIteratorBuiltins.isHelperName(key)) {
+            return intrinsic;
+        }
+        return AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key);
     }
 
     public JsValue driveAsyncGenerator(JsAsyncGenerator generator, AsyncStep kind, JsValue arg) {
@@ -548,54 +542,6 @@ public final class MemberEvaluator {
     }
 
     private JsValue promiseMethod(JsPromise promise, String key) {
-        return switch (key) {
-            case "then" -> new JsNativeFunction("then", (_, args) -> promiseThen(promise, arg0(args), arg1(args)));
-            case "catch" ->
-                new JsNativeFunction("catch", (_, args) -> promiseThen(promise, JsUndefined.getInstance(), arg0(args)));
-            case "finally" -> new JsNativeFunction("finally", (_, args) -> promiseFinally(promise, arg0(args)));
-            default -> intrinsicMember(promise, key);
-        };
-    }
-
-    private JsValue promiseThen(JsPromise promise, JsValue onFulfilled, JsValue onRejected) {
-        final var derived = new JsPromise(eventLoop);
-        promise.subscribe(value -> settleThen(derived, onFulfilled, value, true),
-                reason -> settleThen(derived, onRejected, reason, false));
-        return derived;
-    }
-
-    private void settleThen(JsPromise derived, JsValue handler, JsValue input, boolean fulfilled) {
-        if (!(handler instanceof JsFunction) && !(handler instanceof JsNativeFunction)) {
-            if (fulfilled) {
-                derived.resolve(input);
-            } else {
-                derived.reject(input);
-            }
-            return;
-        }
-        try {
-            derived.resolve(interp.callValue(handler, JsUndefined.getInstance(), List.of(input)));
-        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
-                | SyntaxErrorException error) {
-            derived.reject(toErrorValue(error, interp.intrinsics()));
-        }
-    }
-
-    private JsValue promiseFinally(JsPromise promise, JsValue onFinally) {
-        final var derived = new JsPromise(eventLoop);
-        promise.subscribe(value -> {
-            runFinally(onFinally);
-            derived.resolve(value);
-        }, reason -> {
-            runFinally(onFinally);
-            derived.reject(reason);
-        });
-        return derived;
-    }
-
-    private void runFinally(JsValue onFinally) {
-        if (onFinally instanceof JsFunction || onFinally instanceof JsNativeFunction) {
-            interp.callValue(onFinally, JsUndefined.getInstance(), List.of());
-        }
+        return intrinsicMember(promise, key);
     }
 }

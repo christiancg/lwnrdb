@@ -12,9 +12,7 @@ public final class JsClass extends JsValue {
     private final String name;
     private final JsClass superClass;
     private JsFunction constructor;
-    private final Map<String, JsFunction> instanceMethods = new LinkedHashMap<>();
-    private final Map<String, JsFunction> instanceGetters = new LinkedHashMap<>();
-    private final Map<String, JsFunction> instanceSetters = new LinkedHashMap<>();
+    private final JsObject prototype = new JsObject();
     private final Map<String, JsFunction> staticMethods = new LinkedHashMap<>();
     private final Map<String, JsFunction> staticGetters = new LinkedHashMap<>();
     private final Map<String, JsFunction> staticSetters = new LinkedHashMap<>();
@@ -41,6 +39,15 @@ public final class JsClass extends JsValue {
         this.name = name;
         this.superClass = superClass;
         this.methodScope = methodScope;
+        if (superClass != null) {
+            prototype.setProto(superClass.getPrototype());
+        }
+        prototype.defineValue("constructor", this);
+        prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
+    }
+
+    public JsObject getPrototype() {
+        return prototype;
     }
 
     public JsNativeFunction getNativeSuperClass() {
@@ -49,6 +56,9 @@ public final class JsClass extends JsValue {
 
     public void setNativeSuperClass(JsNativeFunction nativeSuperClass) {
         this.nativeSuperClass = nativeSuperClass;
+        if (nativeSuperClass != null && superClass == null) {
+            prototype.setProto(nativeSuperClass.getPrototype());
+        }
     }
 
     public JsNativeFunction findNativeSuperClass() {
@@ -81,7 +91,14 @@ public final class JsClass extends JsValue {
     }
 
     public void addInstanceMethod(String key, String kind, JsFunction fn) {
-        selectAccessor(instanceMethods, instanceGetters, instanceSetters, kind).put(key, fn);
+        if ("get".equals(kind)) {
+            prototype.defineAccessor(key, fn, null);
+        } else if ("set".equals(kind)) {
+            prototype.defineAccessor(key, null, fn);
+        } else {
+            prototype.defineValue(key, fn);
+        }
+        prototype.setFlags(key, new JsObject.PropertyFlags(true, false, true));
     }
 
     public void addStaticMethod(String key, String kind, JsFunction fn) {
@@ -196,18 +213,6 @@ public final class JsClass extends JsValue {
 
     public boolean hasStaticProp(String key) {
         return staticProps.containsKey(key);
-    }
-
-    public JsFunction findInstanceMethod(String key) {
-        return findInChain(cls -> cls.instanceMethods, key);
-    }
-
-    public JsFunction findInstanceGetter(String key) {
-        return findInChain(cls -> cls.instanceGetters, key);
-    }
-
-    public JsFunction findInstanceSetter(String key) {
-        return findInChain(cls -> cls.instanceSetters, key);
     }
 
     public JsFunction findStaticMethod(String key) {

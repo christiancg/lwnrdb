@@ -8,6 +8,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.numer
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.shouldNotApplyLogical;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.spreadObject;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stringCodePoints;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -134,11 +135,7 @@ public final class ExpressionEvaluator {
                     target.add(array.isHole(i) ? JsUndefined.getInstance() : array.get(i));
                 }
             }
-            case JsString string -> {
-                for (var i = 0; i < string.getValue().length(); i++) {
-                    target.add(new JsString(String.valueOf(string.getValue().charAt(i))));
-                }
-            }
+            case JsString string -> target.addAll(stringCodePoints(string.getValue()));
             default -> {
                 final var iteration = new Iteration(interp, value);
                 var element = iteration.next();
@@ -152,6 +149,8 @@ public final class ExpressionEvaluator {
 
     public JsValue evalObject(ObjectExpression object, Environment env) {
         final var result = new JsObject();
+        final var homeScope = env.child();
+        homeScope.defineHomeClass(result);
         for (final var member : object.getProperties()) {
             if (member instanceof SpreadElement spread) {
                 spreadObject(result, interp.eval(spread.getArgument(), env));
@@ -164,9 +163,11 @@ public final class ExpressionEvaluator {
                 throw new UnsupportedNodeException(property.getValue().getType().name());
             }
             final var accessor = "get".equals(property.getKind()) || "set".equals(property.getKind());
+            // Only shorthand methods and accessors get a home object, so only they may use `super`
+            final var scope = accessor || "method".equals(property.getKind()) ? homeScope : env;
             if (property.isComputed()) {
                 final var keyValue = interp.eval(property.getKey(), env);
-                final var evaluated = interp.eval(value, env);
+                final var evaluated = interp.eval(value, scope);
                 if (accessor) {
                     storeAccessor(result, JsCoercion.toStr(keyValue), property.getKind(), evaluated);
                 } else if (keyValue instanceof JsSymbol symbol) {
@@ -177,7 +178,7 @@ public final class ExpressionEvaluator {
                 continue;
             }
             final var name = staticKeyName(property.getKey());
-            final var evaluated = interp.eval(value, env);
+            final var evaluated = interp.eval(value, scope);
             if (accessor) {
                 storeAccessor(result, name, property.getKind(), evaluated);
             } else if ("__proto__".equals(name)) {
@@ -245,7 +246,12 @@ public final class ExpressionEvaluator {
         final var key = interp.memberKey(member, env);
         return switch (target) {
             case JsProxy proxy -> JsBoolean.of(proxies.delete(proxy, new JsString(key)));
-            case JsObject object -> JsBoolean.of(object.delete(key));
+            case JsObject object -> {
+                if (!object.delete(key)) {
+                    throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
+                }
+                yield JsBoolean.TRUE;
+            }
             case JsArray array -> JsBoolean.of(deleteArrayElement(array, key));
             default -> JsBoolean.TRUE;
         };
@@ -272,7 +278,7 @@ public final class ExpressionEvaluator {
             final var key = interp.memberKeyValue(member, env);
             final var oldValue = interp.getMemberByKey(target, key);
             final var newValue = JsOperators.delta(oldValue, increment, interp.ops());
-            interp.setMemberByKey(target, key, newValue);
+            assignMember(target, key, newValue);
             return update.isPrefix() ? newValue : numericOld(oldValue, interp.ops());
         }
         throw new UnsupportedNodeException(argument.getType().name());
@@ -361,7 +367,7 @@ public final class ExpressionEvaluator {
         final var operator = assignment.getOperator();
         if ("=".equals(operator)) {
             final var value = interp.eval(assignment.getValue(), env);
-            interp.setMemberByKey(target, key, value);
+            assignMember(target, key, value);
             return value;
         }
         final var current = interp.getMemberByKey(target, key);
@@ -370,12 +376,19 @@ public final class ExpressionEvaluator {
                 return current;
             }
             final var value = interp.eval(assignment.getValue(), env);
-            interp.setMemberByKey(target, key, value);
+            assignMember(target, key, value);
             return value;
         }
         final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
                 interp.ops());
-        interp.setMemberByKey(target, key, value);
+        assignMember(target, key, value);
         return value;
+    }
+
+    // The engine is always strict, so a rejected write is a TypeError rather than a silent no-op
+    private void assignMember(JsValue target, JsValue key, JsValue value) {
+        if (!interp.setMemberByKey(target, key, value)) {
+            throw new TypeErrorException(MemberEvaluator.writeRejectionMessage(target, key));
+        }
     }
 }

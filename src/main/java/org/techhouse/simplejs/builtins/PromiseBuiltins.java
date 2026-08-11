@@ -2,8 +2,12 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.List;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.ReferenceErrorException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -32,6 +36,69 @@ public final class PromiseBuiltins {
         promise.setProperty("withResolvers", new JsNativeFunction("withResolvers", (_, _) -> withResolvers(eventLoop)));
         promise.setProperty("try", new JsNativeFunction("try", (_, args) -> tryCall(eventLoop, invoker, args)));
         return promise;
+    }
+
+    public static final List<String> PROTO_NAMES = List.of("then", "catch", "finally");
+
+    public static JsValue getMethod(JsPromise promise, String name, EventLoop eventLoop, Invoker invoker,
+            Intrinsics intrinsics) {
+        return switch (name) {
+            case "then" -> new JsNativeFunction("then",
+                    (_, args) -> then(promise, arg0(args), arg1(args), eventLoop, invoker, intrinsics));
+            case "catch" -> new JsNativeFunction("catch",
+                    (_, args) -> then(promise, JsUndefined.getInstance(), arg0(args), eventLoop, invoker, intrinsics));
+            case "finally" ->
+                new JsNativeFunction("finally", (_, args) -> onFinally(promise, arg0(args), eventLoop, invoker));
+            default -> null;
+        };
+    }
+
+    private static JsValue then(JsPromise promise, JsValue onFulfilled, JsValue onRejected, EventLoop eventLoop,
+            Invoker invoker, Intrinsics intrinsics) {
+        final var derived = new JsPromise(eventLoop);
+        promise.subscribe(value -> settle(derived, onFulfilled, value, true, invoker, intrinsics),
+                reason -> settle(derived, onRejected, reason, false, invoker, intrinsics));
+        return derived;
+    }
+
+    private static void settle(JsPromise derived, JsValue handler, JsValue input, boolean fulfilled, Invoker invoker,
+            Intrinsics intrinsics) {
+        if (!(handler instanceof JsFunction) && !(handler instanceof JsNativeFunction)) {
+            if (fulfilled) {
+                derived.resolve(input);
+            } else {
+                derived.reject(input);
+            }
+            return;
+        }
+        try {
+            derived.resolve(invoker.call(handler, JsUndefined.getInstance(), List.of(input)));
+        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                | SyntaxErrorException error) {
+            derived.reject(InterpreterUtils.toErrorValue(error, intrinsics));
+        }
+    }
+
+    private static JsValue onFinally(JsPromise promise, JsValue onFinally, EventLoop eventLoop, Invoker invoker) {
+        final var derived = new JsPromise(eventLoop);
+        promise.subscribe(value -> {
+            runFinally(onFinally, invoker);
+            derived.resolve(value);
+        }, reason -> {
+            runFinally(onFinally, invoker);
+            derived.reject(reason);
+        });
+        return derived;
+    }
+
+    private static void runFinally(JsValue onFinally, Invoker invoker) {
+        if (onFinally instanceof JsFunction || onFinally instanceof JsNativeFunction) {
+            invoker.call(onFinally, JsUndefined.getInstance(), List.of());
+        }
+    }
+
+    private static JsValue arg1(List<JsValue> args) {
+        return args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
     }
 
     private static JsValue withResolvers(EventLoop eventLoop) {

@@ -262,9 +262,9 @@ public final class GlobalFunctionsBuiltins {
             case JsObject object -> {
                 final var copy = new JsObject();
                 seen.put(value, copy);
-                for (final var entry : object.getProperties().entrySet()) {
-                    if (object.isEnumerable(entry.getKey())) {
-                        copy.set(entry.getKey(), clone(entry.getValue(), seen));
+                for (final var key : object.keys()) {
+                    if (object.isEnumerable(key)) {
+                        copy.set(key, clone(object.get(key), seen));
                     }
                 }
                 yield copy;

@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.values;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -9,6 +12,9 @@ public final class JsObject extends JsValue {
     public record PropertyFlags(boolean writable, boolean enumerable, boolean configurable) {
         public static final PropertyFlags DEFAULT = new PropertyFlags(true, true, true);
     }
+
+    private static final long MAX_ARRAY_INDEX = 4294967294L;
+    private static final int MAX_INDEX_KEY_LENGTH = 10;
 
     private final Map<String, JsValue> properties = new LinkedHashMap<>();
     private boolean extensible = true;
@@ -27,16 +33,19 @@ public final class JsObject extends JsValue {
         return value == null ? JsUndefined.getInstance() : value;
     }
 
-    public void set(String key, JsValue value) {
+    public boolean set(String key, JsValue value) {
         if (properties.containsKey(key)) {
             if (isWritable(key)) {
                 properties.put(key, value);
+                return true;
             }
-            return;
+            return false;
         }
         if (extensible) {
             properties.put(key, value);
+            return true;
         }
+        return false;
     }
 
     public void defineValue(String key, JsValue value) {
@@ -156,11 +165,44 @@ public final class JsObject extends JsValue {
     private Set<String> ownKeys() {
         final var keys = new LinkedHashSet<>(properties.keySet());
         keys.addAll(accessorKeys());
-        return keys;
+        return orderKeys(keys);
     }
 
     public Set<String> keys() {
-        return properties.keySet();
+        return orderKeys(properties.keySet());
+    }
+
+    // OrdinaryOwnPropertyKeys: canonical array-index keys ascending, then the rest in insertion order
+    private static Set<String> orderKeys(Collection<String> raw) {
+        final var indexes = new ArrayList<String>();
+        for (final var key : raw) {
+            if (isArrayIndexKey(key)) {
+                indexes.add(key);
+            }
+        }
+        if (indexes.isEmpty()) {
+            return new LinkedHashSet<>(raw);
+        }
+        indexes.sort(Comparator.comparingLong(Long::parseLong));
+        final var ordered = new LinkedHashSet<>(indexes);
+        for (final var key : raw) {
+            if (!isArrayIndexKey(key)) {
+                ordered.add(key);
+            }
+        }
+        return ordered;
+    }
+
+    private static boolean isArrayIndexKey(String key) {
+        if (key.isEmpty() || key.length() > MAX_INDEX_KEY_LENGTH || (key.length() > 1 && key.charAt(0) == '0')) {
+            return false;
+        }
+        for (var i = 0; i < key.length(); i++) {
+            if (!Character.isDigit(key.charAt(i))) {
+                return false;
+            }
+        }
+        return Long.parseLong(key) <= MAX_ARRAY_INDEX;
     }
 
     public Map<String, JsValue> getProperties() {
@@ -203,15 +245,16 @@ public final class JsObject extends JsValue {
         return value == null ? JsUndefined.getInstance() : value;
     }
 
-    public void setSymbol(JsSymbol key, JsValue value) {
+    public boolean setSymbol(JsSymbol key, JsValue value) {
         final var isNew = symbolProperties == null || !symbolProperties.containsKey(key);
         if (isNew && !extensible) {
-            return;
+            return false;
         }
         if (symbolProperties == null) {
             symbolProperties = new LinkedHashMap<>();
         }
         symbolProperties.put(key, value);
+        return true;
     }
 
     public boolean hasSymbol(JsSymbol key) {

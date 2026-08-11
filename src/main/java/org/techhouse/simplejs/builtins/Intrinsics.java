@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArguments;
@@ -58,20 +59,26 @@ public final class Intrinsics {
     private final JsObject mapProto;
     private final JsObject setProto;
     private final JsObject dateProto;
-    private final JsObject promiseProto = childOfObjectProto();
-    private final JsObject iteratorProto = childOfObjectProto();
-    private final JsObject asyncIteratorProto = childOfObjectProto();
+    private final JsObject promiseProto;
+    private final JsObject iteratorProto;
+    private final JsObject asyncIteratorProto;
     private final JsObject arrayBufferProto;
     private final JsObject dataViewProto;
     private final Map<JsTypedArray.Kind, JsObject> typedArrayProtos = new EnumMap<>(JsTypedArray.Kind.class);
-    private final JsObject errorProto = childOfObjectProto();
+    private final JsObject errorProto = new JsObject();
     private final Map<String, JsObject> errorProtos = new LinkedHashMap<>();
 
-    public Intrinsics(Invoker invoker, InterpreterOps ops) {
+    public Intrinsics(Invoker invoker, InterpreterOps ops, EventLoop eventLoop, GeneratorBuiltins.AsyncDriver driver) {
         this.invoker = invoker;
         this.ops = ops;
-        functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype", (receiver,
-                name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker));
+        promiseProto = prototypeOf(PromiseBuiltins.PROTO_NAMES, "Promise.prototype", (receiver, name) -> PromiseBuiltins
+                .getMethod(requirePromise(receiver, name), name, eventLoop, invoker, this));
+        iteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "Generator.prototype",
+                (receiver, name) -> GeneratorBuiltins.getMethod(requireGenerator(receiver, name), name));
+        asyncIteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "AsyncGenerator.prototype", (receiver,
+                name) -> GeneratorBuiltins.getAsyncMethod(requireAsyncGenerator(receiver, name), name, driver));
+        functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype",
+                (receiver, name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker));
         arrayProto = prototypeOf(ArrayBuiltins.NAMES, "Array.prototype",
                 (receiver, name) -> ArrayBuiltins.getMethod(requireArray(receiver, name), name, invoker, ops));
         stringProto = prototypeOf(StringBuiltins.NAMES, "String.prototype",
@@ -106,18 +113,11 @@ public final class Intrinsics {
         installErrorPrototypes();
     }
 
-    private static JsObject childOfObjectProto() {
-        return new JsObject();
-    }
-
     private void installObjectPrototype() {
         for (final var name : ObjectProtoBuiltins.NAMES) {
             define(objectProto, name, wrapper(name, "Object.prototype",
                     (receiver, key) -> ObjectProtoBuiltins.getMethod(requireObject(receiver, key), key, ops)));
         }
-        promiseProto.setProto(objectProto);
-        iteratorProto.setProto(objectProto);
-        asyncIteratorProto.setProto(objectProto);
         errorProto.setProto(objectProto);
     }
 
@@ -354,6 +354,30 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("RegExp.prototype." + method, receiver);
+    }
+
+    private JsPromise requirePromise(JsValue receiver, String method) {
+        if (receiver instanceof JsPromise promise) {
+            return promise;
+        }
+        if (unwrap(receiver) instanceof JsPromise wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Promise.prototype." + method, receiver);
+    }
+
+    private JsGenerator requireGenerator(JsValue receiver, String method) {
+        if (receiver instanceof JsGenerator generator) {
+            return generator;
+        }
+        throw incompatible("Generator.prototype." + method, receiver);
+    }
+
+    private JsAsyncGenerator requireAsyncGenerator(JsValue receiver, String method) {
+        if (receiver instanceof JsAsyncGenerator generator) {
+            return generator;
+        }
+        throw incompatible("AsyncGenerator.prototype." + method, receiver);
     }
 
     private JsMap requireMap(JsValue receiver, String method) {

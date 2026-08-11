@@ -63,6 +63,10 @@ public final class JsPromise extends JsValue {
         reactions.clear();
     }
 
+    public void markHandled() {
+        handled = true;
+    }
+
     public void subscribe(Consumer<JsValue> onFulfilled, Consumer<JsValue> onRejected) {
         handled = true;
         final var reaction = new Reaction(onFulfilled, onRejected);

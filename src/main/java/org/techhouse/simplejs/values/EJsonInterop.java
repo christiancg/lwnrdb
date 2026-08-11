@@ -68,13 +68,13 @@ public final class EJsonInterop {
     private static JsonBaseElement objectToEjson(JsObject object, Map<JsValue, Boolean> visited) {
         guardCycle(object, visited);
         final var result = new JsonObject();
-        for (final var entry : object.getProperties().entrySet()) {
-            if (!object.isEnumerable(entry.getKey())) {
+        for (final var key : object.keys()) {
+            if (!object.isEnumerable(key)) {
                 continue;
             }
-            final var converted = toEjson(entry.getValue(), visited);
+            final var converted = toEjson(object.get(key), visited);
             if (converted != null) {
-                result.add(entry.getKey(), converted);
+                result.add(key, converted);
             }
         }
         visited.remove(object);

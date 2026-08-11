@@ -21,6 +21,10 @@ public class InterpreterObjectTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
+    private static boolean flag(String source) {
+        return ((org.techhouse.simplejs.values.JsBoolean) Interpreter.run(source)).getValue();
+    }
+
     // Object literals support shorthand and computed keys
     @Test
     public void test_object_literal_shorthand_and_computed() {
@@ -238,6 +242,91 @@ public class InterpreterObjectTest {
         assertInstanceOf(JsUndefined.class, Interpreter.run("const a = [1]; a.length = 3; a[2]"));
     }
 
+    // Own string keys enumerate with the canonical integer indexes first, then insertion order
+    @Test
+    public void test_key_order_integer_first() {
+        assertEquals("1,2,b,a", str("Object.keys({b: 1, 2: 2, a: 3, 1: 4}).join(',')"));
+        assertEquals("1,2,b,a", str("Object.getOwnPropertyNames({b: 1, 2: 2, a: 3, 1: 4}).join(',')"));
+        assertEquals("4,2,1,3", str("Object.values({b: 1, 2: 2, a: 3, 1: 4}).join(',')"));
+        assertEquals("1,2,b,a", str("Reflect.ownKeys({b: 1, 2: 2, a: 3, 1: 4}).join(',')"));
+    }
+
+    // for-in follows the same ordering
+    @Test
+    public void test_forin_order_integer_first() {
+        assertEquals("1,2,b,a",
+                str("let r = []; for (const k in {b: 1, 2: 2, a: 3, 1: 4}) { r.push(k); } r.join(',')"));
+    }
+
+    // JSON.stringify emits the spec key order
+    @Test
+    public void test_json_stringify_key_order() {
+        assertEquals("{\"1\":4,\"2\":2,\"b\":1,\"a\":3}", str("JSON.stringify({b: 1, 2: 2, a: 3, 1: 4})"));
+    }
+
+    // Object.assign and object spread copy in the spec key order
+    @Test
+    public void test_object_assign_and_spread_order() {
+        assertEquals("1,2,b,a", str("Object.keys(Object.assign({}, {b: 1, 2: 2, a: 3, 1: 4})).join(',')"));
+        assertEquals("1,2,b,a", str("Object.keys({...{b: 1, 2: 2, a: 3, 1: 4}}).join(',')"));
+    }
+
+    // A key that only looks like an index stays in the string bucket, in insertion order
+    @Test
+    public void test_non_canonical_index_keys_stay_strings() {
+        assertEquals("1,01,-1,1.0,4294967295",
+                str("Object.keys({'01': 1, '-1': 2, '1.0': 3, '4294967295': 4, 1: 5}).join(',')"));
+        assertEquals("0,4294967294,x", str("Object.keys({x: 1, 4294967294: 2, 0: 3}).join(',')"));
+    }
+
+    // A rejected write is a TypeError, since the engine is always strict
+    @Test
+    public void test_strict_assign_rejections_throw() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const o = Object.freeze({a: 1}); o.a = 2"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const o = Object.freeze({a: 1}); o.a += 2"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const o = Object.freeze({a: 1}); o.a++"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const o = Object.preventExtensions({}); o.b = 1"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const o = {get v() { return 1; }}; o.v = 2"));
+    }
+
+    // A rejected delete is a TypeError too
+    @Test
+    public void test_strict_delete_nonconfigurable_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const o = Object.freeze({a: 1}); delete o.a"));
+        assertTrue(flag("const o = {a: 1}; delete o.b"));
+    }
+
+    // Reflect reports the same rejections as booleans instead of throwing
+    @Test
+    public void test_reflect_reports_rejection_as_false() {
+        assertTrue(flag("const o = Object.freeze({a: 1}); Reflect.set(o, 'a', 2) === false"));
+        assertTrue(flag("const o = Object.freeze({a: 1}); Reflect.deleteProperty(o, 'a') === false"));
+        assertTrue(flag("const o = {}; Reflect.set(o, 'a', 2) === true"));
+    }
+
+    // freeze and friends reach arrays as well as plain objects
+    @Test
+    public void test_freeze_array() {
+        assertTrue(flag("Object.isFrozen(Object.freeze([1]))"));
+        assertTrue(flag("!Object.isFrozen([1])"));
+        assertTrue(flag("!Object.isExtensible(Object.freeze([1]))"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const a = Object.freeze([1]); a[0] = 9"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const a = Object.freeze([1]); a.length = 0"));
+        assertEquals(1, num("const a = Object.freeze([1]); try { a.push(2); } catch (e) { } a.length"));
+    }
+
+    // preventExtensions on an array rejects a new index but keeps the existing ones writable
+    @Test
+    public void test_prevent_extensions_array() {
+        assertEquals(9, num("const a = Object.preventExtensions([1]); a[0] = 9; a[0]"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const a = Object.preventExtensions([1]); a[1] = 9"));
+        assertTrue(flag("Object.isSealed(Object.seal([1]))"));
+        assertTrue(flag("!Object.isFrozen(Object.seal([1]))"));
+        assertTrue(flag("Object.isFrozen(Object.preventExtensions([]))"));
+    }
+
     // An invalid length is rejected
     @Test
     public void test_array_length_assignment_range() {
@@ -248,4 +337,25 @@ public class InterpreterObjectTest {
         assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
                 () -> Interpreter.run("const a = [1]; a.length = NaN"));
     }
+
+    // A shorthand method in an object literal has a home object, so it may call super
+    @Test
+    public void test_object_literal_super() {
+        assertEquals("po", str(
+                "const p = { m() { return 'p'; } }; const o = { __proto__: p, m() { return super.m() + 'o'; } }; o.m()"));
+        assertEquals(2, num(
+                "const p = { get v() { return 1; } }; const o = { __proto__: p, get v() { return super.v + 1; } }; o.v"));
+        assertEquals("p", str(
+                "const p = { m() { return 'p'; } }; const o = { __proto__: p, m() { const g = () => super.m(); return g(); } }; o.m()"));
+    }
+
+    // super with no home object at all is still a syntax error
+    @Test
+    public void test_super_without_home_still_syntax_error() {
+        assertThrows(org.techhouse.simplejs.exceptions.SyntaxErrorException.class,
+                () -> Interpreter.run("function f() { return super.x; } f()"));
+        assertThrows(org.techhouse.simplejs.exceptions.SyntaxErrorException.class,
+                () -> Interpreter.run("const o = { m: function() { return super.x; } }; o.m()"));
+    }
+
 }

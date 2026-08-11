@@ -1,7 +1,7 @@
 package org.techhouse.simplejs.internal.interpreter;
 
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayLikeElements;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.iterableElements;
 
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -37,7 +37,7 @@ public final class Iteration {
         } else if (iterable instanceof JsArray || iterable instanceof JsString || iterable instanceof JsArguments
                 || iterable instanceof JsTypedArray) {
             this.generator = null;
-            this.buffer = arrayLikeElements(iterable);
+            this.buffer = iterableElements(iterable);
             this.iterator = null;
         } else {
             this.generator = null;

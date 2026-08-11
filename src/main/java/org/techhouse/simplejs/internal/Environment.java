@@ -34,6 +34,8 @@ public final class Environment {
     private boolean hasThis;
     private JsValue homeClass;
     private boolean hasHomeClass;
+    private JsValue newTarget;
+    private boolean hasNewTarget;
     private List<DisposalEntry> disposables;
 
     private Environment(Environment parent, boolean functionScope) {
@@ -83,6 +85,22 @@ public final class Environment {
             env = env.parent;
         }
         return null;
+    }
+
+    public void defineNewTarget(JsValue value) {
+        this.newTarget = value;
+        this.hasNewTarget = true;
+    }
+
+    public JsValue resolveNewTarget() {
+        var env = this;
+        while (env != null) {
+            if (env.hasNewTarget) {
+                return env.newTarget;
+            }
+            env = env.parent;
+        }
+        return JsUndefined.getInstance();
     }
 
     public void declareFunction(String name, JsValue value) {

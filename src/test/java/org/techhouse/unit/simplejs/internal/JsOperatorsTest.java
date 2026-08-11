@@ -164,6 +164,16 @@ public class JsOperatorsTest {
         assertEquals(BigInteger.valueOf(-6), big(JsOperators.unary("~", bi(5))));
     }
 
+    // Bitwise operands past the long range wrap modulo 2^32 instead of saturating
+    @Test
+    public void test_bitwise_large_operands() {
+        assertEquals(-559939584, num(JsOperators.binary("|", new JsNumber(1e21), new JsNumber(0))));
+        assertEquals(0, num(JsOperators.binary("|", new JsNumber(9.223372036854776E18), new JsNumber(0))));
+        assertEquals(1410065408, num(JsOperators.binary("|", new JsNumber(1e10), new JsNumber(0))));
+        assertEquals(4294967295.0, num(JsOperators.binary(">>>", new JsNumber(-1), new JsNumber(0))));
+        assertEquals(0, num(JsOperators.binary("|", new JsNumber(Double.POSITIVE_INFINITY), new JsNumber(0))));
+    }
+
     // Unknown operators are rejected by both binary and unary dispatch
     @Test
     public void test_unknown_operators_throw() {

@@ -2,6 +2,7 @@ package org.techhouse.simplejs.internal;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -304,11 +305,7 @@ public final class JsOperators {
     }
 
     private static int toInt32(JsValue value, InterpreterOps ops) {
-        final var d = JsCoercion.toNumber(value, ops);
-        if (Double.isNaN(d) || Double.isInfinite(d)) {
-            return 0;
-        }
-        return (int) (long) d;
+        return NumberFormatter.toInt32(JsCoercion.toNumber(value, ops));
     }
 
     private static long toUint32(JsValue value, InterpreterOps ops) {

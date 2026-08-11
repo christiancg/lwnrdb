@@ -46,7 +46,8 @@ import org.techhouse.simplejs.values.JsValue;
 
 public class IntrinsicsTest {
     private static Intrinsics intrinsics() {
-        return new Intrinsics((fn, thisArg, args) -> ((JsNativeFunction) fn).invoke(thisArg, args), null);
+        return new Intrinsics((fn, thisArg, args) -> ((JsNativeFunction) fn).invoke(thisArg, args), null,
+                new org.techhouse.simplejs.internal.EventLoop(), (_, _, _) -> JsUndefined.getInstance());
     }
 
     // Every runtime value type resolves to a prototype, and anything else falls back to Object.prototype
@@ -88,6 +89,9 @@ public class IntrinsicsTest {
         assertKeys(realm.dateProto(), DateBuiltins.NAMES);
         assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES);
         assertKeys(realm.functionProto(), FunctionProtoBuiltins.NAMES);
+        assertKeys(realm.promiseProto(), org.techhouse.simplejs.builtins.PromiseBuiltins.PROTO_NAMES);
+        assertKeys(realm.iteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
+        assertKeys(realm.asyncIteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
         assertKeys(realm.arrayBufferProto(), TypedArrayBuiltins.BUFFER_NAMES);
         assertKeys(realm.dataViewProto(), TypedArrayBuiltins.VIEW_NAMES);
         assertKeys(realm.mapProto(), MapBuiltins.NAMES);

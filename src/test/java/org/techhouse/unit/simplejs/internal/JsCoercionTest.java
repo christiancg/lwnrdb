@@ -83,6 +83,21 @@ public class JsCoercionTest {
         assertEquals("[object Object]", JsCoercion.toStr(new JsObject()));
     }
 
+    // Number toStr follows the spec Number::toString, including the exponential thresholds
+    @Test
+    public void test_to_str_number_matches_spec() {
+        assertEquals("0", JsCoercion.toStr(new JsNumber(-0d)));
+        assertEquals("1000000000000000", JsCoercion.toStr(new JsNumber(1e15)));
+        assertEquals("100000000000000000000", JsCoercion.toStr(new JsNumber(1e20)));
+        assertEquals("1e+21", JsCoercion.toStr(new JsNumber(1e21)));
+        assertEquals("1.5e+21", JsCoercion.toStr(new JsNumber(1.5e21)));
+        assertEquals("0.000001", JsCoercion.toStr(new JsNumber(1e-6)));
+        assertEquals("1e-7", JsCoercion.toStr(new JsNumber(1e-7)));
+        assertEquals("5e-324", JsCoercion.toStr(new JsNumber(Double.MIN_VALUE)));
+        assertEquals("0.30000000000000004", JsCoercion.toStr(new JsNumber(0.1 + 0.2)));
+        assertEquals("0.3333333333333333", JsCoercion.toStr(new JsNumber(1d / 3)));
+    }
+
     // Array toStr joins with commas, leaving holes for null and undefined elements
     @Test
     public void test_to_str_array() {

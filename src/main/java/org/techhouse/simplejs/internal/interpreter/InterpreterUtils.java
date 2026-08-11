@@ -135,9 +135,9 @@ public final class InterpreterUtils {
     public static void spreadObject(JsObject target, JsValue source) {
         switch (source) {
             case JsObject object -> {
-                for (final var entry : object.getProperties().entrySet()) {
-                    if (object.isEnumerable(entry.getKey())) {
-                        target.set(entry.getKey(), entry.getValue());
+                for (final var key : object.keys()) {
+                    if (object.isEnumerable(key)) {
+                        target.set(key, object.get(key));
                     }
                 }
                 for (final var symbol : object.symbolKeys()) {
@@ -178,6 +178,27 @@ public final class InterpreterUtils {
             return chars;
         }
         throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+    }
+
+    public static List<JsValue> stringCodePoints(String value) {
+        final var points = new ArrayList<JsValue>();
+        var i = 0;
+        while (i < value.length()) {
+            final var point = value.codePointAt(i);
+            final var width = Character.charCount(point);
+            points.add(new JsString(value.substring(i, i + width)));
+            i += width;
+        }
+        return points;
+    }
+
+    // The iterator protocol walks a string by code point, while its indexed properties (and every
+    // generic array-like path built on them) stay code units — arrayLikeElements is deliberately unchanged.
+    public static List<JsValue> iterableElements(JsValue value) {
+        if (value instanceof JsString string) {
+            return stringCodePoints(string.getValue());
+        }
+        return arrayLikeElements(value);
     }
 
     public static void collectBoundNames(JsNode target, List<String> names) {

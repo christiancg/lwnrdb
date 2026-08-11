@@ -178,6 +178,25 @@ public class PrototypeProgramTest {
         assertEquals("\"function\"", run("return typeof [].join"));
     }
 
+    // The promise prototype is a real, patchable object and its patches do not leak between runs
+    @Test
+    public void test_realm_isolation_covers_promise_proto() {
+        assertEquals("[\"object\",\"function\",\"function\",\"function\"]",
+                run("return [typeof Promise.prototype, typeof Promise.prototype.then,"
+                        + " typeof Promise.prototype.catch, typeof Promise.prototype.finally]"));
+        assertEquals("\"leak\"", run(
+                "Promise.prototype.then = function () { return 'leak' };" + " return Promise.resolve(1).then(v => v)"));
+        assertEquals("\"object\"", run("return typeof Promise.resolve(1).then(v => v)"));
+    }
+
+    // A class prototype is a real object whose members are non-enumerable
+    @Test
+    public void test_class_prototype_is_a_real_object() {
+        assertEquals("[\"object\",\"function\",0,true]",
+                run("class E { m() {} } return [typeof E.prototype, typeof E.prototype.m,"
+                        + " Object.keys(E.prototype).length, E.prototype.constructor === E]"));
+    }
+
     // instanceof against builtin constructors matches objects but never primitives
     @Test
     public void test_instanceof_builtins() {

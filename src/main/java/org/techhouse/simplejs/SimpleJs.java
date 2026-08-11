@@ -25,6 +25,7 @@ import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -60,10 +61,10 @@ public final class SimpleJs {
 
     private JsValue contractResult(Interpreter.ProgramOutcome outcome) {
         if (outcome.hasReturn()) {
-            return outcome.returnValue();
+            return settled(outcome.returnValue());
         }
         if (outcome.exportDefault() != null) {
-            return outcome.exportDefault();
+            return settled(outcome.exportDefault());
         }
         if (!outcome.namedExports().isEmpty()) {
             final var object = new JsObject();
@@ -71,6 +72,20 @@ public final class SimpleJs {
             return object;
         }
         return JsUndefined.getInstance();
+    }
+
+    // The event loop has already drained, so a promise at the top level is normally settled; one that
+    // never settles inside the sandbox contributes undefined.
+    private JsValue settled(JsValue value) {
+        if (!(value instanceof JsPromise promise)) {
+            return value;
+        }
+        promise.markHandled();
+        return switch (promise.getState()) {
+            case FULFILLED -> promise.getResult();
+            case REJECTED -> throw new JsThrowException(promise.getResult());
+            case PENDING -> JsUndefined.getInstance();
+        };
     }
 
     private ScriptResult errorFromThrow(JsThrowException thrown) {

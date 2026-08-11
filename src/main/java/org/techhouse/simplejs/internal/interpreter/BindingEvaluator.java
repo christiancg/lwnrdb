@@ -2,10 +2,10 @@ package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.LEXICAL_KINDS;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.USING_KINDS;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayLikeElements;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.collectBoundNames;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.iterableElements;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
 
 import java.util.ArrayList;
@@ -208,7 +208,7 @@ public final class BindingEvaluator {
     }
 
     private void destructureArray(ArrayPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
-        final var elements = arrayLikeElements(value);
+        final var elements = iterableElements(value);
         final var patternElements = pattern.getElements();
         for (var i = 0; i < patternElements.size(); i++) {
             final var element = patternElements.get(i);
@@ -238,9 +238,9 @@ public final class BindingEvaluator {
             if (member instanceof RestElement rest) {
                 final var restObject = new JsObject();
                 if (value instanceof JsObject object) {
-                    for (final var entry : object.getProperties().entrySet()) {
-                        if (!taken.contains(entry.getKey()) && object.isEnumerable(entry.getKey())) {
-                            restObject.set(entry.getKey(), entry.getValue());
+                    for (final var key : object.keys()) {
+                        if (!taken.contains(key) && object.isEnumerable(key)) {
+                            restObject.set(key, object.get(key));
                         }
                     }
                     for (final var symbol : object.symbolKeys()) {

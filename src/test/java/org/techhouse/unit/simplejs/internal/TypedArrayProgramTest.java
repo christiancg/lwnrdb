@@ -632,6 +632,26 @@ public class TypedArrayProgramTest {
         assertEquals("0,9", str("new Int8Array(2).with(-1, 9).join(',')"));
     }
 
+    // An integer element write out of the double range wraps modulo 2^32 instead of clamping
+    @Test
+    public void test_int32_write_out_of_range_wraps() {
+        assertEquals(0, num("const a = new Int32Array(1); a[0] = 1e300; a[0]"));
+        assertEquals(1410065408, num("const a = new Int32Array(1); a[0] = 1e10; a[0]"));
+        assertEquals(-1, num("const a = new Int32Array(1); a[0] = -1; a[0]"));
+        assertEquals(0, num("const a = new Uint8Array(1); a[0] = 1e21; a[0]"));
+        assertEquals(255, num("const a = new Uint8Array(1); a[0] = -1; a[0]"));
+        assertEquals(0, num("const a = new Int16Array(1); a[0] = 9.223372036854776e18; a[0]"));
+    }
+
+    // A DataView integer write wraps the same way
+    @Test
+    public void test_data_view_write_out_of_range_wraps() {
+        final var view = "const v = new DataView(new ArrayBuffer(8));";
+        assertEquals(0, num(view + " v.setInt32(0, 1e300); v.getInt32(0)"));
+        assertEquals(1410065408, num(view + " v.setInt32(0, 1e10); v.getInt32(0)"));
+        assertEquals(255, num(view + " v.setUint8(0, -1); v.getUint8(0)"));
+    }
+
     // findLast, findLastIndex and copyWithin
     @Test
     public void test_find_last_and_copy_within() {

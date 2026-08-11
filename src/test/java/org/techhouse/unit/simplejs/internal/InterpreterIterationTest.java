@@ -236,4 +236,55 @@ public class InterpreterIterationTest {
                 """;
         assertEquals("1,4,9", str(source));
     }
+    // The iterator protocol walks a string by code point, so an astral character is one step
+    @Test
+    public void test_spread_string_astral() {
+        assertEquals(3, num("[...'ab\\u{1F600}'].length"));
+        assertEquals("😀", str("[...'ab\\u{1F600}'][2]"));
+        assertEquals(2, num("[...'\\u{1F600}\\u{1F600}'].length"));
+        assertEquals(0, num("[...''].length"));
+    }
+
+    // for-of over a string yields whole code points
+    @Test
+    public void test_for_of_string_astral() {
+        assertEquals(2, num("let n = 0; for (const c of 'a\\u{1F600}') { n++; } n"));
+        assertEquals("😀", str("let last = ''; for (const c of 'a\\u{1F600}') { last = c; } last"));
+    }
+
+    // Array destructuring of a string follows the iterator, not the index properties
+    @Test
+    public void test_destructure_string_astral() {
+        assertEquals("😀", str("const [a, b] = 'a\\u{1F600}'; b"));
+    }
+
+    // Array.from and the explicit Symbol.iterator agree with the spread form
+    @Test
+    public void test_array_from_string_astral() {
+        assertEquals(2, num("Array.from('a\\u{1F600}').length"));
+        assertEquals(1, num("[...('\\u{1F600}')[Symbol.iterator]()].length"));
+    }
+
+    // Indexed access, length and split('') stay code-unit based
+    @Test
+    public void test_string_index_stays_code_unit() {
+        assertTrue(bool("'\\u{1F600}'[0].length === 1"));
+        assertEquals(2, num("'\\u{1F600}'.length"));
+        assertEquals(3, num("'a\\u{1F600}'.split('').length"));
+        assertEquals("0,1", str("Object.keys({...'\\u{1F600}'}).join(',')"));
+        assertEquals(2, num("Array.prototype.slice.call('\\u{1F600}').length"));
+    }
+
+    // A lone surrogate is yielded as its own single-unit string rather than dropped
+    @Test
+    public void test_lone_surrogate_is_preserved() {
+        assertEquals(2, num("[...'\\uD800x'].length"));
+        assertEquals(1, num("[...'\\uD800x'][0].length"));
+    }
+
+    // for-of over a string honours break
+    @Test
+    public void test_for_of_string_break() {
+        assertEquals(1, num("let n = 0; for (const c of 'a\\u{1F600}b') { n++; break; } n"));
+    }
 }

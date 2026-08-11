@@ -3,6 +3,7 @@ package org.techhouse.simplejs.builtins;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Locale;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -24,6 +25,7 @@ public final class NumberBuiltins {
 
     private static final double MAX_SAFE_INTEGER = 9007199254740991d;
     private static final int MAX_FRACTION_DIGITS = 100;
+    private static final double TO_FIXED_LIMIT = 1e21;
 
     public static JsNativeFunction create() {
         final var number = new JsNativeFunction("Number",
@@ -117,6 +119,9 @@ public final class NumberBuiltins {
         if (!Double.isFinite(value)) {
             return value > 0 ? "Infinity" : "-Infinity";
         }
+        if (Math.abs(value) >= TO_FIXED_LIMIT) {
+            return NumberFormatter.toJsString(value);
+        }
         // The exact-binary BigDecimal ctor (not valueOf) is what makes (1.005).toFixed(2) round to "1.00"
         return new java.math.BigDecimal(value).setScale(digits, java.math.RoundingMode.HALF_UP).toPlainString();
     }
@@ -151,6 +156,7 @@ public final class NumberBuiltins {
         return normalizeExponent(String.format(Locale.ROOT, pattern, value), fixed);
     }
 
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     private static String toStringRadix(double value, List<JsValue> args) {
         final var radix = intArg(args, 10);
         if (radix == 10) {
@@ -167,7 +173,9 @@ public final class NumberBuiltins {
             return value > 0 ? "Infinity" : "-Infinity";
         }
         if (value == Math.floor(value)) {
-            return Long.toString((long) value, radix);
+            return Math.abs(value) <= MAX_SAFE_INTEGER
+                    ? Long.toString((long) value, radix)
+                    : new java.math.BigDecimal(value).toBigInteger().toString(radix);
         }
         return doubleToRadix(value, radix);
     }

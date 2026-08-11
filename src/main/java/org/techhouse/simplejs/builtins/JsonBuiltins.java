@@ -114,12 +114,11 @@ public final class JsonBuiltins {
             Invoker invoker) {
         enter(object, seen);
         final var result = new JsonObject();
-        for (final var entry : object.getProperties().entrySet()) {
-            final var key = entry.getKey();
+        for (final var key : object.keys()) {
             if (!object.isEnumerable(key) || isFiltered(replacer, key)) {
                 continue;
             }
-            final var child = toJsonTree(entry.getValue(), object, key, replacer, seen, ops, invoker);
+            final var child = toJsonTree(object.get(key), object, key, replacer, seen, ops, invoker);
             if (child != null) {
                 result.add(key, child);
             }

@@ -1066,6 +1066,13 @@ public final class Parser {
 
         private Expression parseNew() {
             expectKeyword("new");
+            if (matchOperator(".")) {
+                if (!isContextualKeyword("target")) {
+                    throw error();
+                }
+                advance();
+                return new MetaProperty("new", "target");
+            }
             var callee = isKeyword("new") ? parseNew() : parsePrimary();
             callee = parseNewCalleeTail(callee);
             List<Expression> arguments = List.of();

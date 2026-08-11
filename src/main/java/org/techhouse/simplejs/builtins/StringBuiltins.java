@@ -419,7 +419,7 @@ public final class StringBuiltins {
         var last = 0;
         while (matcher.find()) {
             sb.append(value, last, matcher.start());
-            sb.append(replacementPiece(matcher, value, args, invoker));
+            sb.append(replacementPiece(matcher, value, args, invoker, regexp));
             last = matcher.end();
             if (!global) {
                 break;
@@ -437,7 +437,8 @@ public final class StringBuiltins {
         return sb.toString();
     }
 
-    private static String replacementPiece(Matcher matcher, String input, List<JsValue> args, Invoker invoker) {
+    private static String replacementPiece(Matcher matcher, String input, List<JsValue> args, Invoker invoker,
+            JsRegExp regexp) {
         if (args.size() > 1 && isCallable(args.get(1))) {
             final var callArgs = new ArrayList<JsValue>();
             callArgs.add(new JsString(matcher.group()));
@@ -448,10 +449,10 @@ public final class StringBuiltins {
             callArgs.add(new JsString(input));
             return JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(), callArgs));
         }
-        return expand(str(args, 1), matcher, input);
+        return expand(str(args, 1), matcher, input, regexp);
     }
 
-    private static String expand(String template, Matcher matcher, String input) {
+    private static String expand(String template, Matcher matcher, String input, JsRegExp regexp) {
         final var sb = new StringBuilder();
         for (var i = 0; i < template.length(); i++) {
             final var ch = template.charAt(i);
@@ -465,7 +466,7 @@ public final class StringBuiltins {
                 case '&' -> sb.append(matcher.group());
                 case '`' -> sb.append(input, 0, matcher.start());
                 case '\'' -> sb.append(input.substring(matcher.end()));
-                case '<' -> i = appendNamedGroup(sb, template, i + 2, matcher) - 1;
+                case '<' -> i = appendNamedGroup(sb, template, i + 2, matcher, regexp) - 1;
                 default -> {
                     if (Character.isDigit(next)) {
                         i = appendNumberedGroup(sb, template, i + 1, matcher) - 1;
@@ -480,14 +481,15 @@ public final class StringBuiltins {
         return sb.toString();
     }
 
-    private static int appendNamedGroup(StringBuilder sb, String template, int start, Matcher matcher) {
+    private static int appendNamedGroup(StringBuilder sb, String template, int start, Matcher matcher,
+            JsRegExp regexp) {
         final var close = template.indexOf('>', start);
         if (close < 0) {
             sb.append("$<");
             return start;
         }
-        final var name = template.substring(start, close);
-        final var group = matcher.group(name);
+        final var alias = RegexBuiltins.participatingGroup(regexp, template.substring(start, close), matcher);
+        final var group = alias == null ? null : matcher.group(alias);
         if (group != null) {
             sb.append(group);
         }
@@ -547,9 +549,9 @@ public final class StringBuiltins {
     }
 
     private static JsValue matchResult(Matcher matcher, String input, JsRegExp regexp) {
-        final var result = RegexBuiltins.buildMatchResult(matcher, input, regexp.getSource());
+        final var result = RegexBuiltins.buildMatchResult(matcher, input, regexp);
         if (regexp.hasIndices()) {
-            RegexBuiltins.addIndices(result, matcher, regexp.getSource());
+            RegexBuiltins.addIndices(result, matcher, regexp);
         }
         return result;
     }

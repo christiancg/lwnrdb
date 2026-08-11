@@ -206,4 +206,42 @@ public class InterpreterAsyncTest {
                 """;
         assertEquals("SyntaxError", ((JsString) arr(source).get(0)).getValue());
     }
+
+    // Promise.prototype methods live on a real prototype, so a script can patch them
+    @Test
+    public void test_promise_prototype_is_patchable() {
+        assertEquals("patched", str("""
+                Promise.prototype.then = function() { return 'patched'; };
+                Promise.resolve(1).then(v => v)
+                """));
+        assertEquals("f", str("""
+                Promise.prototype.finally = function() { return 'f'; };
+                Promise.resolve(1).finally(() => {})
+                """));
+        assertEquals("x", str("""
+                Promise.prototype.tap = function() { return 'x'; };
+                Promise.resolve(1).tap()
+                """));
+    }
+
+    // The moved then/catch/finally implementations still behave as before
+    @Test
+    public void test_promise_then_semantics_unchanged() {
+        assertEquals(2, first(arr("""
+                let out = [];
+                Promise.resolve(1).then(v => v + 1).then(v => out.push(v));
+                out
+                """)));
+        assertEquals("caught", ((JsString) arr("""
+                let out = [];
+                Promise.reject(new Error('x')).catch(() => 'caught').then(v => out.push(v));
+                out
+                """).get(0)).getValue());
+        assertEquals("done", ((JsString) arr("""
+                let out = [];
+                Promise.resolve(1).finally(() => out.push('done'));
+                out
+                """).get(0)).getValue());
+    }
+
 }

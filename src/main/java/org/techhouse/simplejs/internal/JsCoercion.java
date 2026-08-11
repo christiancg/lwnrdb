@@ -2,6 +2,7 @@ package org.techhouse.simplejs.internal;
 
 import java.math.BigInteger;
 import java.util.List;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArguments;
@@ -253,18 +254,6 @@ public final class JsCoercion {
     }
 
     private static String numberToString(double d) {
-        if (Double.isNaN(d)) {
-            return "NaN";
-        }
-        if (Double.isInfinite(d)) {
-            return d > 0 ? "Infinity" : "-Infinity";
-        }
-        if (d == 0) {
-            return "0";
-        }
-        if (d == Math.floor(d) && Math.abs(d) < 1e21) {
-            return Long.toString((long) d);
-        }
-        return Double.toString(d);
+        return NumberFormatter.toJsString(d);
     }
 }

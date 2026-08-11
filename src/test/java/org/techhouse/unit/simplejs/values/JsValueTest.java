@@ -27,6 +27,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -232,17 +233,63 @@ public class JsValueTest {
         assertEquals("x", ((JsString) Objects.requireNonNull(array.getProperty("raw"))).getValue());
     }
 
-    // Freezing an array blocks element and property mutation
+    // Freezing an array blocks element and property mutation, and each mutator reports the refusal
     @Test
     public void test_array_freeze() {
         final var array = new JsArray(List.of(new JsNumber(1)));
         array.freeze();
         assertTrue(array.isFrozen());
-        array.set(0, new JsNumber(2));
-        array.push(new JsNumber(3));
-        array.setProperty("raw", new JsString("x"));
+        assertFalse(array.set(0, new JsNumber(2)));
+        assertFalse(array.push(new JsNumber(3)));
+        assertFalse(array.setProperty("raw", new JsString("x")));
+        assertFalse(array.setLength(0));
         assertEquals(1, array.length());
         assertEquals(1, ((JsNumber) array.get(0)).getValue());
         assertFalse(array.hasProperty("raw"));
+    }
+
+    // A sealed array keeps its elements writable but refuses to change its length
+    @Test
+    public void test_array_seal_and_prevent_extensions() {
+        final var sealed = new JsArray(List.of(new JsNumber(1)));
+        sealed.seal();
+        assertTrue(sealed.isSealed());
+        assertFalse(sealed.isFrozen());
+        assertFalse(sealed.isExtensible());
+        assertTrue(sealed.set(0, new JsNumber(2)));
+        assertFalse(sealed.set(1, new JsNumber(3)));
+        assertFalse(sealed.setLength(5));
+
+        final var empty = new JsArray();
+        empty.preventExtensions();
+        assertTrue(empty.isFrozen());
+        assertTrue(empty.isSealed());
+        assertFalse(empty.push(new JsNumber(1)));
+    }
+
+    // A non-writable property and a non-extensible object both refuse the write
+    @Test
+    public void test_object_set_reports_refusal() {
+        final var object = new JsObject();
+        assertTrue(object.set("a", new JsNumber(1)));
+        object.setFlags("a", new JsObject.PropertyFlags(false, true, true));
+        assertFalse(object.set("a", new JsNumber(2)));
+        assertEquals(1, ((JsNumber) object.get("a")).getValue());
+
+        object.preventExtensions();
+        assertFalse(object.set("b", new JsNumber(1)));
+        assertFalse(object.setSymbol(new JsSymbol("s"), new JsNumber(1)));
+    }
+
+    // Own keys report canonical array-index keys first, ascending
+    @Test
+    public void test_object_keys_ordering() {
+        final var object = new JsObject();
+        object.set("b", new JsNumber(1));
+        object.set("10", new JsNumber(2));
+        object.set("a", new JsNumber(3));
+        object.set("2", new JsNumber(4));
+        object.set("01", new JsNumber(5));
+        assertEquals(List.of("2", "10", "b", "a", "01"), List.copyOf(object.keys()));
     }
 }

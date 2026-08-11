@@ -427,4 +427,59 @@ public class InterpreterClassTest {
     public void test_static_block_with_static_private() {
         assertEquals(4, num("class A { static #x = 2; static out; static { A.out = A.#x * 2 } } A.out"));
     }
+
+    // A class exposes a real prototype object that instances are linked to
+    @Test
+    public void test_class_prototype_is_object() {
+        assertEquals("object", str("class E { m() {} } typeof E.prototype"));
+        assertTrue(bool("class E {} E.prototype.constructor === E"));
+        assertTrue(bool("class E {} Object.getPrototypeOf(new E()) === E.prototype"));
+        assertTrue(bool("class E {} typeof Object.getPrototypeOf(new E()) === 'object'"));
+    }
+
+    // Patching, deleting and adding prototype members is visible on existing instances
+    @Test
+    public void test_prototype_is_patchable() {
+        assertEquals(2, num("class E { m() { return 1; } } E.prototype.m = function() { return 2; }; new E().m()"));
+        assertEquals("undefined", str("class E { m() { return 1; } } delete E.prototype.m; typeof new E().m"));
+        assertEquals(7, num("class E {} const e = new E(); E.prototype.extra = function() { return 7; }; e.extra()"));
+    }
+
+    // Prototype members are non-enumerable, so instances still serialise as their own state
+    @Test
+    public void test_prototype_entries_not_enumerable() {
+        assertEquals(0, num("class E { m() {} } Object.keys(E.prototype).length"));
+        assertEquals("{}", str("class E { m() {} } JSON.stringify(new E())"));
+        assertEquals("{\"a\":1}", str("class E { constructor() { this.a = 1; } m() {} } JSON.stringify(new E())"));
+    }
+
+    // The prototype chain mirrors the class heritage
+    @Test
+    public void test_prototype_heritage_chain() {
+        final var setup = "class A { m() { return 'a'; } } class B extends A {} ";
+        assertTrue(bool(setup + "Object.getPrototypeOf(B.prototype) === A.prototype"));
+        assertEquals("a", str(setup + "new B().m()"));
+        assertTrue(bool(setup + "new B() instanceof A"));
+        assertEquals("ab", str(
+                "class A { m() { return 'a'; } } class B extends A { m() { return super.m() + 'b'; } } new B().m()"));
+    }
+
+    // new.target reports the constructor a call was invoked with, and undefined for a plain call
+    @Test
+    public void test_new_target() {
+        assertTrue(bool("class E { constructor() { this.t = new.target === E; } } new E().t"));
+        assertEquals("undefined", str("function f() { return typeof new.target; } f()"));
+        assertTrue(bool("function f() { this.r = new.target === f; } new f().r"));
+        assertTrue(bool("function f() { const g = () => new.target; this.r = g() === f; } new f().r"));
+        assertEquals("B",
+                str("class A { constructor() { this.t = new.target.name; } } class B extends A {} new B().t"));
+        assertEquals("undefined", str("typeof new.target"));
+    }
+
+    // new.target requires the `target` property name
+    @Test
+    public void test_new_target_rejects_other_names() {
+        assertThrows(RuntimeException.class, () -> Interpreter.run("new.other"));
+    }
+
 }

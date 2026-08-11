@@ -588,4 +588,13 @@ public class InterpreterTest {
         assertEquals("1,2", str("[1, 2] + ''"));
         assertTrue(Double.isNaN(num("({}) * 2")));
     }
+
+    // Symbol.unscopables exists as a stable well-known symbol
+    @Test
+    public void test_symbol_unscopables_exists() {
+        assertEquals("symbol", str("typeof Symbol.unscopables"));
+        assertEquals("true", str("String(Symbol.unscopables === Symbol.unscopables)"));
+        assertEquals("false", str("String(Symbol.unscopables === Symbol.iterator)"));
+    }
+
 }

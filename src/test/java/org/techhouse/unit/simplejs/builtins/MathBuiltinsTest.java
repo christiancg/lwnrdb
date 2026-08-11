@@ -119,6 +119,34 @@ public class MathBuiltinsTest {
         assertEquals((float) 1.1, num("Math.fround(1.1)"));
     }
 
+    // imul multiplies as C-like Int32 arithmetic
+    @Test
+    public void test_imul() {
+        assertEquals(6, num("Math.imul(2, 3)"));
+        assertEquals(-6, num("Math.imul(-2, 3)"));
+        assertEquals(-5, num("Math.imul(-1, 5)"));
+        assertEquals(-2147483648d, num("Math.imul(2, 1073741824)"));
+        assertEquals(2, num("Math.imul(4294967295, 5) + 7"));
+        assertEquals(0, num("Math.imul(0 / 0, 5)"));
+    }
+
+    // trunc keeps values past the long range instead of clamping them
+    @Test
+    public void test_trunc_large() {
+        assertEquals(1e21, num("Math.trunc(1e21)"));
+        assertEquals(-1e21, num("Math.trunc(-1e21)"));
+        assertEquals(-2, num("Math.trunc(-2.9)"));
+        assertEquals(-0d, num("Math.trunc(-0.5)"));
+    }
+
+    // clz32 wraps its argument to Uint32 rather than saturating it
+    @Test
+    public void test_clz32_wraps_large_values() {
+        assertEquals(32, num("Math.clz32(4294967296)"));
+        assertEquals(31, num("Math.clz32(4294967297)"));
+        assertEquals(2, num("Math.clz32(1e9)"));
+    }
+
     // The logarithm and root constants
     @Test
     public void test_added_constants() {

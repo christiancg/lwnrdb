@@ -184,4 +184,25 @@ public class InterpreterAsyncGeneratorTest {
     public void test_empty_async_generator() {
         assertEquals("end", ((JsString) arr().get(0)).getValue());
     }
+
+    // Async generator methods resolve through a patchable prototype too
+    @Test
+    public void test_async_generator_prototype_is_patchable() {
+        assertEquals("object", str("async function* g() { yield 1; } typeof Object.getPrototypeOf(g())"));
+        assertEquals("9", joined("""
+                let out = [];
+                async function* g() { yield 1; }
+                const it = g();
+                Object.getPrototypeOf(it).next = function() { return Promise.resolve({value: 9, done: false}); };
+                it.next().then(r => out.push(r.value));
+                out
+                """));
+        assertEquals("1", joined("""
+                let out = [];
+                async function* g() { yield 1; }
+                g().next().then(r => out.push(r.value));
+                out
+                """));
+    }
+
 }

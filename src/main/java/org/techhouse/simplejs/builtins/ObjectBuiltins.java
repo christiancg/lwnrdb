@@ -170,9 +170,9 @@ public final class ObjectBuiltins {
                 }
             }
             case JsObject object -> {
-                for (final var entry : object.getProperties().entrySet()) {
-                    if (object.isEnumerable(entry.getKey())) {
-                        result.push(entry.getValue());
+                for (final var key : object.keys()) {
+                    if (object.isEnumerable(key)) {
+                        result.push(object.get(key));
                     }
                 }
             }
@@ -201,9 +201,9 @@ public final class ObjectBuiltins {
                 }
             }
             case JsObject object -> {
-                for (final var entry : object.getProperties().entrySet()) {
-                    if (object.isEnumerable(entry.getKey())) {
-                        result.push(new JsArray(List.of(new JsString(entry.getKey()), entry.getValue())));
+                for (final var key : object.keys()) {
+                    if (object.isEnumerable(key)) {
+                        result.push(new JsArray(List.of(new JsString(key), object.get(key))));
                     }
                 }
             }
@@ -231,9 +231,9 @@ public final class ObjectBuiltins {
         }
         for (var i = 1; i < args.size(); i++) {
             if (args.get(i) instanceof JsObject source) {
-                for (final var entry : source.getProperties().entrySet()) {
-                    if (source.isEnumerable(entry.getKey())) {
-                        target.set(entry.getKey(), entry.getValue());
+                for (final var key : source.keys()) {
+                    if (source.isEnumerable(key)) {
+                        target.set(key, source.get(key));
                     }
                 }
                 for (final var symbol : source.symbolKeys()) {
@@ -246,38 +246,59 @@ public final class ObjectBuiltins {
 
     private static JsValue freeze(List<JsValue> args) {
         final var target = first(args);
-        if (target instanceof JsObject object) {
-            object.freeze();
+        switch (target) {
+            case JsObject object -> object.freeze();
+            case JsArray array -> array.freeze();
+            default -> {
+            }
         }
         return target;
     }
 
     private static JsValue isFrozen(List<JsValue> args) {
-        return JsBoolean.of(!(first(args) instanceof JsObject object) || object.isFrozen());
+        return JsBoolean.of(switch (first(args)) {
+            case JsObject object -> object.isFrozen();
+            case JsArray array -> array.isFrozen();
+            default -> true;
+        });
     }
 
     private static JsValue seal(List<JsValue> args) {
         final var target = first(args);
-        if (target instanceof JsObject object) {
-            object.seal();
+        switch (target) {
+            case JsObject object -> object.seal();
+            case JsArray array -> array.seal();
+            default -> {
+            }
         }
         return target;
     }
 
     private static JsValue isSealed(List<JsValue> args) {
-        return JsBoolean.of(!(first(args) instanceof JsObject object) || object.isSealed());
+        return JsBoolean.of(switch (first(args)) {
+            case JsObject object -> object.isSealed();
+            case JsArray array -> array.isSealed();
+            default -> true;
+        });
     }
 
     public static JsValue preventExtensions(List<JsValue> args) {
         final var target = first(args);
-        if (target instanceof JsObject object) {
-            object.preventExtensions();
+        switch (target) {
+            case JsObject object -> object.preventExtensions();
+            case JsArray array -> array.preventExtensions();
+            default -> {
+            }
         }
         return target;
     }
 
     public static JsValue isExtensible(List<JsValue> args) {
-        return JsBoolean.of(first(args) instanceof JsObject object && object.isExtensible());
+        return JsBoolean.of(switch (first(args)) {
+            case JsObject object -> object.isExtensible();
+            case JsArray array -> array.isExtensible();
+            default -> false;
+        });
     }
 
     private static JsValue createObject(List<JsValue> args) {
@@ -324,9 +345,9 @@ public final class ObjectBuiltins {
     }
 
     private static void applyProperties(JsObject object, JsObject props) {
-        for (final var entry : props.getProperties().entrySet()) {
-            if (entry.getValue() instanceof JsObject descriptor) {
-                applyDescriptor(object, entry.getKey(), descriptor);
+        for (final var key : props.keys()) {
+            if (props.get(key) instanceof JsObject descriptor) {
+                applyDescriptor(object, key, descriptor);
             }
         }
     }

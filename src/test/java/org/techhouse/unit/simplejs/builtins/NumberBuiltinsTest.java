@@ -227,6 +227,34 @@ public class NumberBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.asIntN(8, 1)"));
     }
 
+    // toFixed falls back to the plain ToString above 1e21
+    @Test
+    public void test_to_fixed_above_1e21() {
+        assertEquals("1e+21", str("(1e21).toFixed(2)"));
+        assertEquals("-1e+21", str("(-1e21).toFixed(2)"));
+        assertEquals("1.5e+30", str("(1.5e30).toFixed(0)"));
+        assertEquals("100000000000000000000.00", str("(1e20).toFixed(2)"));
+    }
+
+    // A radix conversion of a large integral value is not clamped to Long.MAX_VALUE
+    @Test
+    public void test_to_string_radix_large_value() {
+        assertEquals("ff", str("(255).toString(16)"));
+        assertEquals("-ff", str("(-255).toString(16)"));
+        assertEquals("2ba7def3000", str("(3000000000000).toString(16)"));
+        assertEquals("3635c9adc5dea00000", str("(1e21).toString(16)"));
+    }
+
+    // Number ToString follows the spec thresholds through the interpreter
+    @Test
+    public void test_number_to_string_spec_form() {
+        assertEquals("1e+21", str("String(1e21)"));
+        assertEquals("100000000000000000000", str("String(1e20)"));
+        assertEquals("1e-7", str("String(1e-7)"));
+        assertEquals("0.000001", str("String(1e-6)"));
+        assertEquals("x1e+21", str("'x' + 1e21"));
+    }
+
     // The global NaN, Infinity and undefined bindings
     @Test
     public void test_global_number_bindings() {

@@ -182,11 +182,12 @@ public final class ClassEvaluator {
     public JsValue construct(JsClass cls, List<JsValue> args) {
         final var instance = new JsObject();
         instance.setKlass(cls);
-        callConstructorChain(cls, instance, args);
+        instance.setProto(cls.getPrototype());
+        callConstructorChain(cls, instance, args, cls);
         return instance;
     }
 
-    private void callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args) {
+    private void callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args, JsValue newTarget) {
         final var constructor = cls.getConstructor();
         if (cls.getSuperClass() == null) {
             if (cls.getNativeSuperClass() != null) {
@@ -194,25 +195,24 @@ public final class ClassEvaluator {
             }
             initFields(cls, instance);
             if (constructor != null) {
-                interp.callFunction(constructor, instance, args);
+                interp.callFunction(constructor, instance, args, newTarget);
             }
         } else if (constructor == null) {
-            callConstructorChain(cls.getSuperClass(), instance, args);
+            callConstructorChain(cls.getSuperClass(), instance, args, newTarget);
             initFields(cls, instance);
         } else {
-            interp.callFunction(constructor, instance, args);
+            interp.callFunction(constructor, instance, args, newTarget);
         }
     }
 
     // A native super has no method tables to chain into, so its result's own state is copied onto the
     // instance and the instance is linked to the native prototype for method lookup and instanceof.
     private void applyNativeSuper(JsNativeFunction nativeSuper, JsObject instance, List<JsValue> args) {
-        instance.setProto(nativeSuper.getPrototype());
         final var produced = nativeSuper.invoke(JsUndefined.getInstance(), args);
         if (produced instanceof JsObject object) {
-            for (final var entry : object.getProperties().entrySet()) {
-                instance.defineValue(entry.getKey(), entry.getValue());
-                instance.setFlags(entry.getKey(), object.getFlags(entry.getKey()));
+            for (final var key : object.keys()) {
+                instance.defineValue(key, object.get(key));
+                instance.setFlags(key, object.getFlags(key));
             }
             if (object.isErrorData()) {
                 instance.markErrorData();
@@ -257,48 +257,74 @@ public final class ClassEvaluator {
         if (home.getSuperClass() == null) {
             applyNativeSuper(home.getNativeSuperClass(), instance, args);
         } else {
-            callConstructorChain(home.getSuperClass(), instance, args);
+            callConstructorChain(home.getSuperClass(), instance, args, env.resolveNewTarget());
         }
         initFields(home, instance);
         return JsUndefined.getInstance();
     }
 
     public JsValue evalSuperMemberCall(MemberExpression member, CallExpression call, Environment env) {
-        final var home = superHomeClass(env);
         final var thisArg = env.resolveThis();
         final var key = interp.memberKey(member, env);
-        final var parent = superMemberParent(home, key);
         final var args = interp.evalArguments(call.getArguments(), env);
-        final var staticContext = thisArg instanceof JsClass;
-        final var method = staticContext ? parent.findStaticMethod(key) : parent.findInstanceMethod(key);
-        if (method != null) {
-            return interp.callFunction(method, thisArg, args);
+        if (thisArg instanceof JsClass) {
+            final var parent = superMemberParent(superHomeClass(env), key);
+            final var method = parent.findStaticMethod(key);
+            if (method != null) {
+                return interp.callFunction(method, thisArg, args);
+            }
+            final var getter = parent.findStaticGetter(key);
+            if (getter != null) {
+                return interp.callValue(interp.callFunction(getter, thisArg, List.of()), thisArg, args);
+            }
+            throw new TypeErrorException("(intermediate value).super." + key + " is not a function");
         }
-        final var getter = staticContext ? parent.findStaticGetter(key) : parent.findInstanceGetter(key);
-        if (getter != null) {
-            return interp.callValue(interp.callFunction(getter, thisArg, List.of()), thisArg, args);
+        final var value = superProtoRead(env, key, thisArg);
+        if (isCallable(value)) {
+            return interp.callValue(value, thisArg, args);
         }
         throw new TypeErrorException("(intermediate value).super." + key + " is not a function");
     }
 
     public JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
-        final var home = superHomeClass(env);
         final var thisArg = env.resolveThis();
         final var key = interp.memberKey(member, env);
-        final var parent = superMemberParent(home, key);
-        final var staticContext = thisArg instanceof JsClass;
-        final var getter = staticContext ? parent.findStaticGetter(key) : parent.findInstanceGetter(key);
-        if (getter != null) {
-            return interp.callFunction(getter, thisArg, List.of());
-        }
-        final var method = staticContext ? parent.findStaticMethod(key) : parent.findInstanceMethod(key);
-        if (method != null) {
-            return method;
-        }
-        if (staticContext) {
+        if (thisArg instanceof JsClass) {
+            final var parent = superMemberParent(superHomeClass(env), key);
+            final var getter = parent.findStaticGetter(key);
+            if (getter != null) {
+                return interp.callFunction(getter, thisArg, List.of());
+            }
+            final var method = parent.findStaticMethod(key);
+            if (method != null) {
+                return method;
+            }
             return interp.getStaticMember(parent, key);
         }
+        return superProtoRead(env, key, thisArg);
+    }
+
+    private JsValue superProtoRead(Environment env, String key, JsValue thisArg) {
+        for (var proto = superProtoStart(env, key); proto != null; proto = proto.getProto()) {
+            final var getter = proto.getAccessorGetter(key);
+            if (getter != null) {
+                return interp.callValue(getter, thisArg, List.of());
+            }
+            if (proto.has(key)) {
+                return proto.get(key);
+            }
+        }
         return JsUndefined.getInstance();
+    }
+
+    private JsObject superProtoStart(Environment env, String key) {
+        final var home = env.resolveHomeClass();
+        if (home instanceof JsObject object) {
+            return object.getProto();
+        }
+        final var cls = superHomeClass(env);
+        superMemberParent(cls, key);
+        return cls.getPrototype().getProto();
     }
 
     private JsClass superHomeClass(Environment env) {

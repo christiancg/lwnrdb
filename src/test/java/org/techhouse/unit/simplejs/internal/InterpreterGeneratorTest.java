@@ -118,4 +118,23 @@ public class InterpreterGeneratorTest {
     public void test_empty_generator() {
         assertEquals("undefined,true", str("function* g() {} let r = g().next(); r.value + ',' + r.done"));
     }
+
+    // Generator methods resolve through a real prototype a script can patch
+    @Test
+    public void test_generator_prototype_is_patchable() {
+        assertEquals("object", str("function* g() { yield 1; } typeof Object.getPrototypeOf(g())"));
+        assertEquals(9, num("""
+                function* g() { yield 1; }
+                const it = g();
+                Object.getPrototypeOf(it).next = function() { return {value: 9, done: false}; };
+                it.next().value
+                """));
+        assertEquals("1,2,true", str("""
+                function* g() { yield 1; yield 2; }
+                const it = g();
+                it.next().value + ',' + it.next().value + ',' + it.next().done
+                """));
+        assertEquals("2,4", str("function* g() { yield 1; yield 2; } g().map(x => x * 2).toArray().join(',')"));
+    }
+
 }

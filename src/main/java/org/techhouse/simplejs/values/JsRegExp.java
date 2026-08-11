@@ -1,17 +1,31 @@
 package org.techhouse.simplejs.values;
 
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 public final class JsRegExp extends JsValue {
     private final String source;
     private final String flags;
     private final Pattern pattern;
+    // Original group name -> the java group names it was compiled to; more than one when ES2025
+    // duplicate named groups appear in different alternatives.
+    private final Map<String, List<String>> groupAliases;
     private int lastIndex;
 
     public JsRegExp(String source, String flags, Pattern pattern) {
+        this(source, flags, pattern, Map.of());
+    }
+
+    public JsRegExp(String source, String flags, Pattern pattern, Map<String, List<String>> groupAliases) {
         this.source = source;
         this.flags = flags;
         this.pattern = pattern;
+        this.groupAliases = groupAliases == null ? Map.of() : groupAliases;
+    }
+
+    public Map<String, List<String>> getGroupAliases() {
+        return groupAliases;
     }
 
     public String getSource() {

@@ -25,7 +25,7 @@ describes the engine **as built**. The engine is reachable only through
 expose it to clients is still a deferred follow-up.
 
 Two lists bound what the engine does **not** do: the
-[verified gaps and divergences](#known-gaps-and-divergences-verified-2026-08-10)
+[verified gaps and divergences](#known-gaps-and-divergences-verified-2026-08-11)
 (things a conformant engine has that this one is missing or gets wrong — candidates
 for closing) and the
 [deliberately unimplemented features](#deliberately-unimplemented-es2026-features-out-of-scope-for-a-database-interpreter)
@@ -225,7 +225,7 @@ each describes the state at the end of that phase, and a "deferred"/"limitation"
 inside one is superseded whenever a later phase or follow-up section says otherwise
 (e.g. 6b's deferred `arguments` object and object method shorthand both landed later).
 The authoritative statement of what is *still* missing is
-[Known gaps and divergences](#known-gaps-and-divergences-verified-2026-08-10).
+[Known gaps and divergences](#known-gaps-and-divergences-verified-2026-08-11).
 
 - **6a — evaluation core ✅** — the value model (`values/`), lexical
   scopes/environments (`Environment`, with `var` hoisting to the function scope and
@@ -702,7 +702,7 @@ as binding identifiers, and `eval`/`arguments` as binding or assignment/update t
 the poisoned `arguments.callee`/`arguments.caller` accessors throw a `TypeError` (see the ES2026
 conformance closers below).
 
-## Known gaps and divergences (verified 2026-08-10)
+## Known gaps and divergences (verified 2026-08-11)
 
 Everything in this section is a **gap**, not a design decision: a conformant engine has it
 and SimpleJS either lacks it or gets it wrong. Each row was confirmed by running the snippet
@@ -710,29 +710,40 @@ through `SimpleJs.run(source, SimpleHostBindings.empty())` against the built eng
 them are inferred from reading the code. The next section lists the features that are missing
 *on purpose*.
 
-### Defects (a script gets a wrong answer or an unexpected error)
+The ES2026 conformance closeout (2026-08-11) closed every gap previously listed here — numeric
+correctness, own-key ordering, strict-mode write/delete failures, `Object.freeze` on arrays,
+string iteration by code point, real class prototypes, `new.target`, object-literal `super`,
+patchable `Promise`/generator prototypes, `Symbol.unscopables`, duplicate named capture groups and
+the top-level-promise contract. What remains are the bounded limitations below.
 
-| # | Gap | Symptom |
+### Remaining limitations
+
+| # | Limitation | Notes |
 |---|---|---|
-| 1 | **No `new.target`** | Unavailable, so a constructor cannot tell whether it was called with `new`. |
-| 2 | **`Object.freeze` does not reach arrays** | `Object.freeze([1])` is a no-op — `JsArray` has its own freeze flag (used by tagged templates) that the `Object` statics do not set — so the array is still mutable while `Object.isFrozen` reports `true`. |
-| 3 | **`toFixed` above 1e21** | Returns a plain-string expansion where the spec switches to `ToString(x)` (`"1e+21"`). |
-
-### Missing library surface
-
-| # | Missing | Notes |
-|---|---|---|
-| 4 | **`Math.imul`** | The only remaining `Math` member; everything else in the namespace is present. |
-| 5 | **A script-visible `.prototype` for *user* classes** | `JsClass` keeps method tables rather than a prototype object, so `class E {}; E.prototype` is `undefined` and `E.prototype.m = f` does not add a method. Builtin prototypes (`Array.prototype`, …) **are** real objects — see *Intrinsic prototypes* below. |
-| 6 | **`Symbol.unscopables`** | Moot without `with` (which is deliberately unimplemented); `Symbol.species` is likewise deliberate. |
-| 7 | **`Promise`/generator prototype methods are not monkey-patchable** | `then`/`catch`/`finally` and a generator's `next`/`return`/`throw` are resolved by the receiver arm before the intrinsic chain is consulted, so `Promise.prototype` exists (with `constructor`) but reassigning `Promise.prototype.then` does not take effect. Adding a *new* member to those prototypes does work. |
+| 1 | **`\k<name>` on a duplicated group name resolves to the first alias** | A duplicated name (`/(?<y>a)\|(?<y>b)/`) compiles by renaming the repeats and resolving `groups.y`/`$<y>` to whichever alias participated, but `java.util.regex` cannot express "whichever alias participated" in a *backreference*, so `\k<y>` always refers to the first one. |
+| 2 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
+| 3 | **Class statics stay in tables** | Static methods/getters/setters and static props live on `JsClass` and are resolved by `getStaticMember`; the class object itself is not a real object, so `E.staticMethod = f` works through `setStaticProp` but `Object.keys(E)` does not enumerate statics. Instance members *are* a real `E.prototype` object. |
+| 4 | **Generic array-like receivers are snapshotted** | `Array.prototype.push.call(arguments, x)` does not write through — see *Intrinsic prototypes*. |
+| 5 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
+| 6 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. |
 
 ### Host-contract notes
 
-- **A promise returned at top level is not awaited.** `return f()` for an `async f` resolves the
-  script to `null`; `return await f()` returns the value. Worth either awaiting a returned
-  promise in the result contract or documenting on the `RUN_SCRIPT` surface.
+- **A promise returned at top level is awaited.** `return f()` for an `async f` resolves the script
+  to the fulfilment value; a rejection becomes the script error (name/message), and a still-pending
+  promise resolves to JSON `null`. The same applies to `export default`.
 - **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet.
+
+### Numbers
+
+`ToString(Number)` is spec-exact (ECMA-262 6.1.6.1.20) and **shared with EJson**: one
+`ejson/internal/NumberFormatter` backs both `NumberTypeAdapter` (document text and wire responses)
+and `JsCoercion` (`String(x)`, templates, `+`). So `String(1e21)` is `"1e+21"`, `String(1e20)` is the
+full decimal expansion, and a document field of `1e20` is persisted exactly instead of saturating at
+`Long.MAX_VALUE`. Integer conversions (`|`, `>>>`, `Math.imul`/`clz32`, typed-array and `DataView`
+integer writes) use the spec's modulo-2³² `ToInt32`/`ToUint32` rather than a saturating `(long)` cast.
+On the read side the EJson lexer accepts exponent notation and `JsonNumber` keeps an out-of-`int`-range
+integral value as a `double`.
 
 ### Intrinsic prototypes
 
@@ -751,6 +762,19 @@ configurable, so `Object.keys([])`, `for-in` and `JSON.stringify` are unaffected
 `length`, `Map`/`Set` `size`, the regex flag accessors, …) and then walks
 `Intrinsics.protoFor(target)` and its `getProto()` chain, which roots at `Object.prototype`. A user
 object's own `proto` chain is still walked before the intrinsic chain.
+
+`Promise.prototype` and the generator/async-generator prototypes are real prototypes on the same
+model: `PromiseBuiltins.PROTO_NAMES` (`then`/`catch`/`finally`) and `GeneratorBuiltins.PROTO_NAMES`
+(`next`/`return`/`throw`) are installed as delegating wrappers, so patching them takes effect. They
+are reachable from script through `Promise.prototype` and, for generators, through
+`Object.getPrototypeOf(gen)` — `Object.getPrototypeOf` on a value that is not a `JsObject` returns
+its intrinsic prototype, as the spec requires.
+
+**User classes have real prototypes too.** `JsClass` owns a `prototype` `JsObject` whose entries are
+non-enumerable (so instances still serialize as their own state), carrying a `constructor`
+back-reference and `proto`-linked to the superclass's prototype (or, for builtin heritage, the native
+prototype). Instances are linked to it at construction, keeping the `klass` link for private members,
+brand checks and field initialisation. Only *static* members remain in `JsClass` tables.
 
 What this reaches and what it does not:
 
@@ -800,7 +824,43 @@ design decision, not a bug:
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
 
-### ES2026 conformance closers (recently completed)
+### ES2026 conformance closeout (2026-08-11)
+
+The final conformance pass, in five phases:
+
+- **Numeric correctness** — one `ejson/internal/NumberFormatter` implements the spec
+  `Number::toString` and `ToInt32`/`ToUint32` and is shared by EJson and SimpleJS (see *Numbers*
+  above). It also fixes a database-wide defect: an integral double past `Long.MAX_VALUE` used to be
+  persisted as `9223372036854775807`. On the read side the EJson lexer learned exponent notation and
+  `JsonNumber` keeps an out-of-`int`-range integral value as a `double` instead of clamping it.
+  `Math.imul` was added and `Math.trunc`/`clz32`, `toFixed` above 1e21, a large radix conversion and
+  the integer typed-array/`DataView` writes stopped saturating.
+- **Object-model conformance** — `JsObject.keys()` reports `OrdinaryOwnPropertyKeys` order (canonical
+  array-index keys ascending, then insertion order), and every enumeration site routes through it, so
+  `Object.keys`/`values`/`entries`, `for-in`, `Reflect.ownKeys`, `Object.assign`, object spread/rest,
+  `structuredClone` and `JSON.stringify` all agree. A rejected write or `delete` now throws a
+  `TypeError` (the engine is always strict) while `Reflect.set`/`Reflect.deleteProperty` keep
+  returning `false`; `Object.freeze`/`seal`/`preventExtensions` and their predicates reach `JsArray`.
+- **String iteration by code point** — the iterator-protocol paths (`for-of`, spread, array
+  destructuring, `String`'s `Symbol.iterator`, `Array.from`) walk a string by code point, so
+  `[..."ab😀"].length` is 3. Indexed access, `length`, `split("")`, object spread of a string and the
+  generic array-like receiver snapshot stay code-unit based, as the spec's string exotic object requires.
+- **Class prototypes, `new.target`, object-literal `super`, patchable `Promise`/generator prototypes** —
+  `JsClass` now owns a real `prototype` `JsObject` (non-enumerable entries, `constructor`
+  back-reference, `proto`-linked to the superclass prototype), instances are linked to it, and member
+  resolution/`super` go through the proto chain, so `E.prototype.m = f`, `delete E.prototype.m` and
+  `Object.getPrototypeOf(new E())` all behave. `new.target` is parsed as a `MetaProperty` and bound at
+  construction (arrows inherit it lexically). Object-literal shorthand methods and accessors get a home
+  object, so they may call `super`. `Promise.prototype` and the generator/async-generator prototypes
+  carry real delegating wrappers (`PromiseBuiltins.PROTO_NAMES`, `GeneratorBuiltins.PROTO_NAMES`), and
+  `Object.getPrototypeOf` on a non-object value returns its intrinsic prototype, so those are reachable
+  and patchable. `Symbol.unscopables` exists as a stable well-known symbol.
+- **Regex duplicate named groups + host contract** — `RegexTranslator` renames a repeated `(?<name>)`
+  and keeps an alias table on `JsRegExp`, so ES2025 duplicate names in different alternatives compile
+  and `groups.name`/`indices.groups.name`/`$<name>` resolve to whichever alias participated. A promise
+  returned (or default-exported) at top level is awaited by `SimpleJs.contractResult`.
+
+### ES2026 conformance closers (previously completed)
 
 The following were previously listed as gaps and are now implemented:
 

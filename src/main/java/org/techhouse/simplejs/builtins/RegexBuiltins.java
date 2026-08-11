@@ -1,10 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
@@ -24,7 +22,6 @@ public final class RegexBuiltins {
     private static final Set<String> ACCESSORS = Set.of("source", "flags", "global", "ignoreCase", "multiline",
             "dotAll", "sticky", "lastIndex", "hasIndices");
 
-    private static final Pattern NAMED_GROUP = Pattern.compile("\\(\\?<([a-zA-Z][a-zA-Z0-9]*)>");
     private static final String SYNTAX_CHARACTERS = "^$\\.*+?()[]{}|/";
     private static final String OTHER_PUNCTUATORS = ",-=<>#&!%:;@~'`\"";
     private static final char VERTICAL_TAB = '\u000B';
@@ -147,25 +144,27 @@ public final class RegexBuiltins {
         if (stateful) {
             regexp.setLastIndex(matcher.end());
         }
-        final var result = buildMatchResult(matcher, input, regexp.getSource());
+        final var result = buildMatchResult(matcher, input, regexp);
         if (regexp.hasIndices()) {
-            addIndices(result, matcher, regexp.getSource());
+            addIndices(result, matcher, regexp);
         }
         return result;
     }
 
-    public static void addIndices(JsObject result, Matcher matcher, String source) {
+    public static void addIndices(JsObject result, Matcher matcher, JsRegExp regexp) {
         final var indices = new JsArray();
         for (var i = 0; i <= matcher.groupCount(); i++) {
             indices.push(pair(matcher.start(i), matcher.end(i)));
         }
-        final var names = groupNames(source);
+        final var names = groupNames(regexp);
         if (names.isEmpty()) {
             indices.setProperty("groups", JsUndefined.getInstance());
         } else {
             final var groups = new JsObject();
             for (final var groupName : names) {
-                groups.set(groupName, pair(matcher.start(groupName), matcher.end(groupName)));
+                final var alias = participatingGroup(regexp, groupName, matcher);
+                groups.set(groupName,
+                        alias == null ? JsUndefined.getInstance() : pair(matcher.start(alias), matcher.end(alias)));
             }
             indices.setProperty("groups", groups);
         }
@@ -179,7 +178,7 @@ public final class RegexBuiltins {
         return new JsArray(List.of(new JsNumber(start), new JsNumber(end)));
     }
 
-    public static JsObject buildMatchResult(Matcher matcher, String input, String source) {
+    public static JsObject buildMatchResult(Matcher matcher, String input, JsRegExp regexp) {
         final var result = new JsObject();
         final var count = matcher.groupCount();
         for (var i = 0; i <= count; i++) {
@@ -188,26 +187,36 @@ public final class RegexBuiltins {
         result.set("length", new JsNumber(count + 1));
         result.set("index", new JsNumber(matcher.start()));
         result.set("input", new JsString(input));
-        final var names = groupNames(source);
+        final var names = groupNames(regexp);
         if (names.isEmpty()) {
             result.set("groups", JsUndefined.getInstance());
         } else {
             final var groups = new JsObject();
             for (final var groupName : names) {
-                groups.set(groupName, groupValue(matcher.group(groupName)));
+                final var alias = participatingGroup(regexp, groupName, matcher);
+                groups.set(groupName, alias == null ? JsUndefined.getInstance() : groupValue(matcher.group(alias)));
             }
             result.set("groups", groups);
         }
         return result;
     }
 
-    public static List<String> groupNames(String source) {
-        final var names = new ArrayList<String>();
-        final var matcher = NAMED_GROUP.matcher(source);
-        while (matcher.find()) {
-            names.add(matcher.group(1));
+    public static List<String> groupNames(JsRegExp regexp) {
+        return List.copyOf(regexp.getGroupAliases().keySet());
+    }
+
+    // A duplicated name compiles to several java groups; at most one of them can have participated.
+    public static String participatingGroup(JsRegExp regexp, String name, Matcher matcher) {
+        final var aliases = regexp.getGroupAliases().get(name);
+        if (aliases == null) {
+            return name;
         }
-        return names;
+        for (final var alias : aliases) {
+            if (matcher.start(alias) >= 0) {
+                return alias;
+            }
+        }
+        return null;
     }
 
     private static JsValue groupValue(String value) {

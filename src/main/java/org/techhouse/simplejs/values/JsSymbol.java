@@ -14,6 +14,7 @@ public final class JsSymbol extends JsValue {
     public static final JsSymbol SPLIT = new JsSymbol("Symbol.split");
     public static final JsSymbol MATCH_ALL = new JsSymbol("Symbol.matchAll");
     public static final JsSymbol IS_CONCAT_SPREADABLE = new JsSymbol("Symbol.isConcatSpreadable");
+    public static final JsSymbol UNSCOPABLES = new JsSymbol("Symbol.unscopables");
 
     private final String description;
 

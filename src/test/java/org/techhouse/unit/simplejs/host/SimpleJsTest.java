@@ -193,4 +193,56 @@ public class SimpleJsTest {
         assertTrue(array.get(1).asJsonBoolean().getValue());
         assertEquals("Error: x", array.get(2).asJsonString().getValue());
     }
+
+    // A promise returned at top level is awaited, since the event loop has already drained
+    @Test
+    public void test_toplevel_returned_promise_is_awaited() {
+        final var result = run("async function f() { return 42; } return f()");
+        assertFalse(result.isError());
+        assertEquals(42, result.getValue().asJsonNumber().getValue().intValue());
+        assertEquals(5,
+                engine.run("async function f() { return Promise.resolve(5); } return f()", SimpleHostBindings.empty())
+                        .getValue().asJsonNumber().getValue().intValue());
+    }
+
+    // A rejected top-level promise becomes the script error
+    @Test
+    public void test_toplevel_returned_promise_rejection_is_script_error() {
+        final var result = run("async function f() { throw new TypeError('boom'); } return f()");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+        assertEquals("boom", result.getErrorMessage());
+
+        final var plain = run("return Promise.reject('plain')");
+        assertTrue(plain.isError());
+        assertEquals("Error", plain.getErrorName());
+        assertEquals("plain", plain.getErrorMessage());
+    }
+
+    // export default is awaited the same way
+    @Test
+    public void test_export_default_promise_is_awaited() {
+        final var result = run("export default (async function() { return 7; })()");
+        assertFalse(result.isError());
+        assertEquals(7, result.getValue().asJsonNumber().getValue().intValue());
+    }
+
+    // A promise that never settles inside the sandbox contributes JSON null
+    @Test
+    public void test_toplevel_pending_promise_resolves_to_null() {
+        final var result = run("return new Promise(function() {})");
+        assertFalse(result.isError());
+        assertInstanceOf(JsonNull.class, result.getValue());
+    }
+
+    // An awaited top-level rejection is not also reported as an unhandled rejection
+    @Test
+    public void test_awaited_promise_not_reported_as_unhandled_rejection() {
+        final var messages = new ArrayList<String>();
+        final var host = new SimpleHostBindings(new JsonObject(), null, messages::add, ResourceLimits.unlimited());
+        final var result = engine.run("return Promise.reject(new Error('x'))", host);
+        assertTrue(result.isError());
+        assertTrue(messages.stream().noneMatch(m -> m.contains("UnhandledPromiseRejection")), messages::toString);
+    }
+
 }

@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
 /**
@@ -75,9 +76,9 @@ public final class JsDataView extends JsValue {
         final var pos = byteOffset + offset;
         final var bb = view(littleEndian);
         switch (kind) {
-            case "setInt8", "setUint8" -> bb.put(pos, (byte) (long) value);
-            case "setInt16", "setUint16" -> bb.putShort(pos, (short) (long) value);
-            case "setInt32", "setUint32" -> bb.putInt(pos, (int) (long) value);
+            case "setInt8", "setUint8" -> bb.put(pos, (byte) NumberFormatter.toInt32(value));
+            case "setInt16", "setUint16" -> bb.putShort(pos, (short) NumberFormatter.toInt32(value));
+            case "setInt32", "setUint32" -> bb.putInt(pos, NumberFormatter.toInt32(value));
             case "setFloat16" -> bb.putShort(pos, Float.floatToFloat16((float) value));
             case "setFloat32" -> bb.putFloat(pos, (float) value);
             default -> bb.putDouble(pos, value);

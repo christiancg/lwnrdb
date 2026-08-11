@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 
@@ -123,11 +124,7 @@ public final class JsTypedArray extends JsValue {
     }
 
     private static long reduce(double d, int bits) {
-        if (!Double.isFinite(d) || d == 0) {
-            return 0;
-        }
-        final var truncated = d < 0 ? Math.ceil(d) : Math.floor(d);
-        return (long) truncated & ((1L << bits) - 1);
+        return NumberFormatter.toUint32(d) & ((1L << bits) - 1);
     }
 
     private static int clamp(double d) {

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
@@ -52,10 +53,11 @@ public class ObjectBuiltinsTest {
         assertEquals(9, num("let t = Object.assign({x: 1}, {x: 9}); t.x"));
     }
 
-    // freeze blocks further writes
+    // freeze blocks further writes, which the always-strict engine reports as a TypeError
     @Test
     public void test_freeze() {
-        assertEquals(1, num("let o = Object.freeze({a: 1}); o.a = 5; o.a"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("let o = Object.freeze({a: 1}); o.a = 5"));
+        assertEquals(1, num("let o = Object.freeze({a: 1}); try { o.a = 5; } catch (e) { } o.a"));
         assertTrue(bool());
     }
 
@@ -157,8 +159,10 @@ public class ObjectBuiltinsTest {
     // a getter-only accessor makes assignment a no-op
     @Test
     public void test_getter_only_accessor() {
-        assertEquals(1,
-                num("let o = {}; Object.defineProperty(o, 'v', {get: function() { return 1; }}); o.v = 5; o.v"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("let o = {}; Object.defineProperty(o, 'v', {get: function() { return 1; }}); o.v = 5"));
+        assertEquals(1, num(
+                "let o = {}; Object.defineProperty(o, 'v', {get: function() { return 1; }}); try { o.v = 5; } catch (e) { } o.v"));
     }
 
     // getOwnPropertyDescriptor returns an accessor descriptor for accessors
@@ -190,7 +194,10 @@ public class ObjectBuiltinsTest {
     // a non-writable data property ignores later assignment
     @Test
     public void test_define_property_non_writable() {
-        assertEquals(1, num("let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: false}); o.v = 99; o.v"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: false}); o.v = 99"));
+        assertEquals(1, num(
+                "let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: false}); try { o.v = 99; } catch (e) { } o.v"));
     }
 
     // a writable:true data property accepts later assignment
@@ -229,9 +236,10 @@ public class ObjectBuiltinsTest {
     // freeze blocks add, modify and delete; isFrozen reports true
     @Test
     public void test_freeze_full() {
-        assertEquals(1, num("let o = Object.freeze({a: 1}); o.a = 5; o.b = 9; o.a"));
-        assertInstanceOf(JsUndefined.class, Interpreter.run("let o = Object.freeze({a: 1}); o.b = 9; o.b"));
-        assertEquals(1, num("let o = Object.freeze({a: 1}); delete o.a; o.a"));
+        assertEquals(1, num("let o = Object.freeze({a: 1}); try { o.a = 5; o.b = 9; } catch (e) { } o.a"));
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("let o = Object.freeze({a: 1}); try { o.b = 9; } catch (e) { } o.b"));
+        assertEquals(1, num("let o = Object.freeze({a: 1}); try { delete o.a; } catch (e) { } o.a"));
         assertTrue(flag("Object.isFrozen(Object.freeze({a: 1}))"));
         assertFalse(flag("Object.isFrozen({a: 1})"));
     }
@@ -240,8 +248,9 @@ public class ObjectBuiltinsTest {
     @Test
     public void test_seal() {
         assertEquals(5, num("let o = Object.seal({a: 1}); o.a = 5; o.a"));
-        assertInstanceOf(JsUndefined.class, Interpreter.run("let o = Object.seal({a: 1}); o.b = 9; o.b"));
-        assertEquals(1, num("let o = Object.seal({a: 1}); delete o.a; o.a"));
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("let o = Object.seal({a: 1}); try { o.b = 9; } catch (e) { } o.b"));
+        assertEquals(1, num("let o = Object.seal({a: 1}); try { delete o.a; } catch (e) { } o.a"));
         assertTrue(flag("Object.isSealed(Object.seal({a: 1}))"));
         assertFalse(flag("Object.isSealed({a: 1})"));
         assertFalse(flag("Object.isFrozen(Object.seal({a: 1}))"));
@@ -253,7 +262,8 @@ public class ObjectBuiltinsTest {
         assertTrue(flag("Object.isExtensible({})"));
         assertFalse(flag("Object.isExtensible(Object.preventExtensions({}))"));
         assertEquals(5, num("let o = Object.preventExtensions({a: 1}); o.a = 5; o.a"));
-        assertInstanceOf(JsUndefined.class, Interpreter.run("let o = Object.preventExtensions({a: 1}); o.b = 9; o.b"));
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("let o = Object.preventExtensions({a: 1}); try { o.b = 9; } catch (e) { } o.b"));
     }
 
     // an empty non-extensible object is both sealed and frozen
@@ -315,7 +325,9 @@ public class ObjectBuiltinsTest {
     // delete returns false for a non-configurable property and true for a configurable one
     @Test
     public void test_delete_configurability() {
-        assertFalse(flag("let o = {}; Object.defineProperty(o, 'v', {value: 1}); delete o.v"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'v', {value: 1}); delete o.v"));
+        assertFalse(flag("let o = {}; Object.defineProperty(o, 'v', {value: 1}); Reflect.deleteProperty(o, 'v')"));
         assertTrue(flag("let o = {a: 1}; delete o.a"));
     }
 

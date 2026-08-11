@@ -7,6 +7,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
@@ -48,10 +49,7 @@ public final class ArrayBuiltins {
         if (source instanceof JsArray array) {
             items = new ArrayList<>(array.getElements());
         } else if (source instanceof JsString string) {
-            items = new ArrayList<>();
-            for (var i = 0; i < string.getValue().length(); i++) {
-                items.add(new JsString(String.valueOf(string.getValue().charAt(i))));
-            }
+            items = new ArrayList<>(InterpreterUtils.stringCodePoints(string.getValue()));
         } else {
             items = iterableToList.drain(source);
         }
@@ -501,8 +499,8 @@ public final class ArrayBuiltins {
                     result.push(element);
                 }
             } else if (isConcatSpreadable(arg, ops)) {
-                for (final var element : ((JsObject) arg).getProperties().values()) {
-                    result.push(element);
+                for (final var key : ((JsObject) arg).keys()) {
+                    result.push(((JsObject) arg).get(key));
                 }
             } else {
                 result.push(arg);

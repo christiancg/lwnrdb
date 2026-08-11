@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -53,12 +55,92 @@ public final class RegexTranslator {
         } else {
             translated = source;
         }
+        final var renamed = renameDuplicateGroups(translated);
         try {
-            final var pattern = Pattern.compile(inlineFlags(normalizedFlags) + translated);
-            return new JsRegExp(source, normalizedFlags, pattern);
+            final var pattern = Pattern.compile(inlineFlags(normalizedFlags) + renamed.pattern());
+            return new JsRegExp(source, normalizedFlags, pattern, renamed.aliases());
         } catch (PatternSyntaxException syntax) {
             throw new SyntaxErrorException("Invalid regular expression: /" + source + "/: " + syntax.getMessage());
         }
+    }
+
+    private record GroupRename(String pattern, Map<String, List<String>> aliases) {
+    }
+
+    // ES2025 allows the same group name in different alternatives, which java.util.regex rejects, so
+    // repeats are renamed and the original name keeps the list of java names it may have matched as.
+    private static GroupRename renameDuplicateGroups(String pattern) {
+        final var out = new StringBuilder();
+        final var aliases = new LinkedHashMap<String, List<String>>();
+        final var used = new HashSet<String>();
+        var inClass = false;
+        var i = 0;
+        while (i < pattern.length()) {
+            final var c = pattern.charAt(i);
+            if (c == '\\' && i + 1 < pattern.length()) {
+                final var consumed = appendBackreference(pattern, i, aliases, out);
+                if (consumed > 0) {
+                    i += consumed;
+                } else {
+                    out.append(c).append(pattern.charAt(i + 1));
+                    i += 2;
+                }
+                continue;
+            }
+            if (c == '[') {
+                inClass = true;
+            } else if (c == ']') {
+                inClass = false;
+            } else if (!inClass && isNamedGroupStart(pattern, i)) {
+                final var close = pattern.indexOf('>', i + 3);
+                if (close > 0) {
+                    final var name = pattern.substring(i + 3, close);
+                    out.append("(?<").append(uniqueName(name, aliases, used)).append('>');
+                    i = close + 1;
+                    continue;
+                }
+            }
+            out.append(c);
+            i++;
+        }
+        return new GroupRename(out.toString(), aliases);
+    }
+
+    private static boolean isNamedGroupStart(String pattern, int index) {
+        if (!pattern.startsWith("(?<", index) || index + 3 >= pattern.length()) {
+            return false;
+        }
+        final var after = pattern.charAt(index + 3);
+        return after != '=' && after != '!';
+    }
+
+    private static int appendBackreference(String pattern, int index, Map<String, List<String>> aliases,
+            StringBuilder out) {
+        if (pattern.charAt(index + 1) != 'k' || index + 2 >= pattern.length() || pattern.charAt(index + 2) != '<') {
+            return 0;
+        }
+        final var close = pattern.indexOf('>', index + 3);
+        if (close < 0) {
+            return 0;
+        }
+        final var name = pattern.substring(index + 3, close);
+        final var known = aliases.get(name);
+        out.append("\\k<").append(known == null || known.isEmpty() ? name : known.getFirst()).append('>');
+        return close + 1 - index;
+    }
+
+    private static String uniqueName(String name, Map<String, List<String>> aliases, Set<String> used) {
+        final var declared = aliases.computeIfAbsent(name, _ -> new ArrayList<>());
+        if (declared.isEmpty() && used.add(name)) {
+            declared.add(name);
+            return name;
+        }
+        var suffix = declared.size();
+        while (!used.add(name + suffix)) {
+            suffix++;
+        }
+        declared.add(name + suffix);
+        return name + suffix;
     }
 
     private static String translateUnicodeProperties(String source) {

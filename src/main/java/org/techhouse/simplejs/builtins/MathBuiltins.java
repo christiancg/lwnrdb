@@ -2,6 +2,7 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.List;
 import java.util.function.DoubleUnaryOperator;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
@@ -29,7 +30,7 @@ public final class MathBuiltins {
         unary(math, "floor", Math::floor);
         unary(math, "ceil", Math::ceil);
         unary(math, "round", value -> Math.floor(value + 0.5));
-        unary(math, "trunc", value -> (double) (long) value);
+        unary(math, "trunc", value -> value < 0 ? Math.ceil(value) : Math.floor(value));
         unary(math, "sqrt", Math::sqrt);
         unary(math, "cbrt", Math::cbrt);
         unary(math, "sign", Math::signum);
@@ -55,6 +56,7 @@ public final class MathBuiltins {
         unary(math, "clz32", MathBuiltins::clz32);
         unary(math, "fround", value -> (double) (float) value);
         math.set("pow", new JsNativeFunction("pow", (_, args) -> new JsNumber(Math.pow(arg(args, 0), arg(args, 1)))));
+        math.set("imul", new JsNativeFunction("imul", (_, args) -> new JsNumber(imul(args))));
         math.set("atan2",
                 new JsNativeFunction("atan2", (_, args) -> new JsNumber(Math.atan2(arg(args, 0), arg(args, 1)))));
         math.set("hypot", new JsNativeFunction("hypot", (_, args) -> hypot(args)));
@@ -73,11 +75,15 @@ public final class MathBuiltins {
                 : -Math.log(-value + Math.sqrt(value * value + 1));
     }
 
+    private static double imul(List<JsValue> args) {
+        return NumberFormatter.toInt32(arg(args, 0)) * NumberFormatter.toInt32(arg(args, 1));
+    }
+
     private static double clz32(double value) {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
             return 32;
         }
-        return Integer.numberOfLeadingZeros((int) (long) value);
+        return Integer.numberOfLeadingZeros((int) NumberFormatter.toUint32(value));
     }
 
     private static JsValue hypot(List<JsValue> args) {
