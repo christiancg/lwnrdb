@@ -16,6 +16,10 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class SetBuiltins {
+    public static final List<String> NAMES = List.of("add", "has", "delete", "clear", "forEach", "keys", "values",
+            "entries", "union", "intersection", "difference", "symmetricDifference", "isSubsetOf", "isSupersetOf",
+            "isDisjointFrom");
+
     private SetBuiltins() {
     }
 

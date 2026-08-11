@@ -11,6 +11,7 @@ public final class JsNativeFunction extends JsValue {
     private Map<String, JsValue> properties;
     private JsValue boundTarget;
     private List<JsValue> boundArgs;
+    private JsObject prototype;
 
     public JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation) {
         this.name = name;
@@ -55,5 +56,13 @@ public final class JsNativeFunction extends JsValue {
 
     public boolean hasProperty(String key) {
         return properties != null && properties.containsKey(key);
+    }
+
+    public JsObject getPrototype() {
+        return prototype;
+    }
+
+    public void setPrototype(JsObject prototype) {
+        this.prototype = prototype;
     }
 }

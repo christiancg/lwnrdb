@@ -25,42 +25,68 @@ public final class ObjectBuiltins {
     private ObjectBuiltins() {
     }
 
-    public static JsObject create(IterableToList iterableToList, InterpreterOps ops, Invoker invoker) {
-        final var object = new JsObject();
-        object.set("keys", new JsNativeFunction("keys", (_, args) -> keys(args, ops)));
-        object.set("values", new JsNativeFunction("values", (_, args) -> values(args, ops)));
-        object.set("entries", new JsNativeFunction("entries", (_, args) -> entries(args, ops)));
-        object.set("assign", new JsNativeFunction("assign", (_, args) -> assign(args)));
-        object.set("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
-        object.set("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
-        object.set("seal", new JsNativeFunction("seal", (_, args) -> seal(args)));
-        object.set("isSealed", new JsNativeFunction("isSealed", (_, args) -> isSealed(args)));
-        object.set("preventExtensions", new JsNativeFunction("preventExtensions", (_, args) -> {
+    public static JsNativeFunction create(IterableToList iterableToList, InterpreterOps ops, Invoker invoker) {
+        final var object = new JsNativeFunction("Object", (_, args) -> coerceToObject(args));
+        object.setProperty("keys", new JsNativeFunction("keys", (_, args) -> keys(args, ops)));
+        object.setProperty("values", new JsNativeFunction("values", (_, args) -> values(args, ops)));
+        object.setProperty("entries", new JsNativeFunction("entries", (_, args) -> entries(args, ops)));
+        object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args)));
+        object.setProperty("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
+        object.setProperty("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
+        object.setProperty("seal", new JsNativeFunction("seal", (_, args) -> seal(args)));
+        object.setProperty("isSealed", new JsNativeFunction("isSealed", (_, args) -> isSealed(args)));
+        object.setProperty("preventExtensions", new JsNativeFunction("preventExtensions", (_, args) -> {
             ops.preventExtensions(first(args));
             return first(args);
         }));
-        object.set("isExtensible",
+        object.setProperty("isExtensible",
                 new JsNativeFunction("isExtensible", (_, args) -> JsBoolean.of(ops.isExtensible(first(args)))));
-        object.set("create", new JsNativeFunction("create", (_, args) -> createObject(args)));
-        object.set("getPrototypeOf",
+        object.setProperty("create", new JsNativeFunction("create", (_, args) -> createObject(args)));
+        object.setProperty("getPrototypeOf",
                 new JsNativeFunction("getPrototypeOf", (_, args) -> ops.getPrototypeOf(first(args))));
-        object.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
+        object.setProperty("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
             ops.setPrototypeOf(first(args), argAt(args, 1));
             return first(args);
         }));
-        object.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> {
+        object.setProperty("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> {
             ops.defineProperty(first(args), argAt(args, 1), argAt(args, 2));
             return first(args);
         }));
-        object.set("defineProperties", new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args)));
-        object.set("getOwnPropertyNames",
+        object.setProperty("defineProperties",
+                new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args)));
+        object.setProperty("getOwnPropertyNames",
                 new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args, ops)));
-        object.set("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
+        object.setProperty("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
                 (_, args) -> ops.getOwnPropertyDescriptor(first(args), argAt(args, 1))));
-        object.set("fromEntries", new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
-        object.set("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args)));
-        object.set("groupBy", new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
+        object.setProperty("fromEntries",
+                new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
+        object.setProperty("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args)));
+        object.setProperty("groupBy",
+                new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
+        object.setProperty("is", new JsNativeFunction("is", (_, args) -> is(args)));
+        object.setProperty("getOwnPropertySymbols",
+                new JsNativeFunction("getOwnPropertySymbols", (_, args) -> getOwnPropertySymbols(args)));
         return object;
+    }
+
+    private static JsValue coerceToObject(List<JsValue> args) {
+        final var value = first(args);
+        return value instanceof JsObject || value instanceof JsArray || value instanceof JsFunction
+                || value instanceof JsNativeFunction ? value : new JsObject();
+    }
+
+    private static JsValue is(List<JsValue> args) {
+        return JsBoolean.of(!isNotSameValue(argAt(args, 0), argAt(args, 1)));
+    }
+
+    private static JsValue getOwnPropertySymbols(List<JsValue> args) {
+        final var result = new JsArray();
+        if (first(args) instanceof JsObject object) {
+            for (final var symbol : object.symbolKeys()) {
+                result.push(symbol);
+            }
+        }
+        return result;
     }
 
     private static JsValue hasOwn(List<JsValue> args) {
@@ -189,7 +215,8 @@ public final class ObjectBuiltins {
             }
             case JsGlobalObject global -> {
                 for (final var name : global.getEnv().enumerableGlobalNames()) {
-                    result.push(new JsArray(List.of(new JsString(name), Objects.requireNonNull(global.getEnv().tryGet(name)))));
+                    result.push(new JsArray(
+                            List.of(new JsString(name), Objects.requireNonNull(global.getEnv().tryGet(name)))));
                 }
             }
             default -> {
@@ -208,6 +235,9 @@ public final class ObjectBuiltins {
                     if (source.isEnumerable(entry.getKey())) {
                         target.set(entry.getKey(), entry.getValue());
                     }
+                }
+                for (final var symbol : source.symbolKeys()) {
+                    target.setSymbol(symbol, source.getSymbol(symbol));
                 }
             }
         }

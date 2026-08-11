@@ -79,6 +79,7 @@ import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SequenceExpression;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StaticBlock;
@@ -846,7 +847,16 @@ public final class Parser {
         }
 
         private Expression parseExpression() {
-            return parseAssignment();
+            final var first = parseAssignment();
+            if (!isSeparator(',')) {
+                return first;
+            }
+            final var expressions = new ArrayList<Expression>();
+            expressions.add(first);
+            while (matchSeparator(',')) {
+                expressions.add(parseAssignment());
+            }
+            return new SequenceExpression(expressions);
         }
 
         private Expression parseAssignment() {

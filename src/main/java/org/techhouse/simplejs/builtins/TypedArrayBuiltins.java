@@ -3,6 +3,7 @@ package org.techhouse.simplejs.builtins;
 import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -21,6 +22,34 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class TypedArrayBuiltins {
+    public static final List<String> NAMES = List.of("forEach", "map", "filter", "reduce", "reduceRight", "find",
+            "findIndex", "some", "every", "indexOf", "lastIndexOf", "includes", "join", "slice", "subarray", "set",
+            "fill", "reverse", "at", "toString", "keys", "values", "entries", "sort", "toSorted", "toReversed", "with",
+            "findLast", "findLastIndex", "copyWithin");
+    public static final List<String> BUFFER_NAMES = List.of("slice", "resize", "transfer", "transferToFixedLength");
+    public static final List<String> VIEW_NAMES = viewNames();
+    private static final Set<String> BUFFER_ACCESSORS = Set.of("byteLength", "maxByteLength", "resizable", "detached");
+    private static final Set<String> VIEW_ACCESSORS = Set.of("buffer", "byteLength", "byteOffset");
+
+    private static List<String> viewNames() {
+        final var elementTypes = List.of("Int8", "Uint8", "Int16", "Uint16", "Int32", "Uint32", "Float16", "Float32",
+                "Float64", "BigInt64", "BigUint64");
+        final var names = new ArrayList<String>();
+        for (final var type : elementTypes) {
+            names.add("get" + type);
+            names.add("set" + type);
+        }
+        return List.copyOf(names);
+    }
+
+    public static boolean isBufferAccessor(String name) {
+        return BUFFER_ACCESSORS.contains(name);
+    }
+
+    public static boolean isViewAccessor(String name) {
+        return VIEW_ACCESSORS.contains(name);
+    }
+
     private TypedArrayBuiltins() {
     }
 
@@ -240,8 +269,99 @@ public final class TypedArrayBuiltins {
             case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(receiver));
             case "values" -> new JsNativeFunction("values", (_, _) -> JsIterators.of(elements(receiver).iterator()));
             case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(receiver));
+            case "sort" -> new JsNativeFunction("sort", (_, args) -> sort(receiver, args, invoker));
+            case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker));
+            case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(receiver));
+            case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, args));
+            case "findLast" -> new JsNativeFunction("findLast", (_, args) -> findLast(receiver, args, invoker, false));
+            case "findLastIndex" ->
+                new JsNativeFunction("findLastIndex", (_, args) -> findLast(receiver, args, invoker, true));
+            case "copyWithin" -> new JsNativeFunction("copyWithin", (_, args) -> copyWithin(receiver, args));
             default -> null;
         };
+    }
+
+    private static JsValue sort(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
+        final var sorted = sortedElements(receiver, args, invoker);
+        for (var i = 0; i < sorted.size(); i++) {
+            receiver.setElement(i, sorted.get(i));
+        }
+        return receiver;
+    }
+
+    private static JsValue toSorted(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
+        return fromItems(receiver.kind(), sortedElements(receiver, args, invoker));
+    }
+
+    private static List<JsValue> sortedElements(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
+        final var items = new ArrayList<>(elements(receiver));
+        final var comparator = args.isEmpty() || args.getFirst() instanceof JsUndefined ? null : args.getFirst();
+        if (comparator == null) {
+            items.sort(TypedArrayBuiltins::compareNumeric);
+        } else {
+            items.sort((a, b) -> {
+                final var result = JsCoercion
+                        .toNumber(invoker.call(comparator, JsUndefined.getInstance(), List.of(a, b)));
+                return Double.isNaN(result) ? 0 : (int) Math.signum(result);
+            });
+        }
+        return items;
+    }
+
+    private static int compareNumeric(JsValue a, JsValue b) {
+        if (a instanceof JsBigInt x && b instanceof JsBigInt y) {
+            return x.getValue().compareTo(y.getValue());
+        }
+        return Double.compare(JsCoercion.toNumber(a), JsCoercion.toNumber(b));
+    }
+
+    private static JsValue toReversed(JsTypedArray receiver) {
+        final var items = new ArrayList<>(elements(receiver));
+        java.util.Collections.reverse(items);
+        return fromItems(receiver.kind(), items);
+    }
+
+    private static JsValue with(JsTypedArray receiver, List<JsValue> args) {
+        var index = (int) intArg(args, 0, 0);
+        if (index < 0) {
+            index += receiver.length();
+        }
+        if (index < 0 || index >= receiver.length()) {
+            throw new RangeErrorException("Invalid index : " + intArg(args, 0, 0));
+        }
+        final var result = allocate(receiver.kind(), receiver.length());
+        for (var i = 0; i < receiver.length(); i++) {
+            result.setElement(i, i == index ? arg(args, 1) : receiver.getElement(i));
+        }
+        return result;
+    }
+
+    private static JsValue findLast(JsTypedArray receiver, List<JsValue> args, Invoker invoker, boolean wantIndex) {
+        final var callback = callback(args);
+        for (var i = receiver.length() - 1; i >= 0; i--) {
+            final var element = receiver.getElement(i);
+            if (JsCoercion.toBoolean(
+                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
+                return wantIndex ? new JsNumber(i) : element;
+            }
+        }
+        return wantIndex ? new JsNumber(-1) : JsUndefined.getInstance();
+    }
+
+    private static JsValue copyWithin(JsTypedArray receiver, List<JsValue> args) {
+        final var length = receiver.length();
+        final var target = resolveIndex(intArg(args, 0, 0), length);
+        final var start = resolveIndex(intArg(args, 1, 0), length);
+        final var end = resolveIndex(
+                args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0) : length, length);
+        final var slice = new ArrayList<JsValue>();
+        for (var i = start; i < end; i++) {
+            slice.add(receiver.getElement(i));
+        }
+        for (var i = 0; i < slice.size() && target + i < length; i++) {
+            receiver.setElement(target + i, slice.get(i));
+        }
+        return receiver;
     }
 
     private static JsValue forEach(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {

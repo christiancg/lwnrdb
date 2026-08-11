@@ -23,6 +23,10 @@ public final class JsClass extends JsValue {
     private final Map<String, JsFunction> privateInstanceMethods = new LinkedHashMap<>();
     private final Map<String, JsFunction> privateInstanceGetters = new LinkedHashMap<>();
     private final Map<String, JsFunction> privateInstanceSetters = new LinkedHashMap<>();
+    private final Map<String, JsFunction> privateStaticMethods = new LinkedHashMap<>();
+    private final Map<String, JsFunction> privateStaticGetters = new LinkedHashMap<>();
+    private final Map<String, JsFunction> privateStaticSetters = new LinkedHashMap<>();
+    private final Map<String, JsValue> privateStaticFields = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolMethods = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolGetters = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolSetters = new LinkedHashMap<>();
@@ -31,11 +35,29 @@ public final class JsClass extends JsValue {
     private final Map<JsSymbol, JsFunction> staticSymbolSetters = new LinkedHashMap<>();
     private final Map<JsSymbol, JsValue> staticSymbolProps = new LinkedHashMap<>();
     private final Environment methodScope;
+    private JsNativeFunction nativeSuperClass;
 
     public JsClass(String name, JsClass superClass, Environment methodScope) {
         this.name = name;
         this.superClass = superClass;
         this.methodScope = methodScope;
+    }
+
+    public JsNativeFunction getNativeSuperClass() {
+        return nativeSuperClass;
+    }
+
+    public void setNativeSuperClass(JsNativeFunction nativeSuperClass) {
+        this.nativeSuperClass = nativeSuperClass;
+    }
+
+    public JsNativeFunction findNativeSuperClass() {
+        for (var cls = this; cls != null; cls = cls.superClass) {
+            if (cls.nativeSuperClass != null) {
+                return cls.nativeSuperClass;
+            }
+        }
+        return null;
     }
 
     public String getName() {
@@ -68,6 +90,39 @@ public final class JsClass extends JsValue {
 
     public void addPrivateInstanceMethod(String key, String kind, JsFunction fn) {
         selectAccessor(privateInstanceMethods, privateInstanceGetters, privateInstanceSetters, kind).put(key, fn);
+    }
+
+    public void addPrivateStaticMethod(String key, String kind, JsFunction fn) {
+        selectAccessor(privateStaticMethods, privateStaticGetters, privateStaticSetters, kind).put(key, fn);
+    }
+
+    public JsFunction getPrivateStaticMethod(String key) {
+        return privateStaticMethods.get(key);
+    }
+
+    public JsFunction getPrivateStaticGetter(String key) {
+        return privateStaticGetters.get(key);
+    }
+
+    public JsFunction getPrivateStaticSetter(String key) {
+        return privateStaticSetters.get(key);
+    }
+
+    public void setPrivateStaticField(String key, JsValue value) {
+        privateStaticFields.put(key, value);
+    }
+
+    public JsValue getPrivateStaticField(String key) {
+        return privateStaticFields.get(key);
+    }
+
+    public boolean hasPrivateStaticField(String key) {
+        return privateStaticFields.containsKey(key);
+    }
+
+    public boolean declaresStaticPrivate(String key) {
+        return privateStaticMethods.containsKey(key) || privateStaticGetters.containsKey(key)
+                || privateStaticSetters.containsKey(key) || privateStaticFields.containsKey(key);
     }
 
     private static <K> Map<K, JsFunction> selectAccessor(Map<K, JsFunction> methods, Map<K, JsFunction> getters,

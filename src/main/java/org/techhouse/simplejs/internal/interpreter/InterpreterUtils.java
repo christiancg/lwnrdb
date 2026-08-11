@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Set;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -139,6 +140,9 @@ public final class InterpreterUtils {
                         target.set(entry.getKey(), entry.getValue());
                     }
                 }
+                for (final var symbol : object.symbolKeys()) {
+                    target.setSymbol(symbol, object.getSymbol(symbol));
+                }
             }
             case JsArray array -> {
                 final var elements = array.getElements();
@@ -224,7 +228,7 @@ public final class InterpreterUtils {
             return true;
         }
         final var index = arrayIndex(key);
-        return index != null && index < array.length();
+        return index != null && index < array.length() && !array.isHole(index);
     }
 
     public static boolean deleteArrayElement(JsArray array, String key) {
@@ -263,6 +267,10 @@ public final class InterpreterUtils {
     }
 
     public static JsValue toErrorValue(RuntimeException error) {
+        return toErrorValue(error, null);
+    }
+
+    public static JsValue toErrorValue(RuntimeException error, Intrinsics intrinsics) {
         if (error instanceof JsThrowException thrown) {
             return thrown.getValue();
         }
@@ -272,6 +280,8 @@ public final class InterpreterUtils {
             case RangeErrorException ignored -> "RangeError";
             default -> "SyntaxError";
         };
-        return ErrorBuiltins.makeError(name, error.getMessage());
+        return intrinsics == null
+                ? ErrorBuiltins.makeError(name, error.getMessage())
+                : intrinsics.makeError(name, error.getMessage());
     }
 }

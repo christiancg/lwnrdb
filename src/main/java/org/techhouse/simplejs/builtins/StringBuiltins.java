@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.JsArray;
@@ -20,6 +21,12 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class StringBuiltins {
+    public static final List<String> NAMES = List.of("slice", "substring", "split", "replace", "replaceAll", "match",
+            "matchAll", "search", "toUpperCase", "toLowerCase", "trim", "includes", "startsWith", "endsWith",
+            "padStart", "repeat", "charAt", "indexOf", "charCodeAt", "codePointAt", "at", "padEnd", "trimStart",
+            "trimEnd", "normalize", "localeCompare", "concat", "isWellFormed", "toWellFormed", "substr",
+            "toLocaleUpperCase", "toLocaleLowerCase", "trimLeft", "trimRight");
+
     private StringBuiltins() {
     }
 
@@ -120,7 +127,10 @@ public final class StringBuiltins {
                 final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH, ops, List.of());
                 return delegated != null ? delegated : match(value, args);
             });
-            case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> matchAll(value, args));
+            case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> {
+                final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH_ALL, ops, List.of());
+                return delegated != null ? delegated : matchAll(value, args);
+            });
             case "search" -> new JsNativeFunction("search", (_, args) -> {
                 final var delegated = delegateToSymbol(value, args, JsSymbol.SEARCH, ops, List.of());
                 return delegated != null ? delegated : new JsNumber(search(value, args));
@@ -152,6 +162,13 @@ public final class StringBuiltins {
             case "concat" -> new JsNativeFunction("concat", (_, args) -> new JsString(concat(value, args)));
             case "isWellFormed" -> new JsNativeFunction("isWellFormed", (_, _) -> JsBoolean.of(isWellFormed(value)));
             case "toWellFormed" -> new JsNativeFunction("toWellFormed", (_, _) -> new JsString(toWellFormed(value)));
+            case "substr" -> new JsNativeFunction("substr", (_, args) -> new JsString(substr(value, args)));
+            case "toLocaleUpperCase" -> new JsNativeFunction("toLocaleUpperCase",
+                    (_, _) -> new JsString(value.toUpperCase(Locale.getDefault())));
+            case "toLocaleLowerCase" -> new JsNativeFunction("toLocaleLowerCase",
+                    (_, _) -> new JsString(value.toLowerCase(Locale.getDefault())));
+            case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> new JsString(value.stripLeading()));
+            case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> new JsString(value.stripTrailing()));
             default -> null;
         };
     }
@@ -263,6 +280,21 @@ public final class StringBuiltins {
         return value.substring(start, end);
     }
 
+    private static String substr(String value, List<JsValue> args) {
+        final var length = value.length();
+        var start = intArg(args, 0, 0);
+        if (start < 0) {
+            start = Math.max(length + start, 0);
+        } else {
+            start = Math.min(start, length);
+        }
+        final var count = args.size() < 2 || args.get(1) instanceof JsUndefined ? length - start : intArg(args, 1, 0);
+        if (count <= 0) {
+            return "";
+        }
+        return value.substring(start, Math.min(start + count, length));
+    }
+
     private static String substring(String value, List<JsValue> args) {
         final var length = value.length();
         var start = Math.clamp(intArg(args, 0, 0), 0, length);
@@ -278,6 +310,10 @@ public final class StringBuiltins {
     }
 
     private static JsValue split(String value, List<JsValue> args) {
+        return limited(splitAll(value, args), intArg(args, 1, -1));
+    }
+
+    private static JsArray splitAll(String value, List<JsValue> args) {
         final var result = new JsArray();
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
             result.push(new JsString(value));
@@ -304,12 +340,18 @@ public final class StringBuiltins {
         return result;
     }
 
+    private static JsValue limited(JsArray array, int limit) {
+        if (limit < 0 || limit >= array.length()) {
+            return array;
+        }
+        return new JsArray(List.copyOf(array.getElements().subList(0, limit)));
+    }
+
     private static JsValue replace(String value, List<JsValue> args, Invoker invoker, boolean all) {
         if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp) {
             return new JsString(replaceRegex(value, regexp, args, invoker, all));
         }
         final var search = str(args, 0);
-        final var replacement = args.size() > 1 && isCallable(args.get(1)) ? null : str(args, 1);
         if (all) {
             return new JsString(replaceAllLiteral(value, search, args, invoker));
         }
@@ -317,11 +359,39 @@ public final class StringBuiltins {
         if (index < 0) {
             return new JsString(value);
         }
-        final var piece = replacement != null
-                ? replacement
-                : JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(),
-                        List.of(new JsString(search), new JsNumber(index), new JsString(value))));
+        final var piece = literalPiece(value, search, index, args, invoker);
         return new JsString(value.substring(0, index) + piece + value.substring(index + search.length()));
+    }
+
+    private static String literalPiece(String value, String search, int index, List<JsValue> args, Invoker invoker) {
+        if (args.size() > 1 && isCallable(args.get(1))) {
+            return JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(),
+                    List.of(new JsString(search), new JsNumber(index), new JsString(value))));
+        }
+        return expandLiteral(str(args, 1), search, value, index);
+    }
+
+    private static String expandLiteral(String template, String matched, String input, int position) {
+        final var sb = new StringBuilder();
+        for (var i = 0; i < template.length(); i++) {
+            final var ch = template.charAt(i);
+            if (ch != '$' || i + 1 >= template.length()) {
+                sb.append(ch);
+                continue;
+            }
+            switch (template.charAt(i + 1)) {
+                case '$' -> sb.append('$');
+                case '&' -> sb.append(matched);
+                case '`' -> sb.append(input, 0, position);
+                case '\'' -> sb.append(input.substring(position + matched.length()));
+                default -> {
+                    sb.append(ch);
+                    continue;
+                }
+            }
+            i++;
+        }
+        return sb.toString();
     }
 
     private static String replaceAllLiteral(String value, String search, List<JsValue> args, Invoker invoker) {
@@ -333,12 +403,7 @@ public final class StringBuiltins {
         var index = value.indexOf(search);
         while (index >= 0) {
             sb.append(value, from, index);
-            if (args.size() > 1 && isCallable(args.get(1))) {
-                sb.append(JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(),
-                        List.of(new JsString(search), new JsNumber(index), new JsString(value)))));
-            } else {
-                sb.append(str(args, 1));
-            }
+            sb.append(literalPiece(value, search, index, args, invoker));
             from = index + search.length();
             index = value.indexOf(search, from);
         }
@@ -446,9 +511,7 @@ public final class StringBuiltins {
         final var regexp = toRegExp(args);
         if (!regexp.isGlobal()) {
             final var matcher = regexp.getPattern().matcher(value);
-            return matcher.find()
-                    ? RegexBuiltins.buildMatchResult(matcher, value, regexp.getSource())
-                    : JsNull.getInstance();
+            return matcher.find() ? matchResult(matcher, value, regexp) : JsNull.getInstance();
         }
         final var matcher = regexp.getPattern().matcher(value);
         final var result = new JsArray();
@@ -465,11 +528,14 @@ public final class StringBuiltins {
     }
 
     private static JsValue matchAll(String value, List<JsValue> args) {
+        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp given && !given.isGlobal()) {
+            throw new TypeErrorException("String.prototype.matchAll called with a non-global RegExp argument");
+        }
         final var regexp = toRegExp(args);
         final var matcher = regexp.getPattern().matcher(value);
         final var result = new JsArray();
         while (matcher.find()) {
-            result.push(RegexBuiltins.buildMatchResult(matcher, value, regexp.getSource()));
+            result.push(matchResult(matcher, value, regexp));
             if (matcher.end() == matcher.start()) {
                 if (matcher.end() >= value.length()) {
                     break;
@@ -480,13 +546,21 @@ public final class StringBuiltins {
         return result;
     }
 
+    private static JsValue matchResult(Matcher matcher, String input, JsRegExp regexp) {
+        final var result = RegexBuiltins.buildMatchResult(matcher, input, regexp.getSource());
+        if (regexp.hasIndices()) {
+            RegexBuiltins.addIndices(result, matcher, regexp.getSource());
+        }
+        return result;
+    }
+
     private static int search(String value, List<JsValue> args) {
         final var regexp = toRegExp(args);
         final var matcher = regexp.getPattern().matcher(value);
         return matcher.find() ? matcher.start() : -1;
     }
 
-    private static JsValue splitByRegex(String value, JsRegExp regexp) {
+    private static JsArray splitByRegex(String value, JsRegExp regexp) {
         final var parts = regexp.getPattern().split(value, -1);
         final var result = new JsArray();
         for (final var part : parts) {

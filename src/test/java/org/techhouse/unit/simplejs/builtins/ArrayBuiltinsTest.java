@@ -210,4 +210,35 @@ public class ArrayBuiltinsTest {
         assertEquals("1,2,3", str("[1, 2, 3].toLocaleString()"));
         assertEquals("a,,b", str("['a', null, 'b'].toLocaleString()"));
     }
+
+    // toString joins with the default separator
+    @Test
+    public void test_to_string() {
+        assertEquals("1,2", str("[1, 2].toString()"));
+        assertEquals("", str("[].toString()"));
+    }
+
+    // concat splats an object that opts in via Symbol.isConcatSpreadable
+    @Test
+    public void test_is_concat_spreadable() {
+        assertEquals(3, num("const o = {0: 'a', 1: 'b'}; o[Symbol.isConcatSpreadable] = true; [1].concat(o).length"));
+        assertEquals("a", str("const o = {0: 'a'}; o[Symbol.isConcatSpreadable] = true; [1].concat(o)[1]"));
+        assertEquals(2, num("[1].concat({a: 1}).length"));
+        assertEquals(3, num("[1].concat([2, 3]).length"));
+    }
+
+    // Array.fromAsync drains an async iterable and a sync iterable of promises
+    @Test
+    public void test_from_async() {
+        assertEquals(2, asyncLength("async function* g() { yield 1; yield 2 } out.v = await Array.fromAsync(g())"));
+        assertEquals(2, asyncLength("out.v = await Array.fromAsync([Promise.resolve(1), 2])"));
+        assertTrue(bool("typeof Array.fromAsync === 'function'"));
+    }
+
+    // The result of an async body is observed after the event loop has drained
+    private static double asyncLength(String body) {
+        final var out = (org.techhouse.simplejs.values.JsObject) Interpreter
+                .run("const out = {}; (async () => { " + body + " })(); out");
+        return ((org.techhouse.simplejs.values.JsArray) out.get("v")).length();
+    }
 }

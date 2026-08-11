@@ -10,6 +10,9 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class ObjectProtoBuiltins {
+    public static final List<String> NAMES = List.of("hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+            "toString", "valueOf");
+
     private ObjectProtoBuiltins() {
     }
 

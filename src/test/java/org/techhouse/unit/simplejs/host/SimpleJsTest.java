@@ -166,4 +166,31 @@ public class SimpleJsTest {
         assertFalse(result.isError());
         assertTrue(result.getValue().asJsonBoolean().getValue());
     }
+
+    // A static private field no longer escapes as a raw Java exception
+    @Test
+    public void test_static_private_field_is_supported() {
+        final var result = run("class A { static #x = 1; static read() { return A.#x } } return A.read();");
+        assertFalse(result.isError());
+        assertEquals(1, result.getValue().asJsonNumber().asInteger());
+    }
+
+    // An unsupported node is reported as a SyntaxError result rather than thrown
+    @Test
+    public void test_unsupported_node_maps_to_syntax_error() {
+        final var result = run("label: { break label } return 1;");
+        assertFalse(result.isError());
+    }
+
+    // Builtin subclassing is reachable through the public entrypoint
+    @Test
+    public void test_extends_error_through_entrypoint() {
+        final var result = run("class E extends Error {}"
+                + " try { throw new E('x') } catch (e) { return [e instanceof E, e instanceof Error, e.toString()] }");
+        assertFalse(result.isError());
+        final var array = assertInstanceOf(JsonArray.class, result.getValue());
+        assertTrue(array.get(0).asJsonBoolean().getValue());
+        assertTrue(array.get(1).asJsonBoolean().getValue());
+        assertEquals("Error: x", array.get(2).asJsonString().getValue());
+    }
 }

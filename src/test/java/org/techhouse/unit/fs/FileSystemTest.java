@@ -1716,4 +1716,34 @@ public class FileSystemTest {
         fs.compactTombstones(TestGlobals.DB, "noSuchColl", 0L);
         assertTrue(fs.readTombstones(TestGlobals.DB, "noSuchColl").isEmpty());
     }
+
+    // A string field containing a newline stays on a single line in the page file and reads back intact
+    @Test
+    public void test_document_with_newline_occupies_one_line() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        fileSystem.createBaseDbPath();
+        fileSystem.createAdminDatabase();
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        final var id = "nl1";
+        final var value = "line1\nline2\twith \"quotes\" and \\slash";
+        JsonObject data = new JsonObject();
+        data.addProperty("text", value);
+        data.addProperty(Globals.PK_FIELD, id);
+        DbEntry entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.setData(data);
+        entry.set_id(id);
+
+        PkIndexEntry indexEntry = fileSystem.insertIntoCollection(entry);
+        DbEntry read = fileSystem.getById(indexEntry);
+        assertEquals(value, read.getData().get("text").asJsonString().getValue());
+
+        File page = new File(TestGlobals.PATH + '/' + TestGlobals.DB + '/' + TestGlobals.COLL + '/' + TestGlobals.COLL
+                + "-" + indexEntry.getPage() + Globals.DB_FILE_EXTENSION);
+        assertEquals(1, java.nio.file.Files.readAllLines(page.toPath()).size());
+    }
 }

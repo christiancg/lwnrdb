@@ -12,6 +12,8 @@ public final class JsSymbol extends JsValue {
     public static final JsSymbol REPLACE = new JsSymbol("Symbol.replace");
     public static final JsSymbol SEARCH = new JsSymbol("Symbol.search");
     public static final JsSymbol SPLIT = new JsSymbol("Symbol.split");
+    public static final JsSymbol MATCH_ALL = new JsSymbol("Symbol.matchAll");
+    public static final JsSymbol IS_CONCAT_SPREADABLE = new JsSymbol("Symbol.isConcatSpreadable");
 
     private final String description;
 

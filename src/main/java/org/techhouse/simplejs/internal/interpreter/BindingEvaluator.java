@@ -243,6 +243,9 @@ public final class BindingEvaluator {
                             restObject.set(entry.getKey(), entry.getValue());
                         }
                     }
+                    for (final var symbol : object.symbolKeys()) {
+                        restObject.setSymbol(symbol, object.getSymbol(symbol));
+                    }
                 }
                 destructure(rest.getArgument(), restObject, env, leaf);
                 return;

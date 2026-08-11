@@ -179,4 +179,60 @@ public class NumberBuiltinsTest {
         assertEquals("∞", str("(Number.POSITIVE_INFINITY).toLocaleString()"));
         assertEquals("-∞", str("(Number.NEGATIVE_INFINITY).toLocaleString()"));
     }
+
+    // toFixed rounds the binary double, not its shortest decimal form
+    @Test
+    public void test_to_fixed_binary_rounding() {
+        assertEquals("1.00", str("(1.005).toFixed(2)"));
+        assertEquals("3", str("(2.5).toFixed(0)"));
+        assertEquals("-3", str("(-2.5).toFixed(0)"));
+        assertEquals("1.4", str("(1.45).toFixed(1)"));
+        assertEquals("1.50", str("(1.5).toFixed(2)"));
+    }
+
+    // toFixed rejects a digit count outside 0..100
+    @Test
+    public void test_to_fixed_digit_range() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toFixed(-1)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toFixed(101)"));
+        assertEquals("1", str("(1).toFixed(0)"));
+        assertEquals("NaN", str("(NaN).toFixed(2)"));
+        assertEquals("Infinity", str("(Infinity).toFixed(2)"));
+        assertEquals("-Infinity", str("(-Infinity).toFixed(2)"));
+    }
+
+    // isSafeInteger at the boundaries
+    @Test
+    public void test_is_safe_integer() {
+        assertTrue(bool("Number.isSafeInteger(9007199254740991)"));
+        assertTrue(bool("Number.isSafeInteger(-9007199254740991)"));
+        assertFalse(bool("Number.isSafeInteger(9007199254740992)"));
+        assertFalse(bool("Number.isSafeInteger(1.5)"));
+        assertFalse(bool("Number.isSafeInteger('1')"));
+        assertFalse(bool("Number.isSafeInteger(Infinity)"));
+    }
+
+    // BigInt instance methods and the asIntN/asUintN statics
+    @Test
+    public void test_bigint_methods() {
+        assertEquals("ff", str("(255n).toString(16)"));
+        assertEquals("255", str("(255n).toString()"));
+        assertTrue(bool("(2n).valueOf() === 2n"));
+        assertTrue(bool("typeof (2n).toLocaleString() === 'string'"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("(2n).toString(1)"));
+        assertTrue(bool("BigInt.asIntN(8, 255n) === -1n"));
+        assertTrue(bool("BigInt.asUintN(8, -1n) === 255n"));
+        assertTrue(bool("BigInt.asIntN(0, 5n) === 0n"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("BigInt.asIntN(-1, 1n)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.asIntN(8, 1)"));
+    }
+
+    // The global NaN, Infinity and undefined bindings
+    @Test
+    public void test_global_number_bindings() {
+        assertTrue(bool("typeof NaN === 'number'"));
+        assertTrue(bool("Number.isNaN(NaN)"));
+        assertTrue(bool("Infinity > 0 && !isFinite(Infinity)"));
+        assertTrue(bool("typeof undefined === 'undefined'"));
+    }
 }

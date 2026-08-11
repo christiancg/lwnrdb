@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.builtins.ObjectBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -70,6 +71,7 @@ import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.RegexLiteral;
 import org.techhouse.simplejs.nodes.ReturnStatement;
+import org.techhouse.simplejs.nodes.SequenceExpression;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
@@ -214,6 +216,7 @@ public final class Interpreter {
         }
     };
     private final ProxyDispatch proxies = new ProxyDispatch(ops);
+    private final Intrinsics intrinsics = new Intrinsics(this::callValue, ops);
     private final MemberEvaluator members = new MemberEvaluator(this, eventLoop, proxies);
     private final BindingEvaluator binding = new BindingEvaluator(this, members);
     private final ClassEvaluator classes = new ClassEvaluator(this);
@@ -273,7 +276,7 @@ public final class Interpreter {
     private ProgramOutcome runModule(Program program) {
         final var env = Environment.global();
         GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console(), ops, host.network(),
-                host.limits());
+                host.limits(), intrinsics);
         for (final var statement : program.getBody()) {
             if (statement instanceof ImportDeclaration importDeclaration) {
                 modules.bindImport(importDeclaration, env);
@@ -477,6 +480,7 @@ public final class Interpreter {
             case LOGICAL_EXPRESSION -> expressions.evalLogical((LogicalExpression) expression, env);
             case ASSIGNMENT_EXPRESSION -> expressions.evalAssignment((AssignmentExpression) expression, env);
             case CONDITIONAL_EXPRESSION -> expressions.evalConditional((ConditionalExpression) expression, env);
+            case SEQUENCE_EXPRESSION -> expressions.evalSequence((SequenceExpression) expression, env);
             case MEMBER_EXPRESSION -> unwrapShortCircuit(evalMember((MemberExpression) expression, env));
             case CLASS_EXPRESSION -> classes.evalClassExpression((ClassExpression) expression, env);
             case YIELD_EXPRESSION -> evalYield((YieldExpression) expression, env);
@@ -577,6 +581,10 @@ public final class Interpreter {
 
     public InterpreterOps ops() {
         return ops;
+    }
+
+    public Intrinsics intrinsics() {
+        return intrinsics;
     }
 
     public Coroutine currentCoroutine() {
@@ -682,10 +690,31 @@ public final class Interpreter {
             case JsClass cls -> classes.construct(cls, args);
             case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
                 constructValue(nativeFunction.getBoundTarget(), boundArgs(nativeFunction, args));
-            case JsNativeFunction nativeFunction -> nativeFunction.invoke(JsUndefined.getInstance(), args);
+            case JsNativeFunction nativeFunction -> constructNative(nativeFunction, args);
             case JsFunction function when !function.isArrow() -> constructFunction(function, args);
             default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
         };
+    }
+
+    private JsValue constructNative(JsNativeFunction nativeFunction, List<JsValue> args) {
+        final var proto = nativeFunction.getPrototype();
+        if (proto == intrinsics.objectProto()) {
+            final var argument = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+            if (isObjectLike(argument)) {
+                return argument;
+            }
+            final var created = new JsObject();
+            created.setProto(proto);
+            return created;
+        }
+        if (proto == intrinsics.stringProto() || proto == intrinsics.numberProto()
+                || proto == intrinsics.booleanProto()) {
+            final var wrapper = new JsObject();
+            wrapper.setProto(proto);
+            wrapper.setPrimitive(nativeFunction.invoke(JsUndefined.getInstance(), args));
+            return wrapper;
+        }
+        return nativeFunction.invoke(JsUndefined.getInstance(), args);
     }
 
     private List<JsValue> boundArgs(JsNativeFunction nativeFunction, List<JsValue> args) {
@@ -798,7 +827,7 @@ public final class Interpreter {
                 promise.resolve(runFunctionBody(function, activation));
             } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
                     | SyntaxErrorException error) {
-                promise.reject(toErrorValue(error));
+                promise.reject(toErrorValue(error, intrinsics));
             }
             return JsUndefined.getInstance();
         });
@@ -923,6 +952,19 @@ public final class Interpreter {
     }
 
     public JsValue getPrivateMember(JsValue target, String name, Environment env) {
+        if (target instanceof JsClass cls && declaresStaticPrivate(env, name)) {
+            final var getter = cls.getPrivateStaticGetter(name);
+            if (getter != null) {
+                return callFunction(getter, cls, List.of());
+            }
+            final var method = cls.getPrivateStaticMethod(name);
+            if (method != null) {
+                return method;
+            }
+            if (cls.hasPrivateStaticField(name)) {
+                return cls.getPrivateStaticField(name);
+            }
+        }
         if (target instanceof JsObject object) {
             if (object.hasPrivate(name)) {
                 return object.getPrivate(name);
@@ -942,7 +984,20 @@ public final class Interpreter {
                 "Cannot read private member #" + name + " from an object whose class did not declare it");
     }
 
+    private static boolean declaresStaticPrivate(Environment env, String name) {
+        return env.resolveHomeClass() instanceof JsClass home && home.declaresStaticPrivate(name);
+    }
+
     public void setPrivateMember(JsValue target, String name, JsValue value, Environment env) {
+        if (target instanceof JsClass cls && declaresStaticPrivate(env, name)) {
+            final var setter = cls.getPrivateStaticSetter(name);
+            if (setter != null) {
+                callFunction(setter, cls, List.of(value));
+            } else {
+                cls.setPrivateStaticField(name, value);
+            }
+            return;
+        }
         if (target instanceof JsObject object) {
             if (env.resolveHomeClass() instanceof JsClass cls) {
                 final var setter = cls.getPrivateInstanceSetter(name);

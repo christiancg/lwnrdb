@@ -137,8 +137,9 @@ public final class StatementEvaluator {
             } catch (RuntimeException disposeError) {
                 error = error == null
                         ? disposeError
-                        : new JsThrowException(ErrorBuiltins.makeSuppressedError(toErrorValue(disposeError),
-                                toErrorValue(error), "An error was suppressed during disposal"));
+                        : new JsThrowException(ErrorBuiltins.makeSuppressedError(
+                                toErrorValue(disposeError, interp.intrinsics()),
+                                toErrorValue(error, interp.intrinsics()), "An error was suppressed during disposal"));
             }
         }
         if (error != null) {
@@ -459,7 +460,7 @@ public final class StatementEvaluator {
                 if (statement.getHandler() == null) {
                     throw error;
                 }
-                result = interp.evalCatch(statement.getHandler(), toErrorValue(error), env);
+                result = interp.evalCatch(statement.getHandler(), toErrorValue(error, interp.intrinsics()), env);
             }
         } catch (ScriptAbortException abort) {
             throw abort;

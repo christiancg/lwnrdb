@@ -19,6 +19,12 @@ public final class NumberBuiltins {
     private NumberBuiltins() {
     }
 
+    public static final List<String> NAMES = List.of("toFixed", "toPrecision", "toExponential", "toString",
+            "toLocaleString", "valueOf");
+
+    private static final double MAX_SAFE_INTEGER = 9007199254740991d;
+    private static final int MAX_FRACTION_DIGITS = 100;
+
     public static JsNativeFunction create() {
         final var number = new JsNativeFunction("Number",
                 (_, args) -> new JsNumber(args.isEmpty() ? 0 : JsCoercion.toNumber(args.getFirst())));
@@ -26,10 +32,12 @@ public final class NumberBuiltins {
         number.setProperty("isInteger", new JsNativeFunction("isInteger", (_, args) -> JsBoolean.of(isInteger(args))));
         number.setProperty("isFinite",
                 new JsNativeFunction("isFinite", (_, args) -> JsBoolean.of(isFiniteNumber(args))));
+        number.setProperty("isSafeInteger",
+                new JsNativeFunction("isSafeInteger", (_, args) -> JsBoolean.of(isSafeInteger(args))));
         number.setProperty("parseFloat", parseFloatFunction());
         number.setProperty("parseInt", parseIntFunction());
-        number.setProperty("MAX_SAFE_INTEGER", new JsNumber(9007199254740991d));
-        number.setProperty("MIN_SAFE_INTEGER", new JsNumber(-9007199254740991d));
+        number.setProperty("MAX_SAFE_INTEGER", new JsNumber(MAX_SAFE_INTEGER));
+        number.setProperty("MIN_SAFE_INTEGER", new JsNumber(-MAX_SAFE_INTEGER));
         number.setProperty("MAX_VALUE", new JsNumber(Double.MAX_VALUE));
         number.setProperty("MIN_VALUE", new JsNumber(Double.MIN_VALUE));
         number.setProperty("EPSILON", new JsNumber(Math.ulp(1.0)));
@@ -97,15 +105,20 @@ public final class NumberBuiltins {
         return java.text.NumberFormat.getInstance(java.util.Locale.getDefault()).format(value);
     }
 
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     private static String toFixed(double value, List<JsValue> args) {
         final var digits = intArg(args, 0);
+        if (digits < 0 || digits > MAX_FRACTION_DIGITS) {
+            throw new RangeErrorException("toFixed() digits argument must be between 0 and 100");
+        }
         if (Double.isNaN(value)) {
             return "NaN";
         }
         if (!Double.isFinite(value)) {
             return value > 0 ? "Infinity" : "-Infinity";
         }
-        return java.math.BigDecimal.valueOf(value).setScale(digits, java.math.RoundingMode.HALF_UP).toPlainString();
+        // The exact-binary BigDecimal ctor (not valueOf) is what makes (1.005).toFixed(2) round to "1.00"
+        return new java.math.BigDecimal(value).setScale(digits, java.math.RoundingMode.HALF_UP).toPlainString();
     }
 
     private static String toPrecision(double value, List<JsValue> args) {
@@ -220,6 +233,10 @@ public final class NumberBuiltins {
         }
         final var value = n.getValue();
         return Double.isFinite(value) && value == Math.floor(value);
+    }
+
+    private static boolean isSafeInteger(List<JsValue> args) {
+        return isInteger(args) && Math.abs(((JsNumber) args.getFirst()).getValue()) <= MAX_SAFE_INTEGER;
     }
 
     private static boolean isFiniteNumber(List<JsValue> args) {

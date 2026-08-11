@@ -54,6 +54,10 @@ public final class AsyncIteratorBuiltins {
         return ctor;
     }
 
+    public static JsValue drainToArray(InterpreterOps ops, EventLoop loop, JsValue iterable) {
+        return toArray(loop, new AsyncDriver(ops, loop, getAsyncIterator(ops, loop, iterable)));
+    }
+
     public static JsNativeFunction helper(InterpreterOps ops, EventLoop loop, String name) {
         return new JsNativeFunction(name, (thisArg, args) -> dispatch(ops, loop, name, thisArg, args));
     }

@@ -331,4 +331,63 @@ public class StringBuiltinsTest {
         assertEquals("axc", str("'abc'.replace('b', 'x')"));
         assertEquals(1, num("'abc'.search(/b/)"));
     }
+
+    // split honours its limit argument
+    @Test
+    public void test_split_limit() {
+        assertEquals("a|b", str("'a,b,c'.split(',', 2).join('|')"));
+        assertEquals(0, num("'a,b,c'.split(',', 0).length"));
+        assertEquals(3, num("'a,b,c'.split(',', -1).length"));
+        assertEquals(3, num("'a,b,c'.split(',').length"));
+        assertEquals("ab", str("'abc'.split('', 2).join('')"));
+        assertEquals(1, num("'a,b,'.split(',', 1).length"));
+    }
+
+    // A regex separator keeps trailing empties before the limit is applied
+    @Test
+    public void test_split_limit_with_regex() {
+        assertEquals(4, num("'a1b2c3'.split(/[0-9]/).length"));
+        assertEquals(2, num("'a1b2c3'.split(/[0-9]/, 2).length"));
+        assertEquals("", str("'a,,'.split(/,/).pop()"));
+    }
+
+    // $$ in a replacement yields a literal dollar for a string search
+    @Test
+    public void test_dollar_escape_in_replacement() {
+        assertEquals("$", str("'a'.replace('a', '$$')"));
+        assertEquals("[a]", str("'a'.replace('a', '[$&]')"));
+        assertEquals("xx+yy", str("'xay'.replace('a', '$`+$\\'')"));
+        assertEquals("$x", str("'a'.replace('a', '$x')"));
+        assertEquals("$", str("'aa'.replaceAll('aa', '$$')"));
+    }
+
+    // matchAll rejects a non-global regex
+    @Test
+    public void test_match_all_requires_global() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("'aa'.matchAll(/a/)"));
+        assertEquals(2, num("'aa'.matchAll(/a/g).length"));
+        assertEquals(2, num("'aa'.matchAll('a').length"));
+    }
+
+    // Annex-B substr handles negative and absent lengths
+    @Test
+    public void test_substr() {
+        assertEquals("de", str("'abcdef'.substr(-3, 2)"));
+        assertEquals("cdef", str("'abcdef'.substr(2)"));
+        assertEquals("", str("'abcdef'.substr(2, 0)"));
+        assertEquals("", str("'abcdef'.substr(2, -1)"));
+        assertEquals("abc", str("'abcdef'.substr(-10, 3)"));
+        assertEquals("", str("'abcdef'.substr(10, 3)"));
+        assertEquals("ef", str("'abcdef'.substr(4, 10)"));
+    }
+
+    // Annex-B trim aliases and locale case conversion
+    @Test
+    public void test_annex_b_aliases() {
+        assertEquals("a ", str("'  a '.trimLeft()"));
+        assertEquals("  a", str("'  a  '.trimRight()"));
+        assertEquals("ABC", str("'abc'.toLocaleUpperCase()"));
+        assertEquals("abc", str("'ABC'.toLocaleLowerCase()"));
+    }
 }

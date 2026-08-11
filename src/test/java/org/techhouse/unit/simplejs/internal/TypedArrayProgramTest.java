@@ -603,4 +603,42 @@ public class TypedArrayProgramTest {
                 """;
         assertEquals("RangeError", str(source));
     }
+
+    // sort orders numerically by default, not lexicographically
+    @Test
+    public void test_sort_is_numeric() {
+        assertEquals("2,10,33", str("new Int32Array([10, 2, 33]).sort().join(',')"));
+        assertEquals("33,10,2", str("new Int32Array([10, 2, 33]).sort((a, b) => b - a).join(',')"));
+        assertEquals("1,2", str("new BigInt64Array([2n, 1n]).sort().join(',')"));
+    }
+
+    // The by-copy methods return same-kind copies
+    @Test
+    public void test_by_copy_methods() {
+        assertEquals("2,10", str("const t = new Int32Array([10, 2]); const s = t.toSorted();"
+                + " t.join(',') === '10,2' ? s.join(',') : 'mutated'"));
+        assertEquals("2,10", str("new Int32Array([10, 2]).toReversed().join(',')"));
+        assertEquals("9,2", str("new Int32Array([10, 2]).with(0, 9).join(',')"));
+        assertTrue(bool("new Int32Array([1]).toSorted() instanceof Int32Array"));
+    }
+
+    // with rejects an out-of-range index
+    @Test
+    public void test_with_range_error() {
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("new Int8Array(2).with(5, 1)"));
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("new Int8Array(2).with(-5, 1)"));
+        assertEquals("0,9", str("new Int8Array(2).with(-1, 9).join(',')"));
+    }
+
+    // findLast, findLastIndex and copyWithin
+    @Test
+    public void test_find_last_and_copy_within() {
+        assertEquals(4, num("new Int8Array([1, 4, 2]).findLast(v => v > 2)"));
+        assertEquals(1, num("new Int8Array([1, 4, 2]).findLastIndex(v => v > 2)"));
+        assertEquals(-1, num("new Int8Array([1]).findLastIndex(v => v > 9)"));
+        assertEquals("3,4,3,4", str("new Int8Array([1, 2, 3, 4]).copyWithin(0, 2).join(',')"));
+        assertEquals("2,2,3", str("new Int8Array([1, 2, 3]).copyWithin(0, 1, 2).join(',')"));
+    }
 }

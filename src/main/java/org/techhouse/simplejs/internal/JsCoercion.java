@@ -69,6 +69,7 @@ public final class JsCoercion {
             case JsNull ignored -> "null";
             case JsUndefined ignored -> "undefined";
             case JsArray a -> arrayToString(a);
+            case JsObject wrapper when wrapper.getPrimitive() != null -> toStr(wrapper.getPrimitive());
             case JsObject ignored -> "[object Object]";
             case JsFunction f -> functionToString(f.getName());
             case JsNativeFunction f -> functionToString(f.getName());
@@ -105,6 +106,9 @@ public final class JsCoercion {
     }
 
     public static JsValue toPrimitive(JsValue value) {
+        if (value instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
+            return wrapper.getPrimitive();
+        }
         if (value instanceof JsObject || value instanceof JsArray) {
             return new JsString(toStr(value));
         }
@@ -112,6 +116,9 @@ public final class JsCoercion {
     }
 
     public static JsValue toPrimitive(JsValue value, String hint, InterpreterOps ops) {
+        if (value instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
+            return wrapper.getPrimitive();
+        }
         if (ops == null || !(value instanceof JsObject)) {
             return toPrimitive(value);
         }

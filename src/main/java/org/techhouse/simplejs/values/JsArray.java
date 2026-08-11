@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 
 public final class JsArray extends JsValue {
+    private static final JsValue HOLE = JsUndefined.getHole();
+
     private final List<JsValue> elements = new ArrayList<>();
     private Map<String, JsValue> ownProperties;
     private boolean frozen;
@@ -24,12 +26,34 @@ public final class JsArray extends JsValue {
         return elements.get(index);
     }
 
+    public boolean isHole(int index) {
+        return index >= 0 && index < elements.size() && elements.get(index) == HOLE;
+    }
+
+    public void pushHole() {
+        if (!frozen) {
+            elements.add(HOLE);
+        }
+    }
+
+    public int removeHoles() {
+        var removed = 0;
+        final var iterator = elements.iterator();
+        while (iterator.hasNext()) {
+            if (iterator.next() == HOLE) {
+                iterator.remove();
+                removed++;
+            }
+        }
+        return removed;
+    }
+
     public void set(int index, JsValue value) {
         if (frozen) {
             return;
         }
         while (elements.size() <= index) {
-            elements.add(JsUndefined.getInstance());
+            elements.add(HOLE);
         }
         elements.set(index, value);
     }
@@ -69,6 +93,18 @@ public final class JsArray extends JsValue {
 
     public int length() {
         return elements.size();
+    }
+
+    public void setLength(int length) {
+        if (frozen) {
+            return;
+        }
+        while (elements.size() > length) {
+            elements.removeLast();
+        }
+        while (elements.size() < length) {
+            elements.add(HOLE);
+        }
     }
 
     public List<JsValue> getElements() {

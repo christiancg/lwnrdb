@@ -6,11 +6,13 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
+import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
 import org.techhouse.simplejs.exceptions.UnterminatedStringException;
@@ -49,6 +51,10 @@ public final class SimpleJs {
                 | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
                 | UnterminatedCommentException | UnterminatedRegexException error) {
             return ScriptResult.error("SyntaxError", error.getMessage());
+        } catch (UnsupportedNodeException error) {
+            return ScriptResult.error("SyntaxError", "Unsupported syntax: " + error.getMessage());
+        } catch (SimpleJsRuntimeException error) {
+            return ScriptResult.error("InternalError", error.getMessage());
         }
     }
 

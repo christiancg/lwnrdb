@@ -404,4 +404,38 @@ public class ObjectBuiltinsTest {
         assertEquals(9, num("let o = {}; Object.defineProperty(o, 'x', { value: 1, configurable: true }); "
                 + "Object.defineProperty(o, 'x', { get() { return 9; } }); o.x"));
     }
+
+    // Object.is implements SameValue
+    @Test
+    public void test_object_is() {
+        assertTrue(bool2("Object.is(NaN, NaN)"));
+        assertFalse(bool2("Object.is(0, -0)"));
+        assertTrue(bool2("Object.is(0, 0)"));
+        assertTrue(bool2("Object.is(1, 1)"));
+        assertFalse(bool2("Object.is('a', 'b')"));
+        assertTrue(bool2("const o = {}; Object.is(o, o)"));
+        assertFalse(bool2("Object.is({}, {})"));
+        assertFalse(bool2("Object.is(1)"));
+    }
+
+    // Object.getOwnPropertySymbols lists symbol-keyed own properties
+    @Test
+    public void test_get_own_property_symbols() {
+        assertEquals(1, num("const s = Symbol('k'); Object.getOwnPropertySymbols({[s]: 1}).length"));
+        assertEquals(0, num("Object.getOwnPropertySymbols({a: 1}).length"));
+        assertEquals(0, num("Object.getOwnPropertySymbols(1).length"));
+        assertTrue(bool2("const s = Symbol('k'); Object.getOwnPropertySymbols({[s]: 1})[0] === s"));
+    }
+
+    // assign and spread copy symbol-keyed properties
+    @Test
+    public void test_symbol_keys_are_copied() {
+        assertEquals(1, num("const s = Symbol('k'); Object.assign({}, {[s]: 1})[s]"));
+        assertEquals(1, num("const s = Symbol('k'); ({...{[s]: 1}})[s]"));
+        assertEquals(1, num("const s = Symbol('k'); const {...rest} = {[s]: 1}; rest[s]"));
+    }
+
+    private static boolean bool2(String source) {
+        return ((JsBoolean) Interpreter.run(source)).getValue();
+    }
 }

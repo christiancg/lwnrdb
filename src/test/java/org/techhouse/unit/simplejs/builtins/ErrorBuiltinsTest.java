@@ -35,4 +35,40 @@ public class ErrorBuiltinsTest {
         assertFalse(bool("Error.isError(5)"));
         assertFalse(bool("Error.isError()"));
     }
+
+    // The options bag supplies a cause
+    @Test
+    public void test_error_cause() {
+        assertTrue(bool("new Error('m', { cause: 'c' }).cause === 'c'"));
+        assertTrue(bool("new Error('m').cause === undefined"));
+        assertTrue(bool("new Error('m', {}).cause === undefined"));
+    }
+
+    // A synthetic single-frame stack is present
+    @Test
+    public void test_error_stack() {
+        assertTrue(bool("typeof new Error('m').stack === 'string'"));
+        assertTrue(bool("new Error('m').stack.indexOf('Error: m') === 0"));
+    }
+
+    // Error.prototype.toString omits the separator when the message is empty
+    @Test
+    public void test_error_to_string() {
+        assertTrue(bool("new Error('m').toString() === 'Error: m'"));
+        assertTrue(bool("new Error().toString() === 'Error'"));
+        assertTrue(bool("new TypeError('t').toString() === 'TypeError: t'"));
+        assertTrue(bool("new RangeError('').toString() === 'RangeError'"));
+    }
+
+    // Prototype-linked error objects are still branded and keep their identity
+    @Test
+    public void test_error_identity() {
+        assertTrue(bool("Error.isError(new TypeError('x'))"));
+        assertTrue(bool("new TypeError('x') instanceof TypeError"));
+        assertTrue(bool("new TypeError('x') instanceof Error"));
+        assertFalse(bool("new Error('x') instanceof TypeError"));
+        assertTrue(bool("new SuppressedError(1, 2, 'm') instanceof Error"));
+        assertTrue(bool("new AggregateError([], 'm') instanceof Error"));
+        assertTrue(bool("Error.prototype.constructor === Error"));
+    }
 }

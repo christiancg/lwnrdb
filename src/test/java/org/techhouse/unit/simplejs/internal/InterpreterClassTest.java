@@ -381,4 +381,50 @@ public class InterpreterClassTest {
         assertTrue(bool("class A {} class B extends A {} new B() instanceof A"));
         assertFalse(bool("class A {} class B {} new B() instanceof A"));
     }
+
+    // A static private field is readable and writable from the class body
+    @Test
+    public void test_static_private_field() {
+        assertEquals(1, num("class A { static #x = 1; static read() { return A.#x } } A.read()"));
+        assertEquals(5, num("class A { static #x = 1; static bump() { A.#x = 5; return this.#x } } A.bump()"));
+        assertTrue(bool("class A { static #x; static isUndefined() { return A.#x === undefined } } A.isUndefined()"));
+    }
+
+    // A static private method is callable via the class and via this
+    @Test
+    public void test_static_private_method() {
+        assertEquals(7, num("class A { static #m() { return 7 } static call() { return A.#m() } } A.call()"));
+        assertEquals(7, num("class A { static #m() { return 7 } static call() { return this.#m() } } A.call()"));
+    }
+
+    // Static private accessors route through their getter and setter
+    @Test
+    public void test_static_private_accessors() {
+        assertEquals(3, num("class A { static #v = 3; static get #x() { return A.#v }"
+                + " static read() { return A.#x } } A.read()"));
+        assertEquals(9, num("class A { static #v = 0; static set #x(n) { A.#v = n }"
+                + " static write() { A.#x = 9; return A.#v } } A.write()"));
+    }
+
+    // A brand check sees a static private name on the class
+    @Test
+    public void test_static_private_brand_check() {
+        assertTrue(bool("class A { static #x = 1; static check(o) { return #x in o } } A.check(A)"));
+        assertFalse(bool("class A { static #x = 1; static check(o) { return #x in o } } A.check({})"));
+    }
+
+    // Another class cannot reach a static private member
+    @Test
+    public void test_static_private_is_not_shared() {
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("class A { static #x = 1 } class B { static probe() { return A.#x } } B.probe()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("class A { static #m() {} } class B { static probe() { return A.#m() } } B.probe()"));
+    }
+
+    // A static block can use static private state
+    @Test
+    public void test_static_block_with_static_private() {
+        assertEquals(4, num("class A { static #x = 2; static out; static { A.out = A.#x * 2 } } A.out"));
+    }
 }

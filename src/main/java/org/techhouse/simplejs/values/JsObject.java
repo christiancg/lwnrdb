@@ -20,6 +20,7 @@ public final class JsObject extends JsValue {
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
     private Map<String, PropertyFlags> descriptors;
+    private JsValue primitive;
 
     public JsValue get(String key) {
         final var value = properties.get(key);
@@ -215,6 +216,18 @@ public final class JsObject extends JsValue {
 
     public boolean hasSymbol(JsSymbol key) {
         return symbolProperties != null && symbolProperties.containsKey(key);
+    }
+
+    public Set<JsSymbol> symbolKeys() {
+        return symbolProperties == null ? Set.of() : symbolProperties.keySet();
+    }
+
+    public JsValue getPrimitive() {
+        return primitive;
+    }
+
+    public void setPrimitive(JsValue primitive) {
+        this.primitive = primitive;
     }
 
     public JsObject getProto() {

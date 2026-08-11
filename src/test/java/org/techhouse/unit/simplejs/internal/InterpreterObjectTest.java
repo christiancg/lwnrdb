@@ -202,4 +202,50 @@ public class InterpreterObjectTest {
     public void test_symbol_to_string_tag_non_string_ignored() {
         assertEquals("[object Object]", str("let o = { [Symbol.toStringTag]: 42 }; o.toString()"));
     }
+
+    // A non-computed __proto__ key sets the prototype
+    @Test
+    public void test_object_literal_proto_key() {
+        assertEquals("hi", str("const p = { greet() { return 'hi' } }; const o = { __proto__: p }; o.greet()"));
+        assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter
+                .run("const p = {}; Object.getPrototypeOf({ __proto__: p }) === p")).getValue());
+        assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter
+                .run("Object.getPrototypeOf({ __proto__: null }) === null")).getValue());
+    }
+
+    // A computed __proto__ key stays an own property
+    @Test
+    public void test_object_literal_computed_proto_key() {
+        assertEquals("object", str("const p = {}; typeof ({ ['__proto__']: p }).__proto__"));
+        assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter
+                .run("const p = {}; Object.getPrototypeOf({ ['__proto__']: p }) === null")).getValue());
+    }
+
+    // A __proto__ value that is neither object nor null is ignored
+    @Test
+    public void test_object_literal_proto_key_ignored() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("({ __proto__: 1 }).__proto__"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("({ __proto__: 'x' }).__proto__"));
+    }
+
+    // Assigning length truncates or grows an array
+    @Test
+    public void test_array_length_assignment() {
+        assertEquals(1, num("const a = [1, 2, 3]; a.length = 1; a.length"));
+        assertEquals(1, num("const a = [1, 2, 3]; a.length = 1; a[0]"));
+        assertEquals(0, num("const a = [1, 2, 3]; a.length = 0; a.length"));
+        assertEquals(3, num("const a = [1]; a.length = 3; a.length"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("const a = [1]; a.length = 3; a[2]"));
+    }
+
+    // An invalid length is rejected
+    @Test
+    public void test_array_length_assignment_range() {
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("const a = [1]; a.length = -1"));
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("const a = [1]; a.length = 1.5"));
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("const a = [1]; a.length = NaN"));
+    }
 }

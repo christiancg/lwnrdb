@@ -11,6 +11,8 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class SymbolBuiltins {
+    public static final List<String> NAMES = List.of("toString", "valueOf");
+
     private SymbolBuiltins() {
     }
 
@@ -32,10 +34,33 @@ public final class SymbolBuiltins {
         symbol.setProperty("replace", JsSymbol.REPLACE);
         symbol.setProperty("search", JsSymbol.SEARCH);
         symbol.setProperty("split", JsSymbol.SPLIT);
+        symbol.setProperty("matchAll", JsSymbol.MATCH_ALL);
+        symbol.setProperty("isConcatSpreadable", JsSymbol.IS_CONCAT_SPREADABLE);
         symbol.setProperty("for",
                 new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args), JsSymbol::new)));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));
         return symbol;
+    }
+
+    public static JsNativeFunction getMethod(JsSymbol receiver, String name) {
+        return switch (name) {
+            case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(describe(receiver)));
+            case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> receiver);
+            default -> null;
+        };
+    }
+
+    public static JsValue getProperty(JsSymbol receiver, String name) {
+        if ("description".equals(name)) {
+            return receiver.getDescription() == null
+                    ? JsUndefined.getInstance()
+                    : new JsString(receiver.getDescription());
+        }
+        return null;
+    }
+
+    private static String describe(JsSymbol symbol) {
+        return "Symbol(" + (symbol.getDescription() == null ? "" : symbol.getDescription()) + ")";
     }
 
     private static String key(List<JsValue> args) {

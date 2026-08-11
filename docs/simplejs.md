@@ -714,48 +714,68 @@ them are inferred from reading the code. The next section lists the features tha
 
 | # | Gap | Symptom |
 |---|---|---|
-| 1 | **Static private fields** (`class A { static #x = 1 }`) | Throws `UnsupportedNodeException` (`PRIVATE_IDENTIFIER`) — instance private fields/methods/accessors and *declaring* a static private method work; a static private **field** does not. |
-| 2 | **`UnsupportedNodeException` escapes `SimpleJs.run`** | It is not in the entrypoint's catch chain, so the host receives a raw Java exception instead of an error `ScriptResult`. Same for any other `SimpleJsRuntimeException` subclass not enumerated there. |
-| 3 | **Static private method access** (`A.#m()` / `this.#m()` from a `static` method) | `TypeError: Cannot read private member #m from an object whose class did not declare it` — static private members are declared into the instance tables. |
-| 4 | **Sequence (comma) operator** | `(a, b)`, `return (1, 2)` and the very common `for (…; …; i++, j++)` are all `SyntaxError`. |
-| 5 | **`array.length` assignment** | `a.length = 0` is silently ignored (the synthetic `length` is read-only), so the truncate idiom does nothing. |
-| 6 | **`String.prototype.split` `limit`** | The second argument is ignored: `'a,b,c'.split(',', 2)` → `["a","b","c"]`. |
-| 7 | **`JSON.stringify` `replacer` / `space`** | Both extra arguments are ignored — no pretty-printing (`JSON.stringify(o, null, 2)` is compact) and no key filtering / value mapping. `JSON.parse`'s `reviver` **is** applied. |
-| 8 | **`$$` in a replacement string** | `'a'.replace('a', '$$')` → `"$$"` instead of the escaped `"$"` (the other `$` tokens are correct). |
-| 9 | **Symbol keys in copy operations** | `Object.assign({}, {[s]: 1})` and `{...{[s]: 1}}` drop symbol-keyed properties (string keys are copied correctly). |
-| 10 | **Array holes are visited** | `[1, , 3].forEach(cb)` calls back 3 times; the spec skips holes (same for `map`/`filter`/`some`/…). |
-| 11 | **`matchAll` without `g`** | Should throw `TypeError`; returns matches instead. |
-| 12 | **Object-literal `__proto__`** | `{ __proto__: p }` stores an ordinary property instead of setting the prototype (`Object.create`/`setPrototypeOf` work). |
-| 13 | **`toFixed` rounding** | `(1.005).toFixed(2)` → `"1.01"`; JS yields `"1.00"` because it rounds the binary double, not the decimal value. |
+| 1 | **No `new.target`** | Unavailable, so a constructor cannot tell whether it was called with `new`. |
+| 2 | **`Object.freeze` does not reach arrays** | `Object.freeze([1])` is a no-op — `JsArray` has its own freeze flag (used by tagged templates) that the `Object` statics do not set — so the array is still mutable while `Object.isFrozen` reports `true`. |
+| 3 | **`toFixed` above 1e21** | Returns a plain-string expansion where the spec switches to `ToString(x)` (`"1e+21"`). |
 
 ### Missing library surface
 
 | # | Missing | Notes |
 |---|---|---|
-| 14 | **Global `NaN` / `Infinity`** | Not declared: `NaN` throws `ReferenceError` and `typeof Infinity` is `"undefined"`. Reachable only as `Number.NaN` / `Number.POSITIVE_INFINITY` or via arithmetic (`0/0`, `1/0`). Highest-value one-line fix in this list. |
-| 15 | **`Math`** | Missing `log2`, `log10`, `log1p`, `expm1`, `hypot`, `clz32`, `imul`, `fround`, `atan2`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` and the constants `LN2`, `LN10`, `LOG2E`, `LOG10E`, `SQRT2`, `SQRT1_2`. Present: `abs`/`ceil`/`floor`/`round`/`trunc`/`sign`/`sqrt`/`cbrt`/`pow`/`exp`/`log`/`sin`/`cos`/`tan`/`min`/`max`/`random`/`f16round` + `E`/`PI`. |
-| 16 | **`Object.is`, `Object.getOwnPropertySymbols`, `Number.isSafeInteger`** | Everyday statics; `Object.is` is also the natural home for the existing SameValue comparison. |
-| 17 | **`Function.prototype.name` / `.length` / `.toString`** | A function's `name` and `length` read as `undefined` and it has no `toString` (`call`/`apply`/`bind` are present). |
-| 18 | **`Error` `cause`, `stack`, `Error.prototype.toString`** | `new Error(msg, { cause })` drops the options bag, `e.stack` is `undefined`, and `e.toString()` falls through to `"[object Object]"` instead of `"TypeError: msg"`. |
-| 19 | **BigInt methods** | `(2n).toString()` / `valueOf()` are `undefined` (string **coercion** works, e.g. `` `${2n}` ``), and `BigInt.asIntN`/`asUintN` are absent. |
-| 20 | **Typed-array methods** | `sort`, `toSorted`, `toReversed`, `with`, `findLast`, `findLastIndex`, `copyWithin` are missing from the shared `%TypedArray%` set. |
-| 21 | **`Array.prototype.toString`, `Array.fromAsync`** | `[1].toString` is `undefined` (template/`+` coercion still joins correctly); `Array.fromAsync` was never built. |
-| 22 | **`Symbol.prototype.description` / `toString`** | Both `undefined` on a symbol instance. |
-| 23 | **Well-known symbols `Symbol.matchAll` / `isConcatSpreadable` / `unscopables`** | Absent (and their hooks unconsulted). `Symbol.species` is deliberate; `unscopables` is moot without `with`. |
-| 24 | **Regex `d` flag has no effect** | The flag is accepted and `hasIndices` is tracked, but `exec` results carry no `indices` array. |
-| 25 | **Annex-B string methods** | `substr`, `toLocaleUpperCase`, `toLocaleLowerCase`, `trimLeft`, `trimRight`. |
-| 26 | **`.prototype` of builtins, and builtin subclassing** | `Object.prototype`/`Array.prototype`/`String.prototype`/`Number.prototype` are `undefined` and there is no `Function` global, so `Array.prototype.slice.call(x)` and prototype monkey-patching do not work. The visible consequence is that **`class E extends Error {}` (and `extends Map`/`Array`/…) throws** `TypeError: Class extends value … is not a constructor or null` — custom error classes, a very common pattern, are unavailable. |
-| 27 | **Primitive wrapper objects** | `new String('a')`/`new Number(1)`/`new Boolean(1)` return primitives rather than objects and `new Object()` throws `TypeError: … is not a constructor`. Rarely wanted, but `new Object()` is cheap to support. |
+| 4 | **`Math.imul`** | The only remaining `Math` member; everything else in the namespace is present. |
+| 5 | **A script-visible `.prototype` for *user* classes** | `JsClass` keeps method tables rather than a prototype object, so `class E {}; E.prototype` is `undefined` and `E.prototype.m = f` does not add a method. Builtin prototypes (`Array.prototype`, …) **are** real objects — see *Intrinsic prototypes* below. |
+| 6 | **`Symbol.unscopables`** | Moot without `with` (which is deliberately unimplemented); `Symbol.species` is likewise deliberate. |
+| 7 | **`Promise`/generator prototype methods are not monkey-patchable** | `then`/`catch`/`finally` and a generator's `next`/`return`/`throw` are resolved by the receiver arm before the intrinsic chain is consulted, so `Promise.prototype` exists (with `constructor`) but reassigning `Promise.prototype.then` does not take effect. Adding a *new* member to those prototypes does work. |
 
 ### Host-contract notes
 
 - **A promise returned at top level is not awaited.** `return f()` for an `async f` resolves the
   script to `null`; `return await f()` returns the value. Worth either awaiting a returned
   promise in the result contract or documenting on the `RUN_SCRIPT` surface.
-- **A caught runtime error is a plain object.** `try { null.x } catch (e) { … }` gives
-  `{name, message}`, so `e instanceof TypeError` is `false` (thrown-by-`throw` error objects
-  built by the `Error` constructors behave normally).
 - **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet.
+
+### Intrinsic prototypes
+
+Builtin methods live on **realm-scoped prototype objects** built by `builtins/Intrinsics`, one
+`Intrinsics` instance per `Interpreter` (i.e. per `SimpleJs.run`). They are deliberately **not**
+static: a shared `Array.prototype` would let one tenant's monkey-patch poison every later script in
+the JVM. `PrototypeProgramTest.test_realm_isolation` asserts the isolation.
+
+Each prototype's own properties are **delegating wrappers** — one `JsNativeFunction` per method name
+that coerces the receiver at call time and re-dispatches into the untouched family class
+(`ArrayBuiltins`, `StringBuiltins`, …). Entries are installed non-enumerable but writable and
+configurable, so `Object.keys([])`, `for-in` and `JSON.stringify` are unaffected while
+`Array.prototype.join = f` and `delete Array.prototype.push` both work.
+
+`MemberEvaluator` keeps each value type's own state handling first (array/string/typed-array index,
+`length`, `Map`/`Set` `size`, the regex flag accessors, …) and then walks
+`Intrinsics.protoFor(target)` and its `getProto()` chain, which roots at `Object.prototype`. A user
+object's own `proto` chain is still walked before the intrinsic chain.
+
+What this reaches and what it does not:
+
+- `Array.prototype.slice.call(arguments)` works. An **array-like receiver is snapshotted** into a
+  fresh `JsArray`, so a *mutating* generic call (`Array.prototype.push.call(arguments, x)`) does not
+  write through — accepted limitation, and the reason the wrapper name appears in the `TypeError`.
+- A wrong-type receiver throws a `TypeError` naming the method
+  (`Array.prototype.push called on an incompatible receiver 1`).
+- **Builtin subclassing** works via `JsClass.nativeSuperClass`: heritage that resolves to a
+  `JsNativeFunction` carrying a prototype is accepted, `super(...)` runs the native constructor, and
+  the instance is linked to the native prototype so both `instanceof E` and `instanceof Error` hold.
+  A builtin with internal state (`Map`/`Set`/`Date`/`Array`/typed arrays) cannot be copied onto a
+  plain instance, so the produced value is kept as the instance's wrapped primitive and the intrinsic
+  wrappers unwrap it from their receiver — `class M extends Map {}` gets working `set`/`get`/`size`.
+- `super.m()` against a native super is an explicit `TypeError` (there are no native method tables to
+  chain into), not a silent wrong answer.
+- `Function` is installed so `Function.prototype` resolves and `f instanceof Function` holds, but
+  calling or `new`-ing it throws `TypeError("Function constructor is disabled")` — runtime code
+  generation stays outside the sandbox.
+- A **caught runtime error is a real error object** proto-linked to the matching intrinsic prototype,
+  so `try { null.x } catch (e) { e instanceof TypeError }` is `true` and `e.toString()` is
+  `"TypeError: …"`.
+- `e.stack` is a **single synthetic frame** (`"<name>: <message>\n    at <script>"`); no interpreter
+  call stack is retained. `Function.prototype.toString` likewise returns
+  `"function <name>() { [native code] }"` for closures too — no source text is kept.
 
 ## Deliberately unimplemented ES2026 features (out of scope for a database interpreter)
 
@@ -816,6 +836,46 @@ The following were previously listed as gaps and are now implemented:
   now threads the proxy as the `this`/receiver (and `Reflect.get`/`Reflect.set` honour an explicit
   receiver), and `Object.keys`/`values`/`entries` + `for-in` re-filter an `ownKeys` trap's result
   down to enumerable string keys.
+- **Intrinsic prototypes and builtin subclassing** — `Object.prototype`/`Array.prototype`/
+  `String.prototype`/`Number.prototype`/… and a `Function` global are real objects, prototype
+  monkey-patching works, and `class E extends Error {}` (or `Map`/`Set`/`Array`/…) produces a usable
+  instance. See *Intrinsic prototypes* above for the model and its limits.
+- **Static private class members** — `static #x = 1`, `static #m()` and static private accessors are
+  declared into their own tables, so `A.#x`, `A.#m()`, `this.#m()` inside a `static` method and the
+  `#x in A` brand check all work; another class's static private name is still a `TypeError`.
+- **`UnsupportedNodeException` no longer escapes `SimpleJs.run`** — the entrypoint ends in a terminal
+  `catch (SimpleJsRuntimeException)`, mapping an unsupported node to a `SyntaxError` result and any
+  other sibling to `InternalError`.
+- **Sequence (comma) operator** — `nodes/SequenceExpression`; `parseExpression` collects a comma list
+  (a single operand is returned unwrapped), so `(a, b)`, `return (1, 2)` and `for (…; …; i++, j++)`
+  all work. Call arguments and array/object literals still parse with `parseAssignment`.
+- **`array.length` assignment** — truncates or pads with holes, and rejects a negative, fractional or
+  `NaN` length with a `RangeError`.
+- **`JSON.stringify` `replacer` / `space`** — a function replacer (called with `(key, value)` and the
+  holder as `this`), an array key allowlist, `toJSON`, cycle detection (`TypeError`) and
+  non-enumerable-key skipping happen while building the EJson tree; rendering delegates to the new
+  `EJson.toJson(element, indent)` so escaping and number formatting stay in one place. `space` is a
+  number (capped at 10) or a string (first 10 chars).
+- **Array holes** — `JsArray` marks an elision with a distinct `JsUndefined` instance, so every reader
+  that does not opt in still sees `undefined`. `forEach`/`map`/`filter`/`some`/`every`/`find*`/
+  `reduce*`/`indexOf`/`lastIndexOf` skip holes (`map` preserves them), `join`/`toString` render them
+  empty, `sort` moves them last, `in` reports them absent, `JSON.stringify` emits `null`, and spread
+  materialises them as real `undefined`.
+- **Object-literal `__proto__`** — a non-computed `__proto__` key sets the prototype; a computed
+  `['__proto__']` key still creates an own property and a non-object, non-null value is ignored.
+- **Symbol keys in copy operations** — `Object.assign`, object spread and object rest-destructuring
+  copy symbol-keyed properties after the string keys.
+- **`matchAll` without `g`**, **`$$` in a replacement**, **`split` `limit`**, **`toFixed` rounding**
+  (exact-binary `BigDecimal`, so `(1.005).toFixed(2)` is `"1.00"`) and the **Annex-B string methods**
+  (`substr`, `toLocale{Upper,Lower}Case`, `trimLeft`/`trimRight`).
+- **Library surface** — global `NaN`/`Infinity`/`undefined`; the full `Math` namespace bar `imul`;
+  `Object.is`/`getOwnPropertySymbols`, `Number.isSafeInteger`; `Function` `name`/`length`/`toString`;
+  `Error` `cause`/`stack`/`toString`; BigInt `toString([radix])`/`valueOf`/`toLocaleString` +
+  `BigInt.asIntN`/`asUintN`; typed-array `sort`/`toSorted`/`toReversed`/`with`/`findLast`/
+  `findLastIndex`/`copyWithin`; `Array.prototype.toString` and `Array.fromAsync`; `Symbol`
+  `description`/`toString` and the `Symbol.matchAll`/`isConcatSpreadable` hooks; regex `d`-flag
+  `indices` (numbered and named groups, `undefined` for a non-participating group); and primitive
+  wrapper objects (`new String/Number/Boolean`) plus `new Object()`.
 
 ## Testing conventions
 

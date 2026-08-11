@@ -31,6 +31,7 @@ import org.techhouse.simplejs.nodes.ObjectExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
 import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Property;
+import org.techhouse.simplejs.nodes.SequenceExpression;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.SuperExpression;
 import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
@@ -39,6 +40,7 @@ import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
@@ -115,7 +117,7 @@ public final class ExpressionEvaluator {
         final var result = new JsArray();
         for (final var element : array.getElements()) {
             if (element == null) {
-                result.push(JsUndefined.getInstance());
+                result.pushHole();
             } else if (element instanceof SpreadElement spread) {
                 spreadInto(result.getElements(), interp.eval(spread.getArgument(), env));
             } else {
@@ -127,7 +129,11 @@ public final class ExpressionEvaluator {
 
     public void spreadInto(List<JsValue> target, JsValue value) {
         switch (value) {
-            case JsArray array -> target.addAll(array.getElements());
+            case JsArray array -> {
+                for (var i = 0; i < array.length(); i++) {
+                    target.add(array.isHole(i) ? JsUndefined.getInstance() : array.get(i));
+                }
+            }
             case JsString string -> {
                 for (var i = 0; i < string.getValue().length(); i++) {
                     target.add(new JsString(String.valueOf(string.getValue().charAt(i))));
@@ -174,9 +180,29 @@ public final class ExpressionEvaluator {
             final var evaluated = interp.eval(value, env);
             if (accessor) {
                 storeAccessor(result, name, property.getKind(), evaluated);
+            } else if ("__proto__".equals(name)) {
+                setLiteralProto(result, evaluated);
             } else {
                 result.set(name, evaluated);
             }
+        }
+        return result;
+    }
+
+    // A non-computed `__proto__` in an object literal sets the prototype instead of creating a
+    // property; per spec any value that is neither an object nor null is ignored.
+    private static void setLiteralProto(JsObject target, JsValue value) {
+        if (value instanceof JsObject proto) {
+            target.setProto(proto);
+        } else if (value instanceof JsNull) {
+            target.setProto(null);
+        }
+    }
+
+    public JsValue evalSequence(SequenceExpression sequence, Environment env) {
+        var result = (JsValue) JsUndefined.getInstance();
+        for (final var expression : sequence.getExpressions()) {
+            result = interp.eval(expression, env);
         }
         return result;
     }

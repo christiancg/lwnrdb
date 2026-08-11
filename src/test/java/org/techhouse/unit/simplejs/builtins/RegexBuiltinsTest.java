@@ -236,4 +236,43 @@ public class RegexBuiltinsTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Foo=Bar}/u"));
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Script=Nonsense}/u"));
     }
+
+    // The d flag adds an indices array for numbered groups
+    @Test
+    public void test_indices_for_numbered_groups() {
+        assertEquals(1, num("/(b)/d.exec('abc').indices[0][0]"));
+        assertEquals(2, num("/(b)/d.exec('abc').indices[0][1]"));
+        assertEquals(1, num("/(b)/d.exec('abc').indices[1][0]"));
+        assertTrue(bool("/b/d.exec('abc').indices.groups === undefined"));
+        assertTrue(bool("/a/d.hasIndices"));
+        assertFalse(bool("/a/.hasIndices"));
+    }
+
+    // Named groups appear under indices.groups
+    @Test
+    public void test_indices_for_named_groups() {
+        assertEquals(1, num("/(?<w>b)/d.exec('abc').indices.groups.w[0]"));
+        assertEquals(2, num("/(?<w>b)/d.exec('abc').indices.groups.w[1]"));
+    }
+
+    // A non-participating group has an undefined entry
+    @Test
+    public void test_indices_for_non_participating_group() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/b(z)?/d.exec('abc').indices[1]"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/(?<w>z)?b/d.exec('abc').indices.groups.w"));
+    }
+
+    // Without the flag there is no indices array
+    @Test
+    public void test_no_indices_without_flag() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/b/.exec('abc').indices"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("'abc'.match(/b/).indices"));
+    }
+
+    // match and matchAll carry indices when the flag is present
+    @Test
+    public void test_indices_through_string_methods() {
+        assertEquals(1, num("'abc'.match(/b/d).indices[0][0]"));
+        assertEquals(1, num("'abc'.matchAll(/b/dg)[0].indices[0][0]"));
+    }
 }

@@ -57,4 +57,76 @@ public class MathBuiltinsTest {
         assertEquals(1, num("Math.cos(0)"));
         assertEquals(0, num("Math.tan(0)"));
     }
+
+    // Logarithms and exponentials added for ES completeness
+    @Test
+    public void test_logs_and_exponentials() {
+        assertEquals(3, num("Math.log2(8)"));
+        assertEquals(3, num("Math.log10(1000)"));
+        assertEquals(0, num("Math.log1p(0)"));
+        assertEquals(0, num("Math.expm1(0)"));
+    }
+
+    // Trigonometric and hyperbolic functions
+    @Test
+    public void test_trig_and_hyperbolic() {
+        assertEquals(0, num("Math.asin(0)"));
+        assertEquals(0, num("Math.acos(1)"));
+        assertEquals(0, num("Math.atan(0)"));
+        assertEquals(0, num("Math.sinh(0)"));
+        assertEquals(1, num("Math.cosh(0)"));
+        assertEquals(0, num("Math.tanh(0)"));
+        assertEquals(0, num("Math.asinh(0)"));
+        assertEquals(0, num("Math.acosh(1)"));
+        assertEquals(0, num("Math.atanh(0)"));
+        assertTrue(num("Math.asinh(-1)") < 0);
+        assertTrue(Double.isInfinite(num("Math.asinh(Infinity)")));
+    }
+
+    // atan2 spans the quadrants
+    @Test
+    public void test_atan2_quadrants() {
+        assertEquals(Math.PI / 4, num("Math.atan2(1, 1)"));
+        assertEquals(3 * Math.PI / 4, num("Math.atan2(1, -1)"));
+        assertEquals(-Math.PI / 4, num("Math.atan2(-1, 1)"));
+        assertEquals(0, num("Math.atan2(0, 1)"));
+    }
+
+    // hypot over zero, one and many arguments
+    @Test
+    public void test_hypot() {
+        assertEquals(0, num("Math.hypot()"));
+        assertEquals(5, num("Math.hypot(3, 4)"));
+        assertEquals(3, num("Math.hypot(3)"));
+        assertTrue(Double.isInfinite(num("Math.hypot(Infinity, NaN)")));
+        assertTrue(Double.isNaN(num("Math.hypot(NaN, 1)")));
+    }
+
+    // clz32 counts leading zeros of the ToUint32 value
+    @Test
+    public void test_clz32() {
+        assertEquals(32, num("Math.clz32(0)"));
+        assertEquals(31, num("Math.clz32(1)"));
+        assertEquals(0, num("Math.clz32(-1)"));
+        assertEquals(32, num("Math.clz32(NaN)"));
+        assertEquals(32, num("Math.clz32(Infinity)"));
+    }
+
+    // fround narrows through float precision
+    @Test
+    public void test_fround() {
+        assertEquals(1, num("Math.fround(1)"));
+        assertEquals((float) 1.1, num("Math.fround(1.1)"));
+    }
+
+    // The logarithm and root constants
+    @Test
+    public void test_added_constants() {
+        assertEquals(Math.log(2), num("Math.LN2"));
+        assertEquals(Math.log(10), num("Math.LN10"));
+        assertEquals(1 / Math.log(2), num("Math.LOG2E"));
+        assertEquals(1 / Math.log(10), num("Math.LOG10E"));
+        assertEquals(Math.sqrt(2), num("Math.SQRT2"));
+        assertEquals(Math.sqrt(0.5), num("Math.SQRT1_2"));
+    }
 }

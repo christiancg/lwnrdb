@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.values.JsArray;
@@ -12,20 +13,31 @@ import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class ArrayBuiltins {
+    public static final List<String> NAMES = List.of("toLocaleString", "map", "filter", "reduce", "forEach", "find",
+            "some", "every", "includes", "indexOf", "slice", "splice", "concat", "join", "toString", "push", "pop",
+            "shift", "unshift", "sort", "flat", "findIndex", "findLast", "findLastIndex", "lastIndexOf", "reduceRight",
+            "flatMap", "fill", "copyWithin", "reverse", "at", "keys", "values", "entries", "toReversed", "toSorted",
+            "toSpliced", "with");
+
     private ArrayBuiltins() {
     }
 
-    public static JsNativeFunction create(Invoker invoker, IterableToList iterableToList) {
+    public static JsNativeFunction create(Invoker invoker, IterableToList iterableToList, EventLoop eventLoop,
+            InterpreterOps ops) {
         final var array = new JsNativeFunction("Array", (_, args) -> construct(args));
         array.setProperty("isArray", new JsNativeFunction("isArray",
                 (_, args) -> JsBoolean.of(!args.isEmpty() && args.getFirst() instanceof JsArray)));
         array.setProperty("from", new JsNativeFunction("from", (_, args) -> from(args, invoker, iterableToList)));
         array.setProperty("of", new JsNativeFunction("of", (_, args) -> new JsArray(new ArrayList<>(args))));
+        array.setProperty("fromAsync", new JsNativeFunction("fromAsync", (_, args) -> AsyncIteratorBuiltins
+                .drainToArray(ops, eventLoop, args.isEmpty() ? JsUndefined.getInstance() : args.getFirst())));
         return array;
     }
 
@@ -81,8 +93,9 @@ public final class ArrayBuiltins {
             case "indexOf" -> new JsNativeFunction("indexOf", (_, args) -> new JsNumber(indexOf(receiver, args)));
             case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(receiver, args));
             case "splice" -> new JsNativeFunction("splice", (_, args) -> splice(receiver, args));
-            case "concat" -> new JsNativeFunction("concat", (_, args) -> concat(receiver, args));
+            case "concat" -> new JsNativeFunction("concat", (_, args) -> concat(receiver, args, ops));
             case "join" -> new JsNativeFunction("join", (_, args) -> new JsString(join(receiver, args)));
+            case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(join(receiver, List.of())));
             case "push" -> new JsNativeFunction("push", (_, args) -> push(receiver, args));
             case "pop" -> new JsNativeFunction("pop", (_, _) -> pop(receiver));
             case "shift" -> new JsNativeFunction("shift", (_, _) -> shift(receiver));
@@ -169,7 +182,7 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
-            if (JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
+            if (!receiver.isHole(i) && JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
                     List.of(elements.get(i), new JsNumber(i), receiver)))) {
                 return i;
             }
@@ -181,6 +194,9 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = elements.size() - 1; i >= 0; i--) {
+            if (receiver.isHole(i)) {
+                continue;
+            }
             final var element = elements.get(i);
             if (JsCoercion.toBoolean(
                     invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
@@ -194,7 +210,7 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = elements.size() - 1; i >= 0; i--) {
-            if (JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
+            if (!receiver.isHole(i) && JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
                     List.of(elements.get(i), new JsNumber(i), receiver)))) {
                 return i;
             }
@@ -209,7 +225,7 @@ public final class ArrayBuiltins {
         final var target = args.getFirst();
         final var elements = receiver.getElements();
         for (var i = elements.size() - 1; i >= 0; i--) {
-            if (JsOperators.strictEquals(elements.get(i), target)) {
+            if (!receiver.isHole(i) && JsOperators.strictEquals(elements.get(i), target)) {
                 return i;
             }
         }
@@ -230,6 +246,9 @@ public final class ArrayBuiltins {
             index--;
         }
         for (var i = index; i >= 0; i--) {
+            if (receiver.isHole(i)) {
+                continue;
+            }
             accumulator = invoker.call(callback, JsUndefined.getInstance(),
                     List.of(accumulator, elements.get(i), new JsNumber(i), receiver));
         }
@@ -329,6 +348,10 @@ public final class ArrayBuiltins {
         final var result = new JsArray();
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
+            if (receiver.isHole(i)) {
+                result.pushHole();
+                continue;
+            }
             result.push(invoker.call(callback, JsUndefined.getInstance(),
                     List.of(elements.get(i), new JsNumber(i), receiver)));
         }
@@ -340,6 +363,9 @@ public final class ArrayBuiltins {
         final var result = new JsArray();
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
+            if (receiver.isHole(i)) {
+                continue;
+            }
             final var element = elements.get(i);
             if (JsCoercion.toBoolean(
                     invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
@@ -363,6 +389,9 @@ public final class ArrayBuiltins {
             index = 1;
         }
         for (var i = index; i < elements.size(); i++) {
+            if (receiver.isHole(i)) {
+                continue;
+            }
             accumulator = invoker.call(callback, JsUndefined.getInstance(),
                     List.of(accumulator, elements.get(i), new JsNumber(i), receiver));
         }
@@ -373,6 +402,9 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
+            if (receiver.isHole(i)) {
+                continue;
+            }
             invoker.call(callback, JsUndefined.getInstance(), List.of(elements.get(i), new JsNumber(i), receiver));
         }
         return JsUndefined.getInstance();
@@ -382,6 +414,9 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
+            if (receiver.isHole(i)) {
+                continue;
+            }
             final var element = elements.get(i);
             if (JsCoercion.toBoolean(
                     invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
@@ -395,7 +430,7 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
-            if (JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
+            if (!receiver.isHole(i) && JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
                     List.of(elements.get(i), new JsNumber(i), receiver)))) {
                 return true;
             }
@@ -407,7 +442,7 @@ public final class ArrayBuiltins {
         final var callback = callback(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
-            if (!JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
+            if (!receiver.isHole(i) && !JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
                     List.of(elements.get(i), new JsNumber(i), receiver)))) {
                 return false;
             }
@@ -422,7 +457,7 @@ public final class ArrayBuiltins {
         final var target = args.getFirst();
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
-            if (JsOperators.strictEquals(elements.get(i), target)) {
+            if (!receiver.isHole(i) && JsOperators.strictEquals(elements.get(i), target)) {
                 return i;
             }
         }
@@ -458,11 +493,15 @@ public final class ArrayBuiltins {
         return removed;
     }
 
-    private static JsValue concat(JsArray receiver, List<JsValue> args) {
+    private static JsValue concat(JsArray receiver, List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray(new ArrayList<>(receiver.getElements()));
         for (final var arg : args) {
             if (arg instanceof JsArray array) {
                 for (final var element : array.getElements()) {
+                    result.push(element);
+                }
+            } else if (isConcatSpreadable(arg, ops)) {
+                for (final var element : ((JsObject) arg).getProperties().values()) {
                     result.push(element);
                 }
             } else {
@@ -470,6 +509,11 @@ public final class ArrayBuiltins {
             }
         }
         return result;
+    }
+
+    private static boolean isConcatSpreadable(JsValue value, InterpreterOps ops) {
+        return ops != null && value instanceof JsObject
+                && JsCoercion.toBoolean(ops.getMember(value, JsSymbol.IS_CONCAT_SPREADABLE));
     }
 
     private static String join(JsArray receiver, List<JsValue> args) {
@@ -522,6 +566,7 @@ public final class ArrayBuiltins {
 
     private static JsValue sort(JsArray receiver, List<JsValue> args, Invoker invoker) {
         final var comparator = args.isEmpty() ? null : args.getFirst();
+        final var holes = receiver.removeHoles();
         receiver.getElements().sort((left, right) -> {
             if (comparator instanceof JsNativeFunction
                     || comparator instanceof org.techhouse.simplejs.values.JsFunction) {
@@ -534,6 +579,9 @@ public final class ArrayBuiltins {
             }
             return JsCoercion.toStr(left).compareTo(JsCoercion.toStr(right));
         });
+        for (var i = 0; i < holes; i++) {
+            receiver.pushHole();
+        }
         return receiver;
     }
 

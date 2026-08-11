@@ -26,11 +26,15 @@ import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.StaticBlock;
+import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -60,18 +64,23 @@ public final class ClassEvaluator {
 
     private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env) {
         JsClass superClass = null;
+        JsNativeFunction nativeSuperClass = null;
         if (superClassExpr != null) {
             final var resolved = interp.eval(superClassExpr, env);
-            if (!(resolved instanceof JsClass sc)) {
+            if (resolved instanceof JsClass sc) {
+                superClass = sc;
+            } else if (resolved instanceof JsNativeFunction nf && nf.getPrototype() != null) {
+                nativeSuperClass = nf;
+            } else {
                 throw new TypeErrorException(
                         "Class extends value " + JsCoercion.toStr(resolved) + " is not a constructor or null");
             }
-            superClass = sc;
         }
         final var classScope = env.child();
         final var methodScope = classScope.child();
         final var name = id == null ? null : id.getName();
         final var cls = new JsClass(name, superClass, methodScope);
+        cls.setNativeSuperClass(nativeSuperClass);
         methodScope.defineHomeClass(cls);
         if (name != null) {
             classScope.declareLexical(name, "const");
@@ -106,7 +115,11 @@ public final class ClassEvaluator {
             return;
         }
         if (method.getKey() instanceof PrivateIdentifier priv) {
-            cls.addPrivateInstanceMethod(priv.getName(), kind, fn);
+            if (method.isStatic()) {
+                cls.addPrivateStaticMethod(priv.getName(), kind, fn);
+            } else {
+                cls.addPrivateInstanceMethod(priv.getName(), kind, fn);
+            }
             return;
         }
         if (method.isComputed()) {
@@ -141,7 +154,9 @@ public final class ClassEvaluator {
                 final var value = field.getValue() == null
                         ? JsUndefined.getInstance()
                         : interp.eval(field.getValue(), staticScope);
-                if (field.isComputed()) {
+                if (field.getKey() instanceof PrivateIdentifier priv) {
+                    cls.setPrivateStaticField(priv.getName(), value);
+                } else if (field.isComputed()) {
                     final var keyValue = interp.eval(field.getKey(), staticScope);
                     if (keyValue instanceof JsSymbol symbol) {
                         cls.setStaticSymbolProp(symbol, value);
@@ -174,6 +189,9 @@ public final class ClassEvaluator {
     private void callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args) {
         final var constructor = cls.getConstructor();
         if (cls.getSuperClass() == null) {
+            if (cls.getNativeSuperClass() != null) {
+                applyNativeSuper(cls.getNativeSuperClass(), instance, args);
+            }
             initFields(cls, instance);
             if (constructor != null) {
                 interp.callFunction(constructor, instance, args);
@@ -183,6 +201,27 @@ public final class ClassEvaluator {
             initFields(cls, instance);
         } else {
             interp.callFunction(constructor, instance, args);
+        }
+    }
+
+    // A native super has no method tables to chain into, so its result's own state is copied onto the
+    // instance and the instance is linked to the native prototype for method lookup and instanceof.
+    private void applyNativeSuper(JsNativeFunction nativeSuper, JsObject instance, List<JsValue> args) {
+        instance.setProto(nativeSuper.getPrototype());
+        final var produced = nativeSuper.invoke(JsUndefined.getInstance(), args);
+        if (produced instanceof JsObject object) {
+            for (final var entry : object.getProperties().entrySet()) {
+                instance.defineValue(entry.getKey(), entry.getValue());
+                instance.setFlags(entry.getKey(), object.getFlags(entry.getKey()));
+            }
+            if (object.isErrorData()) {
+                instance.markErrorData();
+            }
+        } else {
+            // A builtin with internal state (Map/Set/Date/Array/…) cannot be copied onto a plain
+            // instance, so the produced value is kept as the instance's wrapped primitive and the
+            // intrinsic prototype methods unwrap it from their receiver.
+            instance.setPrimitive(produced);
         }
     }
 
@@ -215,7 +254,11 @@ public final class ClassEvaluator {
             throw new TypeErrorException("'super' call outside of a constructor");
         }
         final var args = interp.evalArguments(call.getArguments(), env);
-        callConstructorChain(home.getSuperClass(), instance, args);
+        if (home.getSuperClass() == null) {
+            applyNativeSuper(home.getNativeSuperClass(), instance, args);
+        } else {
+            callConstructorChain(home.getSuperClass(), instance, args);
+        }
         initFields(home, instance);
         return JsUndefined.getInstance();
     }
@@ -223,8 +266,8 @@ public final class ClassEvaluator {
     public JsValue evalSuperMemberCall(MemberExpression member, CallExpression call, Environment env) {
         final var home = superHomeClass(env);
         final var thisArg = env.resolveThis();
-        final var parent = home.getSuperClass();
         final var key = interp.memberKey(member, env);
+        final var parent = superMemberParent(home, key);
         final var args = interp.evalArguments(call.getArguments(), env);
         final var staticContext = thisArg instanceof JsClass;
         final var method = staticContext ? parent.findStaticMethod(key) : parent.findInstanceMethod(key);
@@ -241,8 +284,8 @@ public final class ClassEvaluator {
     public JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
         final var home = superHomeClass(env);
         final var thisArg = env.resolveThis();
-        final var parent = home.getSuperClass();
         final var key = interp.memberKey(member, env);
+        final var parent = superMemberParent(home, key);
         final var staticContext = thisArg instanceof JsClass;
         final var getter = staticContext ? parent.findStaticGetter(key) : parent.findInstanceGetter(key);
         if (getter != null) {
@@ -259,14 +302,28 @@ public final class ClassEvaluator {
     }
 
     private JsClass superHomeClass(Environment env) {
-        if (env.resolveHomeClass() instanceof JsClass cls && cls.getSuperClass() != null) {
+        if (env.resolveHomeClass() instanceof JsClass cls
+                && (cls.getSuperClass() != null || cls.getNativeSuperClass() != null)) {
             return cls;
         }
         throw new SyntaxErrorException("'super' keyword unexpected here");
     }
 
+    private JsClass superMemberParent(JsClass home, String key) {
+        final var parent = home.getSuperClass();
+        if (parent == null) {
+            throw new TypeErrorException("super." + key + " is not available: " + home.getNativeSuperClass().getName()
+                    + " is a builtin superclass with no chainable methods");
+        }
+        return parent;
+    }
+
     public JsValue evalBrandCheck(PrivateIdentifier priv, JsValue target, Environment env) {
         final var name = priv.getName();
+        if (target instanceof JsClass cls) {
+            return JsBoolean.of(env.resolveHomeClass() instanceof JsClass home && home.declaresStaticPrivate(name)
+                    && cls.declaresStaticPrivate(name));
+        }
         if (target instanceof JsObject object) {
             if (object.hasPrivate(name)) {
                 return JsBoolean.TRUE;
@@ -286,13 +343,47 @@ public final class ClassEvaluator {
             }
         }
         return switch (right) {
-            case JsClass cls -> JsBoolean.of(left instanceof JsObject object && object.getKlass() != null
-                    && object.getKlass().isSubclassOf(cls));
+            case JsClass cls -> JsBoolean.of(isInstanceOfClass(left, cls));
             case JsFunction function -> JsBoolean.of(hasInPrototypeChain(left, function.getPrototype()));
             case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
                 evalInstanceof(left, nativeFunction.getBoundTarget());
-            case JsNativeFunction ignored -> JsBoolean.FALSE;
+            case JsNativeFunction nativeFunction ->
+                JsBoolean.of(isInstanceOfNative(left, nativeFunction.getPrototype()));
             default -> throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
         };
+    }
+
+    private boolean isInstanceOfClass(JsValue left, JsClass cls) {
+        if (left instanceof JsObject object && object.getKlass() != null && object.getKlass().isSubclassOf(cls)) {
+            return true;
+        }
+        final var nativeSuper = cls.findNativeSuperClass();
+        return nativeSuper != null && isInstanceOfNative(left, nativeSuper.getPrototype());
+    }
+
+    // A non-JsObject runtime value has no own prototype link, so an object-like one (array, map,
+    // function, …) is matched against the realm's intrinsic chain instead; primitives never match.
+    private boolean isInstanceOfNative(JsValue left, JsObject prototype) {
+        if (prototype == null) {
+            return false;
+        }
+        if (hasInPrototypeChain(left, prototype)) {
+            return true;
+        }
+        if (left instanceof JsObject || isPrimitiveValue(left)) {
+            return false;
+        }
+        for (var proto = interp.intrinsics().protoFor(left); proto != null; proto = proto.getProto()) {
+            if (proto == prototype) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isPrimitiveValue(JsValue value) {
+        return value instanceof JsString || value instanceof JsNumber || value instanceof JsBoolean
+                || value instanceof JsBigInt || value instanceof JsSymbol || value instanceof JsNull
+                || value instanceof JsUndefined;
     }
 }

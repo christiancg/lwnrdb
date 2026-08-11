@@ -67,4 +67,30 @@ public class SymbolBuiltinsTest {
         assertTrue(bool("Symbol.match !== Symbol.replace && Symbol.search !== Symbol.split"));
         assertTrue(bool("Symbol.hasInstance !== Symbol.toStringTag"));
     }
+
+    // A symbol exposes its description and a readable toString
+    @Test
+    public void test_description_and_to_string() {
+        assertEquals("x", str("Symbol('x').description"));
+        assertEquals("Symbol(x)", str("Symbol('x').toString()"));
+        assertEquals("Symbol()", str("Symbol().toString()"));
+        assertTrue(bool("Symbol().description === undefined"));
+        assertTrue(bool("const s = Symbol('y'); s.valueOf() === s"));
+        assertTrue(bool("Symbol('x').nope === undefined"));
+    }
+
+    // The two newly exposed well-known symbols have a stable identity
+    @Test
+    public void test_new_well_known_symbols() {
+        assertTrue(bool("typeof Symbol.matchAll === 'symbol'"));
+        assertTrue(bool("typeof Symbol.isConcatSpreadable === 'symbol'"));
+        assertTrue(bool("Symbol.matchAll === Symbol.matchAll"));
+        assertTrue(bool("Symbol.matchAll !== Symbol.isConcatSpreadable"));
+    }
+
+    // String.matchAll delegates to a Symbol.matchAll method on a plain object
+    @Test
+    public void test_symbol_match_all_hook() {
+        assertEquals("got:abc", str("'abc'.matchAll({ [Symbol.matchAll](s) { return 'got:' + s } })"));
+    }
 }

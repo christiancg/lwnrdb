@@ -18,10 +18,17 @@ public final class ErrorBuiltins {
     }
 
     public static JsObject makeError(String name, String message) {
+        return makeError(name, message, null);
+    }
+
+    public static JsObject makeError(String name, String message, JsObject proto) {
         final var error = new JsObject();
         error.set("name", new JsString(name));
         error.set("message", new JsString(message));
+        // No interpreter call stack is retained, so `stack` is a single synthetic frame.
+        error.set("stack", new JsString(name + ": " + message + "\n    at <script>"));
         error.markErrorData();
+        error.setProto(proto);
         return error;
     }
 
@@ -42,22 +49,48 @@ public final class ErrorBuiltins {
         return result;
     }
 
-    public static void install(Environment global) {
+    public static void install(Environment global, Intrinsics intrinsics) {
         for (final var name : NAMES) {
-            final var constructor = new JsNativeFunction(name, (_, args) -> makeError(name, message(args)));
+            final var constructor = new JsNativeFunction(name, (_, args) -> construct(intrinsics, name, args));
             if ("Error".equals(name)) {
                 constructor.setProperty("isError",
                         new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
             }
+            link(constructor, intrinsics, name);
             global.declareBuiltin(name, constructor);
         }
-        global.declareBuiltin("SuppressedError",
-                new JsNativeFunction("SuppressedError", (_, args) -> makeSuppressedError(arg(args, 0), arg(args, 1),
-                        args.size() > 2 ? message(List.of(args.get(2))) : "")));
-        global.declareBuiltin("AggregateError", new JsNativeFunction("AggregateError", (_, args) -> {
+        final var suppressed = new JsNativeFunction("SuppressedError", (_, args) -> link(
+                makeSuppressedError(arg(args, 0), arg(args, 1), args.size() > 2 ? message(List.of(args.get(2))) : ""),
+                intrinsics, "SuppressedError"));
+        link(suppressed, intrinsics, "SuppressedError");
+        global.declareBuiltin("SuppressedError", suppressed);
+        final var aggregate = new JsNativeFunction("AggregateError", (_, args) -> {
             final var errors = arg(args, 0) instanceof JsArray array ? array.getElements() : List.<JsValue>of();
-            return makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : "");
-        }));
+            return link(makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : ""), intrinsics,
+                    "AggregateError");
+        });
+        link(aggregate, intrinsics, "AggregateError");
+        global.declareBuiltin("AggregateError", aggregate);
+    }
+
+    private static JsObject construct(Intrinsics intrinsics, String name, List<JsValue> args) {
+        final var error = intrinsics.makeError(name, message(args));
+        if (args.size() > 1 && args.get(1) instanceof JsObject options && options.has("cause")) {
+            error.set("cause", options.get("cause"));
+        }
+        return error;
+    }
+
+    private static JsObject link(JsObject error, Intrinsics intrinsics, String name) {
+        error.setProto(intrinsics.errorProto(name));
+        return error;
+    }
+
+    private static void link(JsNativeFunction constructor, Intrinsics intrinsics, String name) {
+        final var proto = intrinsics.errorProto(name);
+        proto.defineValue("constructor", constructor);
+        proto.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
+        constructor.setPrototype(proto);
     }
 
     private static boolean isError(JsValue value) {

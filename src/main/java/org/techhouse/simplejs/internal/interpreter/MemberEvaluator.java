@@ -11,18 +11,14 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stepR
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
 import java.util.List;
-import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.AsyncIteratorBuiltins;
-import org.techhouse.simplejs.builtins.DateBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.IteratorBuiltins;
 import org.techhouse.simplejs.builtins.JsIterators;
 import org.techhouse.simplejs.builtins.MapBuiltins;
-import org.techhouse.simplejs.builtins.NumberBuiltins;
-import org.techhouse.simplejs.builtins.ObjectProtoBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.SetBuiltins;
-import org.techhouse.simplejs.builtins.StringBuiltins;
+import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -37,6 +33,8 @@ import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
+import org.techhouse.simplejs.values.JsBigInt;
+import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
@@ -146,6 +144,7 @@ public final class MemberEvaluator {
             case JsArray array -> getArrayMember(array, key);
             case JsString string -> getStringMember(string, key);
             case JsNumber number -> numberMember(number, key);
+            case JsSymbol symbol -> symbolMember(symbol, key);
             case JsGenerator generator -> generatorMethod(generator, key);
             case JsAsyncGenerator generator -> asyncGeneratorMethod(generator, key);
             case JsRegExp regexp -> regExpMember(regexp, key);
@@ -153,9 +152,11 @@ public final class MemberEvaluator {
             case JsSet set -> jsSetMember(set, key);
             case JsDate date -> dateMember(date, key);
             case JsTypedArray typed -> typedArrayMember(typed, key);
-            case JsArrayBuffer buffer -> orUndefined(TypedArrayBuiltins.bufferMethod(buffer, key));
-            case JsDataView view -> orUndefined(TypedArrayBuiltins.dataViewMethod(view, key));
+            case JsArrayBuffer buffer -> bufferMember(buffer, key);
+            case JsDataView view -> dataViewMember(view, key);
             case JsPromise promise -> promiseMethod(promise, key);
+            case JsBoolean bool -> intrinsicMember(bool, key);
+            case JsBigInt bigInt -> intrinsicMember(bigInt, key);
             case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
             case JsFunction fn -> functionMember(fn, key);
             case JsNativeFunction nf -> functionMember(nf, key);
@@ -195,15 +196,18 @@ public final class MemberEvaluator {
                     return proto.get(key);
                 }
             }
-            final var builtin = ObjectProtoBuiltins.getMethod(object, key, interp.ops());
-            if (builtin != null) {
-                return builtin;
+            final var intrinsic = intrinsicMember(object, key);
+            if (!(intrinsic instanceof JsUndefined)) {
+                return intrinsic;
             }
             if (AsyncIteratorBuiltins.isHelperName(key) && isAsyncIteratorLike(object)) {
                 return AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key);
             }
             if (IteratorBuiltins.isHelperName(key) && isIteratorLike(object)) {
                 return IteratorBuiltins.helper(interp.ops(), key);
+            }
+            if (object.getPrimitive() != null) {
+                return getMember(object.getPrimitive(), key);
             }
         }
         return object.get(key);
@@ -225,27 +229,65 @@ public final class MemberEvaluator {
         return index == null ? JsUndefined.getInstance() : arguments.get(index);
     }
 
+    // The last dispatch step for every value type: walk the realm's intrinsic prototype chain, so a
+    // monkey-patched or user-added member on e.g. Array.prototype is what a receiver resolves to.
+    private JsValue intrinsicMember(JsValue target, String key) {
+        for (var proto = interp.intrinsics().protoFor(target); proto != null; proto = proto.getProto()) {
+            final var getter = proto.getAccessorGetter(key);
+            if (getter != null) {
+                return interp.callValue(getter, target, List.of());
+            }
+            if (proto.has(key)) {
+                return proto.get(key);
+            }
+        }
+        return JsUndefined.getInstance();
+    }
+
     private JsValue functionMember(JsValue function, String key) {
         if (function instanceof JsFunction fn && "prototype".equals(key)) {
             return fn.getPrototype();
         }
-        final var method = FunctionProtoBuiltins.getMethod(function, key, interp::callValue);
-        return method == null ? JsUndefined.getInstance() : method;
+        if (function instanceof JsNativeFunction nf && "prototype".equals(key)) {
+            return orUndefined(nf.getPrototype());
+        }
+        final var metadata = FunctionProtoBuiltins.metadata(function, key);
+        if (metadata != null) {
+            return metadata;
+        }
+        return intrinsicMember(function, key);
     }
 
     private JsValue mapMember(JsMap map, String key) {
-        final var method = MapBuiltins.getMethod(map, key, interp::callValue);
-        return method == null ? JsUndefined.getInstance() : method;
+        if ("size".equals(key)) {
+            return new JsNumber(map.size());
+        }
+        return intrinsicMember(map, key);
     }
 
     private JsValue jsSetMember(JsSet set, String key) {
-        final var method = SetBuiltins.getMethod(set, key, interp::callValue);
-        return method == null ? JsUndefined.getInstance() : method;
+        if ("size".equals(key)) {
+            return new JsNumber(set.size());
+        }
+        return intrinsicMember(set, key);
     }
 
     private JsValue dateMember(JsDate date, String key) {
-        final var method = DateBuiltins.getMethod(date, key);
-        return method == null ? JsUndefined.getInstance() : method;
+        return intrinsicMember(date, key);
+    }
+
+    private JsValue bufferMember(JsArrayBuffer buffer, String key) {
+        if (TypedArrayBuiltins.isBufferAccessor(key)) {
+            return orUndefined(TypedArrayBuiltins.bufferMethod(buffer, key));
+        }
+        return intrinsicMember(buffer, key);
+    }
+
+    private JsValue dataViewMember(JsDataView view, String key) {
+        if (TypedArrayBuiltins.isViewAccessor(key)) {
+            return orUndefined(TypedArrayBuiltins.dataViewMethod(view, key));
+        }
+        return intrinsicMember(view, key);
     }
 
     private JsValue typedArrayMember(JsTypedArray typed, String key) {
@@ -272,12 +314,19 @@ public final class MemberEvaluator {
         if (index != null) {
             return typed.getElement(index);
         }
-        return orUndefined(TypedArrayBuiltins.getMethod(typed, key, interp::callValue));
+        return intrinsicMember(typed, key);
     }
 
     private JsValue numberMember(JsNumber number, String key) {
-        final var method = NumberBuiltins.getMethod(number, key);
-        return method == null ? JsUndefined.getInstance() : method;
+        return intrinsicMember(number, key);
+    }
+
+    private JsValue symbolMember(JsSymbol symbol, String key) {
+        final var property = SymbolBuiltins.getProperty(symbol, key);
+        if (property != null) {
+            return property;
+        }
+        return intrinsicMember(symbol, key);
     }
 
     private JsValue getArrayMember(JsArray array, String key) {
@@ -291,8 +340,7 @@ public final class MemberEvaluator {
         if (array.hasProperty(key)) {
             return array.getProperty(key);
         }
-        final var method = ArrayBuiltins.getMethod(array, key, interp::callValue, interp.ops());
-        return method == null ? JsUndefined.getInstance() : method;
+        return intrinsicMember(array, key);
     }
 
     private JsValue getStringMember(JsString string, String key) {
@@ -305,8 +353,7 @@ public final class MemberEvaluator {
                     ? new JsString(String.valueOf(string.getValue().charAt(index)))
                     : JsUndefined.getInstance();
         }
-        final var method = StringBuiltins.getMethod(string, key, interp::callValue, interp.ops());
-        return method == null ? JsUndefined.getInstance() : method;
+        return intrinsicMember(string, key);
     }
 
     public void setMember(JsValue target, String key, JsValue value, JsValue receiver) {
@@ -359,6 +406,10 @@ public final class MemberEvaluator {
                 }
             }
             case JsArray array -> {
+                if ("length".equals(key)) {
+                    array.setLength(requireLength(value));
+                    return;
+                }
                 final var index = arrayIndex(key);
                 if (index != null) {
                     array.set(index, value);
@@ -385,6 +436,14 @@ public final class MemberEvaluator {
         }
     }
 
+    private static int requireLength(JsValue value) {
+        final var length = JsCoercion.toNumber(value);
+        if (Double.isNaN(length) || length < 0 || length != Math.floor(length)) {
+            throw new RangeErrorException("Invalid array length");
+        }
+        return (int) length;
+    }
+
     private JsValue generatorMethod(JsGenerator generator, String key) {
         final var coroutine = generator.getCoroutine();
         return switch (key) {
@@ -394,7 +453,7 @@ public final class MemberEvaluator {
             case "throw" -> new JsNativeFunction("throw", (_, args) -> stepResult(coroutine.resumeThrow(arg0(args))));
             default -> IteratorBuiltins.isHelperName(key)
                     ? IteratorBuiltins.helper(interp.ops(), key)
-                    : JsUndefined.getInstance();
+                    : intrinsicMember(generator, key);
         };
     }
 
@@ -416,7 +475,7 @@ public final class MemberEvaluator {
                 new JsNativeFunction("throw", (_, args) -> driveAsyncGenerator(generator, AsyncStep.THROW, arg0(args)));
             default -> AsyncIteratorBuiltins.isHelperName(key)
                     ? AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key)
-                    : JsUndefined.getInstance();
+                    : intrinsicMember(generator, key);
         };
     }
 
@@ -475,15 +534,17 @@ public final class MemberEvaluator {
         if (error instanceof JsThrowException || error instanceof TypeErrorException
                 || error instanceof ReferenceErrorException || error instanceof RangeErrorException
                 || error instanceof SyntaxErrorException) {
-            promise.reject(toErrorValue(error));
+            promise.reject(toErrorValue(error, interp.intrinsics()));
         } else {
             throw error;
         }
     }
 
     private JsValue regExpMember(JsRegExp regexp, String key) {
-        final var member = RegexBuiltins.getMethod(regexp, key);
-        return member == null ? JsUndefined.getInstance() : member;
+        if (RegexBuiltins.isAccessor(key)) {
+            return orUndefined(RegexBuiltins.getMethod(regexp, key));
+        }
+        return intrinsicMember(regexp, key);
     }
 
     private JsValue promiseMethod(JsPromise promise, String key) {
@@ -492,7 +553,7 @@ public final class MemberEvaluator {
             case "catch" ->
                 new JsNativeFunction("catch", (_, args) -> promiseThen(promise, JsUndefined.getInstance(), arg0(args)));
             case "finally" -> new JsNativeFunction("finally", (_, args) -> promiseFinally(promise, arg0(args)));
-            default -> JsUndefined.getInstance();
+            default -> intrinsicMember(promise, key);
         };
     }
 
@@ -516,7 +577,7 @@ public final class MemberEvaluator {
             derived.resolve(interp.callValue(handler, JsUndefined.getInstance(), List.of(input)));
         } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
                 | SyntaxErrorException error) {
-            derived.reject(toErrorValue(error));
+            derived.reject(toErrorValue(error, interp.intrinsics()));
         }
     }
 

@@ -14,6 +14,9 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class MapBuiltins {
+    public static final List<String> NAMES = List.of("get", "set", "has", "delete", "clear", "forEach", "keys",
+            "values", "entries");
+
     private MapBuiltins() {
     }
 

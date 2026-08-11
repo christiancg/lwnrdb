@@ -2,11 +2,13 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
+import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -18,6 +20,10 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class RegexBuiltins {
+    public static final List<String> NAMES = List.of("test", "exec");
+    private static final Set<String> ACCESSORS = Set.of("source", "flags", "global", "ignoreCase", "multiline",
+            "dotAll", "sticky", "lastIndex", "hasIndices");
+
     private static final Pattern NAMED_GROUP = Pattern.compile("\\(\\?<([a-zA-Z][a-zA-Z0-9]*)>");
     private static final String SYNTAX_CHARACTERS = "^$\\.*+?()[]{}|/";
     private static final String OTHER_PUNCTUATORS = ",-=<>#&!%:;@~'`\"";
@@ -98,6 +104,10 @@ public final class RegexBuiltins {
         return RegexTranslator.compile(source, flags);
     }
 
+    public static boolean isAccessor(String name) {
+        return ACCESSORS.contains(name);
+    }
+
     public static JsValue getMethod(JsRegExp receiver, String name) {
         return switch (name) {
             case "test" -> new JsNativeFunction("test", (_, args) -> JsBoolean.of(test(receiver, str(args))));
@@ -109,6 +119,7 @@ public final class RegexBuiltins {
             case "multiline" -> JsBoolean.of(receiver.isMultiline());
             case "dotAll" -> JsBoolean.of(receiver.isDotAll());
             case "sticky" -> JsBoolean.of(receiver.isSticky());
+            case "hasIndices" -> JsBoolean.of(receiver.hasIndices());
             case "lastIndex" -> new JsNumber(receiver.getLastIndex());
             default -> null;
         };
@@ -136,7 +147,36 @@ public final class RegexBuiltins {
         if (stateful) {
             regexp.setLastIndex(matcher.end());
         }
-        return buildMatchResult(matcher, input, regexp.getSource());
+        final var result = buildMatchResult(matcher, input, regexp.getSource());
+        if (regexp.hasIndices()) {
+            addIndices(result, matcher, regexp.getSource());
+        }
+        return result;
+    }
+
+    public static void addIndices(JsObject result, Matcher matcher, String source) {
+        final var indices = new JsArray();
+        for (var i = 0; i <= matcher.groupCount(); i++) {
+            indices.push(pair(matcher.start(i), matcher.end(i)));
+        }
+        final var names = groupNames(source);
+        if (names.isEmpty()) {
+            indices.setProperty("groups", JsUndefined.getInstance());
+        } else {
+            final var groups = new JsObject();
+            for (final var groupName : names) {
+                groups.set(groupName, pair(matcher.start(groupName), matcher.end(groupName)));
+            }
+            indices.setProperty("groups", groups);
+        }
+        result.set("indices", indices);
+    }
+
+    private static JsValue pair(int start, int end) {
+        if (start < 0) {
+            return JsUndefined.getInstance();
+        }
+        return new JsArray(List.of(new JsNumber(start), new JsNumber(end)));
     }
 
     public static JsObject buildMatchResult(Matcher matcher, String input, String source) {

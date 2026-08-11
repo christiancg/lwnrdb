@@ -19,6 +19,14 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class DateBuiltins {
+    public static final List<String> NAMES = List.of("getTime", "valueOf", "setTime", "toISOString", "toJSON",
+            "toString", "toDateString", "toUTCString", "toLocaleString", "toLocaleDateString", "toLocaleTimeString",
+            "getTimezoneOffset", "getFullYear", "getUTCFullYear", "getMonth", "getUTCMonth", "getDate", "getUTCDate",
+            "getDay", "getUTCDay", "getHours", "getUTCHours", "getMinutes", "getUTCMinutes", "getSeconds",
+            "getUTCSeconds", "getMilliseconds", "getUTCMilliseconds", "setFullYear", "setUTCFullYear", "setMonth",
+            "setUTCMonth", "setDate", "setUTCDate", "setHours", "setUTCHours", "setMinutes", "setUTCMinutes",
+            "setSeconds", "setUTCSeconds", "setMilliseconds", "setUTCMilliseconds");
+
     private DateBuiltins() {
     }
 
