@@ -146,17 +146,41 @@ public final class Lexer {
 
     private static JsonNumber lexNumber(String input) {
         final var strNumber = new StringBuilder();
-        for (var c : input.toCharArray()) {
-            if (NUMBER_CHARACTERS.contains(c)) {
-                strNumber.append(c);
-            } else {
-                break;
-            }
+        var index = 0;
+        while (index < input.length() && NUMBER_CHARACTERS.contains(input.charAt(index))) {
+            strNumber.append(input.charAt(index));
+            index++;
         }
         if (strNumber.isEmpty()) {
             return null;
-        } else {
-            return new JsonNumber(strNumber.toString());
+        }
+        appendExponent(input, index, strNumber);
+        return new JsonNumber(strNumber.toString());
+    }
+
+    private static void appendExponent(String input, int start, StringBuilder strNumber) {
+        var index = start;
+        if (index >= input.length() || (input.charAt(index) != 'e' && input.charAt(index) != 'E')) {
+            return;
+        }
+        final var marker = input.charAt(index);
+        index++;
+        final var sign = index < input.length() && (input.charAt(index) == '+' || input.charAt(index) == '-')
+                ? input.charAt(index)
+                : 0;
+        if (sign != 0) {
+            index++;
+        }
+        if (index >= input.length() || !Character.isDigit(input.charAt(index))) {
+            return;
+        }
+        strNumber.append(marker);
+        if (sign != 0) {
+            strNumber.append(sign);
+        }
+        while (index < input.length() && Character.isDigit(input.charAt(index))) {
+            strNumber.append(input.charAt(index));
+            index++;
         }
     }
 
