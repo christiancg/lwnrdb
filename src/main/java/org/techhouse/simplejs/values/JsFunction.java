@@ -4,7 +4,7 @@ import java.util.List;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.nodes.JsNode;
 
-public final class JsFunction extends JsValue {
+public final class JsFunction extends JsValue implements JsCallableProperties {
     private final String name;
     private final List<JsNode> params;
     private final JsNode body;
@@ -13,6 +13,7 @@ public final class JsFunction extends JsValue {
     private final boolean async;
     private final boolean generator;
     private final Environment closure;
+    private final CallablePropertyStore properties = new CallablePropertyStore();
     private JsObject prototype;
 
     public JsFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
@@ -65,5 +66,40 @@ public final class JsFunction extends JsValue {
             prototype.set("constructor", this);
         }
         return prototype;
+    }
+
+    @Override
+    public void setProperty(String key, JsValue value) {
+        properties.setProperty(key, value);
+    }
+
+    @Override
+    public void setEnumerableProperty(String key, JsValue value) {
+        properties.setEnumerableProperty(key, value);
+    }
+
+    @Override
+    public JsValue getProperty(String key) {
+        return properties.getProperty(key);
+    }
+
+    @Override
+    public boolean hasProperty(String key) {
+        return properties.hasProperty(key);
+    }
+
+    @Override
+    public boolean deleteProperty(String key) {
+        return properties.deleteProperty(key);
+    }
+
+    @Override
+    public List<String> propertyKeys() {
+        return properties.propertyKeys();
+    }
+
+    @Override
+    public List<String> enumerablePropertyKeys() {
+        return properties.enumerablePropertyKeys();
     }
 }

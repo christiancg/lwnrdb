@@ -39,6 +39,7 @@ import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
+import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -413,6 +414,9 @@ public final class StatementEvaluator {
                 keys.add(Integer.toString(i));
             }
             return keys;
+        }
+        if (target instanceof JsCallableProperties callable) {
+            return callable.enumerablePropertyKeys();
         }
         return List.of();
     }

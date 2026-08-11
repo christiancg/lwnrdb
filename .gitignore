@@ -52,6 +52,9 @@ db/
 ### Test logs ###
 test_log/
 
+### test262 corpus (fetched, never committed) ###
+test262/
+
 ### TLS keystores (auto-generated, contain private keys — never commit) ###
 certs/
 *.p12

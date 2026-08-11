@@ -41,6 +41,7 @@ import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
@@ -253,6 +254,7 @@ public final class ExpressionEvaluator {
                 yield JsBoolean.TRUE;
             }
             case JsArray array -> JsBoolean.of(deleteArrayElement(array, key));
+            case JsCallableProperties callable -> JsBoolean.of(callable.deleteProperty(key));
             default -> JsBoolean.TRUE;
         };
     }

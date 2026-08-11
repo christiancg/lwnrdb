@@ -1,0 +1,46 @@
+# test262 exclusions for the SimpleJS conformance harness.
+#
+# An exclusion says "we deliberately do not measure this", so every line carries a reason and is
+# counted and reported by category. This file is the machine-readable form of the *Deliberately
+# unimplemented ES2026 features* section of docs/simplejs.md — keep the two in step.
+#
+# Line kinds:
+#   dir:     <path prefix relative to test262/test/>   # reason
+#   feature: <features: value>                         # reason
+#   pattern: <python regex matched against the source> # reason
+#
+# A `pattern:` line is a source scan, not a feature flag, because test262 does not flag `eval` or the
+# Function constructor. It can false-positive on a test that merely mentions the word; the count is
+# reported so the cost stays visible. The alternative is thousands of guaranteed failures carrying no
+# information.
+#
+# Deliberately NOT excluded, even though it would be tempting: resizable-arraybuffer (supported,
+# including length-tracking views) and explicit-resource-management (supported). Anything the engine
+# gets wrong there belongs in config/test262-baseline.txt, not here.
+
+dir:     intl402/                    # Intl not implemented (deliberate)
+dir:     staging/                    # not part of the conformance corpus
+dir:     annexB/                     # normative-optional web-legacy semantics; not required of a non-browser host
+
+feature: Temporal                    # deliberate: Date is the only temporal type
+feature: SharedArrayBuffer           # deliberate: single-threaded per-request VM
+feature: Atomics                     # deliberate: ditto
+feature: Atomics.pause               # deliberate: ditto
+feature: WeakRef                     # deliberate: GC-observable behaviour
+feature: FinalizationRegistry        # deliberate: ditto
+feature: Symbol.species              # deliberate: JsArray/JsTypedArray are not subclassable
+feature: tail-call-optimization      # deliberate: no TCO
+feature: cross-realm                 # needs $262.createRealm, which the shim does not provide
+feature: IsHTMLDDA                   # host-specific exotic object
+feature: immutable-arraybuffer       # deliberate: not in the ES2026 snapshot, no third buffer state
+feature: dynamic-import              # deliberate: import() resolves only the args/db host built-ins
+feature: import-assertions           # deliberate: arbitrary module resolution is out of scope
+feature: import-attributes           # deliberate: ditto
+feature: json-modules                # deliberate: ditto
+feature: import-defer                # deliberate: ditto
+feature: source-phase-imports        # deliberate: ditto
+feature: arbitrary-module-namespace-names  # deliberate: ditto
+
+pattern: \beval\s*\(                 # eval absent by design (sandbox boundary)
+pattern: \bnew\s+Function\b          # Function constructor disabled by design
+pattern: \$262\.(createRealm|evalScript|agent|gc|IsHTMLDDA)  # host APIs the shim does not provide

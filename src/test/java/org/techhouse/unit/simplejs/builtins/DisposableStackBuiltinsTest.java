@@ -27,7 +27,8 @@ public class DisposableStackBuiltinsTest {
     }
 
     private static String joinArray() {
-        final var array = (JsArray) Interpreter.run("let log = [];\nasync function run() {\n    const s = new AsyncDisposableStack();\n    s.defer(() => log.push('a'));\n    s.defer(async () => { log.push('b'); });\n    await s.disposeAsync();\n    log.push('done');\n}\nrun();\nlog\n");
+        final var array = (JsArray) Interpreter.run(
+                "let log = [];\nasync function run() {\n    const s = new AsyncDisposableStack();\n    s.defer(() => log.push('a'));\n    s.defer(async () => { log.push('b'); });\n    await s.disposeAsync();\n    log.push('done');\n}\nrun();\nlog\n");
         final var joined = new StringBuilder();
         for (var i = 0; i < array.length(); i++) {
             if (i > 0) {

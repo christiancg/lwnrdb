@@ -1,14 +1,12 @@
 package org.techhouse.simplejs.values;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.function.BiFunction;
 
-public final class JsNativeFunction extends JsValue {
+public final class JsNativeFunction extends JsValue implements JsCallableProperties {
     private final String name;
     private final BiFunction<JsValue, List<JsValue>, JsValue> implementation;
-    private Map<String, JsValue> properties;
+    private final CallablePropertyStore properties = new CallablePropertyStore();
     private JsValue boundTarget;
     private List<JsValue> boundArgs;
     private JsObject prototype;
@@ -43,19 +41,39 @@ public final class JsNativeFunction extends JsValue {
         return implementation.apply(thisArg, args);
     }
 
+    @Override
     public void setProperty(String key, JsValue value) {
-        if (properties == null) {
-            properties = new HashMap<>();
-        }
-        properties.put(key, value);
+        properties.setProperty(key, value);
     }
 
+    @Override
+    public void setEnumerableProperty(String key, JsValue value) {
+        properties.setEnumerableProperty(key, value);
+    }
+
+    @Override
     public JsValue getProperty(String key) {
-        return properties == null ? null : properties.get(key);
+        return properties.getProperty(key);
     }
 
+    @Override
     public boolean hasProperty(String key) {
-        return properties != null && properties.containsKey(key);
+        return properties.hasProperty(key);
+    }
+
+    @Override
+    public boolean deleteProperty(String key) {
+        return properties.deleteProperty(key);
+    }
+
+    @Override
+    public List<String> propertyKeys() {
+        return properties.propertyKeys();
+    }
+
+    @Override
+    public List<String> enumerablePropertyKeys() {
+        return properties.enumerablePropertyKeys();
     }
 
     public JsObject getPrototype() {

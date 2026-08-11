@@ -136,8 +136,8 @@ public final class Intrinsics {
     }
 
     private void installErrorPrototypes() {
-        define(errorProto, "toString", new JsNativeFunction("toString",
-                (thisArg, _) -> new JsString(errorText(requireObject(thisArg)))));
+        define(errorProto, "toString",
+                new JsNativeFunction("toString", (thisArg, _) -> new JsString(errorText(requireObject(thisArg)))));
         // Error.prototype is the shared base so `e instanceof Error` holds for every error subtype.
         define(errorProto, "name", new JsString("Error"));
         errorProtos.put("Error", errorProto);

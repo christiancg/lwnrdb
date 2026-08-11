@@ -702,26 +702,50 @@ as binding identifiers, and `eval`/`arguments` as binding or assignment/update t
 the poisoned `arguments.callee`/`arguments.caller` accessors throw a `TypeError` (see the ES2026
 conformance closers below).
 
-## Known gaps and divergences (verified 2026-08-11)
+## Measuring conformance
 
-Everything in this section is a **gap**, not a design decision: a conformant engine has it
-and SimpleJS either lacks it or gets it wrong. Each row was confirmed by running the snippet
-through `SimpleJs.run(source, SimpleHostBindings.empty())` against the built engine — none of
-them are inferred from reading the code. The next section lists the features that are missing
-*on purpose*.
+Conformance is **measured, not asserted**. The official tc39/test262 corpus runs against
+`SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
+the language + built-ins surface a database script host actually exposes, and gated on a tracked
+baseline of known failures so the number can only ratchet upward:
 
-This section is only as good as its last verification run. The ES2026 conformance closeout
-(2026-08-11) closed the gaps it had found — numeric correctness, own-key ordering, strict-mode
-write/delete failures, `Object.freeze` on arrays, string iteration by code point, real class
-prototypes, `new.target`, object-literal `super`, patchable `Promise`/generator prototypes,
-`Symbol.unscopables`, duplicate named capture groups and the top-level-promise contract. A
-**follow-up probing pass the same day** found ten more, all now closed (see *ES2026 conformance
-follow-up* below): the iteration protocol rejecting a generator-valued `[Symbol.iterator]`,
-accessor properties missing from own-key enumeration, `includes` not using SameValueZero,
-`Object.prototype` methods rejecting a non-object receiver, the ignored `JSON.parse` reviver,
-the missing `Object.getOwnPropertyDescriptors`, `\p{ASCII}`, `Math.sumPrecise`, the two
-disposable stacks and the `Uint8Array` base64/hex family. What remains are the bounded
-limitations below.
+```bash
+# corpus fetched on demand into ./test262 (pinned + sha256-verified, never committed)
+python3 test_utils/test262.py --fetch
+python3 test_utils/test262.py --self-test         # check the harness itself; no corpus needed
+python3 test_utils/test262.py --gate baseline     # what CI runs
+python3 test_utils/test262.py --update-baseline   # after fixing a gap
+python3 test_utils/test262.py --self-check        # assert the known divergences still fail
+```
+
+The report lands in `test_log/test262-report.md` (per-area pass rates, a totals line and the
+exclusion/skip breakdown). The pieces:
+
+| File | Role |
+|---|---|
+| `config/test262.properties` | pinned corpus commit + tarball URL + sha256 |
+| `config/test262-exclusions.txt` | what is deliberately **not** measured; the machine-readable form of *Deliberately unimplemented ES2026 features* below |
+| `config/test262-baseline.txt` | known-failing test ids, with the corpus SHA in the header |
+| `config/test262-features.txt` | features already accounted for, so a corpus bump surfaces only the new ones |
+| `test_utils/test262_shims/` | the `print`/`$DONE` and `$262` shims the corpus harness expects |
+| `src/test/java/org/techhouse/unit/simplejs/test262/Test262Worker.java` | the worker JVM the driver batches jobs onto |
+
+The rate is computed over `PASS + FAIL + HANG`; excluded and skipped tests are reported but never
+counted in the denominator, so a deliberate omission cannot flatter the number. `noStrict` tests are
+**skipped, not failed** — always-strict is a design decision, not a defect. The gate fails on a new
+failure, on a baselined test that now passes (fixes must be recorded) and on a baselined test that
+the filter has started excluding.
+
+Because the baseline's line count is the honest answer to "is SimpleJS ES2026 compliant?", the table
+below is no longer a hand-maintained inventory of gaps — it lists only what is not expressible as a
+test262 id. Everything else is a diff against the baseline.
+
+## Known gaps and divergences
+
+Everything in this section is a **gap**, not a design decision: a conformant engine has it and
+SimpleJS either lacks it or gets it wrong. The next section lists the features that are missing *on
+purpose*. For the full, measured list see `config/test262-baseline.txt` and reproduce it with the
+commands above; the limitations below are the ones that need an explanation rather than a test id.
 
 ### Remaining limitations
 
@@ -814,7 +838,10 @@ What this reaches and what it does not:
 The engine targets ES2026 semantics for code that runs inside the database. The following
 standard features are intentionally **not** implemented — each is either a sandbox/security
 boundary or unobservable in a single-threaded, per-request interpreter, so omitting them is a
-design decision, not a bug:
+design decision, not a bug. This list is the **specification of the conformance filter**:
+`config/test262-exclusions.txt` is its machine-readable form (one `feature:`/`dir:`/`pattern:` line
+per decision, each carrying its reason), so the two must be kept in step — an exclusion with no
+entry here is a number being flattered.
 
 - **`eval` / the `Function` constructor** — no runtime code generation from strings. Allowing it
   would defeat the instruction-budget/deadline sandbox and open an injection surface.

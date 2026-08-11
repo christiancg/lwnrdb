@@ -11,6 +11,7 @@ import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -108,6 +109,7 @@ public final class ObjectBuiltins {
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
             case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
+            case JsCallableProperties callable -> callable.hasProperty(key);
             default -> false;
         };
     }
@@ -176,6 +178,11 @@ public final class ObjectBuiltins {
                     result.push(new JsString(name));
                 }
             }
+            case JsCallableProperties callable -> {
+                for (final var key : callable.enumerablePropertyKeys()) {
+                    result.push(new JsString(key));
+                }
+            }
             default -> {
             }
         }
@@ -205,6 +212,11 @@ public final class ObjectBuiltins {
             case JsGlobalObject global -> {
                 for (final var name : global.getEnv().enumerableGlobalNames()) {
                     result.push(global.getEnv().tryGet(name));
+                }
+            }
+            case JsCallableProperties callable -> {
+                for (final var key : callable.enumerablePropertyKeys()) {
+                    result.push(callable.getProperty(key));
                 }
             }
             default -> {
@@ -240,6 +252,11 @@ public final class ObjectBuiltins {
                             List.of(new JsString(name), Objects.requireNonNull(global.getEnv().tryGet(name)))));
                 }
             }
+            case JsCallableProperties callable -> {
+                for (final var key : callable.enumerablePropertyKeys()) {
+                    result.push(new JsArray(List.of(new JsString(key), callable.getProperty(key))));
+                }
+            }
             default -> {
             }
         }
@@ -259,6 +276,10 @@ public final class ObjectBuiltins {
                 }
                 for (final var symbol : source.symbolKeys()) {
                     target.setSymbol(symbol, source.getSymbol(symbol));
+                }
+            } else if (args.get(i) instanceof JsCallableProperties callable) {
+                for (final var key : callable.enumerablePropertyKeys()) {
+                    target.set(key, callable.getProperty(key));
                 }
             }
         }
@@ -521,6 +542,11 @@ public final class ObjectBuiltins {
                     result.push(new JsString(name));
                 }
             }
+            case JsCallableProperties callable -> {
+                for (final var key : callable.propertyKeys()) {
+                    result.push(new JsString(key));
+                }
+            }
             default -> {
             }
         }
@@ -528,6 +554,9 @@ public final class ObjectBuiltins {
     }
 
     public static JsValue getOwnPropertyDescriptor(List<JsValue> args) {
+        if (args.size() > 1 && first(args) instanceof JsCallableProperties callable) {
+            return callableDescriptor(callable, args.get(1));
+        }
         if (!(first(args) instanceof JsObject object) || args.size() < 2) {
             return JsUndefined.getInstance();
         }
@@ -555,6 +584,25 @@ public final class ObjectBuiltins {
             return descriptor;
         }
         return JsUndefined.getInstance();
+    }
+
+    // Data properties only: accessors and descriptor flags on a callable are out of scope, so a
+    // script-assigned property reports the JsObject default and a builtin static reports
+    // non-enumerable.
+    private static JsValue callableDescriptor(JsCallableProperties callable, JsValue keyValue) {
+        if (keyValue instanceof JsSymbol) {
+            return JsUndefined.getInstance();
+        }
+        final var key = JsCoercion.toStr(keyValue);
+        if (!callable.hasProperty(key)) {
+            return JsUndefined.getInstance();
+        }
+        final var descriptor = new JsObject();
+        descriptor.set("value", callable.getProperty(key));
+        descriptor.set("writable", JsBoolean.of(true));
+        descriptor.set("enumerable", JsBoolean.of(callable.enumerablePropertyKeys().contains(key)));
+        descriptor.set("configurable", JsBoolean.of(true));
+        return descriptor;
     }
 
     private static JsValue symbolDescriptor(JsObject object, JsSymbol symbol) {

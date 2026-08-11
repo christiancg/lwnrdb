@@ -170,6 +170,45 @@ jobs:
         run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
 
   # ---------------------------------------------------------------------------
+  # test262 conformance. Its own job rather than an integration matrix row: the
+  # matrix legs only download the shaded jar, while the worker JVM needs both
+  # target/classes and target/test-classes. Runs outside mvn verify's critical
+  # path because a conformance run must survive tests that hang or blow the JVM
+  # stack. The corpus is fetched on demand and cached, never committed.
+  # ---------------------------------------------------------------------------
+  test262:
+    name: test262 Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Compile (main + test classes)
+        run: mvn -B --no-transfer-progress -DskipTests test-compile
+      - name: Cache test262 corpus
+        uses: actions/cache@v4
+        with:
+          path: test262
+          key: test262-${{ hashFiles('config/test262.properties') }}
+      - name: Fetch corpus
+        run: python3 test_utils/test262.py --fetch
+      - name: Driver self-test
+        run: python3 test_utils/test262.py --self-test
+      - name: Run conformance
+        run: python3 test_utils/test262.py --gate baseline --require-corpus
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test262-report
+          path: test_log/test262-report.md
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
   # Single aggregate gate. This is the check required by branch protection
   # (named "Verify" to match the existing rule): it succeeds only when the build
   # and every integration leg succeeded, so the split pipeline still reports one
@@ -178,14 +217,14 @@ jobs:
   # ---------------------------------------------------------------------------
   verify:
     name: Verify
-    needs: [build, integration]
+    needs: [build, integration, test262]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs succeeded
         run: |
-          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }}"
-          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ]; then
+          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }} test262=${{ needs.test262.result }}"
+          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ] || [ "${{ needs.test262.result }}" != "success" ]; then
             echo "::error::one or more jobs failed"
             exit 1
           fi

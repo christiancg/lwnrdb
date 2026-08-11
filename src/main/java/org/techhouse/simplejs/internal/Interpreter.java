@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Intrinsics;
@@ -92,6 +93,7 @@ import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
@@ -516,9 +518,25 @@ public final class Interpreter {
             case JsObject object when keyValue instanceof JsSymbol symbol -> hasSymbolMember(object, symbol);
             case JsObject object -> object.has(JsCoercion.toStr(keyValue));
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue));
+            case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue));
             default -> throw new TypeErrorException(
                     "Cannot use 'in' operator to search for '" + JsCoercion.toStr(keyValue) + "'");
         };
+    }
+
+    private boolean callableHasMember(JsCallableProperties callable, String key) {
+        if (callable.hasProperty(key) || FunctionProtoBuiltins.metadata((JsValue) callable, key) != null) {
+            return true;
+        }
+        if (callable instanceof JsFunction && "prototype".equals(key)) {
+            return true;
+        }
+        for (var proto = intrinsics.protoFor((JsValue) callable); proto != null; proto = proto.getProto()) {
+            if (proto.has(key) || proto.hasAccessor(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean hasSymbolMember(JsObject object, JsSymbol symbol) {
@@ -1083,8 +1101,17 @@ public final class Interpreter {
             case JsProxy proxy -> proxies.ownKeys(proxy);
             case JsObject object -> objectOwnKeys(object);
             case JsArray array -> arrayOwnKeys(array);
+            case JsCallableProperties callable -> callableOwnKeys(callable);
             default -> new ArrayList<>();
         };
+    }
+
+    private static List<JsValue> callableOwnKeys(JsCallableProperties callable) {
+        final var keys = new ArrayList<JsValue>();
+        for (final var key : callable.propertyKeys()) {
+            keys.add(new JsString(key));
+        }
+        return keys;
     }
 
     private boolean deleteMemberValue(JsValue target, JsValue keyValue) {
@@ -1092,6 +1119,7 @@ public final class Interpreter {
             case JsProxy proxy -> proxies.delete(proxy, keyValue);
             case JsObject object -> object.delete(JsCoercion.toStr(keyValue));
             case JsArray array -> deleteArrayElement(array, JsCoercion.toStr(keyValue));
+            case JsCallableProperties callable -> callable.deleteProperty(JsCoercion.toStr(keyValue));
             default -> true;
         };
     }

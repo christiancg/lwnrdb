@@ -34,6 +34,7 @@ import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
@@ -161,7 +162,6 @@ public final class MemberEvaluator {
             case JsPromise promise -> promiseMethod(promise, key);
             case JsBoolean bool -> intrinsicMember(bool, key);
             case JsBigInt bigInt -> intrinsicMember(bigInt, key);
-            case JsNativeFunction fn when fn.hasProperty(key) -> fn.getProperty(key);
             case JsFunction fn -> functionMember(fn, key);
             case JsNativeFunction nf -> functionMember(nf, key);
             case JsNull ignored -> throw cannotReadProperties(target, key);
@@ -238,6 +238,9 @@ public final class MemberEvaluator {
     }
 
     private JsValue functionMember(JsValue function, String key) {
+        if (function instanceof JsCallableProperties callable && callable.hasProperty(key)) {
+            return callable.getProperty(key);
+        }
         if (function instanceof JsFunction fn && "prototype".equals(key)) {
             return fn.getPrototype();
         }
@@ -418,6 +421,12 @@ public final class MemberEvaluator {
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
             case JsUndefined ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
+            case JsCallableProperties callable -> {
+                if (!"prototype".equals(key)) {
+                    callable.setEnumerableProperty(key, value);
+                }
+                yield true;
+            }
             default -> true;
         };
     }

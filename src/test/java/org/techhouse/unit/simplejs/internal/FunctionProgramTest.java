@@ -10,6 +10,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsString;
 
 public class FunctionProgramTest {
     private static double num(String source) {
@@ -18,6 +19,10 @@ public class FunctionProgramTest {
 
     private static boolean bool(String source) {
         return ((JsBoolean) Interpreter.run(source)).getValue();
+    }
+
+    private static String str(String source) {
+        return ((JsString) Interpreter.run(source)).getValue();
     }
 
     // A plain-function instance is an instanceof its constructor
@@ -161,5 +166,132 @@ public class FunctionProgramTest {
     @Test
     public void test_arguments_caller_poisoned() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("function f(){ return arguments.caller; } f()"));
+    }
+
+    // A property assigned to a function value is readable back off the function
+    @Test
+    public void test_function_own_property_read_write() {
+        assertEquals(1, num("function f(){} f.x = 1; f.x"));
+    }
+
+    // A function-valued own property is callable as a method of the function
+    @Test
+    public void test_function_own_method_call() {
+        assertEquals(2, num("function f(){} f.m = function(){ return 2; }; f.m()"));
+    }
+
+    // Arrows hold own properties too
+    @Test
+    public void test_arrow_own_property() {
+        assertEquals(3, num("var g = () => {}; g.x = 3; g.x"));
+    }
+
+    // Native functions hold own properties, alongside their builtin statics
+    @Test
+    public void test_native_function_own_property() {
+        assertEquals(1, num("Array.from.tag = 1; Array.from.tag"));
+    }
+
+    // in reports a function's own properties and does not throw
+    @Test
+    public void test_function_own_property_in_operator() {
+        assertTrue(bool("function f(){} f.x = 1; 'x' in f"));
+        assertFalse(bool("function f(){} f.x = 1; 'y' in f"));
+    }
+
+    // in also reports the inherited function metadata and Function.prototype methods
+    @Test
+    public void test_function_in_operator_reaches_builtins() {
+        assertTrue(bool("function f(){} 'name' in f"));
+        assertTrue(bool("function f(){} 'call' in f"));
+        assertTrue(bool("function f(){} 'prototype' in f"));
+    }
+
+    // delete removes a function's own property
+    @Test
+    public void test_function_own_property_delete() {
+        assertTrue(bool("function f(){} f.x = 1; delete f.x"));
+        assertEquals("undefined", str("function f(){} f.x = 1; delete f.x; typeof f.x"));
+    }
+
+    // Own keys report script-assigned properties only: name/length/prototype stay unreported
+    @Test
+    public void test_function_own_keys() {
+        assertEquals("[\"x\"]", str("function f(a, b){} f.x = 1; JSON.stringify(Object.keys(f))"));
+        assertEquals("[\"x\"]", str("function f(){} f.x = 1; JSON.stringify(Object.getOwnPropertyNames(f))"));
+    }
+
+    // Builtin statics on a native function stay non-enumerable, as the spec requires
+    @Test
+    public void test_native_function_builtin_statics_not_enumerable() {
+        assertEquals("[]", str("JSON.stringify(Object.keys(Object))"));
+        assertEquals("[\"tag\"]", str("Object.keys.tag = 1; JSON.stringify(Object.keys(Object.keys))"));
+    }
+
+    // A script-assigned function property is a plain data property with the default flags
+    @Test
+    public void test_function_own_property_descriptor() {
+        final var source = """
+                function f(){}
+                f.x = 1;
+                const d = Object.getOwnPropertyDescriptor(f, 'x');
+                JSON.stringify([d.value, d.writable, d.enumerable, d.configurable])
+                """;
+        assertEquals("[1,true,true,true]", str(source));
+        assertEquals("undefined", str("function f(){} typeof Object.getOwnPropertyDescriptor(f, 'x')"));
+    }
+
+    // An own property shadows the inherited Function.prototype member of the same name
+    @Test
+    public void test_function_own_property_shadows_builtin() {
+        assertEquals(1, num("function f(){} f.call = 1; f.call"));
+    }
+
+    // for-in and Object.assign see a function's enumerable own properties
+    @Test
+    public void test_function_own_properties_enumerate() {
+        assertEquals("[\"x\"]",
+                str("function f(){} f.x = 1; const o = []; for (const k in f) o.push(k); JSON.stringify(o)"));
+        assertEquals("{\"x\":1}", str("function f(){} f.x = 1; JSON.stringify(Object.assign({}, f))"));
+    }
+
+    // Function metadata and the prototype object survive own-property storage
+    @Test
+    public void test_function_metadata_unchanged() {
+        assertEquals("[\"f\",1,\"object\"]",
+                str("function f(a){} JSON.stringify([f.name, f.length, typeof f.prototype])"));
+    }
+
+    // The acceptance test for the test262 prelude: an assert.js-shaped namespace on a function
+    @Test
+    public void test_assert_js_shape() {
+        final var source = """
+                function assert(mustBeTrue, message) {
+                    if (mustBeTrue === true) { return; }
+                    throw new Error(message || 'assert failed');
+                }
+                assert._isSameValue = function (a, b) {
+                    if (a === b) { return a !== 0 || 1 / a === 1 / b; }
+                    return a !== a && b !== b;
+                };
+                assert.sameValue = function (actual, expected, message) {
+                    if (assert._isSameValue(actual, expected)) { return; }
+                    throw new Error(message || 'sameValue failed');
+                };
+                assert.throws = function (expectedErrorConstructor, func, message) {
+                    try {
+                        func();
+                    } catch (thrown) {
+                        if (thrown instanceof expectedErrorConstructor) { return; }
+                        throw new Error('wrong error type');
+                    }
+                    throw new Error(message || 'did not throw');
+                };
+                assert(true);
+                assert.sameValue(NaN, NaN);
+                assert.throws(TypeError, function () { null.x; });
+                'prelude-ok'
+                """;
+        assertEquals("prelude-ok", str(source));
     }
 }
