@@ -78,4 +78,39 @@ public class RegexTranslatorVFlagTest {
         assertFalse(find("[^[a-z][A-Z]]", "M"));
         assertTrue(find("[^[a-z][A-Z]]", "5"));
     }
+
+    // \p{ASCII} is translated to the java.util.regex property of the same name
+    @Test
+    public void test_ascii_binary_property() {
+        assertTrue(RegexTranslator.compile("\\p{ASCII}", "u").getPattern().matcher("A").find());
+        assertFalse(RegexTranslator.compile("\\p{ASCII}", "u").getPattern().matcher("\u00e9").find());
+        assertTrue(RegexTranslator.compile("\\P{ASCII}", "u").getPattern().matcher("\u00e9").find());
+    }
+
+    // \p{ASCII} composes with v-mode set subtraction
+    @Test
+    public void test_ascii_in_set_subtraction() {
+        assertTrue(find("[\\p{ASCII}--[a-z]]", "A"));
+        assertFalse(find("[\\p{ASCII}--[a-z]]", "a"));
+    }
+
+    // \p{Any} matches every code point
+    @Test
+    public void test_any_binary_property() {
+        assertTrue(RegexTranslator.compile("\\p{Any}", "u").getPattern().matcher("\u00e9").find());
+    }
+
+    // an unsupported property name is still a SyntaxError
+    @Test
+    public void test_unsupported_property_still_throws() {
+        assertThrows(SyntaxErrorException.class, () -> RegexTranslator.compile("\\p{Emoji}", "u"));
+        assertThrows(SyntaxErrorException.class, () -> RegexTranslator.compile("\\p{Nope}", "u"));
+    }
+
+    // the existing category and script forms stay green
+    @Test
+    public void test_existing_properties_unchanged() {
+        assertTrue(RegexTranslator.compile("\\p{Lu}", "u").getPattern().matcher("A").find());
+        assertTrue(RegexTranslator.compile("\\p{Script=Greek}", "u").getPattern().matcher("\u03b1").find());
+    }
 }

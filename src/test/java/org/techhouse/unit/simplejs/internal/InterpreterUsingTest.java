@@ -276,4 +276,38 @@ public class InterpreterUsingTest {
                 """;
         assertEquals("body,d", str(source));
     }
+
+    // a DisposableStack composes with a using declaration
+    @Test
+    public void test_using_disposable_stack() {
+        final var source = """
+                let log = [];
+                { using s = new DisposableStack(); s.defer(() => log.push('d')); log.push('body'); }
+                log.join(',')
+                """;
+        assertEquals("body,d", str(source));
+    }
+
+    // Symbol.dispose resolves through the prototype
+    @Test
+    public void test_disposable_stack_prototype_has_dispose() {
+        assertTrue(bool("Symbol.dispose in DisposableStack.prototype"));
+        assertTrue(bool("new DisposableStack() instanceof DisposableStack"));
+    }
+
+    // await using awaits disposeAsync on an AsyncDisposableStack
+    @Test
+    public void test_await_using_async_disposable_stack() {
+        final var source = """
+                let log = [];
+                async function run() {
+                    await using s = new AsyncDisposableStack();
+                    s.defer(() => log.push('d'));
+                    log.push('body');
+                }
+                run();
+                log
+                """;
+        assertEquals("body,d", joinArray(source));
+    }
 }

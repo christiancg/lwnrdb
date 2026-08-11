@@ -17,6 +17,9 @@ public final class JsObject extends JsValue {
     private static final int MAX_INDEX_KEY_LENGTH = 10;
 
     private final Map<String, JsValue> properties = new LinkedHashMap<>();
+    // Data properties and accessors live in separate maps, so their relative insertion order is only
+    // recoverable from this single own-key list.
+    private final Set<String> keyOrder = new LinkedHashSet<>();
     private boolean extensible = true;
     private boolean errorData;
     private JsClass klass;
@@ -37,12 +40,14 @@ public final class JsObject extends JsValue {
         if (properties.containsKey(key)) {
             if (isWritable(key)) {
                 properties.put(key, value);
+                keyOrder.add(key);
                 return true;
             }
             return false;
         }
         if (extensible) {
             properties.put(key, value);
+            keyOrder.add(key);
             return true;
         }
         return false;
@@ -50,6 +55,7 @@ public final class JsObject extends JsValue {
 
     public void defineValue(String key, JsValue value) {
         properties.put(key, value);
+        keyOrder.add(key);
     }
 
     public boolean has(String key) {
@@ -57,10 +63,17 @@ public final class JsObject extends JsValue {
     }
 
     public boolean delete(String key) {
-        if (properties.containsKey(key) && isNotConfigurable(key)) {
+        if (keyOrder.contains(key) && isNotConfigurable(key)) {
             return false;
         }
         properties.remove(key);
+        keyOrder.remove(key);
+        if (accessorGetters != null) {
+            accessorGetters.remove(key);
+        }
+        if (accessorSetters != null) {
+            accessorSetters.remove(key);
+        }
         if (descriptors != null) {
             descriptors.remove(key);
         }
@@ -104,7 +117,7 @@ public final class JsObject extends JsValue {
 
     public void seal() {
         extensible = false;
-        for (final var key : ownKeys()) {
+        for (final var key : keys()) {
             final var flags = getFlags(key);
             setFlags(key, new PropertyFlags(flags.writable(), flags.enumerable(), false));
         }
@@ -112,7 +125,7 @@ public final class JsObject extends JsValue {
 
     public void freeze() {
         extensible = false;
-        for (final var key : ownKeys()) {
+        for (final var key : keys()) {
             setFlags(key, new PropertyFlags(false, isEnumerable(key), false));
         }
     }
@@ -121,29 +134,20 @@ public final class JsObject extends JsValue {
         if (extensible) {
             return false;
         }
-        for (final var key : properties.keySet()) {
+        for (final var key : keys()) {
             final var flags = getFlags(key);
-            if (flags.writable() || flags.configurable()) {
+            if (flags.configurable() || (flags.writable() && !hasAccessor(key))) {
                 return false;
             }
         }
-        return accessorsNonConfigurable();
+        return true;
     }
 
     public boolean isSealed() {
         if (extensible) {
             return false;
         }
-        for (final var key : properties.keySet()) {
-            if (getFlags(key).configurable()) {
-                return false;
-            }
-        }
-        return accessorsNonConfigurable();
-    }
-
-    private boolean accessorsNonConfigurable() {
-        for (final var key : accessorKeys()) {
+        for (final var key : keys()) {
             if (getFlags(key).configurable()) {
                 return false;
             }
@@ -151,25 +155,8 @@ public final class JsObject extends JsValue {
         return true;
     }
 
-    private Set<String> accessorKeys() {
-        final var keys = new LinkedHashSet<String>();
-        if (accessorGetters != null) {
-            keys.addAll(accessorGetters.keySet());
-        }
-        if (accessorSetters != null) {
-            keys.addAll(accessorSetters.keySet());
-        }
-        return keys;
-    }
-
-    private Set<String> ownKeys() {
-        final var keys = new LinkedHashSet<>(properties.keySet());
-        keys.addAll(accessorKeys());
-        return orderKeys(keys);
-    }
-
     public Set<String> keys() {
-        return orderKeys(properties.keySet());
+        return orderKeys(keyOrder);
     }
 
     // OrdinaryOwnPropertyKeys: canonical array-index keys ascending, then the rest in insertion order
@@ -282,6 +269,9 @@ public final class JsObject extends JsValue {
     }
 
     public void defineAccessor(String key, JsValue getter, JsValue setter) {
+        if (getter != null || setter != null) {
+            keyOrder.add(key);
+        }
         if (getter != null) {
             if (accessorGetters == null) {
                 accessorGetters = new LinkedHashMap<>();

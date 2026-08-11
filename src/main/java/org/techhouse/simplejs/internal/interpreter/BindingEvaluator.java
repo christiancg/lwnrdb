@@ -5,7 +5,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.USING
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.collectBoundNames;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.iterableElements;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
 
 import java.util.ArrayList;
@@ -208,23 +208,25 @@ public final class BindingEvaluator {
     }
 
     private void destructureArray(ArrayPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
-        final var elements = iterableElements(value);
-        final var patternElements = pattern.getElements();
-        for (var i = 0; i < patternElements.size(); i++) {
-            final var element = patternElements.get(i);
-            if (element == null) {
-                continue;
-            }
+        final var iteration = new Iteration(interp, value);
+        var exhausted = false;
+        for (final var element : pattern.getElements()) {
             if (element instanceof RestElement rest) {
                 final var restArray = new JsArray();
-                for (var j = i; j < elements.size(); j++) {
-                    restArray.push(elements.get(j));
+                for (var item = exhausted ? null : iteration.next(); item != null; item = iteration.next()) {
+                    restArray.push(item);
                 }
                 destructure(rest.getArgument(), restArray, env, leaf);
                 return;
             }
-            final var elementValue = i < elements.size() ? elements.get(i) : JsUndefined.getInstance();
-            destructure(element, elementValue, env, leaf);
+            final var item = exhausted ? null : iteration.next();
+            exhausted = item == null;
+            if (element != null) {
+                destructure(element, exhausted ? JsUndefined.getInstance() : item, env, leaf);
+            }
+        }
+        if (!exhausted) {
+            iteration.close();
         }
     }
 
@@ -240,7 +242,7 @@ public final class BindingEvaluator {
                 if (value instanceof JsObject object) {
                     for (final var key : object.keys()) {
                         if (!taken.contains(key) && object.isEnumerable(key)) {
-                            restObject.set(key, object.get(key));
+                            restObject.set(key, ownValue(object, key, interp.ops()));
                         }
                     }
                     for (final var symbol : object.symbolKeys()) {

@@ -34,7 +34,7 @@ public final class GlobalScope {
         constructor(global, "String", StringBuiltins.create(ops), intrinsics.stringProto());
         constructor(global, "Number", NumberBuiltins.create(), intrinsics.numberProto());
         constructor(global, "Boolean", booleanFunction(), intrinsics.booleanProto());
-        define(global, "Math", MathBuiltins.create());
+        define(global, "Math", MathBuiltins.create(iterableToList));
         define(global, "JSON", JsonBuiltins.create(ops, invoker));
         define(global, "console", consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
         constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, iterableToList),
@@ -50,6 +50,11 @@ public final class GlobalScope {
         constructor(global, "Set", SetBuiltins.create(iterableToList, false), intrinsics.setProto());
         constructor(global, "WeakSet", SetBuiltins.create(iterableToList, true), intrinsics.setProto());
         constructor(global, "Date", DateBuiltins.create(), intrinsics.dateProto());
+        constructor(global, "DisposableStack", DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false),
+                intrinsics.disposableStackProto());
+        constructor(global, "AsyncDisposableStack",
+                DisposableStackBuiltins.create(intrinsics.asyncDisposableStackProto(), true),
+                intrinsics.asyncDisposableStackProto());
         define(global, "Reflect", ReflectBuiltins.create(ops));
         define(global, "Proxy", ProxyBuiltins.create());
         constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(), intrinsics.arrayBufferProto());
@@ -65,7 +70,7 @@ public final class GlobalScope {
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());
         define(global, "isFinite", NumberBuiltins.isFiniteFunction());
-        GlobalFunctionsBuiltins.install(global, eventLoop, invoker);
+        GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops);
         FetchBuiltins.install(global, eventLoop, network, limits);
         define(global, "globalThis", globalThis);
     }

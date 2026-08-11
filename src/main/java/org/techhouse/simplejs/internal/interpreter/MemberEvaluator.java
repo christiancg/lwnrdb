@@ -108,6 +108,11 @@ public final class MemberEvaluator {
                 return method;
             }
         }
+        for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
+            if (proto.hasSymbol(symbol)) {
+                return proto.getSymbol(symbol);
+            }
+        }
         return object.getSymbol(symbol);
     }
 

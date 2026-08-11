@@ -95,4 +95,16 @@ public class EJsonInteropTest {
         assertInstanceOf(JsonObject.class, result);
         assertTrue(result.asJsonObject().entrySet().isEmpty());
     }
+
+    // EJsonInterop is the host boundary and runs after the event loop has drained, so it reads data
+    // properties only: an accessor-valued key is absent from the script result rather than null.
+    @Test
+    public void test_accessor_property_is_not_serialized() {
+        final var object = new JsObject();
+        object.set("a", new JsNumber(1));
+        object.defineAccessor("x", new JsNativeFunction("get x", (_, _) -> new JsNumber(2)), null);
+        final var converted = EJsonInterop.toEjson(object).asJsonObject();
+        assertEquals(1, converted.get("a").asJsonNumber().asInteger());
+        assertNull(converted.get("x"));
+    }
 }

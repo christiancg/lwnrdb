@@ -513,11 +513,21 @@ public final class Interpreter {
         return switch (container) {
             case JsProxy proxy -> proxies.has(proxy, keyValue);
             case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue));
+            case JsObject object when keyValue instanceof JsSymbol symbol -> hasSymbolMember(object, symbol);
             case JsObject object -> object.has(JsCoercion.toStr(keyValue));
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue));
             default -> throw new TypeErrorException(
                     "Cannot use 'in' operator to search for '" + JsCoercion.toStr(keyValue) + "'");
         };
+    }
+
+    private boolean hasSymbolMember(JsObject object, JsSymbol symbol) {
+        for (var current = object; current != null; current = current.getProto()) {
+            if (current.hasSymbol(symbol)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private JsValue evalMember(MemberExpression member, Environment env) {

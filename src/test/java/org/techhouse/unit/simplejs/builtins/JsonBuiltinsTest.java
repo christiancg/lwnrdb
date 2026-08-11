@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -64,5 +65,68 @@ public class JsonBuiltinsTest {
     @Test
     public void test_stringify_null() {
         assertTrue(str("JSON.stringify(null)").contains("null"));
+    }
+
+    // the reviver rewrites every value bottom-up
+    @Test
+    public void test_parse_reviver_doubles_numbers() {
+        assertEquals(2, num("JSON.parse('{\"a\":1}', (k, v) => typeof v === 'number' ? v * 2 : v).a"));
+        assertEquals(2, num("JSON.parse('1', (k, v) => v * 2)"));
+    }
+
+    // a nested object is revived depth-first
+    @Test
+    public void test_parse_reviver_nested() {
+        final var source = "JSON.parse('{\"a\":{\"b\":2}}', (k, v) => typeof v === 'number' ? v + 1 : v).a.b";
+        assertEquals(3, num(source));
+    }
+
+    // an undefined reviver result deletes the key
+    @Test
+    public void test_parse_reviver_undefined_deletes_key() {
+        final var source = "Object.keys(JSON.parse('{\"a\":1,\"b\":2}', (k, v) => k === 'a' ? undefined : v)).join(',')";
+        assertEquals("b", str(source));
+    }
+
+    // array elements are revived by index
+    @Test
+    public void test_parse_reviver_array_elements() {
+        assertEquals("2,4,6", str("JSON.parse('[1,2,3]', (k, v) => typeof v === 'number' ? v * 2 : v).join(',')"));
+    }
+
+    // the reviver sees the holder as this and the root key last
+    @Test
+    public void test_parse_reviver_root_key_and_holder() {
+        final var source = """
+                let keys = [];
+                let rootHolder = null;
+                JSON.parse('{"a":1}', function (k, v) { keys.push(k); if (k === '') rootHolder = this; return v; });
+                keys.join('|') + '#' + (typeof rootHolder === 'object')
+                """;
+        assertEquals("a|#true", str(source));
+    }
+
+    // reviver keys follow own-key order
+    @Test
+    public void test_parse_reviver_key_order() {
+        final var source = """
+                let keys = [];
+                JSON.parse('{"b":1,"a":2}', (k, v) => { keys.push(k); return v; });
+                keys.join(',')
+                """;
+        assertEquals("b,a,", str(source));
+    }
+
+    // a throwing reviver propagates out of parse
+    @Test
+    public void test_parse_reviver_throws() {
+        assertThrows(JsThrowException.class,
+                () -> Interpreter.run("JSON.parse('{\"a\":1}', () => { throw new TypeError('x'); })"));
+    }
+
+    // a non-callable second argument is ignored
+    @Test
+    public void test_parse_non_callable_reviver_ignored() {
+        assertEquals(1, num("JSON.parse('{\"a\":1}', null).a"));
     }
 }

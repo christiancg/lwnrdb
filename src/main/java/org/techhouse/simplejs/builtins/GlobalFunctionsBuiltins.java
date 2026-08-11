@@ -1,11 +1,12 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
+
 import java.nio.charset.StandardCharsets;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Environment;
@@ -41,7 +42,7 @@ public final class GlobalFunctionsBuiltins {
     private GlobalFunctionsBuiltins() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker) {
+    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops) {
         define(global, "encodeURI", new JsNativeFunction("encodeURI",
                 (_, args) -> new JsString(encode(str(args), URI_UNESCAPED + URI_RESERVED))));
         define(global, "encodeURIComponent", new JsNativeFunction("encodeURIComponent",
@@ -52,8 +53,10 @@ public final class GlobalFunctionsBuiltins {
                 new JsNativeFunction("decodeURIComponent", (_, args) -> new JsString(decode(str(args), false))));
         define(global, "escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(str(args)))));
         define(global, "unescape", new JsNativeFunction("unescape", (_, args) -> new JsString(unescape(str(args)))));
-        define(global, "structuredClone", new JsNativeFunction("structuredClone", (_,
-                args) -> clone(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(), new IdentityHashMap<>())));
+        define(global, "structuredClone",
+                new JsNativeFunction("structuredClone",
+                        (_, args) -> clone(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(),
+                                new IdentityHashMap<>(), ops)));
         define(global, "queueMicrotask", new JsNativeFunction("queueMicrotask", (_, args) -> {
             final var callback = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
             if (!(callback instanceof JsFunction) && !(callback instanceof JsNativeFunction)) {
@@ -196,7 +199,7 @@ public final class GlobalFunctionsBuiltins {
         return true;
     }
 
-    private static JsValue clone(JsValue value, Map<JsValue, JsValue> seen) {
+    private static JsValue clone(JsValue value, Map<JsValue, JsValue> seen, InterpreterOps ops) {
         switch (value) {
             case JsNumber ignored -> {
                 return value;
@@ -222,18 +225,18 @@ public final class GlobalFunctionsBuiltins {
             case JsProxy ignored -> throw dataCloneError(value);
             default -> {
                 final var existing = seen.get(value);
-                return Objects.requireNonNullElseGet(existing, () -> cloneStructured(value, seen));
+                return Objects.requireNonNullElseGet(existing, () -> cloneStructured(value, seen, ops));
             }
         }
     }
 
-    private static JsValue cloneStructured(JsValue value, Map<JsValue, JsValue> seen) {
+    private static JsValue cloneStructured(JsValue value, Map<JsValue, JsValue> seen, InterpreterOps ops) {
         return switch (value) {
             case JsArray array -> {
                 final var copy = new JsArray();
                 seen.put(value, copy);
                 for (final var element : array.getElements()) {
-                    copy.push(clone(element, seen));
+                    copy.push(clone(element, seen, ops));
                 }
                 yield copy;
             }
@@ -247,7 +250,7 @@ public final class GlobalFunctionsBuiltins {
                 final var copy = new JsMap();
                 seen.put(value, copy);
                 for (final var entry : map.entries()) {
-                    copy.set(clone(entry.key(), seen), clone(entry.value(), seen));
+                    copy.set(clone(entry.key(), seen, ops), clone(entry.value(), seen, ops));
                 }
                 yield copy;
             }
@@ -255,7 +258,7 @@ public final class GlobalFunctionsBuiltins {
                 final var copy = new JsSet();
                 seen.put(value, copy);
                 for (final var element : set.values()) {
-                    copy.add(clone(element, seen));
+                    copy.add(clone(element, seen, ops));
                 }
                 yield copy;
             }
@@ -264,7 +267,7 @@ public final class GlobalFunctionsBuiltins {
                 seen.put(value, copy);
                 for (final var key : object.keys()) {
                     if (object.isEnumerable(key)) {
-                        copy.set(key, clone(object.get(key), seen));
+                        copy.set(key, clone(ownValue(object, key, ops), seen, ops));
                     }
                 }
                 yield copy;

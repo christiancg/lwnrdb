@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -36,12 +39,12 @@ public final class JsonBuiltins {
 
     public static JsObject create(InterpreterOps ops, Invoker invoker) {
         final var json = new JsObject();
-        json.set("parse", new JsNativeFunction("parse", (_, args) -> parse(args)));
+        json.set("parse", new JsNativeFunction("parse", (_, args) -> parse(args, invoker)));
         json.set("stringify", new JsNativeFunction("stringify", (_, args) -> stringify(args, ops, invoker)));
         return json;
     }
 
-    private static JsValue parse(List<JsValue> args) {
+    private static JsValue parse(List<JsValue> args, Invoker invoker) {
         final var source = args.isEmpty() ? "undefined" : args.getFirst();
         if (!(source instanceof JsString string)) {
             throw new SyntaxErrorException("Unexpected token in JSON");
@@ -52,7 +55,46 @@ public final class JsonBuiltins {
         } catch (RuntimeException e) {
             throw new SyntaxErrorException("Unexpected token in JSON: " + e.getMessage());
         }
-        return EJsonInterop.fromEjson(element);
+        final var parsed = EJsonInterop.fromEjson(element);
+        final var reviver = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        if (!isCallable(reviver)) {
+            return parsed;
+        }
+        final var holder = new JsObject();
+        holder.set("", parsed);
+        return internalize(holder, "", reviver, invoker);
+    }
+
+    // InternalizeJSONProperty: revive the children bottom-up, then hand the parent to the reviver.
+    private static JsValue internalize(JsObject holder, String key, JsValue reviver, Invoker invoker) {
+        final var value = holder.get(key);
+        switch (value) {
+            case JsArray array -> {
+                for (var i = 0; i < array.length(); i++) {
+                    reviveInto(array, i, reviver, invoker);
+                }
+            }
+            case JsObject object -> {
+                for (final var child : List.copyOf(object.keys())) {
+                    final var revived = internalize(object, child, reviver, invoker);
+                    if (revived instanceof JsUndefined) {
+                        object.delete(child);
+                    } else {
+                        object.set(child, revived);
+                    }
+                }
+            }
+            default -> {
+            }
+        }
+        return invoker.call(reviver, holder, List.of(new JsString(key), value));
+    }
+
+    private static void reviveInto(JsArray array, int index, JsValue reviver, Invoker invoker) {
+        final var element = new JsObject();
+        final var name = Integer.toString(index);
+        element.set(name, array.get(index));
+        array.set(index, internalize(element, name, reviver, invoker));
     }
 
     private static JsValue stringify(List<JsValue> args, InterpreterOps ops, Invoker invoker) {
@@ -118,7 +160,7 @@ public final class JsonBuiltins {
             if (!object.isEnumerable(key) || isFiltered(replacer, key)) {
                 continue;
             }
-            final var child = toJsonTree(object.get(key), object, key, replacer, seen, ops, invoker);
+            final var child = toJsonTree(ownValue(object, key, ops), object, key, replacer, seen, ops, invoker);
             if (child != null) {
                 result.add(key, child);
             }

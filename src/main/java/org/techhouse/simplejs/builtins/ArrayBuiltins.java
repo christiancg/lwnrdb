@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
+
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -19,6 +21,7 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.SameValueZero;
 
 public final class ArrayBuiltins {
     public static final List<String> NAMES = List.of("toLocaleString", "map", "filter", "reduce", "forEach", "find",
@@ -86,8 +89,7 @@ public final class ArrayBuiltins {
             case "find" -> new JsNativeFunction("find", (_, args) -> find(receiver, args, invoker));
             case "some" -> new JsNativeFunction("some", (_, args) -> JsBoolean.of(some(receiver, args, invoker)));
             case "every" -> new JsNativeFunction("every", (_, args) -> JsBoolean.of(every(receiver, args, invoker)));
-            case "includes" ->
-                new JsNativeFunction("includes", (_, args) -> JsBoolean.of(indexOf(receiver, args) >= 0));
+            case "includes" -> new JsNativeFunction("includes", (_, args) -> JsBoolean.of(includes(receiver, args)));
             case "indexOf" -> new JsNativeFunction("indexOf", (_, args) -> new JsNumber(indexOf(receiver, args)));
             case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(receiver, args));
             case "splice" -> new JsNativeFunction("splice", (_, args) -> splice(receiver, args));
@@ -448,6 +450,19 @@ public final class ArrayBuiltins {
         return true;
     }
 
+    // A hole reads as undefined here, unlike indexOf, so it is not skipped.
+    private static boolean includes(JsArray receiver, List<JsValue> args) {
+        final var target = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        final var elements = receiver.getElements();
+        for (var i = clampIndex(intArg(args, 1, 0), elements.size()); i < elements.size(); i++) {
+            final var element = receiver.isHole(i) ? JsUndefined.getInstance() : elements.get(i);
+            if (SameValueZero.equal(element, target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static int indexOf(JsArray receiver, List<JsValue> args) {
         if (args.isEmpty()) {
             return -1;
@@ -500,7 +515,7 @@ public final class ArrayBuiltins {
                 }
             } else if (isConcatSpreadable(arg, ops)) {
                 for (final var key : ((JsObject) arg).keys()) {
-                    result.push(((JsObject) arg).get(key));
+                    result.push(ownValue((JsObject) arg, key, ops));
                 }
             } else {
                 result.push(arg);

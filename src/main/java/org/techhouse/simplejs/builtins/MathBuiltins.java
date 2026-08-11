@@ -1,12 +1,15 @@
 package org.techhouse.simplejs.builtins;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.function.DoubleUnaryOperator;
 import org.techhouse.ejson.internal.NumberFormatter;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class MathBuiltins {
@@ -16,7 +19,7 @@ public final class MathBuiltins {
     private static final double LN2 = Math.log(2);
     private static final double LN10 = Math.log(10);
 
-    public static JsObject create() {
+    public static JsObject create(IterableToList iterableToList) {
         final var math = new JsObject();
         math.set("PI", new JsNumber(Math.PI));
         math.set("E", new JsNumber(Math.E));
@@ -61,6 +64,8 @@ public final class MathBuiltins {
                 new JsNativeFunction("atan2", (_, args) -> new JsNumber(Math.atan2(arg(args, 0), arg(args, 1)))));
         math.set("hypot", new JsNativeFunction("hypot", (_, args) -> hypot(args)));
         math.set("random", new JsNativeFunction("random", (_, _) -> new JsNumber(Math.random())));
+        math.set("sumPrecise",
+                new JsNativeFunction("sumPrecise", (_, args) -> new JsNumber(sumPrecise(args, iterableToList))));
         math.set("min", new JsNativeFunction("min", (_, args) -> reduce(args, Double.POSITIVE_INFINITY, true)));
         math.set("max", new JsNativeFunction("max", (_, args) -> reduce(args, Double.NEGATIVE_INFINITY, false)));
         return math;
@@ -73,6 +78,41 @@ public final class MathBuiltins {
         return value > 0
                 ? Math.log(value + Math.sqrt(value * value + 1))
                 : -Math.log(-value + Math.sqrt(value * value + 1));
+    }
+
+    // BigDecimal accumulation is exact for finite doubles, so the sum rounds to a double exactly once.
+    // The double constructor is the exact one here; BigDecimal.valueOf would round through toString.
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
+    private static double sumPrecise(List<JsValue> args, IterableToList iterableToList) {
+        final var elements = iterableToList.drain(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
+        if (elements.isEmpty()) {
+            return -0.0;
+        }
+        var total = BigDecimal.ZERO;
+        var positiveInfinity = false;
+        var negativeInfinity = false;
+        var nan = false;
+        for (final var element : elements) {
+            if (!(element instanceof JsNumber number)) {
+                throw new TypeErrorException("Math.sumPrecise argument is not a number");
+            }
+            final var value = number.getValue();
+            if (Double.isNaN(value)) {
+                nan = true;
+            } else if (Double.isInfinite(value)) {
+                positiveInfinity |= value > 0;
+                negativeInfinity |= value < 0;
+            } else {
+                total = total.add(new BigDecimal(value));
+            }
+        }
+        if (nan || (positiveInfinity && negativeInfinity)) {
+            return Double.NaN;
+        }
+        if (positiveInfinity || negativeInfinity) {
+            return positiveInfinity ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+        }
+        return total.doubleValue();
     }
 
     private static double imul(List<JsValue> args) {

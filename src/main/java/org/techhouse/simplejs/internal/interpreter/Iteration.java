@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.iterableElements;
 
 import java.util.List;
@@ -10,7 +11,6 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsGenerator;
-import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
@@ -25,7 +25,7 @@ public final class Iteration {
     private final Interpreter interp;
     private final JsGenerator generator;
     private final List<JsValue> buffer;
-    private final JsObject iterator;
+    private final JsValue iterator;
     private int index;
 
     public Iteration(Interpreter interp, JsValue iterable) {
@@ -74,15 +74,15 @@ public final class Iteration {
         }
     }
 
-    private JsObject openIterator(JsValue iterable) {
+    private JsValue openIterator(JsValue iterable) {
         final var iterFn = interp.getMemberByKey(iterable, JsSymbol.ITERATOR);
         if (!isCallable(iterFn)) {
             throw new TypeErrorException(JsCoercion.toStr(iterable) + " is not iterable");
         }
         final var iter = interp.callValue(iterFn, iterable, List.of());
-        if (!(iter instanceof JsObject object)) {
+        if (!isObjectLike(iter)) {
             throw new TypeErrorException("Result of Symbol.iterator method is not an object");
         }
-        return object;
+        return iter;
     }
 }

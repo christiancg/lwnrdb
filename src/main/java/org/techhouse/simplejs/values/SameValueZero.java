@@ -23,4 +23,8 @@ public final class SameValueZero {
             default -> value;
         };
     }
+
+    public static boolean equal(JsValue a, JsValue b) {
+        return key(a).equals(key(b));
+    }
 }

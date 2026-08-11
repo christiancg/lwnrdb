@@ -1,15 +1,21 @@
 package org.techhouse.unit.simplejs.builtins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsNumber;
 
 public class MathBuiltinsTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
+    }
+
+    private static boolean bool(String source) {
+        return ((org.techhouse.simplejs.values.JsBoolean) Interpreter.run(source)).getValue();
     }
 
     // Math exposes constants
@@ -156,5 +162,50 @@ public class MathBuiltinsTest {
         assertEquals(1 / Math.log(10), num("Math.LOG10E"));
         assertEquals(Math.sqrt(2), num("Math.SQRT2"));
         assertEquals(Math.sqrt(0.5), num("Math.SQRT1_2"));
+    }
+
+    // sumPrecise rounds once, so the cancelling terms do not lose the small addend
+    @Test
+    public void test_sum_precise_is_exact() {
+        assertEquals(0.1, num("Math.sumPrecise([1e20, 0.1, -1e20])"));
+        assertEquals(6, num("Math.sumPrecise([1, 2, 3])"));
+    }
+
+    // an empty iterable sums to -0
+    @Test
+    public void test_sum_precise_empty_is_negative_zero() {
+        assertTrue(bool("Object.is(-0, Math.sumPrecise([]))"));
+    }
+
+    // NaN and opposing infinities produce NaN
+    @Test
+    public void test_sum_precise_nan_cases() {
+        assertTrue(bool("Number.isNaN(Math.sumPrecise([NaN, 1]))"));
+        assertTrue(bool("Number.isNaN(Math.sumPrecise([Infinity, -Infinity]))"));
+    }
+
+    // a single infinity dominates the sum
+    @Test
+    public void test_sum_precise_infinity() {
+        assertEquals(Double.POSITIVE_INFINITY, num("Math.sumPrecise([Infinity, 1])"));
+        assertEquals(Double.NEGATIVE_INFINITY, num("Math.sumPrecise([-Infinity, 1])"));
+    }
+
+    // a non-number element is rejected
+    @Test
+    public void test_sum_precise_non_number_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Math.sumPrecise(['1'])"));
+    }
+
+    // a non-iterable argument is rejected
+    @Test
+    public void test_sum_precise_non_iterable_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Math.sumPrecise(1)"));
+    }
+
+    // any iterable works, not just an array
+    @Test
+    public void test_sum_precise_generator() {
+        assertEquals(6, num("function* g() { yield 1; yield 2; yield 3; } Math.sumPrecise(g())"));
     }
 }

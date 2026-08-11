@@ -28,13 +28,13 @@ import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
-import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -59,9 +59,12 @@ public final class InterpreterUtils {
         return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
+    // A deny-list, not an allow-list: every non-primitive JsValue subtype is an object to the spec,
+    // so a value type added later must not silently regress iteration or construction.
     public static boolean isObjectLike(JsValue value) {
-        return value instanceof JsObject || value instanceof JsArray || value instanceof JsFunction
-                || value instanceof JsNativeFunction || value instanceof JsClass;
+        return !(value instanceof JsUndefined || value instanceof JsNull || value instanceof JsBoolean
+                || value instanceof JsNumber || value instanceof JsString || value instanceof JsBigInt
+                || value instanceof JsSymbol);
     }
 
     public static Integer arrayIndex(String key) {
@@ -111,14 +114,6 @@ public final class InterpreterUtils {
         return completionLabel == null || completionLabel.equals(loopLabel);
     }
 
-    public static JsValue arg0(List<JsValue> args) {
-        return args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
-    }
-
-    public static JsValue arg1(List<JsValue> args) {
-        return args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
-    }
-
     public static JsValue orUndefined(JsValue value) {
         return value == null ? JsUndefined.getInstance() : value;
     }
@@ -132,12 +127,20 @@ public final class InterpreterUtils {
         };
     }
 
-    public static void spreadObject(JsObject target, JsValue source) {
+    // An accessor's value is only reachable by invoking its getter, which JsObject cannot do by design.
+    public static JsValue ownValue(JsObject object, String key, InterpreterOps ops) {
+        if (ops != null && object.hasAccessor(key)) {
+            return ops.getMember(object, new JsString(key));
+        }
+        return object.get(key);
+    }
+
+    public static void spreadObject(JsObject target, JsValue source, InterpreterOps ops) {
         switch (source) {
             case JsObject object -> {
                 for (final var key : object.keys()) {
                     if (object.isEnumerable(key)) {
-                        target.set(key, object.get(key));
+                        target.set(key, ownValue(object, key, ops));
                     }
                 }
                 for (final var symbol : object.symbolKeys()) {

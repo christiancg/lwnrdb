@@ -5,9 +5,20 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsMap;
+import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsUndefined;
 
 public class InterpreterIterationTest {
     private static double num(String source) {
@@ -286,5 +297,160 @@ public class InterpreterIterationTest {
     @Test
     public void test_for_of_string_break() {
         assertEquals(1, num("let n = 0; for (const c of 'a\\u{1F600}b') { n++; break; } n"));
+    }
+
+    // a class whose [Symbol.iterator] is a generator method drives for-of
+    @Test
+    public void test_for_of_over_object_with_generator_symbol_iterator() {
+        final var source = """
+                class C { *[Symbol.iterator]() { yield 7; } }
+                let s = 0; for (const x of new C()) s += x; s
+                """;
+        assertEquals(7, num(source));
+    }
+
+    // spread consumes a generator-valued [Symbol.iterator]
+    @Test
+    public void test_spread_object_with_generator_symbol_iterator() {
+        final var source = """
+                class C { *[Symbol.iterator]() { yield 1; yield 2; } }
+                [...new C()].join(',')
+                """;
+        assertEquals("1,2", str(source));
+    }
+
+    // the object-literal form of a generator [Symbol.iterator] method works too
+    @Test
+    public void test_spread_object_literal_generator_method() {
+        assertEquals("1", str("[...{ *[Symbol.iterator]() { yield 1; } }].join(',')"));
+    }
+
+    // a plain generator function stored under [Symbol.iterator] is equally iterable
+    @Test
+    public void test_symbol_iterator_as_plain_generator_function_property() {
+        final var source = """
+                const o = { [Symbol.iterator]: function* () { yield 1; yield 2; } };
+                [...o].join(',')
+                """;
+        assertEquals("1,2", str(source));
+    }
+
+    // array destructuring pulls from a generator-valued iterable
+    @Test
+    public void test_array_destructuring_from_generator_iterable() {
+        final var source = """
+                class C { *[Symbol.iterator]() { yield 4; yield 5; } }
+                const [a, b] = new C(); a * 10 + b
+                """;
+        assertEquals(45, num(source));
+    }
+
+    // Array.from materialises a generator-valued iterable
+    @Test
+    public void test_array_from_generator_iterable() {
+        final var source = """
+                class C { *[Symbol.iterator]() { yield 1; yield 2; yield 3; } }
+                Array.from(new C()).length
+                """;
+        assertEquals(3, num(source));
+    }
+
+    // yield* delegates to a generator-valued iterable
+    @Test
+    public void test_yield_star_over_generator_iterable() {
+        final var source = """
+                class C { *[Symbol.iterator]() { yield 1; yield 2; } }
+                function* g() { yield* new C(); yield 3; }
+                [...g()].join(',')
+                """;
+        assertEquals("1,2,3", str(source));
+    }
+
+    // new Set(iterable) accepts a generator-valued [Symbol.iterator]
+    @Test
+    public void test_new_set_from_generator_iterable() {
+        final var source = """
+                class C { *[Symbol.iterator]() { yield 1; yield 1; yield 2; } }
+                new Set(new C()).size
+                """;
+        assertEquals(2, num(source));
+    }
+
+    // an iterator built by another builtin (a Map iterator) is object-like enough to drive iteration
+    @Test
+    public void test_symbol_iterator_returning_map_iterator() {
+        final var source = """
+                const o = { [Symbol.iterator]() { return new Map([[1, 2]])[Symbol.iterator](); } };
+                [...o][0].join(',')
+                """;
+        assertEquals("1,2", str(source));
+    }
+
+    // a primitive returned from [Symbol.iterator] is still rejected
+    @Test
+    public void test_symbol_iterator_returning_primitive_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[...{ [Symbol.iterator]() { return 1; } }]"));
+    }
+
+    // undefined returned from [Symbol.iterator] is still rejected
+    @Test
+    public void test_symbol_iterator_returning_undefined_throws() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("[...{ [Symbol.iterator]() { return undefined; } }]"));
+    }
+
+    // closing a generator-valued iterable through the member return() unwinds its finally
+    @Test
+    public void test_generator_iterable_close_runs_finally() {
+        final var source = """
+                let closed = false;
+                class C {
+                    *[Symbol.iterator]() {
+                        try { yield 1; yield 2; } finally { closed = true; }
+                    }
+                }
+                for (const x of new C()) { break; }
+                closed
+                """;
+        assertTrue(bool(source));
+    }
+
+    // the member path honours a patched Generator.prototype.next
+    @Test
+    public void test_patched_next_on_generator_iterable() {
+        final var source = """
+                function* seed() { yield 1; }
+                const proto = Object.getPrototypeOf(seed());
+                const original = proto.next;
+                proto.next = function () { return { value: 9, done: true }; };
+                const o = { [Symbol.iterator]() { return (function* () { yield 1; yield 2; })(); } };
+                const count = [...o].length;
+                proto.next = original;
+                count
+                """;
+        assertEquals(0, num(source));
+    }
+
+    // isObjectLike is a deny-list: every non-primitive value counts as an object
+    @Test
+    public void test_is_object_like_covers_non_primitives() {
+        assertTrue(InterpreterUtils.isObjectLike(new JsObject()));
+        assertTrue(InterpreterUtils.isObjectLike(new JsArray()));
+        assertTrue(InterpreterUtils.isObjectLike(new JsMap()));
+        assertTrue(InterpreterUtils.isObjectLike(new JsSet()));
+        assertTrue(InterpreterUtils.isObjectLike(new JsDate(0)));
+        assertTrue(InterpreterUtils.isObjectLike(new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance())));
+    }
+
+    // isObjectLike rejects each of the seven primitive types
+    @Test
+    public void test_is_object_like_rejects_primitives() {
+        assertFalse(InterpreterUtils.isObjectLike(JsUndefined.getInstance()));
+        assertFalse(InterpreterUtils.isObjectLike(JsNull.getInstance()));
+        assertFalse(InterpreterUtils.isObjectLike(JsBoolean.TRUE));
+        assertFalse(InterpreterUtils.isObjectLike(new JsNumber(1)));
+        assertFalse(InterpreterUtils.isObjectLike(new JsString("a")));
+        assertFalse(InterpreterUtils.isObjectLike(new JsBigInt(java.math.BigInteger.ONE)));
+        assertFalse(InterpreterUtils.isObjectLike(new JsSymbol("s")));
     }
 }

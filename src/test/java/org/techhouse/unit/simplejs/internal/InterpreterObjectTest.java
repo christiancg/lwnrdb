@@ -358,4 +358,21 @@ public class InterpreterObjectTest {
                 () -> Interpreter.run("const o = { m: function() { return super.x; } }; o.m()"));
     }
 
+    // object spread copies the getter's value
+    @Test
+    public void test_spread_invokes_getter() {
+        assertEquals(1, num("({...{get x() { return 1; }}}).x"));
+    }
+
+    // rest destructuring copies the getter's value
+    @Test
+    public void test_rest_destructuring_invokes_getter() {
+        assertEquals(2, num("const {a, ...rest} = {a: 1, get b() { return 2; }}; rest.b"));
+    }
+
+    // for-in visits an enumerable accessor key
+    @Test
+    public void test_for_in_lists_accessor() {
+        assertEquals("x", str("let out = ''; for (const k in {get x() { return 1; }}) out += k; out"));
+    }
 }

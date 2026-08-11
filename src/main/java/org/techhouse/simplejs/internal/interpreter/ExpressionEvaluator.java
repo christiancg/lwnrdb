@@ -153,7 +153,7 @@ public final class ExpressionEvaluator {
         homeScope.defineHomeClass(result);
         for (final var member : object.getProperties()) {
             if (member instanceof SpreadElement spread) {
-                spreadObject(result, interp.eval(spread.getArgument(), env));
+                spreadObject(result, interp.eval(spread.getArgument(), env), interp.ops());
                 continue;
             }
             if (!(member instanceof Property property)) {

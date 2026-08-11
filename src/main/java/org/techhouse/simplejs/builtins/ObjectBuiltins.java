@@ -1,12 +1,14 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
@@ -18,6 +20,8 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -30,7 +34,7 @@ public final class ObjectBuiltins {
         object.setProperty("keys", new JsNativeFunction("keys", (_, args) -> keys(args, ops)));
         object.setProperty("values", new JsNativeFunction("values", (_, args) -> values(args, ops)));
         object.setProperty("entries", new JsNativeFunction("entries", (_, args) -> entries(args, ops)));
-        object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args)));
+        object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args, ops)));
         object.setProperty("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
         object.setProperty("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
         object.setProperty("seal", new JsNativeFunction("seal", (_, args) -> seal(args)));
@@ -41,7 +45,7 @@ public final class ObjectBuiltins {
         }));
         object.setProperty("isExtensible",
                 new JsNativeFunction("isExtensible", (_, args) -> JsBoolean.of(ops.isExtensible(first(args)))));
-        object.setProperty("create", new JsNativeFunction("create", (_, args) -> createObject(args)));
+        object.setProperty("create", new JsNativeFunction("create", (_, args) -> createObject(args, ops)));
         object.setProperty("getPrototypeOf",
                 new JsNativeFunction("getPrototypeOf", (_, args) -> ops.getPrototypeOf(first(args))));
         object.setProperty("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
@@ -53,11 +57,13 @@ public final class ObjectBuiltins {
             return first(args);
         }));
         object.setProperty("defineProperties",
-                new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args)));
+                new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args, ops)));
         object.setProperty("getOwnPropertyNames",
                 new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args, ops)));
         object.setProperty("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
                 (_, args) -> ops.getOwnPropertyDescriptor(first(args), argAt(args, 1))));
+        object.setProperty("getOwnPropertyDescriptors",
+                new JsNativeFunction("getOwnPropertyDescriptors", (_, args) -> getOwnPropertyDescriptors(args, ops)));
         object.setProperty("fromEntries",
                 new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
         object.setProperty("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args)));
@@ -93,12 +99,27 @@ public final class ObjectBuiltins {
         if (args.size() < 2) {
             return JsBoolean.of(false);
         }
-        final var key = JsCoercion.toStr(args.get(1));
-        return switch (args.getFirst()) {
-            case JsObject object -> JsBoolean.of(object.has(key) || object.hasAccessor(key));
-            case JsArray array -> JsBoolean.of("length".equals(key) || arrayHasIndex(array, key));
-            default -> JsBoolean.of(false);
+        return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(args.get(1))));
+    }
+
+    static boolean hasOwnKey(JsValue target, String key) {
+        return switch (target) {
+            case JsObject object -> object.has(key) || object.hasAccessor(key);
+            case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
+            case JsString string -> "length".equals(key) || stringHasIndex(string, key);
+            case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
+            default -> false;
         };
+    }
+
+    private static boolean stringHasIndex(JsString string, String key) {
+        final var index = InterpreterUtils.arrayIndex(key);
+        return index != null && index < string.getValue().length();
+    }
+
+    private static boolean typedHasIndex(JsTypedArray typed, String key) {
+        final var index = InterpreterUtils.arrayIndex(key);
+        return index != null && index < typed.length();
     }
 
     private static boolean arrayHasIndex(JsArray array, String key) {
@@ -172,7 +193,7 @@ public final class ObjectBuiltins {
             case JsObject object -> {
                 for (final var key : object.keys()) {
                     if (object.isEnumerable(key)) {
-                        result.push(object.get(key));
+                        result.push(ownValue(object, key, ops));
                     }
                 }
             }
@@ -203,7 +224,7 @@ public final class ObjectBuiltins {
             case JsObject object -> {
                 for (final var key : object.keys()) {
                     if (object.isEnumerable(key)) {
-                        result.push(new JsArray(List.of(new JsString(key), object.get(key))));
+                        result.push(new JsArray(List.of(new JsString(key), ownValue(object, key, ops))));
                     }
                 }
             }
@@ -225,7 +246,7 @@ public final class ObjectBuiltins {
         return result;
     }
 
-    private static JsValue assign(List<JsValue> args) {
+    private static JsValue assign(List<JsValue> args, InterpreterOps ops) {
         if (args.isEmpty() || !(args.getFirst() instanceof JsObject target)) {
             return first(args);
         }
@@ -233,7 +254,7 @@ public final class ObjectBuiltins {
             if (args.get(i) instanceof JsObject source) {
                 for (final var key : source.keys()) {
                     if (source.isEnumerable(key)) {
-                        target.set(key, source.get(key));
+                        target.set(key, ownValue(source, key, ops));
                     }
                 }
                 for (final var symbol : source.symbolKeys()) {
@@ -301,14 +322,14 @@ public final class ObjectBuiltins {
         });
     }
 
-    private static JsValue createObject(List<JsValue> args) {
+    private static JsValue createObject(List<JsValue> args, InterpreterOps ops) {
         final var object = new JsObject();
         final var proto = first(args);
         if (proto instanceof JsObject protoObject) {
             object.setProto(protoObject);
         }
         if (args.size() > 1 && args.get(1) instanceof JsObject props) {
-            applyProperties(object, props);
+            applyProperties(object, props, ops);
         }
         return object;
     }
@@ -336,17 +357,17 @@ public final class ObjectBuiltins {
         return target;
     }
 
-    private static JsValue defineProperties(List<JsValue> args) {
+    private static JsValue defineProperties(List<JsValue> args, InterpreterOps ops) {
         final var target = first(args);
         if (target instanceof JsObject object && args.size() > 1 && args.get(1) instanceof JsObject props) {
-            applyProperties(object, props);
+            applyProperties(object, props, ops);
         }
         return target;
     }
 
-    private static void applyProperties(JsObject object, JsObject props) {
+    private static void applyProperties(JsObject object, JsObject props, InterpreterOps ops) {
         for (final var key : props.keys()) {
-            if (props.get(key) instanceof JsObject descriptor) {
+            if (ownValue(props, key, ops) instanceof JsObject descriptor) {
                 applyDescriptor(object, key, descriptor);
             }
         }
@@ -462,6 +483,20 @@ public final class ObjectBuiltins {
         return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
+    private static JsValue getOwnPropertyDescriptors(List<JsValue> args, InterpreterOps ops) {
+        if (!(first(args) instanceof JsObject target)) {
+            throw new TypeErrorException("Object.getOwnPropertyDescriptors called on non-object");
+        }
+        final var result = new JsObject();
+        for (final var key : target.keys()) {
+            result.set(key, ops.getOwnPropertyDescriptor(target, new JsString(key)));
+        }
+        for (final var symbol : target.symbolKeys()) {
+            result.setSymbol(symbol, ops.getOwnPropertyDescriptor(target, symbol));
+        }
+        return result;
+    }
+
     private static JsValue getOwnPropertyNames(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
         switch (first(args)) {
@@ -496,6 +531,9 @@ public final class ObjectBuiltins {
         if (!(first(args) instanceof JsObject object) || args.size() < 2) {
             return JsUndefined.getInstance();
         }
+        if (args.get(1) instanceof JsSymbol symbol) {
+            return symbolDescriptor(object, symbol);
+        }
         final var key = JsCoercion.toStr(args.get(1));
         final var flags = object.getFlags(key);
         final var getter = object.getAccessorGetter(key);
@@ -517,6 +555,18 @@ public final class ObjectBuiltins {
             return descriptor;
         }
         return JsUndefined.getInstance();
+    }
+
+    private static JsValue symbolDescriptor(JsObject object, JsSymbol symbol) {
+        if (!object.hasSymbol(symbol)) {
+            return JsUndefined.getInstance();
+        }
+        final var descriptor = new JsObject();
+        descriptor.set("value", object.getSymbol(symbol));
+        descriptor.set("writable", JsBoolean.of(true));
+        descriptor.set("enumerable", JsBoolean.of(true));
+        descriptor.set("configurable", JsBoolean.of(true));
+        return descriptor;
     }
 
     private static JsValue fromEntries(List<JsValue> args, IterableToList iterableToList) {

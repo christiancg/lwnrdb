@@ -241,4 +241,42 @@ public class ArrayBuiltinsTest {
                 .run("const out = {}; (async () => { " + body + " })(); out");
         return ((org.techhouse.simplejs.values.JsArray) out.get("v")).length();
     }
+
+    // includes uses SameValueZero, so NaN finds itself
+    @Test
+    public void test_includes_same_value_zero() {
+        assertTrue(bool("[NaN].includes(NaN)"));
+        assertTrue(bool("[-0].includes(0)"));
+        assertTrue(bool("[0].includes(-0)"));
+    }
+
+    // indexOf keeps strict equality, so NaN is never found
+    @Test
+    public void test_index_of_nan_unchanged() {
+        assertEquals(-1, num("[NaN].indexOf(NaN)"));
+        assertEquals(0, num("[-0].indexOf(0)"));
+    }
+
+    // a hole reads as undefined for includes but is skipped by indexOf
+    @Test
+    public void test_includes_finds_hole_as_undefined() {
+        assertTrue(bool("[,].includes(undefined)"));
+        assertEquals(-1, num("[,].indexOf(undefined)"));
+    }
+
+    // includes honours the fromIndex argument
+    @Test
+    public void test_includes_from_index() {
+        assertFalse(bool("[1, 2].includes(1, 1)"));
+        assertTrue(bool("[1, 2].includes(2, 1)"));
+        assertTrue(bool("[1, 2, 3].includes(3, -1)"));
+        assertFalse(bool("[1, 2, 3].includes(1, -1)"));
+    }
+
+    // includes with no argument searches for undefined
+    @Test
+    public void test_includes_no_argument() {
+        assertTrue(bool("[undefined].includes()"));
+        assertFalse(bool("[1].includes()"));
+    }
 }

@@ -450,4 +450,157 @@ public class ObjectBuiltinsTest {
     private static boolean bool2(String source) {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
+
+    // an accessor property is an own key, so Object.keys lists it
+    @Test
+    public void test_object_keys_includes_accessor() {
+        assertEquals("x", str("Object.keys({get x() { return 1; }}).join(',')"));
+    }
+
+    // data and accessor properties share one insertion-ordered own-key list
+    @Test
+    public void test_own_key_order_mixes_data_and_accessor() {
+        assertEquals("a,b,c", str("Object.keys({a: 1, get b() { return 2; }, c: 3}).join(',')"));
+    }
+
+    // Object.values invokes the getter rather than reporting undefined
+    @Test
+    public void test_object_values_invokes_getter() {
+        assertEquals("1", str("Object.values({get x() { return 1; }}).join(',')"));
+    }
+
+    // Object.entries invokes the getter
+    @Test
+    public void test_object_entries_invokes_getter() {
+        assertEquals("x,1", str("Object.entries({get x() { return 1; }})[0].join(',')"));
+    }
+
+    // Object.assign copies the getter's value, not the accessor itself
+    @Test
+    public void test_object_assign_copies_getter_value() {
+        final var source = """
+                let calls = 0;
+                const src = { get x() { calls++; return 5; } };
+                const target = Object.assign({}, src);
+                target.x + ',' + target.x + ',' + calls
+                """;
+        assertEquals("5,5,1", str(source));
+    }
+
+    // getOwnPropertyNames lists accessor keys too
+    @Test
+    public void test_get_own_property_names_includes_accessor() {
+        assertEquals("x", str("Object.getOwnPropertyNames({get x() { return 1; }}).join(',')"));
+    }
+
+    // an accessor defined with enumerable:true participates in enumeration
+    @Test
+    public void test_define_property_enumerable_accessor_is_enumerated() {
+        final var source = """
+                const o = {};
+                Object.defineProperty(o, 'x', { get() { return 7; }, enumerable: true });
+                Object.keys(o).join(',') + '|' + Object.values(o).join(',')
+                """;
+        assertEquals("x|7", str(source));
+    }
+
+    // a non-enumerable accessor stays hidden from keys but visible to getOwnPropertyNames
+    @Test
+    public void test_non_enumerable_accessor_is_skipped() {
+        final var source = """
+                const o = {};
+                Object.defineProperty(o, 'x', { get() { return 7; } });
+                Object.keys(o).length + '|' + Object.getOwnPropertyNames(o).join(',')
+                """;
+        assertEquals("0|x", str(source));
+    }
+
+    // a setter-only property enumerates with an undefined value
+    @Test
+    public void test_setter_only_property_enumerates_as_undefined() {
+        final var source = """
+                const o = { set x(v) {} };
+                Object.keys(o).join(',') + '|' + String(Object.values(o)[0])
+                """;
+        assertEquals("x|undefined", str(source));
+    }
+
+    // delete drops the accessor entries along with the key
+    @Test
+    public void test_delete_removes_accessor() {
+        final var source = """
+                const o = { get x() { return 1; } };
+                delete o.x;
+                String(o.x) + '|' + Object.keys(o).length
+                """;
+        assertEquals("undefined|0", str(source));
+    }
+
+    // freeze and seal still cover accessor keys after the ownKeys() collapse
+    @Test
+    public void test_freeze_still_covers_accessors() {
+        assertTrue(flag("const o = { get x() { return 1; } }; Object.freeze(o); Object.isFrozen(o)"));
+        assertTrue(flag("const o = { get x() { return 1; } }; Object.seal(o); Object.isSealed(o)"));
+        assertFalse(flag("const o = { a: 1, get x() { return 1; } }; Object.seal(o); Object.isFrozen(o)"));
+    }
+
+    // canonical array-index keys still sort ahead of the insertion-ordered rest
+    @Test
+    public void test_array_index_key_order_unaffected() {
+        assertEquals("1,2,b,a", str("Object.keys({b: 1, 2: 1, a: 1, 1: 1}).join(',')"));
+    }
+
+    // getOwnPropertyDescriptors reports every own key's descriptor
+    @Test
+    public void test_get_own_property_descriptors_data_property() {
+        final var source = """
+                const d = Object.getOwnPropertyDescriptors({a: 1});
+                d.a.value + '|' + d.a.writable + '|' + d.a.enumerable + '|' + d.a.configurable
+                """;
+        assertEquals("1|true|true|true", str(source));
+    }
+
+    // an accessor descriptor carries its get and set functions
+    @Test
+    public void test_get_own_property_descriptors_accessor() {
+        final var source = """
+                const d = Object.getOwnPropertyDescriptors({ get x() { return 1; }, set x(v) {} });
+                typeof d.x.get + '|' + typeof d.x.set
+                """;
+        assertEquals("function|function", str(source));
+    }
+
+    // a non-enumerable key is still described
+    @Test
+    public void test_get_own_property_descriptors_includes_non_enumerable() {
+        final var source = """
+                const o = {};
+                Object.defineProperty(o, 'x', { value: 1 });
+                Object.getOwnPropertyDescriptors(o).x.value
+                """;
+        assertEquals(1, num(source));
+    }
+
+    // symbol keys are described alongside string keys
+    @Test
+    public void test_get_own_property_descriptors_includes_symbol() {
+        final var source = """
+                const s = Symbol('s');
+                const o = { [s]: 3 };
+                Object.getOwnPropertyDescriptors(o)[s].value
+                """;
+        assertEquals(3, num(source));
+    }
+
+    // an empty object yields an empty descriptor map
+    @Test
+    public void test_get_own_property_descriptors_empty() {
+        assertEquals(0, num("Object.keys(Object.getOwnPropertyDescriptors({})).length"));
+    }
+
+    // a non-object argument is rejected
+    @Test
+    public void test_get_own_property_descriptors_non_object_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptors(1)"));
+    }
 }

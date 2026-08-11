@@ -136,7 +136,7 @@ public class IntrinsicsTest {
             assertNotNull(DateBuiltins.getMethod(new JsDate(0), name), name);
         }
         for (final var name : ObjectProtoBuiltins.NAMES) {
-            assertNotNull(ObjectProtoBuiltins.getMethod(new JsObject(), name, null), name);
+            assertNotNull(ObjectProtoBuiltins.getMethod(new JsObject(), name, null, null), name);
         }
         for (final var name : FunctionProtoBuiltins.NAMES) {
             assertNotNull(FunctionProtoBuiltins.getMethod(new JsNativeFunction("f", (_, _) -> null), name, null), name);
@@ -170,7 +170,7 @@ public class IntrinsicsTest {
         assertNull(SymbolBuiltins.getMethod(new JsSymbol("s"), "nope"));
         assertNull(SymbolBuiltins.getProperty(new JsSymbol("s"), "nope"));
         assertNull(RegexBuiltins.getMethod(RegexTranslator.compile("a", ""), "nope"));
-        assertNull(ObjectProtoBuiltins.getMethod(new JsObject(), "nope", null));
+        assertNull(ObjectProtoBuiltins.getMethod(new JsObject(), "nope", null, null));
         assertNull(FunctionProtoBuiltins.getMethod(new JsNativeFunction("f", (_, _) -> null), "nope", null));
         assertNull(FunctionProtoBuiltins.metadata(new JsNativeFunction("f", (_, _) -> null), "nope"));
     }

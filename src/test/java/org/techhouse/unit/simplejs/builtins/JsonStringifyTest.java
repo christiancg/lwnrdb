@@ -121,4 +121,21 @@ public class JsonStringifyTest {
     public void test_space_with_structural_characters_in_strings() {
         assertEquals("{\n  \"a\": \"}{\\\"\"\n}", str("JSON.stringify({a: '}{\"'}, null, 2)"));
     }
+
+    // stringify reads an enumerable accessor through its getter
+    @Test
+    public void test_stringify_invokes_getter() {
+        assertEquals("{\"x\":1}", str("JSON.stringify({get x() { return 1; }})"));
+    }
+
+    // a non-enumerable accessor is skipped like a non-enumerable data property
+    @Test
+    public void test_stringify_skips_non_enumerable_accessor() {
+        final var source = """
+                const o = {a: 1};
+                Object.defineProperty(o, 'x', { get() { return 2; } });
+                JSON.stringify(o)
+                """;
+        assertEquals("{\"a\":1}", str(source));
+    }
 }

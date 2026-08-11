@@ -36,8 +36,8 @@ public final class RegexTranslator {
             Map.entry("White_Space", "IsWhite_Space"), Map.entry("Uppercase", "IsUppercase"),
             Map.entry("Lowercase", "IsLowercase"), Map.entry("Hex_Digit", "IsHexDigit"),
             Map.entry("Ideographic", "IsIdeographic"), Map.entry("Assigned", "IsAssigned"),
-            Map.entry("Noncharacter_Code_Point", "IsNoncharacterCodePoint"),
-            Map.entry("Join_Control", "IsJoinControl"));
+            Map.entry("Noncharacter_Code_Point", "IsNoncharacterCodePoint"), Map.entry("Join_Control", "IsJoinControl"),
+            Map.entry("ASCII", "ASCII"), Map.entry("Any", "all"));
 
     private RegexTranslator() {
     }

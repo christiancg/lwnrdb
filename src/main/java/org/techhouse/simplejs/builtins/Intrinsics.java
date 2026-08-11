@@ -65,6 +65,8 @@ public final class Intrinsics {
     private final JsObject arrayBufferProto;
     private final JsObject dataViewProto;
     private final Map<JsTypedArray.Kind, JsObject> typedArrayProtos = new EnumMap<>(JsTypedArray.Kind.class);
+    private final JsObject disposableStackProto;
+    private final JsObject asyncDisposableStackProto;
     private final JsObject errorProto = new JsObject();
     private final Map<String, JsObject> errorProtos = new LinkedHashMap<>();
 
@@ -109,6 +111,18 @@ public final class Intrinsics {
             proto.setProto(typedArrayProto);
             typedArrayProtos.put(kind, proto);
         }
+        for (final var name : TypedArrayBuiltins.UINT8_NAMES) {
+            define(typedArrayProtos.get(JsTypedArray.Kind.UINT8), name, wrapper(name, "Uint8Array.prototype",
+                    (receiver, key) -> TypedArrayBuiltins.uint8Method(requireUint8(receiver, key), key)));
+        }
+        disposableStackProto = prototypeOf(DisposableStackBuiltins.NAMES, "DisposableStack.prototype",
+                (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker,
+                        eventLoop, false));
+        DisposableStackBuiltins.installAccessors(disposableStackProto, false);
+        asyncDisposableStackProto = prototypeOf(DisposableStackBuiltins.ASYNC_NAMES, "AsyncDisposableStack.prototype",
+                (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker,
+                        eventLoop, true));
+        DisposableStackBuiltins.installAccessors(asyncDisposableStackProto, true);
         installObjectPrototype();
         installErrorPrototypes();
     }
@@ -116,14 +130,14 @@ public final class Intrinsics {
     private void installObjectPrototype() {
         for (final var name : ObjectProtoBuiltins.NAMES) {
             define(objectProto, name, wrapper(name, "Object.prototype",
-                    (receiver, key) -> ObjectProtoBuiltins.getMethod(requireObject(receiver, key), key, ops)));
+                    (receiver, key) -> ObjectProtoBuiltins.getMethod(receiver, key, ops, this)));
         }
         errorProto.setProto(objectProto);
     }
 
     private void installErrorPrototypes() {
         define(errorProto, "toString", new JsNativeFunction("toString",
-                (thisArg, _) -> new JsString(errorText(requireObject(thisArg, "toString")))));
+                (thisArg, _) -> new JsString(errorText(requireObject(thisArg)))));
         // Error.prototype is the shared base so `e instanceof Error` holds for every error subtype.
         define(errorProto, "name", new JsString("Error"));
         errorProtos.put("Error", errorProto);
@@ -199,6 +213,14 @@ public final class Intrinsics {
             case JsNativeFunction ignored -> functionProto;
             default -> objectProto;
         };
+    }
+
+    public JsObject disposableStackProto() {
+        return disposableStackProto;
+    }
+
+    public JsObject asyncDisposableStackProto() {
+        return asyncDisposableStackProto;
     }
 
     public JsObject objectProto() {
@@ -440,11 +462,26 @@ public final class Intrinsics {
         throw incompatible("TypedArray.prototype." + method, receiver);
     }
 
-    private JsObject requireObject(JsValue receiver, String method) {
+    private JsTypedArray requireUint8(JsValue receiver, String method) {
+        final var typed = requireTypedArray(receiver, method);
+        if (typed.kind() != JsTypedArray.Kind.UINT8) {
+            throw incompatible("Uint8Array.prototype." + method, receiver);
+        }
+        return typed;
+    }
+
+    private JsObject requireStack(JsValue receiver, String method) {
+        if (receiver instanceof JsObject object && object.hasSymbol(DisposableStackBuiltins.entriesKey())) {
+            return object;
+        }
+        throw incompatible("DisposableStack.prototype." + method, receiver);
+    }
+
+    private JsObject requireObject(JsValue receiver) {
         if (receiver instanceof JsObject object) {
             return object;
         }
-        throw incompatible("Object.prototype." + method, receiver);
+        throw incompatible("Object.prototype." + "toString", receiver);
     }
 
     private JsValue requireCallable(JsValue receiver, String method) {

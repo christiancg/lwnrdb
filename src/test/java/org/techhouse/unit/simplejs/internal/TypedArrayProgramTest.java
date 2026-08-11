@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -660,5 +662,87 @@ public class TypedArrayProgramTest {
         assertEquals(-1, num("new Int8Array([1]).findLastIndex(v => v > 9)"));
         assertEquals("3,4,3,4", str("new Int8Array([1, 2, 3, 4]).copyWithin(0, 2).join(',')"));
         assertEquals("2,2,3", str("new Int8Array([1, 2, 3]).copyWithin(0, 1, 2).join(',')"));
+    }
+
+    // typed-array includes uses SameValueZero for NaN and signed zero
+    @Test
+    public void test_typed_array_includes_same_value_zero() {
+        assertTrue(bool("new Float64Array([NaN]).includes(NaN)"));
+        assertTrue(bool("new Float32Array([NaN]).includes(NaN)"));
+        assertTrue(bool("new Float64Array([-0]).includes(0)"));
+        assertFalse(bool("new Float64Array([NaN]).indexOf(NaN) >= 0"));
+    }
+
+    // BigInt element kinds compare by value
+    @Test
+    public void test_typed_array_includes_bigint() {
+        assertTrue(bool("new BigInt64Array([1n]).includes(1n)"));
+        assertFalse(bool("new BigInt64Array([1n]).includes(2n)"));
+    }
+
+    // includes honours the fromIndex argument
+    @Test
+    public void test_typed_array_includes_from_index() {
+        assertFalse(bool("new Int8Array([1, 2]).includes(1, 1)"));
+        assertTrue(bool("new Int8Array([1, 2]).includes(2, -1)"));
+    }
+
+    // base64 round-trips through the instance method and the static
+    @Test
+    public void test_uint8_base64_round_trip() {
+        assertEquals("AQID", str("new Uint8Array([1, 2, 3]).toBase64()"));
+        assertEquals("1,2,3", str("Array.from(Uint8Array.fromBase64('AQID')).join(',')"));
+    }
+
+    // the base64url alphabet and omitPadding options are honoured
+    @Test
+    public void test_uint8_base64_options() {
+        assertEquals("--8", str("new Uint8Array([251, 239]).toBase64({alphabet: 'base64url', omitPadding: true})"));
+        assertEquals("--8=", str("new Uint8Array([251, 239]).toBase64({alphabet: 'base64url'})"));
+        assertEquals("251,239", str("Array.from(Uint8Array.fromBase64('--8=', {alphabet: 'base64url'})).join(',')"));
+    }
+
+    // an unknown alphabet is rejected
+    @Test
+    public void test_uint8_base64_unknown_alphabet_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Uint8Array(1).toBase64({alphabet: 'x'})"));
+    }
+
+    // hex round-trips in lowercase
+    @Test
+    public void test_uint8_hex_round_trip() {
+        assertEquals("0aff", str("new Uint8Array([10, 255]).toHex()"));
+        assertEquals("10,255", str("Array.from(Uint8Array.fromHex('0AFF')).join(',')"));
+    }
+
+    // malformed hex and base64 input are SyntaxErrors
+    @Test
+    public void test_uint8_malformed_input_throws() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("Uint8Array.fromHex('abc')"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("Uint8Array.fromHex('zz')"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("Uint8Array.fromBase64('!!!!')"));
+    }
+
+    // setFrom* reports how much was read and written, bounded by the target
+    @Test
+    public void test_uint8_set_from_reports_progress() {
+        assertEquals("1,2,3|4|3", str("""
+                const u = new Uint8Array(3);
+                const r = u.setFromBase64('AQID');
+                Array.from(u).join(',') + '|' + r.read + '|' + r.written
+                """));
+        assertEquals("1,2|4|2", str("""
+                const u = new Uint8Array(2);
+                const r = u.setFromHex('010203');
+                Array.from(u).join(',') + '|' + r.read + '|' + r.written
+                """));
+    }
+
+    // the family is Uint8Array-only
+    @Test
+    public void test_base64_is_uint8_only() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Uint16Array(1).toBase64()"));
+        assertTrue(bool("typeof Uint8Array.fromBase64 === 'function'"));
+        assertTrue(bool("Uint16Array.fromBase64 === undefined"));
     }
 }

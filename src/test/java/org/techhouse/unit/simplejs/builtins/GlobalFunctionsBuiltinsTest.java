@@ -210,4 +210,10 @@ public class GlobalFunctionsBuiltinsTest {
                 """;
         assertEquals("TypeError", str(source));
     }
+
+    // structuredClone copies the getter's value rather than the accessor
+    @Test
+    public void test_structured_clone_invokes_getter() {
+        assertEquals(4, num("structuredClone({get x() { return 4; }}).x"));
+    }
 }

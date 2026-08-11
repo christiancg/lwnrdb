@@ -710,11 +710,18 @@ through `SimpleJs.run(source, SimpleHostBindings.empty())` against the built eng
 them are inferred from reading the code. The next section lists the features that are missing
 *on purpose*.
 
-The ES2026 conformance closeout (2026-08-11) closed every gap previously listed here — numeric
-correctness, own-key ordering, strict-mode write/delete failures, `Object.freeze` on arrays,
-string iteration by code point, real class prototypes, `new.target`, object-literal `super`,
-patchable `Promise`/generator prototypes, `Symbol.unscopables`, duplicate named capture groups and
-the top-level-promise contract. What remains are the bounded limitations below.
+This section is only as good as its last verification run. The ES2026 conformance closeout
+(2026-08-11) closed the gaps it had found — numeric correctness, own-key ordering, strict-mode
+write/delete failures, `Object.freeze` on arrays, string iteration by code point, real class
+prototypes, `new.target`, object-literal `super`, patchable `Promise`/generator prototypes,
+`Symbol.unscopables`, duplicate named capture groups and the top-level-promise contract. A
+**follow-up probing pass the same day** found ten more, all now closed (see *ES2026 conformance
+follow-up* below): the iteration protocol rejecting a generator-valued `[Symbol.iterator]`,
+accessor properties missing from own-key enumeration, `includes` not using SameValueZero,
+`Object.prototype` methods rejecting a non-object receiver, the ignored `JSON.parse` reviver,
+the missing `Object.getOwnPropertyDescriptors`, `\p{ASCII}`, `Math.sumPrecise`, the two
+disposable stacks and the `Uint8Array` base64/hex family. What remains are the bounded
+limitations below.
 
 ### Remaining limitations
 
@@ -726,6 +733,7 @@ the top-level-promise contract. What remains are the bounded limitations below.
 | 4 | **Generic array-like receivers are snapshotted** | `Array.prototype.push.call(arguments, x)` does not write through — see *Intrinsic prototypes*. |
 | 5 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
 | 6 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. |
+| 7 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
 
 ### Host-contract notes
 
@@ -813,8 +821,10 @@ design decision, not a bug:
 - **`Intl`** — the internationalization API is enormous; only ad-hoc `toLocaleString`/
   `localeCompare` defaults (backed by `java.text`) are provided.
 - **`Temporal`** — the date/time proposal is out of scope; `Date` is the only temporal type.
-- **`SharedArrayBuffer` + `Atomics`** — shared-memory multithreading is meaningless in a
-  single-threaded per-connection VM.
+- **`SharedArrayBuffer` + `Atomics`** (including `Atomics.pause`) — shared-memory multithreading is
+  meaningless in a single-threaded per-connection VM.
+- **Immutable `ArrayBuffer`** (`transferToImmutable`/`sliceToImmutable`) — the proposal is not in the
+  ES2026 snapshot; buffers are mutable or detached, with no third state.
 - **`WeakRef` / `FinalizationRegistry`** — GC-observable behavior cannot be exposed safely or
   deterministically; `WeakMap`/`WeakSet` exist but are strong (weakness is unobservable in-sandbox).
 - **Arbitrary module resolution** — `import` resolves only the host `args`/`db` built-ins;
@@ -823,6 +833,53 @@ design decision, not a bug:
   by-copy methods always allocate the default type.
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
+
+### ES2026 conformance follow-up (2026-08-11)
+
+A probing pass run *after* the closeout below found ten further defects, all closed in four phases:
+
+- **The iteration protocol accepts any object-like iterator.** `Iteration.openIterator` demanded a
+  `JsObject`, so an object whose `[Symbol.iterator]` is a generator method
+  (`class C { *[Symbol.iterator]() {…} }`) was rejected — a generator is a sibling `JsValue`, not a
+  `JsObject`. The iterator is now typed `JsValue` and checked with a deny-list `isObjectLike` (every
+  non-primitive is an object to the spec), which restores `for-of`, spread, `Array.from`, `yield*`
+  and `new Set(obj)` over such an iterable, and also accepts a returned `Map`/`Set`/proxy iterator.
+  Array destructuring was moved onto the same `Iteration` choke point — it drove `iterableElements`
+  directly, so it never honoured the iterator protocol at all — and now pulls lazily and `close()`s
+  the iterator when the pattern ends early. The returned generator is driven through the member path
+  (not the coroutine fast path), so a patched `Generator.prototype.next` is honoured.
+- **Accessor properties participate in own-key enumeration.** Data properties and accessors live in
+  separate maps, so their relative insertion order was unrecoverable; `JsObject` now keeps one
+  insertion-ordered `keyOrder` set as the single source of truth for own string keys, maintained by
+  `set`/`defineValue`/`defineAccessor`/`delete`, and `keys()` orders that (the private `ownKeys()`
+  collapsed into it). `delete o.x` now also drops the accessor entries, which it previously left
+  live. Because `JsObject` cannot call a getter by design, the value-reading consumers route through
+  a shared `InterpreterUtils.ownValue(object, key, ops)` — `Object.values`/`entries`/`assign`,
+  object spread, rest destructuring, `JSON.stringify`, `structuredClone`, `Object.create`/
+  `defineProperties` and `Array.prototype.concat` on a spreadable object. `EJsonInterop` deliberately
+  does **not** (see *Remaining limitations* #7).
+- **Small conformance fixes.** `Array.prototype.includes` and the typed-array `includes` use
+  SameValueZero (`SameValueZero.equal`) instead of delegating to `indexOf`, so `[NaN].includes(NaN)`
+  is `true`, `[-0].includes(0)` is `true` and a hole reads as `undefined`; `indexOf` keeps strict
+  equality. Every `Object.prototype` method accepts any receiver: `toString` uses the spec brand
+  table (`[object Array]`/`Number`/`Date`/`Null`/`Arguments`/…, with a string `Symbol.toStringTag`
+  still winning), `hasOwnProperty`/`propertyIsEnumerable` share `ObjectBuiltins.hasOwnKey` (extended
+  to string and typed-array indices) and throw a `TypeError` on `null`/`undefined`, and
+  `isPrototypeOf` walks `Intrinsics.protoFor` and the implicit terminal `Object.prototype` link, so
+  `Array.prototype.isPrototypeOf([])` is `true`. `JSON.parse` implements the `InternalizeJSONProperty`
+  reviver walk (bottom-up, mutating in place, an `undefined` result deleting the key).
+  `Object.getOwnPropertyDescriptors` was added, and `getOwnPropertyDescriptor` learned symbol keys.
+  `\p{ASCII}` and `\p{Any}` are translated (`ASCII`/`all`); every other name that `java.util.regex`
+  cannot express still throws an honest `SyntaxError`.
+- **Missing ES2026 library surface.** `Math.sumPrecise` (exact `BigDecimal` accumulation rounded
+  once; empty → `-0`, mixed infinities → `NaN`, a non-Number element → `TypeError`);
+  `DisposableStack`/`AsyncDisposableStack` (`use`/`defer`/`adopt`/`dispose`/`disposeAsync`/`move`,
+  the `disposed` getter and `[Symbol.dispose]`/`[Symbol.asyncDispose]`, reverse-order disposal with
+  `SuppressedError` aggregation, entries held under a module-private symbol key so the backing array
+  never leaks onto the stack); and the `Uint8Array` base64/hex family (`toBase64`/`toHex`/
+  `setFromBase64`/`setFromHex` on the `Uint8Array` prototype only, plus `Uint8Array.fromBase64`/
+  `fromHex`). Symbol lookup now walks the prototype chain, so a prototype-installed well-known symbol
+  such as `[Symbol.dispose]` resolves on an instance and answers `in`.
 
 ### ES2026 conformance closeout (2026-08-11)
 

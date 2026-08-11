@@ -2,10 +2,12 @@ package org.techhouse.simplejs.builtins;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Set;
 
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
@@ -20,12 +22,14 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.SameValueZero;
 
 public final class TypedArrayBuiltins {
     public static final List<String> NAMES = List.of("forEach", "map", "filter", "reduce", "reduceRight", "find",
             "findIndex", "some", "every", "indexOf", "lastIndexOf", "includes", "join", "slice", "subarray", "set",
             "fill", "reverse", "at", "toString", "keys", "values", "entries", "sort", "toSorted", "toReversed", "with",
             "findLast", "findLastIndex", "copyWithin");
+    public static final List<String> UINT8_NAMES = List.of("toBase64", "toHex", "setFromBase64", "setFromHex");
     public static final List<String> BUFFER_NAMES = List.of("slice", "resize", "transfer", "transferToFixedLength");
     public static final List<String> VIEW_NAMES = viewNames();
     private static final Set<String> BUFFER_ACCESSORS = Set.of("byteLength", "maxByteLength", "resizable", "detached");
@@ -81,6 +85,11 @@ public final class TypedArrayBuiltins {
         ctor.setProperty("BYTES_PER_ELEMENT", new JsNumber(kind.bytesPerElement()));
         ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(kind, args, invoker, iterableToList)));
         ctor.setProperty("of", new JsNativeFunction("of", (_, args) -> fromItems(kind, args)));
+        if (kind == JsTypedArray.Kind.UINT8) {
+            ctor.setProperty("fromBase64",
+                    new JsNativeFunction("fromBase64", (_, args) -> ofBytes(decodeBase64(args))));
+            ctor.setProperty("fromHex", new JsNativeFunction("fromHex", (_, args) -> ofBytes(decodeHex(args))));
+        }
         return ctor;
     }
 
@@ -173,6 +182,118 @@ public final class TypedArrayBuiltins {
         return result;
     }
 
+    public static JsValue uint8Method(JsTypedArray receiver, String name) {
+        return switch (name) {
+            case "toBase64" -> new JsNativeFunction("toBase64", (_, args) -> new JsString(toBase64(receiver, args)));
+            case "toHex" -> new JsNativeFunction("toHex", (_, _) -> new JsString(toHex(receiver)));
+            case "setFromBase64" ->
+                new JsNativeFunction("setFromBase64", (_, args) -> setFrom(receiver, decodeBase64(args), 4, 3));
+            case "setFromHex" ->
+                new JsNativeFunction("setFromHex", (_, args) -> setFrom(receiver, decodeHex(args), 2, 1));
+            default -> null;
+        };
+    }
+
+    private static byte[] bytesOf(JsTypedArray typed) {
+        final var bytes = new byte[typed.length()];
+        for (var i = 0; i < bytes.length; i++) {
+            bytes[i] = (byte) (int) JsCoercion.toNumber(typed.getElement(i));
+        }
+        return bytes;
+    }
+
+    private static JsValue ofBytes(byte[] bytes) {
+        final var result = new JsTypedArray(JsTypedArray.Kind.UINT8, new JsArrayBuffer(new byte[bytes.length]), 0,
+                bytes.length);
+        for (var i = 0; i < bytes.length; i++) {
+            result.setElement(i, new JsNumber(bytes[i] & 0xFF));
+        }
+        return result;
+    }
+
+    private static String toBase64(JsTypedArray receiver, List<JsValue> args) {
+        final var options = args.isEmpty() || !(args.getFirst() instanceof JsObject object) ? null : object;
+        var encoder = "base64url".equals(alphabetOf(options)) ? Base64.getUrlEncoder() : Base64.getEncoder();
+        if (options != null && JsCoercion.toBoolean(options.get("omitPadding"))) {
+            encoder = encoder.withoutPadding();
+        }
+        return encoder.encodeToString(bytesOf(receiver));
+    }
+
+    private static String alphabetOf(JsObject options) {
+        if (options == null || options.get("alphabet") instanceof JsUndefined) {
+            return "base64";
+        }
+        final var alphabet = JsCoercion.toStr(options.get("alphabet"));
+        if (!"base64".equals(alphabet) && !"base64url".equals(alphabet)) {
+            throw new TypeErrorException("Invalid base64 alphabet: " + alphabet);
+        }
+        return alphabet;
+    }
+
+    private static byte[] decodeBase64(List<JsValue> args) {
+        if (args.isEmpty() || !(args.getFirst() instanceof JsString source)) {
+            throw new TypeErrorException("Expected a string to decode");
+        }
+        final var options = args.size() > 1 && args.get(1) instanceof JsObject object ? object : null;
+        if (options != null && !(options.get("lastChunkHandling") instanceof JsUndefined)
+                && !"loose".equals(JsCoercion.toStr(options.get("lastChunkHandling")))) {
+            throw new TypeErrorException("Unsupported lastChunkHandling option");
+        }
+        final var decoder = "base64url".equals(alphabetOf(options)) ? Base64.getUrlDecoder() : Base64.getDecoder();
+        try {
+            return decoder.decode(source.getValue());
+        } catch (IllegalArgumentException error) {
+            throw new SyntaxErrorException("Invalid base64 string");
+        }
+    }
+
+    private static String toHex(JsTypedArray receiver) {
+        final var hex = new StringBuilder();
+        for (final var value : bytesOf(receiver)) {
+            hex.append(Character.forDigit((value >> 4) & 0xF, 16)).append(Character.forDigit(value & 0xF, 16));
+        }
+        return hex.toString();
+    }
+
+    private static byte[] decodeHex(List<JsValue> args) {
+        if (args.isEmpty() || !(args.getFirst() instanceof JsString source)) {
+            throw new TypeErrorException("Expected a string to decode");
+        }
+        final var text = source.getValue();
+        if (text.length() % 2 != 0) {
+            throw new SyntaxErrorException("Invalid hex string length");
+        }
+        final var bytes = new byte[text.length() / 2];
+        for (var i = 0; i < bytes.length; i++) {
+            final var high = Character.digit(text.charAt(i * 2), 16);
+            final var low = Character.digit(text.charAt(i * 2 + 1), 16);
+            if (high < 0 || low < 0) {
+                throw new SyntaxErrorException("Invalid hex string");
+            }
+            bytes[i] = (byte) ((high << 4) | low);
+        }
+        return bytes;
+    }
+
+    private static JsValue setFrom(JsTypedArray receiver, byte[] decoded, int charsPerChunk, int bytesPerChunk) {
+        final var written = Math.min(decoded.length, receiver.length());
+        for (var i = 0; i < written; i++) {
+            receiver.setElement(i, new JsNumber(decoded[i] & 0xFF));
+        }
+        final var read = written == decoded.length
+                ? charsPerChunk * ceilDiv(decoded.length, bytesPerChunk)
+                : charsPerChunk * (written / bytesPerChunk);
+        final var result = new JsObject();
+        result.set("read", new JsNumber(read));
+        result.set("written", new JsNumber(written));
+        return result;
+    }
+
+    private static int ceilDiv(int value, int divisor) {
+        return (value + divisor - 1) / divisor;
+    }
+
     public static List<JsValue> elements(JsTypedArray typed) {
         final var result = new ArrayList<JsValue>();
         for (var i = 0; i < typed.length(); i++) {
@@ -256,8 +377,7 @@ public final class TypedArrayBuiltins {
                 new JsNativeFunction("indexOf", (_, args) -> new JsNumber(indexOf(receiver, args, false)));
             case "lastIndexOf" ->
                 new JsNativeFunction("lastIndexOf", (_, args) -> new JsNumber(indexOf(receiver, args, true)));
-            case "includes" ->
-                new JsNativeFunction("includes", (_, args) -> JsBoolean.of(indexOf(receiver, args, false) >= 0));
+            case "includes" -> new JsNativeFunction("includes", (_, args) -> JsBoolean.of(includes(receiver, args)));
             case "join" -> new JsNativeFunction("join", (_, args) -> new JsString(join(receiver, args)));
             case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(receiver, args));
             case "subarray" -> new JsNativeFunction("subarray", (_, args) -> subarray(receiver, args));
@@ -455,6 +575,19 @@ public final class TypedArrayBuiltins {
             }
         }
         return -1;
+    }
+
+    private static boolean includes(JsTypedArray receiver, List<JsValue> args) {
+        final var target = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        final var length = receiver.length();
+        var from = args.size() > 1 ? (int) JsCoercion.toNumber(args.get(1)) : 0;
+        from = from < 0 ? Math.max(length + from, 0) : Math.min(from, length);
+        for (var i = from; i < length; i++) {
+            if (SameValueZero.equal(receiver.getElement(i), target)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean sameNumber(JsValue a, JsValue b) {
