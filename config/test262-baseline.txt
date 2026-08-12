@@ -20,7 +20,7 @@ FAIL  built-ins/AggregateError/prototype/prop-desc.js
 FAIL  built-ins/Array/S15.4.5.1_A1.2_T2.js
 FAIL  built-ins/Array/S15.4.5.2_A1_T1.js
 HANG  built-ins/Array/S15.4.5.2_A3_T3.js
-HANG  built-ins/Array/S15.4_A1.1_T10.js
+FAIL  built-ins/Array/S15.4_A1.1_T10.js
 FAIL  built-ins/Array/S15.4_A1.1_T9.js
 FAIL  built-ins/Array/from/Array.from_arity.js
 FAIL  built-ins/Array/from/Array.from_forwards-length-for-array-likes.js
@@ -117,7 +117,7 @@ FAIL  built-ins/Array/fromAsync/this-constructor-with-bad-length-setter.js
 FAIL  built-ins/Array/fromAsync/this-constructor-with-readonly-elements.js
 FAIL  built-ins/Array/fromAsync/this-constructor-with-readonly-length.js
 FAIL  built-ins/Array/fromAsync/this-constructor-with-unsettable-element-closes-async-iterator.js
-HANG  built-ins/Array/fromAsync/this-constructor-with-unsettable-element-closes-sync-iterator.js
+FAIL  built-ins/Array/fromAsync/this-constructor-with-unsettable-element-closes-sync-iterator.js
 FAIL  built-ins/Array/fromAsync/this-constructor-with-unsettable-element.js
 FAIL  built-ins/Array/fromAsync/this-constructor.js
 FAIL  built-ins/Array/fromAsync/this-non-constructor.js
