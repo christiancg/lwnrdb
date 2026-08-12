@@ -100,6 +100,9 @@ public final class ObjectBuiltins {
         if (args.size() < 2) {
             return JsBoolean.of(false);
         }
+        if (args.get(1) instanceof JsSymbol symbol) {
+            return JsBoolean.of(hasOwnSymbol(args.getFirst(), symbol));
+        }
         return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(args.get(1))));
     }
 
@@ -109,9 +112,27 @@ public final class ObjectBuiltins {
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
             case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
-            case JsCallableProperties callable -> callable.hasProperty(key);
+            case JsGlobalObject global -> global.getEnv().isDeclared(key);
+            case JsCallableProperties callable -> callable.hasProperty(key) || callableMetadataKey(callable, key);
             default -> false;
         };
+    }
+
+    static boolean hasOwnSymbol(JsValue target, JsSymbol key) {
+        return target instanceof JsObject object && object.hasSymbol(key);
+    }
+
+    // name/length/prototype are synthesised at lookup time rather than stored, so the reflective
+    // surface has to report them explicitly.
+    private static boolean callableMetadataKey(JsCallableProperties callable, String key) {
+        return "name".equals(key) || "length".equals(key) || ("prototype".equals(key) && hasPrototype(callable));
+    }
+
+    private static boolean hasPrototype(JsCallableProperties callable) {
+        if (callable instanceof JsFunction function) {
+            return !function.isArrow() && !function.isMethod();
+        }
+        return callable instanceof JsNativeFunction nativeFunction && nativeFunction.getPrototype() != null;
     }
 
     private static boolean stringHasIndex(JsString string, String key) {
@@ -543,8 +564,13 @@ public final class ObjectBuiltins {
                 }
             }
             case JsCallableProperties callable -> {
-                for (final var key : callable.propertyKeys()) {
+                for (final var key : callableMetadataKeys(callable)) {
                     result.push(new JsString(key));
+                }
+                for (final var key : callable.propertyKeys()) {
+                    if (!callableMetadataKey(callable, key)) {
+                        result.push(new JsString(key));
+                    }
                 }
             }
             default -> {
@@ -553,9 +579,16 @@ public final class ObjectBuiltins {
         return result;
     }
 
+    private static List<String> callableMetadataKeys(JsCallableProperties callable) {
+        return hasPrototype(callable) ? List.of("length", "name", "prototype") : List.of("length", "name");
+    }
+
     public static JsValue getOwnPropertyDescriptor(List<JsValue> args) {
         if (args.size() > 1 && first(args) instanceof JsCallableProperties callable) {
-            return callableDescriptor(callable, args.get(1));
+            return callableDescriptor(first(args), callable, args.get(1));
+        }
+        if (args.size() > 1 && first(args) instanceof JsGlobalObject global) {
+            return globalDescriptor(global, args.get(1));
         }
         if (!(first(args) instanceof JsObject object) || args.size() < 2) {
             return JsUndefined.getInstance();
@@ -589,18 +622,62 @@ public final class ObjectBuiltins {
     // Data properties only: accessors and descriptor flags on a callable are out of scope, so a
     // script-assigned property reports the JsObject default and a builtin static reports
     // non-enumerable.
-    private static JsValue callableDescriptor(JsCallableProperties callable, JsValue keyValue) {
+    private static JsValue callableDescriptor(JsValue target, JsCallableProperties callable, JsValue keyValue) {
         if (keyValue instanceof JsSymbol) {
             return JsUndefined.getInstance();
         }
         final var key = JsCoercion.toStr(keyValue);
         if (!callable.hasProperty(key)) {
-            return JsUndefined.getInstance();
+            return callableMetadataKey(callable, key)
+                    ? metadataDescriptor(target, callable, key)
+                    : JsUndefined.getInstance();
         }
         final var descriptor = new JsObject();
         descriptor.set("value", callable.getProperty(key));
         descriptor.set("writable", JsBoolean.of(true));
         descriptor.set("enumerable", JsBoolean.of(callable.enumerablePropertyKeys().contains(key)));
+        descriptor.set("configurable", JsBoolean.of(true));
+        return descriptor;
+    }
+
+    private static JsValue metadataDescriptor(JsValue target, JsCallableProperties callable, String key) {
+        final var descriptor = new JsObject();
+        if ("prototype".equals(key)) {
+            descriptor.set("value", prototypeOf(callable));
+            descriptor.set("writable", JsBoolean.of(true));
+            descriptor.set("enumerable", JsBoolean.of(false));
+            descriptor.set("configurable", JsBoolean.of(false));
+            return descriptor;
+        }
+        descriptor.set("value", FunctionProtoBuiltins.metadata(target, key));
+        descriptor.set("writable", JsBoolean.of(false));
+        descriptor.set("enumerable", JsBoolean.of(false));
+        descriptor.set("configurable", JsBoolean.of(true));
+        return descriptor;
+    }
+
+    private static JsValue prototypeOf(JsCallableProperties callable) {
+        if (callable instanceof JsFunction function) {
+            return function.getPrototype();
+        }
+        return callable instanceof JsNativeFunction nativeFunction && nativeFunction.getPrototype() != null
+                ? nativeFunction.getPrototype()
+                : JsUndefined.getInstance();
+    }
+
+    private static JsValue globalDescriptor(JsGlobalObject global, JsValue keyValue) {
+        if (keyValue instanceof JsSymbol) {
+            return JsUndefined.getInstance();
+        }
+        final var key = JsCoercion.toStr(keyValue);
+        final var env = global.getEnv();
+        if (!env.isDeclared(key)) {
+            return JsUndefined.getInstance();
+        }
+        final var descriptor = new JsObject();
+        descriptor.set("value", InterpreterUtils.orUndefined(env.tryGet(key)));
+        descriptor.set("writable", JsBoolean.of(true));
+        descriptor.set("enumerable", JsBoolean.of(env.enumerableGlobalNames().contains(key)));
         descriptor.set("configurable", JsBoolean.of(true));
         return descriptor;
     }

@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
@@ -181,6 +182,41 @@ public final class InterpreterUtils {
             return chars;
         }
         throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
+    }
+
+    // A generic array-like is snapshotted by reading `length` then every index through the member
+    // seam, so getters and inherited index properties are honoured; a missing index is a hole. A
+    // method that iterates backwards reads the indices in descending order (`fromEnd`) so a throwing
+    // getter is observed in the same order as the spec's lazy walk.
+    public static List<JsValue> arrayLikeElements(JsValue value, InterpreterOps ops, boolean fromEnd) {
+        if (ops == null || !(value instanceof JsObject object)) {
+            return arrayLikeElements(value);
+        }
+        final var length = toLength(ops.getMember(object, new JsString("length")), ops);
+        final var elements = new ArrayList<JsValue>(length);
+        for (var i = 0; i < length; i++) {
+            final var index = fromEnd ? length - 1 - i : i;
+            final var key = new JsString(Integer.toString(index));
+            final var element = ops.getMember(object, key);
+            elements.add(element instanceof JsUndefined && !ops.has(object, key) ? JsUndefined.getHole() : element);
+        }
+        if (fromEnd) {
+            Collections.reverse(elements);
+        }
+        return elements;
+    }
+
+    // A length past the int range cannot be materialised by the snapshot model, and every spec path
+    // that would need one throws anyway ("integer limit exceeded"), so report that rather than hang.
+    private static int toLength(JsValue value, InterpreterOps ops) {
+        final var number = JsCoercion.toNumber(value, ops);
+        if (Double.isNaN(number) || number <= 0) {
+            return 0;
+        }
+        if (number > Integer.MAX_VALUE) {
+            throw new TypeErrorException("Array-like receiver length exceeds the supported maximum");
+        }
+        return (int) number;
     }
 
     public static List<JsValue> stringCodePoints(String value) {

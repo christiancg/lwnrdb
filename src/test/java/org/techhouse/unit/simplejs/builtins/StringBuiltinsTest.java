@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNull;
@@ -389,5 +390,36 @@ public class StringBuiltinsTest {
         assertEquals("  a", str("'  a  '.trimRight()"));
         assertEquals("ABC", str("'abc'.toLocaleUpperCase()"));
         assertEquals("abc", str("'ABC'.toLocaleLowerCase()"));
+    }
+
+    // String(symbol) returns the descriptive string instead of throwing
+    @Test
+    public void test_string_of_symbol_returns_descriptive_string() {
+        assertEquals("Symbol(x)", str("String(Symbol('x'))"));
+    }
+
+    // a symbol without a description describes as an empty pair of parentheses
+    @Test
+    public void test_string_of_symbol_without_description() {
+        assertEquals("Symbol()", str("String(Symbol())"));
+    }
+
+    // a well-known symbol keeps its registered description
+    @Test
+    public void test_string_of_well_known_symbol() {
+        assertEquals("Symbol(Symbol.iterator)", str("String(Symbol.iterator)"));
+    }
+
+    // implicit symbol coercion is still a TypeError
+    @Test
+    public void test_implicit_symbol_coercion_still_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("'' + Symbol()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("`${Symbol()}`"));
+    }
+
+    // the String wrapper constructor still rejects a symbol
+    @Test
+    public void test_new_string_of_symbol_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new String(Symbol())"));
     }
 }

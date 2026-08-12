@@ -753,6 +753,11 @@ public final class Interpreter {
         }
         if (proto == intrinsics.stringProto() || proto == intrinsics.numberProto()
                 || proto == intrinsics.booleanProto()) {
+            // String(sym) describes the symbol, but `new String(sym)` is still a TypeError, so the
+            // wrapper branch must reject it before reaching the String function itself.
+            if (proto == intrinsics.stringProto() && !args.isEmpty() && args.getFirst() instanceof JsSymbol) {
+                throw new TypeErrorException("Cannot convert a Symbol value to a string");
+            }
             final var wrapper = new JsObject();
             wrapper.setProto(proto);
             wrapper.setPrimitive(nativeFunction.invoke(JsUndefined.getInstance(), args));

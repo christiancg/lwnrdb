@@ -28,6 +28,8 @@ public final class Test262Worker {
     private static final String ASYNC_PASS = "Test262:AsyncTestComplete";
     private static final String ASYNC_FAIL_PREFIX = "Test262:AsyncTestFailure:";
     private static final List<String> PRELUDE_SHIMS = List.of("print.js", "host262.js");
+    // $DONE is defined only for async tests: a non-async test asserts globalThis has no own "$DONE".
+    private static final String ASYNC_SHIM = "done.js";
     private static final List<String> PRELUDE_HARNESS = List.of("sta.js", "assert.js");
 
     private Test262Worker() {
@@ -111,6 +113,9 @@ public final class Test262Worker {
         final var harnessDir = Path.of(string(job, "harnessDir"));
         for (final var shim : PRELUDE_SHIMS) {
             source.append(read(shimDir.resolve(shim))).append('\n');
+        }
+        if (flags.contains("async")) {
+            source.append(read(shimDir.resolve(ASYNC_SHIM))).append('\n');
         }
         for (final var harness : PRELUDE_HARNESS) {
             source.append(read(harnessDir.resolve(harness))).append('\n');

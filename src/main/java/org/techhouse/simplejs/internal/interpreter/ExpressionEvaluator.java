@@ -42,6 +42,7 @@ import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
+import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
@@ -166,9 +167,10 @@ public final class ExpressionEvaluator {
             final var accessor = "get".equals(property.getKind()) || "set".equals(property.getKind());
             // Only shorthand methods and accessors get a home object, so only they may use `super`
             final var scope = accessor || "method".equals(property.getKind()) ? homeScope : env;
+            final var concise = accessor || "method".equals(property.getKind());
             if (property.isComputed()) {
                 final var keyValue = interp.eval(property.getKey(), env);
-                final var evaluated = interp.eval(value, scope);
+                final var evaluated = markIfMethod(interp.eval(value, scope), concise);
                 if (accessor) {
                     storeAccessor(result, JsCoercion.toStr(keyValue), property.getKind(), evaluated);
                 } else if (keyValue instanceof JsSymbol symbol) {
@@ -179,7 +181,7 @@ public final class ExpressionEvaluator {
                 continue;
             }
             final var name = staticKeyName(property.getKey());
-            final var evaluated = interp.eval(value, scope);
+            final var evaluated = markIfMethod(interp.eval(value, scope), concise);
             if (accessor) {
                 storeAccessor(result, name, property.getKind(), evaluated);
             } else if ("__proto__".equals(name)) {
@@ -189,6 +191,13 @@ public final class ExpressionEvaluator {
             }
         }
         return result;
+    }
+
+    private static JsValue markIfMethod(JsValue value, boolean concise) {
+        if (concise && value instanceof JsFunction function && !function.isGenerator()) {
+            function.markMethod();
+        }
+        return value;
     }
 
     // A non-computed `__proto__` in an object literal sets the prototype instead of creating a

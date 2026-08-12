@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Supplier;
 import org.techhouse.simplejs.elements.JsBaseElement;
 import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsBigInt;
@@ -19,6 +20,7 @@ import org.techhouse.simplejs.elements.JsString;
 import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.SourcePosition;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.internal.parser.DeclarationScope;
 import org.techhouse.simplejs.internal.parser.ParserTables;
 import org.techhouse.simplejs.internal.parser.PatternConverter;
 import org.techhouse.simplejs.internal.parser.TokenStream;
@@ -116,11 +118,79 @@ public final class Parser {
     // so the grammar productions live in this nested type. The cursor and token-level primitives
     // are inherited from TokenStream; the shared precedence tables live in ParserTables and the
     // cover-grammar reinterpretation in PatternConverter.
+    private record FunctionParts(List<JsNode> params, BlockStatement body) {
+    }
+
     private static final class State extends TokenStream {
         private final PatternConverter patterns = new PatternConverter(this);
+        private DeclarationScope scope = new DeclarationScope(null, true);
+        private boolean inStaticBlock;
 
         private State(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore) {
             super(tokens, positions, newlineBefore);
+        }
+
+        private <T> T inScope(Supplier<T> production) {
+            scope = new DeclarationScope(scope, false);
+            try {
+                return production.get();
+            } finally {
+                scope = scope.getParent();
+            }
+        }
+
+        // A function's parameters share one scope with the top level of its body, so
+        // `function f(a) { let a }` is rejected while `function f(a) { { let a } }` is not.
+        private <T> T inFunctionScope(List<JsNode> params, Supplier<T> production) {
+            scope = new DeclarationScope(scope, true);
+            try {
+                for (final var param : params) {
+                    declareBoundNames(param, false);
+                }
+                return production.get();
+            } finally {
+                scope = scope.getParent();
+            }
+        }
+
+        // An arrow keeps the enclosing static block's `arguments` restriction; a real function
+        // introduces its own `arguments` binding and so lifts it across both params and body.
+        private FunctionParts parseFunctionParts() {
+            final var wasInStaticBlock = inStaticBlock;
+            inStaticBlock = false;
+            try {
+                final var params = parseParams();
+                return new FunctionParts(params, inFunctionScope(params, this::parseBlockBody));
+            } finally {
+                inStaticBlock = wasInStaticBlock;
+            }
+        }
+
+        private void declareBoundNames(JsNode target, boolean isLexical) {
+            final var names = new ArrayList<String>();
+            collectNames(target, names);
+            for (final var name : names) {
+                if (isLexical) {
+                    scope.declareLexical(name);
+                } else {
+                    scope.declareVar(name);
+                }
+            }
+        }
+
+        private static void collectNames(JsNode node, List<String> names) {
+            switch (node) {
+                case null -> {
+                }
+                case Identifier id -> names.add(id.getName());
+                case RestElement rest -> collectNames(rest.getArgument(), names);
+                case AssignmentPattern assignment -> collectNames(assignment.getLeft(), names);
+                case ArrayPattern array -> array.getElements().forEach(element -> collectNames(element, names));
+                case ObjectPattern object -> object.getProperties().forEach(prop -> collectNames(prop, names));
+                case Property prop -> collectNames(prop.getValue(), names);
+                default -> {
+                }
+            }
         }
 
         private Program parseProgram() {
@@ -244,6 +314,7 @@ public final class Parser {
             do {
                 final var id = parseBindingIdentifier();
                 expectOperator("=");
+                declareBoundNames(id, true);
                 declarations.add(new VariableDeclarator(id, parseAssignment()));
             } while (matchSeparator(','));
             consumeSemicolon();
@@ -257,6 +328,10 @@ public final class Parser {
         }
 
         private BlockStatement parseBlock() {
+            return inScope(this::parseBlockBody);
+        }
+
+        private BlockStatement parseBlockBody() {
             expectSeparator('{');
             final var body = new ArrayList<Statement>();
             while (!isSeparator('}') && !atEnd()) {
@@ -275,6 +350,10 @@ public final class Parser {
                 if (matchOperator("=")) {
                     init = parseAssignment();
                 }
+                if (init == null && "const".equals(kind)) {
+                    throw new SyntaxErrorException("Missing initializer in const declaration");
+                }
+                declareBoundNames(id, !"var".equals(kind));
                 declarations.add(new VariableDeclarator(id, init));
             } while (matchSeparator(','));
             consumeSemicolon();
@@ -315,6 +394,10 @@ public final class Parser {
         }
 
         private Statement parseFor() {
+            return inScope(this::parseForRest);
+        }
+
+        private Statement parseForRest() {
             expectKeyword("for");
             final var isAwait = isKeyword("await");
             if (isAwait) {
@@ -368,6 +451,7 @@ public final class Parser {
                     if (matchOperator("=")) {
                         init = parseAssignment();
                     }
+                    declareBoundNames(id, !"var".equals(kind));
                     declarations.add(new VariableDeclarator(id, init));
                 } while (matchSeparator(','));
                 return new VariableDeclaration(kind, declarations);
@@ -391,6 +475,13 @@ public final class Parser {
         }
 
         private ForStatement parseClassicForRest(JsNode init) {
+            if (init instanceof VariableDeclaration declaration && "const".equals(declaration.getKind())) {
+                for (final var declarator : declaration.getDeclarations()) {
+                    if (declarator.getInit() == null) {
+                        throw new SyntaxErrorException("Missing initializer in const declaration");
+                    }
+                }
+            }
             expectSeparator(';');
             Expression test = null;
             if (!isSeparator(';')) {
@@ -450,10 +541,14 @@ public final class Parser {
             final var discriminant = parseExpression();
             expectSeparator(')');
             expectSeparator('{');
-            final var cases = new ArrayList<SwitchCase>();
-            while (!isSeparator('}') && !atEnd()) {
-                cases.add(parseSwitchCase());
-            }
+            // Every case clause shares one lexical scope, so `case 0: let x; default: let x` clashes.
+            final var cases = inScope(() -> {
+                final var parsed = new ArrayList<SwitchCase>();
+                while (!isSeparator('}') && !atEnd()) {
+                    parsed.add(parseSwitchCase());
+                }
+                return parsed;
+            });
             expectSeparator('}');
             return new SwitchStatement(discriminant, cases);
         }
@@ -505,9 +600,10 @@ public final class Parser {
             expectKeyword("function");
             final var generator = matchOperator("*");
             final var name = parseBindingIdentifier();
-            final var params = parseParams();
-            final var body = parseBlock();
-            return new FunctionDeclaration(name, params, body, async, generator);
+            // A function declaration is var-scoped at a function boundary and lexical inside a block.
+            declareBoundNames(name, !scope.isFunctionBoundary());
+            final var parts = parseFunctionParts();
+            return new FunctionDeclaration(name, parts.params(), parts.body(), async, generator);
         }
 
         private ImportDeclaration parseImportDeclaration() {
@@ -1161,6 +1257,11 @@ public final class Parser {
                     return parseTemplate((JsTemplateString) t);
                 }
                 case IDENTIFIER -> {
+                    // ContainsArguments: a class static block may not reference `arguments`, and the
+                    // check reaches into arrow bodies and computed keys but not nested function bodies.
+                    if (inStaticBlock && "arguments".equals(((JsIdentifier) t).getValue())) {
+                        throw new SyntaxErrorException("'arguments' is not allowed in a class static block");
+                    }
                     return parseIdentifierOrArrow();
                 }
                 case PRIVATE_IDENTIFIER -> {
@@ -1272,14 +1373,14 @@ public final class Parser {
             if (current().getType() == JsType.IDENTIFIER) {
                 name = parseBindingIdentifier();
             }
-            final var params = parseParams();
-            final var body = parseBlock();
-            return new FunctionExpression(name, params, body, async, generator);
+            final var parts = parseFunctionParts();
+            return new FunctionExpression(name, parts.params(), parts.body(), async, generator);
         }
 
         private ClassDeclaration parseClassDeclaration() {
             expectKeyword("class");
             final var id = parseBindingIdentifier();
+            declareBoundNames(id, true);
             final var superClass = parseClassHeritage();
             return new ClassDeclaration(id, superClass, parseClassBody());
         }
@@ -1328,7 +1429,8 @@ public final class Parser {
             }
             final var memberKey = parseClassMemberKey();
             if (isSeparator('(')) {
-                final var value = new FunctionExpression(null, parseParams(), parseBlock(), async, generator);
+                final var parts = parseFunctionParts();
+                final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic, async, generator);
                 return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
             }
@@ -1344,6 +1446,13 @@ public final class Parser {
         }
 
         private StaticBlock parseStaticBlock() {
+            return inFunctionScope(List.of(), () -> {
+                inStaticBlock = true;
+                return parseStaticBlockBody();
+            });
+        }
+
+        private StaticBlock parseStaticBlockBody() {
             expectSeparator('{');
             final var body = new ArrayList<Statement>();
             while (!isSeparator('}') && !atEnd()) {
@@ -1389,7 +1498,8 @@ public final class Parser {
         // member key. When followed by '(', '=', ';' or '}' the word is itself the member name.
         private boolean matchContextualModifier(String name) {
             final var t = current();
-            if (t.getType() != JsType.IDENTIFIER || !((JsIdentifier) t).getValue().equals(name)) {
+            if (t.getType() != JsType.IDENTIFIER || !((JsIdentifier) t).getValue().equals(name)
+                    || ((JsIdentifier) t).isEscaped()) {
                 return false;
             }
             final var next = peek();
@@ -1479,7 +1589,7 @@ public final class Parser {
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
             if (isSeparator('{')) {
-                return new ArrowFunctionExpression(params, parseBlock(), false, async);
+                return new ArrowFunctionExpression(params, inFunctionScope(params, this::parseBlockBody), false, async);
             }
             return new ArrowFunctionExpression(params, parseAssignment(), true, async);
         }
@@ -1539,7 +1649,8 @@ public final class Parser {
             final var fromIdentifier = current().getType() == JsType.IDENTIFIER;
             final var key = parsePropertyKey();
             if (isSeparator('(')) {
-                final var value = new FunctionExpression(null, parseParams(), parseBlock(), async, generator);
+                final var parts = parseFunctionParts();
+                final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 return new Property(key, value, computed, false, "init".equals(kind) ? "method" : kind);
             }
             if (async || generator || !"init".equals(kind)) {
@@ -1595,7 +1706,8 @@ public final class Parser {
 
         private boolean isIdentifier(String name) {
             final var t = current();
-            return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(name);
+            return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(name)
+                    && !((JsIdentifier) t).isEscaped();
         }
 
         private TemplateLiteral parseTemplate(JsTemplateString template) {

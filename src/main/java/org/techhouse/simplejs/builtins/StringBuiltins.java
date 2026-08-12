@@ -50,14 +50,25 @@ public final class StringBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var string = new JsNativeFunction("String",
-                (_, args) -> new JsString(args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst(), ops)));
+        final var string = new JsNativeFunction("String", (_, args) -> new JsString(stringify(args, ops)));
         string.setProperty("raw", new JsNativeFunction("raw", (_, args) -> new JsString(raw(args))));
         string.setProperty("fromCharCode",
                 new JsNativeFunction("fromCharCode", (_, args) -> new JsString(fromCharCode(args))));
         string.setProperty("fromCodePoint",
                 new JsNativeFunction("fromCodePoint", (_, args) -> new JsString(fromCodePoint(args))));
         return string;
+    }
+
+    // The explicit String(sym) conversion describes a symbol; implicit coercion (JsCoercion.toStr)
+    // must keep throwing, so this cannot go into the shared coercion.
+    private static String stringify(List<JsValue> args, InterpreterOps ops) {
+        if (args.isEmpty()) {
+            return "";
+        }
+        if (args.getFirst() instanceof JsSymbol symbol) {
+            return SymbolBuiltins.describe(symbol);
+        }
+        return JsCoercion.toStr(args.getFirst(), ops);
     }
 
     private static String fromCharCode(List<JsValue> args) {

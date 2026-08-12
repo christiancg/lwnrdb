@@ -4,6 +4,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -30,6 +31,7 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
+import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 // The realm's intrinsic prototype objects. Deliberately per-Interpreter (never static): a shared
@@ -41,8 +43,12 @@ public final class Intrinsics {
     }
 
     private static final PropertyFlags HIDDEN = new PropertyFlags(true, false, true);
+    private static final Set<String> MUTATING_ARRAY_METHODS = Set.of("push", "pop", "shift", "unshift", "splice",
+            "copyWithin", "fill", "reverse", "sort");
+    private static final Set<String> REVERSE_ARRAY_METHODS = Set.of("lastIndexOf", "reduceRight", "findLast",
+            "findLastIndex");
     private static final List<String> ERROR_NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError",
-            "URIError", "SuppressedError", "AggregateError");
+            "URIError", "ReferenceError", "EvalError", "SuppressedError", "AggregateError");
 
     private final Invoker invoker;
     private final InterpreterOps ops;
@@ -304,7 +310,9 @@ public final class Intrinsics {
     }
 
     // Array.prototype.* accepts any array-like receiver by snapshotting it into a JsArray; a
-    // mutating method therefore does not write through to the original (documented limitation).
+    // mutating method therefore does not write through to the original (documented limitation), so a
+    // plain object — unlike arguments/typed arrays/strings, which callers already treat as read-only
+    // views — is accepted only for the non-mutating methods rather than silently losing the write.
     private JsArray requireArray(JsValue receiver, String method) {
         if (receiver instanceof JsArray array) {
             return array;
@@ -314,6 +322,10 @@ public final class Intrinsics {
         }
         if (receiver instanceof JsArguments || receiver instanceof JsTypedArray || receiver instanceof JsString) {
             return new JsArray(InterpreterUtils.arrayLikeElements(receiver));
+        }
+        if (receiver instanceof JsObject object && ops != null && !MUTATING_ARRAY_METHODS.contains(method)
+                && !(ops.getMember(object, new JsString("length")) instanceof JsUndefined)) {
+            return new JsArray(InterpreterUtils.arrayLikeElements(object, ops, REVERSE_ARRAY_METHODS.contains(method)));
         }
         throw incompatible("Array.prototype." + method, receiver);
     }

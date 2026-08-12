@@ -162,9 +162,12 @@ public abstract class TokenStream {
         }
     }
 
+    // A contextual keyword must be written literally: `n\u0065w.target` is a SyntaxError, not a
+    // meta property, so an escaped identifier never matches one.
     protected boolean isContextualKeyword(String word) {
         final var t = current();
-        return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(word);
+        return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(word)
+                && !((JsIdentifier) t).isEscaped();
     }
 
     protected boolean matchContextualKeyword(String word) {

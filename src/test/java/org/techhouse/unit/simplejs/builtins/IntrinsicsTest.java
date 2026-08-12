@@ -26,6 +26,7 @@ import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsArrayBuffer;
@@ -45,6 +46,10 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public class IntrinsicsTest {
+    private static String run(String source) {
+        return ((JsString) Interpreter.run(source)).getValue();
+    }
+
     private static Intrinsics intrinsics() {
         return new Intrinsics((fn, thisArg, args) -> ((JsNativeFunction) fn).invoke(thisArg, args), null,
                 new org.techhouse.simplejs.internal.EventLoop(), (_, _, _) -> JsUndefined.getInstance());
@@ -228,5 +233,47 @@ public class IntrinsicsTest {
         final var realm = intrinsics();
         final var join = (JsNativeFunction) realm.arrayProto().get("join");
         assertEquals("a-b", ((JsString) join.invoke(new JsString("ab"), List.of(new JsString("-")))).getValue());
+    }
+
+    // Array.prototype methods accept a plain array-like receiver
+    @Test
+    public void test_array_method_on_plain_array_like() {
+        assertEquals("[2,4]", run("JSON.stringify(Array.prototype.map.call({length: 2, 0: 1, 1: 2}, x => x * 2))"));
+    }
+
+    // reduce folds over a plain array-like
+    @Test
+    public void test_array_reduce_on_plain_array_like() {
+        assertEquals("6",
+                run("String(Array.prototype.reduce.call({length: 3, 0: 1, 1: 2, 2: 3}, (a, b) => a + b, 0))"));
+    }
+
+    // a missing index of an array-like is a hole, which join renders as empty
+    @Test
+    public void test_array_join_on_plain_array_like_with_holes() {
+        assertEquals("a--c", run("Array.prototype.join.call({length: 3, 0: 'a', 2: 'c'}, '-')"));
+    }
+
+    // a backwards-walking method reads the array-like's indices in descending order
+    @Test
+    public void test_reverse_walking_array_method_on_plain_array_like() {
+        assertEquals("cba",
+                run("Array.prototype.reduceRight.call({length: 3, 0: 'a', 1: 'b', 2: 'c'}, (a, b) => a + b)"));
+    }
+
+    // a mutating method is refused on a plain array-like rather than discarding the write
+    @Test
+    public void test_mutating_array_method_on_plain_array_like_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call({length: 0}, 1)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Array.prototype.copyWithin.call({length: 43}, 42, 0)"));
+    }
+
+    // a receiver that is not array-like still reports an incompatible-receiver TypeError
+    @Test
+    public void test_array_method_on_a_non_array_like_still_throws() {
+        final var error = assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call(1)"));
+        assertTrue(error.getMessage().contains("Array.prototype.push"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.map.call({}, x => x)"));
     }
 }

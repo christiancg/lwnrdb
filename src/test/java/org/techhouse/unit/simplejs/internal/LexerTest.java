@@ -190,6 +190,36 @@ public class LexerTest {
         assertEquals("field", ((JsPrivateIdentifier) tokens.getFirst()).getValue());
     }
 
+    // An identifier written with unicode escapes lexes to its cooked name
+    @Test
+    public void test_lex_identifier_with_unicode_escape() {
+        final List<JsBaseElement> tokens = Lexer.lex("\\u0061\\u{62}c");
+        assertInstanceOf(JsIdentifier.class, tokens.getFirst());
+        assertEquals("abc", ((JsIdentifier) tokens.getFirst()).getValue());
+    }
+
+    // A private name may also be written with unicode escapes
+    @Test
+    public void test_lex_private_identifier_with_unicode_escape() {
+        final List<JsBaseElement> tokens = Lexer.lex("#\\u{6F}_");
+        assertInstanceOf(JsPrivateIdentifier.class, tokens.getFirst());
+        assertEquals("o_", ((JsPrivateIdentifier) tokens.getFirst()).getValue());
+    }
+
+    // constructor is no longer a keyword
+    @Test
+    public void test_lex_constructor_is_an_identifier() {
+        final List<JsBaseElement> tokens = Lexer.lex("constructor");
+        assertInstanceOf(JsIdentifier.class, tokens.getFirst());
+        assertEquals("constructor", ((JsIdentifier) tokens.getFirst()).getValue());
+    }
+
+    // A reserved word spelled with an escape is rejected rather than lexed as an identifier
+    @Test
+    public void test_lex_escaped_keyword_throws() {
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("\\u0069\\u0066"));
+    }
+
     // A # not followed by an identifier is an unexpected character
     @Test
     public void test_lex_lone_hash_throws() {

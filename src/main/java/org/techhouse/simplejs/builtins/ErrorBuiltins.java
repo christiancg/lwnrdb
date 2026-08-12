@@ -12,7 +12,8 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class ErrorBuiltins {
-    private static final List<String> NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError", "URIError");
+    private static final List<String> NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError", "URIError",
+            "ReferenceError", "EvalError");
 
     private ErrorBuiltins() {
     }

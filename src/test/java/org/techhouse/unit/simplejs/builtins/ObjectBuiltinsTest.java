@@ -603,4 +603,58 @@ public class ObjectBuiltinsTest {
     public void test_get_own_property_descriptors_non_object_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptors(1)"));
     }
+
+    // a function's name is an own property, not only a lookup-time synthesis
+    @Test
+    public void test_function_name_is_an_own_property() {
+        assertTrue(flag("Object.prototype.hasOwnProperty.call(Array.prototype.join, 'name')"));
+        assertTrue(flag("function f(){} Object.hasOwn(f, 'name')"));
+    }
+
+    // a function's length is an own property
+    @Test
+    public void test_function_length_is_an_own_property() {
+        assertTrue(flag("function f(a, b){} Object.hasOwn(f, 'length')"));
+    }
+
+    // the name descriptor is non-writable, non-enumerable and configurable
+    @Test
+    public void test_function_name_descriptor_attributes() {
+        final var source = """
+                function foo(a, b){}
+                const d = Object.getOwnPropertyDescriptor(foo, 'name');
+                JSON.stringify([d.value, d.writable, d.enumerable, d.configurable])
+                """;
+        assertEquals("[\"foo\",false,false,true]", str(source));
+    }
+
+    // the prototype descriptor is writable, non-enumerable and non-configurable
+    @Test
+    public void test_function_prototype_descriptor_attributes() {
+        final var source = """
+                function foo(){}
+                const d = Object.getOwnPropertyDescriptor(foo, 'prototype');
+                JSON.stringify([d.value === foo.prototype, d.writable, d.enumerable, d.configurable])
+                """;
+        assertEquals("[true,true,false,false]", str(source));
+    }
+
+    // getOwnPropertyNames lists the synthesised metadata alongside script-assigned keys
+    @Test
+    public void test_get_own_property_names_of_a_function_includes_name_and_length() {
+        assertEquals("[\"length\",\"name\",\"prototype\",\"x\"]",
+                str("function f(a, b){} f.x = 1; JSON.stringify(Object.getOwnPropertyNames(f))"));
+    }
+
+    // a declared global reports a data descriptor on globalThis
+    @Test
+    public void test_get_own_property_descriptor_of_a_global() {
+        final var source = """
+                var gg = 7;
+                const d = Object.getOwnPropertyDescriptor(globalThis, 'gg');
+                JSON.stringify([d.value, d.writable, d.enumerable, d.configurable])
+                """;
+        assertEquals("[7,true,true,true]", str(source));
+        assertTrue(flag("Object.getOwnPropertyDescriptor(globalThis, 'neverDeclared') === undefined"));
+    }
 }

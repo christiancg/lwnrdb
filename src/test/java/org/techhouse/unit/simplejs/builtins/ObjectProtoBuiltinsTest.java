@@ -130,4 +130,44 @@ public class ObjectProtoBuiltinsTest {
         assertTrue(bool("const o = {}; Object.prototype.valueOf.call(o) === o"));
         assertTrue(bool("Object.prototype.valueOf.call(5) === 5"));
     }
+
+    // hasOwnProperty answers a symbol key from the symbol storage
+    @Test
+    public void test_has_own_property_with_symbol_key() {
+        assertTrue(bool("const s = Symbol('k'); const o = {}; o[s] = 1; Object.prototype.hasOwnProperty.call(o, s)"));
+    }
+
+    // an absent symbol key reports false rather than throwing
+    @Test
+    public void test_has_own_property_with_absent_symbol_key() {
+        assertFalse(bool("Object.prototype.hasOwnProperty.call({}, Symbol('z'))"));
+        assertFalse(bool("Object.prototype.hasOwnProperty.call(1, Symbol('z'))"));
+    }
+
+    // propertyIsEnumerable accepts a symbol key
+    @Test
+    public void test_property_is_enumerable_with_symbol_key() {
+        assertTrue(bool(
+                "const s = Symbol('k'); const o = {}; o[s] = 1; Object.prototype.propertyIsEnumerable.call(o, s)"));
+        assertFalse(bool("Object.prototype.propertyIsEnumerable.call({}, Symbol('z'))"));
+    }
+
+    // Object.hasOwn accepts a symbol key
+    @Test
+    public void test_object_has_own_with_symbol_key() {
+        assertTrue(bool("const s = Symbol('k'); const o = {}; o[s] = 1; Object.hasOwn(o, s)"));
+        assertFalse(bool("Object.hasOwn({}, Symbol('z'))"));
+    }
+
+    // a declared global is an own property of globalThis
+    @Test
+    public void test_has_own_property_on_global_this() {
+        assertTrue(bool("var g = 1; Object.prototype.hasOwnProperty.call(globalThis, 'g')"));
+    }
+
+    // an undeclared name is not an own property of globalThis
+    @Test
+    public void test_has_own_property_on_global_this_absent() {
+        assertFalse(bool("Object.prototype.hasOwnProperty.call(globalThis, 'notDeclaredAnywhere')"));
+    }
 }

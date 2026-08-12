@@ -114,6 +114,9 @@ public final class ClassEvaluator {
             cls.setConstructor(fn);
             return;
         }
+        if (!fn.isGenerator()) {
+            fn.markMethod();
+        }
         if (method.getKey() instanceof PrivateIdentifier priv) {
             if (method.isStatic()) {
                 cls.addPrivateStaticMethod(priv.getName(), kind, fn);

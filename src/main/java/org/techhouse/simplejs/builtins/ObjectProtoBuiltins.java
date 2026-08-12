@@ -11,6 +11,7 @@ import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
@@ -106,7 +107,13 @@ public final class ObjectProtoBuiltins {
 
     private static boolean hasOwnProperty(JsValue receiver, List<JsValue> args) {
         requireCoercible(receiver, "hasOwnProperty");
-        return !args.isEmpty() && ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(args.getFirst()));
+        if (args.isEmpty()) {
+            return false;
+        }
+        if (args.getFirst() instanceof JsSymbol symbol) {
+            return ObjectBuiltins.hasOwnSymbol(receiver, symbol);
+        }
+        return ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(args.getFirst()));
     }
 
     private static boolean isEnumerable(JsValue receiver, List<JsValue> args) {
@@ -114,12 +121,18 @@ public final class ObjectProtoBuiltins {
         if (args.isEmpty()) {
             return false;
         }
+        if (args.getFirst() instanceof JsSymbol symbol) {
+            return ObjectBuiltins.hasOwnSymbol(receiver, symbol);
+        }
         final var key = JsCoercion.toStr(args.getFirst());
         if (!ObjectBuiltins.hasOwnKey(receiver, key)) {
             return false;
         }
         if (receiver instanceof JsObject object) {
             return object.isEnumerable(key);
+        }
+        if (receiver instanceof JsCallableProperties callable) {
+            return callable.enumerablePropertyKeys().contains(key);
         }
         return !"length".equals(key);
     }

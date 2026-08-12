@@ -15,6 +15,8 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private final Environment closure;
     private final CallablePropertyStore properties = new CallablePropertyStore();
     private JsObject prototype;
+    // Concise methods and accessors are not constructors, so they have no `prototype` property.
+    private boolean method;
 
     public JsFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
             boolean async, boolean generator, Environment closure) {
@@ -54,6 +56,14 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
 
     public boolean isGenerator() {
         return generator;
+    }
+
+    public boolean isMethod() {
+        return method;
+    }
+
+    public void markMethod() {
+        this.method = true;
     }
 
     public Environment getClosure() {

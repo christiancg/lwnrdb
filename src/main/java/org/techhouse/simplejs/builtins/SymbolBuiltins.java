@@ -60,7 +60,7 @@ public final class SymbolBuiltins {
         return null;
     }
 
-    private static String describe(JsSymbol symbol) {
+    static String describe(JsSymbol symbol) {
         return "Symbol(" + (symbol.getDescription() == null ? "" : symbol.getDescription()) + ")";
     }
 

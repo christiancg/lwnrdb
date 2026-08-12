@@ -71,4 +71,32 @@ public class ErrorBuiltinsTest {
         assertTrue(bool("new AggregateError([], 'm') instanceof Error"));
         assertTrue(bool("Error.prototype.constructor === Error"));
     }
+
+    // the ReferenceError global is installed
+    @Test
+    public void test_reference_error_global_is_installed() {
+        assertTrue(bool("typeof ReferenceError === 'function'"));
+    }
+
+    // the EvalError global is installed
+    @Test
+    public void test_eval_error_global_is_installed() {
+        assertTrue(bool("typeof EvalError === 'function'"));
+    }
+
+    // a ReferenceError instance is branded as its own type and as an Error
+    @Test
+    public void test_reference_error_instance_is_branded() {
+        assertTrue(bool("new ReferenceError('x') instanceof ReferenceError"));
+        assertTrue(bool("new ReferenceError('x') instanceof Error"));
+        assertTrue(bool("new ReferenceError('x').name === 'ReferenceError'"));
+        assertTrue(bool("new EvalError('x') instanceof EvalError"));
+        assertFalse(bool("new EvalError('x') instanceof ReferenceError"));
+    }
+
+    // a runtime reference error is catchable as a ReferenceError
+    @Test
+    public void test_thrown_reference_error_is_catchable_as_its_type() {
+        assertTrue(bool("let ok = false; try { missingBinding } catch (e) { ok = e instanceof ReferenceError } ok"));
+    }
 }

@@ -34,10 +34,22 @@ public final class Lexer {
 
     private static final Set<String> JS_KEYWORD = Set.of("if", "do", "while", "for", "in", "of", "switch", "case",
             "default", "var", "let", "const", "break", "continue", "return", "try", "catch", "finally", "throw",
-            "async", "await", "yield", "function", "import", "export", "this", "constructor", "new", "class", "else",
-            "typeof", "instanceof", "void", "delete", "extends", "super");
+            "async", "await", "yield", "function", "import", "export", "this", "new", "class", "else", "typeof",
+            "instanceof", "void", "delete", "extends", "super");
+
+    // Reserved words a unicode escape may not spell: the literals plus the words the lexer keeps
+    // contextual or does not support, plus the strict future-reserved words.
+    private static final Set<String> ESCAPE_RESERVED = Set.of("true", "false", "null", "debugger", "enum", "with",
+            "implements", "interface", "package", "private", "protected", "public", "static");
 
     private static final Set<String> EXPRESSION_END_KEYWORDS = Set.of("this", "super");
+
+    private static final char ZWNJ = 0x200C;
+
+    private static final char ZWJ = 0x200D;
+
+    // A modifier letter to the JDK, but Pattern_Syntax to Unicode, so ES excludes it from identifiers.
+    private static final char VERTICAL_TILDE = 0x2E2F;
 
     private static final Set<Character> SEPARATORS = Set.of('(', ')', '{', '}', '[', ']', ';', ',');
 
@@ -47,6 +59,12 @@ public final class Lexer {
             "~", "?", ":", ".");
 
     private record Lexed(JsBaseElement token, int next) {
+    }
+
+    private record IdentifierScan(String name, int next, boolean escaped) {
+    }
+
+    private record EscapePoint(int point, int next) {
     }
 
     // Tokens plus the parallel list of source positions (one per token, EOF included) and the
@@ -95,9 +113,9 @@ public final class Lexer {
             } else if (Character.isDigit(c)
                     || (c == '.' && pos + 1 < n && Character.isDigit(sourceCode.charAt(pos + 1)))) {
                 lexed = lexNumber(sourceCode, pos);
-            } else if (Character.isLetter(c) || c == '_' || c == '$') {
+            } else if (isIdentifierStart(sourceCode, pos)) {
                 lexed = lexWord(sourceCode, pos);
-            } else if (c == '#' && pos + 1 < n && isIdentifierStart(sourceCode.charAt(pos + 1))) {
+            } else if (c == '#' && pos + 1 < n && isIdentifierStart(sourceCode, pos + 1)) {
                 lexed = lexPrivateIdentifier(sourceCode, pos);
             } else if (c == '/' && startsRegex(last)) {
                 lexed = lexRegex(sourceCode, pos);
@@ -327,45 +345,107 @@ public final class Lexer {
     }
 
     private static Lexed lexWord(String src, int start) {
-        final var n = src.length();
-        var i = start;
-        while (i < n) {
-            final var c = src.charAt(i);
-            if (Character.isLetterOrDigit(c) || c == '_' || c == '$') {
-                i++;
-            } else {
-                break;
-            }
+        final var scan = scanIdentifier(src, start);
+        final var word = scan.name();
+        // A reserved word may not be written with an escape, so an escaped `if` is a SyntaxError
+        // rather than an identifier named "if".
+        if (scan.escaped() && (JS_KEYWORD.contains(word) || ESCAPE_RESERVED.contains(word))) {
+            throw new SyntaxErrorException("Keyword must not contain escaped characters: " + word);
         }
-        final var word = src.substring(start, i);
         final JsBaseElement token = switch (word) {
             case "true" -> new JsBoolean(true);
             case "false" -> new JsBoolean(false);
             case "null" -> JsNull.getInstance();
             case "undefined" -> JsUndefined.getInstance();
-            default -> JS_KEYWORD.contains(word) ? new JsKeyword(word) : new JsIdentifier(word);
+            default -> JS_KEYWORD.contains(word) ? new JsKeyword(word) : new JsIdentifier(word, scan.escaped());
         };
-        return new Lexed(token, i);
+        return new Lexed(token, scan.next());
     }
 
     // A private identifier is a `#` immediately followed by an identifier; the leading `#` is
     // dropped and only the name is stored.
     private static Lexed lexPrivateIdentifier(String src, int start) {
-        final var n = src.length();
-        var i = start + 1;
-        while (i < n) {
-            final var c = src.charAt(i);
-            if (Character.isLetterOrDigit(c) || c == '_' || c == '$') {
-                i++;
-            } else {
-                break;
-            }
-        }
-        return new Lexed(new JsPrivateIdentifier(src.substring(start + 1, i)), i);
+        final var scan = scanIdentifier(src, start + 1);
+        return new Lexed(new JsPrivateIdentifier(scan.name()), scan.next());
     }
 
-    private static boolean isIdentifierStart(char c) {
-        return Character.isLetter(c) || c == '_' || c == '$';
+    // Walks the cooked identifier: every position is either an identifier code point or a unicode
+    // escape whose decoded code point must itself be valid there.
+    private static IdentifierScan scanIdentifier(String src, int start) {
+        final var n = src.length();
+        final var builder = new StringBuilder();
+        var i = start;
+        var escaped = false;
+        while (i < n) {
+            if (src.charAt(i) == '\\') {
+                final var decoded = decodeIdentifierEscape(src, i);
+                if (isNotValidAt(decoded.point(), builder.isEmpty())) {
+                    throw new UnexpectedCharacterException('\\', i);
+                }
+                builder.appendCodePoint(decoded.point());
+                i = decoded.next();
+                escaped = true;
+                continue;
+            }
+            final var point = src.codePointAt(i);
+            if (isNotValidAt(point, builder.isEmpty())) {
+                break;
+            }
+            builder.appendCodePoint(point);
+            i += Character.charCount(point);
+        }
+        return new IdentifierScan(builder.toString(), i, escaped);
+    }
+
+    private static EscapePoint decodeIdentifierEscape(String src, int i) {
+        final var n = src.length();
+        if (i + 1 >= n || src.charAt(i + 1) != 'u') {
+            throw new UnexpectedCharacterException('\\', i);
+        }
+        if (i + 2 < n && src.charAt(i + 2) == '{') {
+            final var end = src.indexOf('}', i + 3);
+            if (end < 0) {
+                throw new UnexpectedCharacterException('\\', i);
+            }
+            return new EscapePoint(parseCodePoint(src.substring(i + 3, end), i), end + 1);
+        }
+        if (i + 6 > n) {
+            throw new UnexpectedCharacterException('\\', i);
+        }
+        return new EscapePoint(parseCodePoint(src.substring(i + 2, i + 6), i), i + 6);
+    }
+
+    private static int parseCodePoint(String digits, int offset) {
+        try {
+            return Integer.parseInt(digits, 16);
+        } catch (NumberFormatException ignored) {
+            throw new UnexpectedCharacterException('\\', offset);
+        }
+    }
+
+    private static boolean isNotValidAt(int point, boolean atStart) {
+        return atStart ? !isIdentifierStartPoint(point) : !isIdentifierPartPoint(point);
+    }
+
+    private static boolean isIdentifierStartPoint(int point) {
+        return (Character.isUnicodeIdentifierStart(point) && point != VERTICAL_TILDE) || point == '$' || point == '_';
+    }
+
+    // The JDK counts every format character as an identifier part; ES admits only ZWNJ and ZWJ.
+    private static boolean isIdentifierPartPoint(int point) {
+        if (point == '$' || point == ZWNJ || point == ZWJ) {
+            return true;
+        }
+        return Character.isUnicodeIdentifierPart(point) && !Character.isIdentifierIgnorable(point)
+                && point != VERTICAL_TILDE;
+    }
+
+    private static boolean isIdentifierStart(String src, int pos) {
+        final var c = src.charAt(pos);
+        if (c == '\\') {
+            return pos + 1 < src.length() && src.charAt(pos + 1) == 'u';
+        }
+        return isIdentifierStartPoint(src.codePointAt(pos));
     }
 
     // A slash begins a regex only when the previous significant token cannot end an

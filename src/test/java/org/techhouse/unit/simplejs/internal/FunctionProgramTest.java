@@ -214,11 +214,12 @@ public class FunctionProgramTest {
         assertEquals("undefined", str("function f(){} f.x = 1; delete f.x; typeof f.x"));
     }
 
-    // Own keys report script-assigned properties only: name/length/prototype stay unreported
+    // Enumerable own keys are the script-assigned ones; name/length/prototype are own but not enumerable
     @Test
     public void test_function_own_keys() {
         assertEquals("[\"x\"]", str("function f(a, b){} f.x = 1; JSON.stringify(Object.keys(f))"));
-        assertEquals("[\"x\"]", str("function f(){} f.x = 1; JSON.stringify(Object.getOwnPropertyNames(f))"));
+        assertEquals("[\"length\",\"name\",\"prototype\",\"x\"]",
+                str("function f(){} f.x = 1; JSON.stringify(Object.getOwnPropertyNames(f))"));
     }
 
     // Builtin statics on a native function stay non-enumerable, as the spec requires
