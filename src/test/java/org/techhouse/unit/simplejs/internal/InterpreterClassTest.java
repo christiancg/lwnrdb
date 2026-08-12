@@ -482,4 +482,147 @@ public class InterpreterClassTest {
         assertThrows(RuntimeException.class, () -> Interpreter.run("new.other"));
     }
 
+    // A computed method key that coerces to a non-symbol string installs under that string name
+    @Test
+    public void test_computed_method_key_coerces_to_string() {
+        assertEquals(4, num("class C { [1 + 1]() { return 4; } } new C()['2']()"));
+    }
+
+    // A computed static field key evaluating to a symbol is stored on the static symbol table
+    @Test
+    public void test_static_field_computed_symbol_key() {
+        assertEquals(1, num("class A { static [Symbol.for('k')] = 1; } A[Symbol.for('k')]"));
+    }
+
+    // A computed static field key that coerces to a string is stored as a normal static prop
+    @Test
+    public void test_static_field_computed_string_key() {
+        assertEquals(2, num("class A { static [1 + 1] = 2; } A['2']"));
+    }
+
+    // An abrupt completion (break) inside a static block stops processing later static members
+    @Test
+    public void test_static_block_break_stops_early() {
+        final var source = """
+                class A {
+                    static out = 1;
+                    static {
+                        A.out = 2;
+                        break;
+                        A.out = 99;
+                    }
+                }
+                A.out
+                """;
+        assertEquals(2, num(source));
+    }
+
+    // An instance field declared with no initializer defaults to undefined
+    @Test
+    public void test_instance_field_without_initializer() {
+        assertEquals("undefined", str("class A { x; } typeof (new A()).x"));
+    }
+
+    // A computed instance field key that coerces to a non-symbol string sets that named property
+    @Test
+    public void test_instance_field_computed_string_key() {
+        assertEquals(5, num("class A { ['x' + 'y'] = 5; } new A().xy"));
+    }
+
+    // Calling super() where `this` is not an object instance (e.g. a static method) is rejected
+    @Test
+    public void test_super_call_outside_constructor() {
+        final var source = """
+                class Base {}
+                class Sub extends Base {
+                    static test() { super(); }
+                }
+                Sub.test()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // super.method() dispatches through a parent static getter that returns a callable
+    @Test
+    public void test_super_static_getter_call() {
+        final var source = """
+                class Base { static get make() { return function() { return 5; }; } }
+                class Sub extends Base { static test() { return super.make(); } }
+                Sub.test()
+                """;
+        assertEquals(5, num(source));
+    }
+
+    // super.method() with neither a method nor a getter on the parent static side throws
+    @Test
+    public void test_super_static_call_not_found() {
+        final var source = """
+                class Base {}
+                class Sub extends Base { static test() { return super.missing(); } }
+                Sub.test()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // super.method() on the instance side where the resolved value is not callable throws
+    @Test
+    public void test_super_instance_call_not_callable() {
+        final var source = """
+                class Base { get prop() { return 5; } }
+                class Sub extends Base { call() { return super.prop(); } }
+                new Sub().call()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // super.prop reads a parent static getter (not a call)
+    @Test
+    public void test_super_static_getter_read() {
+        final var source = """
+                class Base { static get val() { return 7; } }
+                class Sub extends Base { static read() { return super.val; } }
+                Sub.read()
+                """;
+        assertEquals(7, num(source));
+    }
+
+    // super.prop reads a plain parent static field (no getter, no method)
+    @Test
+    public void test_super_static_plain_field_read() {
+        final var source = """
+                class Base { static x = 42; }
+                class Sub extends Base { static read() { return super.x; } }
+                Sub.read()
+                """;
+        assertEquals(42, num(source));
+    }
+
+    // super.prop on the instance side falls through to undefined when nothing matches
+    @Test
+    public void test_super_instance_property_read_missing() {
+        final var source = """
+                class Base {}
+                class Sub extends Base { call() { return super.missingProp; } }
+                typeof new Sub().call()
+                """;
+        assertEquals("undefined", str(source));
+    }
+
+    // instanceof against a bound function delegates to the bound target
+    @Test
+    public void test_instanceof_bound_function() {
+        assertTrue(bool("function F() {} const B = F.bind(null); new F() instanceof B"));
+    }
+
+    // instanceof against a native function with no prototype is false
+    @Test
+    public void test_instanceof_native_function_without_prototype() {
+        assertFalse(bool("5 instanceof parseInt"));
+    }
+
+    // instanceof against an unrelated native constructor's prototype is false
+    @Test
+    public void test_instanceof_native_prototype_mismatch() {
+        assertFalse(bool("[] instanceof Map"));
+    }
 }

@@ -170,4 +170,51 @@ public class ObjectProtoBuiltinsTest {
     public void test_has_own_property_on_global_this_absent() {
         assertFalse(bool("Object.prototype.hasOwnProperty.call(globalThis, 'notDeclaredAnywhere')"));
     }
+
+    // hasOwnProperty and propertyIsEnumerable with no key argument report false
+    @Test
+    public void test_has_own_property_and_enumerable_no_args() {
+        assertFalse(bool("({}).hasOwnProperty()"));
+        assertFalse(bool("({a: 1}).propertyIsEnumerable()"));
+    }
+
+    // propertyIsEnumerable on a callable receiver reads its own enumerable property keys
+    @Test
+    public void test_property_is_enumerable_on_function() {
+        assertTrue(bool("function f() {} f.x = 1; Object.prototype.propertyIsEnumerable.call(f, 'x')"));
+        assertFalse(bool("function f() {} Object.prototype.propertyIsEnumerable.call(f, 'name')"));
+    }
+
+    // isPrototypeOf falls back to the intrinsic Object.prototype when a chain dead-ends at an explicit
+    // null proto rather than reaching it naturally
+    @Test
+    public void test_is_prototype_of_falls_back_past_explicit_null_proto() {
+        assertTrue(bool("let p = {}; Object.setPrototypeOf(p, null); let o = Object.create(p); "
+                + "Object.prototype.isPrototypeOf(o)"));
+    }
+
+    // toString.call brands cover the remaining builtin types
+    @Test
+    public void test_to_string_call_more_brands() {
+        assertEquals("[object Function]", strOf("Object.prototype.toString.call(Array.prototype.push)"));
+        assertEquals("[object Function]", strOf("Object.prototype.toString.call(class {})"));
+        assertEquals("[object BigInt]", strOf("Object.prototype.toString.call(1n)"));
+        assertEquals("[object Symbol]", strOf("Object.prototype.toString.call(Symbol())"));
+        assertEquals("[object Promise]", strOf("Object.prototype.toString.call(Promise.resolve())"));
+        assertEquals("[object Generator]", strOf("function* g() {} Object.prototype.toString.call(g())"));
+        assertEquals("[object AsyncGenerator]", strOf("async function* g() {} Object.prototype.toString.call(g())"));
+        assertEquals("[object ArrayBuffer]", strOf("Object.prototype.toString.call(new ArrayBuffer(4))"));
+        assertEquals("[object DataView]", strOf("Object.prototype.toString.call(new DataView(new ArrayBuffer(4)))"));
+        assertEquals("[object Uint8Array]", strOf("Object.prototype.toString.call(new Uint8Array(2))"));
+        assertEquals("[object global]", strOf("Object.prototype.toString.call(globalThis)"));
+        assertEquals("[object Array]", strOf("Object.prototype.toString.call(new Proxy([], {}))"));
+    }
+
+    // a primitive-wrapper receiver (created via new String/Number/Boolean) reports its boxed brand
+    @Test
+    public void test_to_string_call_primitive_wrapper_brands() {
+        assertEquals("[object Number]", strOf("Object.prototype.toString.call(new Number(1))"));
+        assertEquals("[object String]", strOf("Object.prototype.toString.call(new String('a'))"));
+        assertEquals("[object Boolean]", strOf("Object.prototype.toString.call(new Boolean(true))"));
+    }
 }

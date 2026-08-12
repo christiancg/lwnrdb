@@ -50,6 +50,14 @@ public class IntrinsicsTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
+    private static boolean bool(String source) {
+        return ((JsBoolean) Interpreter.run(source)).getValue();
+    }
+
+    private static double num(String source) {
+        return ((JsNumber) Interpreter.run(source)).getValue();
+    }
+
     private static Intrinsics intrinsics() {
         return new Intrinsics((fn, thisArg, args) -> ((JsNativeFunction) fn).invoke(thisArg, args), null,
                 new org.techhouse.simplejs.internal.EventLoop(), (_, _, _) -> JsUndefined.getInstance());
@@ -275,5 +283,108 @@ public class IntrinsicsTest {
         final var error = assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call(1)"));
         assertTrue(error.getMessage().contains("Array.prototype.push"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.map.call({}, x => x)"));
+    }
+
+    // Boolean.prototype.valueOf/toString accept a real boolean receiver and reject anything else
+    @Test
+    public void test_boolean_prototype_valueof_and_incompatible_receiver() {
+        assertTrue(bool("(true).valueOf() === true"));
+        assertEquals("true", run("(true).toString()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Boolean.prototype.valueOf.call(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Boolean.prototype.toString.call(5)"));
+    }
+
+    // a boxed Boolean wrapper (new Boolean(...)) unwraps through valueOf/toString
+    @Test
+    public void test_boolean_wrapper_unwraps() {
+        assertTrue(bool("(new Boolean(true)).valueOf() === true"));
+        assertEquals("true", run("(new Boolean(true)).toString()"));
+    }
+
+    // a boxed Number wrapper (new Number(...)) unwraps through a Number.prototype method
+    @Test
+    public void test_number_wrapper_unwraps() {
+        assertEquals("5.00", run("(new Number(5)).toFixed(2)"));
+    }
+
+    // every prototype family reports the same incompatible-receiver TypeError for a plain number
+    @Test
+    public void test_incompatible_receiver_throws_for_every_prototype_family() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.charAt.call(5, 0)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.prototype.toString.call(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Symbol.prototype.toString.call(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("RegExp.prototype.test.call(5, 'a')"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise.prototype.then.call(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Set.prototype.has.call(5, 1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Date.prototype.getTime.call(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("ArrayBuffer.prototype.slice.call(5, 0)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("DataView.prototype.getUint8.call(5, 0)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Int8Array.prototype.fill.call(5, 1)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Uint8Array.prototype.toBase64.call(new Int8Array(1))"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Error.prototype.toString.call(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Function.prototype.call.call(5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let g = (function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let g = (async function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
+    }
+
+    // a subclass of BigInt with no JsObject internal state wraps the produced primitive, so a
+    // BigInt.prototype method resolves the receiver via the unwrap fallback rather than direct instanceof
+    @Test
+    public void test_bigint_subclass_unwraps() {
+        assertEquals("5", run("class B extends BigInt { constructor(v) { super(v); } } new B(5).toString()"));
+    }
+
+    // a subclass of Symbol wraps the produced primitive for Symbol.prototype methods
+    @Test
+    public void test_symbol_subclass_unwraps() {
+        assertEquals("Symbol(x)", run("class S extends Symbol { constructor(d) { super(d); } } new S('x').toString()"));
+    }
+
+    // a subclass of RegExp wraps the produced primitive for RegExp.prototype methods
+    @Test
+    public void test_regexp_subclass_unwraps() {
+        assertTrue(bool("class R extends RegExp { constructor(p) { super(p); } } new R('a').test('a')"));
+    }
+
+    // a subclass of Promise wraps the produced primitive for Promise.prototype methods
+    @Test
+    public void test_promise_subclass_unwraps() {
+        assertEquals("object", run("class P extends Promise { constructor(e) { super(e); } } "
+                + "typeof new P((res) => res(1)).then(() => {})"));
+    }
+
+    // a subclass of Set wraps the produced primitive for Set.prototype methods
+    @Test
+    public void test_set_subclass_unwraps() {
+        assertTrue(bool("class MySet extends Set { constructor(v) { super(v); } } new MySet([1, 2]).has(1)"));
+    }
+
+    // a subclass of Date wraps the produced primitive for Date.prototype methods
+    @Test
+    public void test_date_subclass_unwraps() {
+        assertEquals(0, num("class D extends Date { constructor(v) { super(v); } } new D(0).getTime()"));
+    }
+
+    // a subclass of ArrayBuffer wraps the produced primitive for ArrayBuffer.prototype methods
+    @Test
+    public void test_array_buffer_subclass_unwraps() {
+        assertEquals(4,
+                num("class Buf extends ArrayBuffer { constructor(n) { super(n); } } new Buf(4).slice(0).byteLength"));
+    }
+
+    // a subclass of DataView wraps the produced primitive for DataView.prototype methods
+    @Test
+    public void test_data_view_subclass_unwraps() {
+        assertEquals(0,
+                num("class V extends DataView { constructor(b) { super(b); } } new V(new ArrayBuffer(4)).getInt8(0)"));
+    }
+
+    // a subclass of a TypedArray wraps the produced primitive for %TypedArray%.prototype methods
+    @Test
+    public void test_typed_array_subclass_unwraps() {
+        assertEquals(1, num("class T extends Int8Array { constructor(n) { super(n); } } new T(4).fill(1)[0]"));
     }
 }

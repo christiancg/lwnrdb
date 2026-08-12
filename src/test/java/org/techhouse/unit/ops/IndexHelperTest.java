@@ -285,6 +285,25 @@ public class IndexHelperTest {
         assertTrue(index == null || index.stream().noneMatch(e -> e.getIds().contains("del1")));
     }
 
+    // updateIndexes for a document that still exists but whose field value became null removes it
+    // from the scalar indexes (as opposed to a DELETED event, where the document itself is gone)
+    @Test
+    public void test_update_indexes_field_value_became_null_removes_scalar_entry()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "active");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("active"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("b1", "active", JsonNull.INSTANCE));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "b1");
+
+        final var boolIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "active",
+                Boolean.class);
+        assertTrue(boolIndex == null || boolIndex.stream().noneMatch(e -> e.getIds().contains("b1")));
+    }
+
     // getIndexEntriesForField returns null when the field has no index (caller falls back to scan)
     @Test
     public void test_get_index_entries_for_field_returns_null_when_no_index() throws IOException {
@@ -603,5 +622,337 @@ public class IndexHelperTest {
 
         assertNotNull(result);
         assertEquals(Set.of("r1", "r3"), result);
+    }
+
+    // getIndexEntriesForField throws IOException when the calling thread is interrupted while
+    // blocked acquiring the field's index read lock (blocked here by a write lock held elsewhere)
+    @Test
+    public void test_getIndexEntriesForField_interrupted_while_acquiring_read_lock() throws Exception {
+        String fieldName = "lockedField";
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("l1", fieldName, new JsonString("v")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, fieldName);
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(fieldName));
+
+        final var rl = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        rl.lockIndex(TestGlobals.DB, TestGlobals.COLL, fieldName);
+        try {
+            final var caught = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            final var readyLatch = new java.util.concurrent.CountDownLatch(1);
+            final var reader = new Thread(() -> {
+                readyLatch.countDown();
+                try {
+                    IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, fieldName);
+                } catch (Throwable t) {
+                    caught.set(t);
+                }
+            });
+            reader.start();
+            readyLatch.await();
+            Thread.sleep(200);
+            reader.interrupt();
+            reader.join(2000);
+
+            assertInstanceOf(IOException.class, caught.get());
+            assertInstanceOf(InterruptedException.class, caught.get().getCause());
+        } finally {
+            rl.releaseIndex(TestGlobals.DB, TestGlobals.COLL, fieldName);
+        }
+    }
+
+    // getIndexEntriesForField records the field as index-used and its read lock as acquired when an
+    // analyze context is active on the calling thread
+    @Test
+    public void test_getIndexEntriesForField_records_analyze_context() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("a1", "tag", new JsonString("alpha")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tag");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("tag"));
+
+        final var analyzeContext = new org.techhouse.analyze.AnalyzeContext();
+        org.techhouse.analyze.AnalyzeContext.set(analyzeContext);
+        try {
+            final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag");
+            assertNotNull(entries);
+            assertTrue(analyzeContext.getIndexesUsed().contains("tag"));
+            assertTrue(analyzeContext.getLocksAcquired().contains(
+                    org.techhouse.analyze.AnalyzeContext.fieldLockId(TestGlobals.DB, TestGlobals.COLL, "tag")));
+        } finally {
+            org.techhouse.analyze.AnalyzeContext.clear();
+        }
+    }
+
+    // addHashIndexEntries skips a hash-matched id whose current document no longer has the field, or
+    // whose value changed from object to a scalar without the index having been updated yet (the
+    // background-processing lag the object/array hash index tolerates)
+    @Test
+    public void test_getIndexEntriesForField_hash_index_skips_stale_entries() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("keep1", "data", objectValue(1)), entryWith("gone1", "data", objectValue(2)),
+                entryWith("scalarNow1", "data", objectValue(3)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var withoutField = new JsonObject();
+        withoutField.add(Globals.PK_FIELD, new JsonString("gone1"));
+        final var goneEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, withoutField);
+        goneEntry.set_id("gone1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, goneEntry);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+                entryWith("scalarNow1", "data", new JsonString("no-longer-an-object")));
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertTrue(allIds.contains("keep1"));
+        assertFalse(allIds.contains("gone1"));
+        assertFalse(allIds.contains("scalarNow1"));
+    }
+
+    // reconcilePending skips a pending document that no longer has the indexed field at all
+    @Test
+    public void test_reconcilePending_doc_missing_field_is_skipped() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        final var indexed = entryWith("has1", "status", new JsonString("active"));
+        final var missingFieldDoc = new JsonObject();
+        missingFieldDoc.add(Globals.PK_FIELD, new JsonString("missing1"));
+        final var pendingEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, missingFieldDoc);
+        pendingEntry.set_id("missing1");
+        setupCollection(cache, indexed, pendingEntry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
+
+        IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL,
+                "missing1");
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+        assertNotNull(entries);
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertFalse(allIds.contains("missing1"));
+        assertTrue(allIds.contains("has1"));
+    }
+
+    // reconcilePending adds a second pending null-valued document to the null entry created by the
+    // first one processed in the same reconciliation pass (null entries are never preloaded from the
+    // index, only ever created while reconciling pending writes)
+    @Test
+    public void test_reconcilePending_second_null_value_joins_first_pending_null_entry() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("s1", "status", new JsonString("active")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("null1", "status", JsonNull.INSTANCE));
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("null2", "status", JsonNull.INSTANCE));
+        final var pendingWrites = IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
+        pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "null1");
+        pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "null2");
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
+        assertNotNull(entries);
+        final var nullEntry = entries.stream().filter(e -> e.getValue() == JsonNull.INSTANCE).findFirst().orElseThrow();
+        assertEquals(Set.of("null1", "null2"), nullEntry.getIds());
+    }
+
+    // reconcilePending creates a fresh Boolean-valued entry (scalarEntryFor) for a pending document
+    // whose value was never indexed before
+    @Test
+    public void test_reconcilePending_new_boolean_value_creates_entry_via_scalarEntryFor() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("b1", "flag", new JsonBoolean(true)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "flag");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("flag"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", new JsonBoolean(false)));
+        IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "b2");
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "flag");
+        assertNotNull(entries);
+        assertEquals(2, entries.size());
+        final var falseEntry = entries.stream().filter(e -> Boolean.FALSE.equals(e.getValue())).findFirst()
+                .orElseThrow();
+        assertEquals(Set.of("b2"), falseEntry.getIds());
+    }
+
+    // reconcilePending creates a fresh custom-typed entry (scalarEntryFor) for a pending document
+    // whose custom value was never indexed before
+    @Test
+    public void test_reconcilePending_new_custom_value_creates_entry_via_scalarEntryFor() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("ct1", "startTime", new JsonTime("#time(08:00:00)")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "startTime");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("startTime"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+                entryWith("ct2", "startTime", new JsonTime("#time(09:00:00)")));
+        IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "ct2");
+
+        final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "startTime");
+        assertNotNull(entries);
+        assertEquals(2, entries.size());
+        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
+                .collect(java.util.stream.Collectors.toSet());
+        assertEquals(Set.of("ct1", "ct2"), allIds);
+    }
+
+    // elementToLookupValue returns a custom-typed element unchanged (used as the lookup key itself)
+    @Test
+    public void test_element_to_lookup_value_returns_custom_instance_itself() {
+        final var custom = new JsonTime("#time(10:00:00)");
+        assertSame(custom, IndexHelper.elementToLookupValue(custom));
+    }
+
+    // getMatchingIdsForJoin skips null-valued and object-valued local join keys, matching only the
+    // scalar value against the remote index
+    @Test
+    public void test_get_matching_ids_for_join_skips_null_and_object_values() throws IOException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
+                entryWith("r2", "refKey", new JsonNumber(7)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("refKey"));
+
+        final var localValues = new java.util.HashSet<JsonBaseElement>();
+        localValues.add(JsonNull.INSTANCE);
+        localValues.add(new JsonObject());
+        localValues.add(new JsonNumber(42));
+
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
+
+        assertNotNull(result);
+        assertEquals(Set.of("r1"), result);
+    }
+
+    // updateIndexes for a new document whose object value already matches an existing hash entry adds
+    // its id to that entry instead of creating a new one
+    @Test
+    public void test_update_indexes_object_value_joins_existing_hash_entry() throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("o1", "data", objectValue(1)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("o2", "data", objectValue(1)));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "o2");
+
+        final var objIndex = readHashIndex(IndexKind.OBJECT);
+        assertNotNull(objIndex);
+        assertEquals(1, objIndex.size());
+        assertEquals(Set.of("o1", "o2"), objIndex.getFirst().getIds());
+    }
+
+    // updateIndexes for a document whose value changes from a custom type to a plain string removes
+    // the old custom-typed entry (found by scanning the registered custom types) and indexes the new
+    // string value
+    @Test
+    public void test_update_indexes_custom_value_changed_to_plain_string_removes_custom_entry()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("ct1", "startTime", new JsonTime("#time(08:00:00)"));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "startTime");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("startTime"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+                entryWith("ct1", "startTime", new JsonString("not-a-time-anymore")));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "ct1");
+
+        final var timeIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime",
+                JsonTime.class);
+        assertTrue(timeIndex == null || timeIndex.stream().noneMatch(e -> e.getIds().contains("ct1")));
+
+        final var stringIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime",
+                String.class);
+        assertNotNull(stringIndex);
+        assertTrue(stringIndex.stream().anyMatch(e -> e.getIds().contains("ct1")));
+    }
+
+    // updateIndexes for a new document whose custom value already matches an existing custom-typed
+    // entry adds its id to that entry instead of creating a new one
+    @Test
+    public void test_update_indexes_new_doc_with_matching_existing_custom_value_joins_entry()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("ct1", "startTime", new JsonTime("#time(08:00:00)"));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "startTime");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("startTime"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+                entryWith("ct2", "startTime", new JsonTime("#time(08:00:00)")));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "ct2");
+
+        final var timeIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "startTime",
+                JsonTime.class);
+        assertNotNull(timeIndex);
+        assertEquals(1, timeIndex.size());
+        assertEquals(Set.of("ct1", "ct2"), timeIndex.getFirst().getIds());
+    }
+
+    // updateIndexes for a document whose value changes from boolean to number removes the boolean
+    // entry (toRemoveBoolean branch) and indexes the new number value
+    @Test
+    public void test_update_indexes_boolean_to_number_type_change_removes_boolean_entry()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "active");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("active"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("b1", "active", new JsonNumber(1)));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "b1");
+
+        final var boolIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "active",
+                Boolean.class);
+        assertTrue(boolIndex == null || boolIndex.stream().noneMatch(e -> e.getIds().contains("b1")));
+
+        final var numberIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "active",
+                Double.class);
+        assertNotNull(numberIndex);
+        assertTrue(numberIndex.stream().anyMatch(e -> e.getIds().contains("b1")));
+    }
+
+    // updateIndexes for the first-ever custom value on a field that previously only held numbers
+    // finds no existing custom-typed index (null) and creates a fresh one
+    @Test
+    public void test_update_indexes_first_custom_value_for_field_creates_entry()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("m1", "mixedField", new JsonNumber(5));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "mixedField");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("mixedField"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+                entryWith("m2", "mixedField", new JsonTime("#time(08:00:00)")));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "m2");
+
+        final var timeIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "mixedField",
+                JsonTime.class);
+        assertNotNull(timeIndex);
+        assertTrue(timeIndex.stream().anyMatch(e -> e.getIds().contains("m2")));
+    }
+
+    // updateIndexes for the first-ever boolean value on a field that previously only held custom
+    // values finds no existing boolean index (null) and creates a fresh one
+    @Test
+    public void test_update_indexes_first_boolean_value_for_field_creates_entry()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        DbEntry entry = entryWith("m1", "mixedField2", new JsonTime("#time(08:00:00)"));
+        setupCollection(cache, entry);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "mixedField2");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("mixedField2"));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("m2", "mixedField2", new JsonBoolean(true)));
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "m2");
+
+        final var boolIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "mixedField2",
+                Boolean.class);
+        assertNotNull(boolIndex);
+        assertTrue(boolIndex.stream().anyMatch(e -> e.getIds().contains("m2")));
     }
 }

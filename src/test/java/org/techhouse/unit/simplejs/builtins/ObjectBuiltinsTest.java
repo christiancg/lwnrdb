@@ -657,4 +657,144 @@ public class ObjectBuiltinsTest {
         assertEquals("[7,true,true,true]", str(source));
         assertTrue(flag("Object.getOwnPropertyDescriptor(globalThis, 'neverDeclared') === undefined"));
     }
+
+    // Object() called as a plain function coerces a primitive to a plain object but returns an
+    // object/array/function argument unchanged
+    @Test
+    public void test_object_called_as_function() {
+        assertTrue(bool2("typeof Object(5) === 'object'"));
+        assertTrue(bool2("let o = {a: 1}; Object(o) === o"));
+        assertTrue(bool2("let a = [1]; Object(a) === a"));
+        assertTrue(bool2("let f = function() {}; Object(f) === f"));
+        assertTrue(bool2("typeof Object() === 'object'"));
+    }
+
+    // Object.hasOwn with a missing second argument reports false
+    @Test
+    public void test_has_own_requires_two_args() {
+        assertFalse(flag("Object.hasOwn({a: 1})"));
+    }
+
+    // Object.hasOwn reports own index presence on a typed array and a script-assigned array property
+    @Test
+    public void test_has_own_typed_array_and_array_custom_property() {
+        assertTrue(flag("Object.hasOwn(new Int8Array(3), 1)"));
+        assertFalse(flag("Object.hasOwn(new Int8Array(3), 5)"));
+        assertTrue(flag("let a = []; a.custom = 1; Object.hasOwn(a, 'custom')"));
+        assertFalse(flag("Object.hasOwn([], 'missing')"));
+    }
+
+    // Object.values/entries over a proxy re-filter down to enumerable string keys via the ownKeys and
+    // getOwnPropertyDescriptor traps, falling back to the target when the traps are absent
+    @Test
+    public void test_values_entries_over_proxy() {
+        assertEquals("1,2", str("Object.values(new Proxy({a: 1, b: 2}, {})).join(',')"));
+        assertEquals("a=1,b=2",
+                str("Object.entries(new Proxy({a: 1, b: 2}, {})).map(e => e[0] + '=' + e[1]).join(',')"));
+    }
+
+    // Object.values/entries over a callable read its script-assigned enumerable properties
+    @Test
+    public void test_values_entries_over_function() {
+        assertEquals("1", str("function f() {} f.x = 1; Object.values(f).join(',')"));
+        assertEquals("x=1", str("function f() {} f.x = 1; Object.entries(f).map(e => e[0] + '=' + e[1]).join(',')"));
+    }
+
+    // Object.entries over an array pairs each index string with its element
+    @Test
+    public void test_entries_over_array() {
+        assertEquals("0=a,1=b", str("Object.entries(['a', 'b']).map(e => e[0] + '=' + e[1]).join(',')"));
+    }
+
+    // assign with a non-object target and no sources returns the target argument unchanged
+    @Test
+    public void test_assign_non_object_target() {
+        assertEquals(5, num("Object.assign(5)"));
+    }
+
+    // isFrozen/isSealed/isExtensible report the trivial defaults for non-object, non-array values
+    @Test
+    public void test_is_frozen_sealed_extensible_on_primitives() {
+        assertTrue(flag("Object.isFrozen(5)"));
+        assertTrue(flag("Object.isSealed('a')"));
+        assertFalse(flag("Object.isExtensible(true)"));
+    }
+
+    // changing the enumerable flag of a non-configurable property is rejected
+    @Test
+    public void test_redefine_enumerable_change_rejected() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run(
+                        "let o = {}; Object.defineProperty(o, 'x', {value: 1, enumerable: true, configurable: false}); "
+                                + "Object.defineProperty(o, 'x', {enumerable: false});"));
+    }
+
+    // changing the setter of a non-configurable accessor is rejected
+    @Test
+    public void test_redefine_accessor_setter_change_rejected() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; let s = function(v) {}; "
+                        + "Object.defineProperty(o, 'x', { set: s, configurable: false }); "
+                        + "Object.defineProperty(o, 'x', { set(v) {} });"));
+    }
+
+    // flipping writable from false to true on a non-configurable property is rejected
+    @Test
+    public void test_redefine_writable_false_to_true_rejected() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let o = {}; Object.defineProperty(o, 'x', "
+                        + "{ value: 1, writable: false, configurable: false }); "
+                        + "Object.defineProperty(o, 'x', { writable: true });"));
+    }
+
+    // getOwnPropertyNames over a proxy delegates to the ownKeys trap, falling back to the target
+    @Test
+    public void test_get_own_property_names_over_proxy() {
+        assertEquals("a,b", str("Object.getOwnPropertyNames(new Proxy({a: 1, b: 2}, {})).join(',')"));
+    }
+
+    // getOwnPropertyNames over globalThis lists every declared global name, not just enumerable ones
+    @Test
+    public void test_get_own_property_names_over_global_this() {
+        assertTrue(flag("Object.getOwnPropertyNames(globalThis).includes('NaN')"));
+    }
+
+    // getOwnPropertyNames of an arrow function (no prototype) omits 'prototype' from the metadata keys
+    @Test
+    public void test_get_own_property_names_of_arrow_function_omits_prototype() {
+        assertEquals("length,name", str("Object.getOwnPropertyNames(() => {}).join(',')"));
+    }
+
+    // getOwnPropertyDescriptor with a missing key argument or a non-object receiver returns undefined
+    @Test
+    public void test_get_own_property_descriptor_missing_arg_or_non_object() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor({})"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor(5, 'x')"));
+    }
+
+    // a symbol key is not reflected in a function's descriptor lookup (functions have no symbol storage)
+    @Test
+    public void test_get_own_property_descriptor_of_function_with_symbol_key() {
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("Object.getOwnPropertyDescriptor(function() {}, Symbol('x'))"));
+    }
+
+    // the prototype metadata descriptor of a native constructor reports its real .prototype
+    @Test
+    public void test_get_own_property_descriptor_of_native_constructor_prototype() {
+        assertTrue(bool2("Object.getOwnPropertyDescriptor(Array, 'prototype').value === Array.prototype"));
+    }
+
+    // a symbol key on globalThis's descriptor lookup returns undefined
+    @Test
+    public void test_get_own_property_descriptor_of_global_with_symbol_key() {
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("Object.getOwnPropertyDescriptor(globalThis, Symbol('x'))"));
+    }
+
+    // a symbol never assigned on the object reports no descriptor
+    @Test
+    public void test_get_own_property_descriptor_of_absent_symbol() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor({}, Symbol('x'))"));
+    }
 }

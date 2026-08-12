@@ -4,11 +4,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
@@ -63,6 +66,19 @@ public class EnforcingDatabaseAccessIntegrationTest {
         object.add("_id", new JsonString(id));
         object.add("value", new JsonString("hello"));
         return object;
+    }
+
+    private static JsonArray equalsFilterPipeline(String value) {
+        final var operator = new JsonObject();
+        operator.add("fieldOperatorType", new JsonString("EQUALS"));
+        operator.add("field", new JsonString("value"));
+        operator.add("value", new JsonString(value));
+        final var filterStep = new JsonObject();
+        filterStep.add("type", new JsonString("FILTER"));
+        filterStep.add("operator", operator);
+        final var pipeline = new JsonArray();
+        pipeline.add(filterStep);
+        return pipeline;
     }
 
     // An authorized save is committed and can be read back
@@ -144,5 +160,58 @@ public class EnforcingDatabaseAccessIntegrationTest {
         final var denied = engine.run(source, new SimpleHostBindings(new JsonObject(),
                 new EnforcingDatabaseAccess(NOBODY, null), null, ResourceLimits.unlimited()));
         assertTrue(denied.isError());
+    }
+
+    // aggregate() returns the matching documents from a FILTER pipeline
+    @Test
+    public void test_aggregate_returns_results() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var marked = new JsonObject();
+        marked.add("_id", new JsonString("agg-match"));
+        marked.add("value", new JsonString("unique-aggregate-marker"));
+        db.save(TestGlobals.DB, TestGlobals.COLL, marked);
+
+        final var results = db.aggregate(TestGlobals.DB, TestGlobals.COLL,
+                equalsFilterPipeline("unique-aggregate-marker"));
+
+        assertEquals(1, results.size());
+        assertEquals("agg-match", results.getFirst().get("_id").asJsonString().getValue());
+    }
+
+    // aggregate() returns an empty list (not null) when the pipeline matches no documents
+    @Test
+    public void test_aggregate_returns_empty_list_when_no_results() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var results = db.aggregate(TestGlobals.DB, TestGlobals.COLL,
+                equalsFilterPipeline("definitely-does-not-exist-xyz"));
+        assertEquals(List.of(), results);
+    }
+
+    // save() returns null when the underlying operation is rejected without throwing (an oversized
+    // entry, rather than an authorization/schema denial)
+    @Test
+    public void test_save_oversized_entry_returns_null() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var big = new JsonObject();
+        big.add("_id", new JsonString("bigDoc"));
+        big.add("bigField", new JsonString("x".repeat(1_048_600)));
+        assertNull(db.save(TestGlobals.DB, TestGlobals.COLL, big));
+    }
+
+    // listCollections() returns an empty list (not null) for a database that does not exist
+    @Test
+    public void test_list_collections_for_nonexistent_database_returns_empty() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertEquals(List.of(), db.listCollections("this-db-does-not-exist"));
+    }
+
+    // dispatch() routes through processMessage with an explicit (non-null) clientId
+    @Test
+    public void test_dispatch_with_explicit_client_id() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, UUID.randomUUID());
+        db.save(TestGlobals.DB, TestGlobals.COLL, doc("u-clientid"));
+        final var stored = db.findById(TestGlobals.DB, TestGlobals.COLL, "u-clientid");
+        assertNotNull(stored);
+        assertEquals("hello", stored.get("value").asJsonString().getValue());
     }
 }
