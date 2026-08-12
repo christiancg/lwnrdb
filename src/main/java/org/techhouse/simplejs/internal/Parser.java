@@ -1,8 +1,10 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.elements.JsBaseElement;
@@ -160,10 +162,43 @@ public final class Parser {
             inStaticBlock = false;
             try {
                 final var params = parseParams();
-                return new FunctionParts(params, inFunctionScope(params, this::parseBlockBody));
+                final var body = inFunctionScope(params, this::parseBlockBody);
+                checkUseStrictWithSimpleParams(params, body);
+                return new FunctionParts(params, body);
             } finally {
                 inStaticBlock = wasInStaticBlock;
             }
+        }
+
+        // It is a Syntax Error if a function body's directive prologue contains "use strict" while
+        // its parameter list is not simple (destructuring, default, or rest parameters).
+        private void checkUseStrictWithSimpleParams(List<JsNode> params, BlockStatement body) {
+            if (isSimpleParameterList(params) || !containsUseStrictDirective(body)) {
+                return;
+            }
+            throw new SyntaxErrorException("Illegal 'use strict' directive in function with non-simple parameter list");
+        }
+
+        private static boolean isSimpleParameterList(List<JsNode> params) {
+            for (final var param : params) {
+                if (!(param instanceof Identifier)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static boolean containsUseStrictDirective(BlockStatement body) {
+            for (final var statement : body.getBody()) {
+                if (!(statement instanceof ExpressionStatement stmt)
+                        || !(stmt.getExpression() instanceof StringLiteral str)) {
+                    break;
+                }
+                if ("use strict".equals(str.getValue())) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void declareBoundNames(JsNode target, boolean isLexical) {
@@ -1250,7 +1285,10 @@ public final class Parser {
                 }
                 case REGEX -> {
                     advance();
-                    return new RegexLiteral(((JsRegex) t).getPattern(), ((JsRegex) t).getFlags());
+                    final var pattern = ((JsRegex) t).getPattern();
+                    final var flags = ((JsRegex) t).getFlags();
+                    RegexTranslator.compile(pattern, flags);
+                    return new RegexLiteral(pattern, flags);
                 }
                 case TEMPLATE_STRING -> {
                     advance();
@@ -1402,17 +1440,18 @@ public final class Parser {
         private ClassBody parseClassBody() {
             expectSeparator('{');
             final var members = new ArrayList<JsNode>();
+            final Map<String, Set<String>> privateNames = new HashMap<>();
             while (!isSeparator('}') && !atEnd()) {
                 if (matchSeparator(';')) {
                     continue;
                 }
-                members.add(parseClassMember());
+                members.add(parseClassMember(privateNames));
             }
             expectSeparator('}');
             return new ClassBody(members);
         }
 
-        private JsNode parseClassMember() {
+        private JsNode parseClassMember(Map<String, Set<String>> privateNames) {
             final var isStatic = matchContextualModifier("static");
             if (isStatic && isSeparator('{')) {
                 return parseStaticBlock();
@@ -1432,17 +1471,106 @@ public final class Parser {
                 final var parts = parseFunctionParts();
                 final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic, async, generator);
+                declarePrivateName(privateNames, memberKey, resolvedKind);
                 return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
             }
             if (!"method".equals(kind) || async || generator) {
                 throw error();
             }
+            checkFieldName(memberKey, isStatic);
+            declarePrivateName(privateNames, memberKey, "field");
             Expression value = null;
             if (matchOperator("=")) {
                 value = parseAssignment();
+                if (containsArgumentsOrSuperCall(value)) {
+                    throw new SyntaxErrorException(
+                            "'arguments' and a bare 'super' call are not allowed in a class field initializer");
+                }
             }
             consumeSemicolon();
             return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
+        }
+
+        // An instance field cannot be named `constructor`, and a static field cannot be named
+        // `prototype` — both would collide with the class's own machinery.
+        private void checkFieldName(MemberKey memberKey, boolean isStatic) {
+            if (memberKey.computed()) {
+                return;
+            }
+            final String name;
+            if (memberKey.key() instanceof Identifier id) {
+                name = id.getName();
+            } else if (memberKey.key() instanceof StringLiteral str) {
+                name = str.getValue();
+            } else {
+                return;
+            }
+            if (!isStatic && "constructor".equals(name)) {
+                throw new SyntaxErrorException("Classes may not have a field named 'constructor'");
+            }
+            if (isStatic && "prototype".equals(name)) {
+                throw new SyntaxErrorException("Classes may not have a static field named 'prototype'");
+            }
+        }
+
+        // A private name may be declared more than once only as exactly one getter and one setter
+        // pair; any other repetition of the same #name is a Syntax Error.
+        private void declarePrivateName(Map<String, Set<String>> privateNames, MemberKey memberKey, String kind) {
+            if (!(memberKey.key() instanceof PrivateIdentifier priv)) {
+                return;
+            }
+            final var existing = privateNames.computeIfAbsent(priv.getName(), _ -> new HashSet<>());
+            final var isDuplicate = switch (kind) {
+                case "get" -> existing.contains("get") || existing.contains("field") || existing.contains("method");
+                case "set" -> existing.contains("set") || existing.contains("field") || existing.contains("method");
+                default -> !existing.isEmpty();
+            };
+            if (isDuplicate) {
+                throw new SyntaxErrorException("Duplicate private name #" + priv.getName());
+            }
+            existing.add(kind);
+        }
+
+        // ContainsArguments / ContainsSuperCall, approximated: recurse through ordinary expressions
+        // and into arrow bodies (which have no `arguments`/`super` binding of their own), but treat a
+        // nested function or class as an opaque boundary since it introduces its own bindings.
+        private static boolean containsArgumentsOrSuperCall(JsNode node) {
+            return switch (node) {
+                case null -> false;
+                case Identifier id -> "arguments".equals(id.getName());
+                case CallExpression call ->
+                    call.getCallee() instanceof SuperExpression || containsArgumentsOrSuperCall(call.getCallee())
+                            || call.getArguments().stream().anyMatch(State::containsArgumentsOrSuperCall);
+                case BinaryExpression bin ->
+                    containsArgumentsOrSuperCall(bin.getLeft()) || containsArgumentsOrSuperCall(bin.getRight());
+                case LogicalExpression log ->
+                    containsArgumentsOrSuperCall(log.getLeft()) || containsArgumentsOrSuperCall(log.getRight());
+                case ConditionalExpression cond ->
+                    containsArgumentsOrSuperCall(cond.getTest()) || containsArgumentsOrSuperCall(cond.getConsequent())
+                            || containsArgumentsOrSuperCall(cond.getAlternate());
+                case UnaryExpression unary -> containsArgumentsOrSuperCall(unary.getArgument());
+                case AssignmentExpression assign -> containsArgumentsOrSuperCall(assign.getValue());
+                case SequenceExpression seq ->
+                    seq.getExpressions().stream().anyMatch(State::containsArgumentsOrSuperCall);
+                case SpreadElement spread -> containsArgumentsOrSuperCall(spread.getArgument());
+                case ArrayExpression array ->
+                    array.getElements().stream().anyMatch(State::containsArgumentsOrSuperCall);
+                case ObjectExpression obj -> obj.getProperties().stream().anyMatch(State::containsArgumentsOrSuperCall);
+                case Property prop -> containsArgumentsOrSuperCall(prop.getValue());
+                case MemberExpression member -> containsArgumentsOrSuperCall(member.getObject())
+                        || containsArgumentsOrSuperCall(member.getProperty());
+                case ArrowFunctionExpression arrow -> containsArgumentsOrSuperCall(arrow.getBody());
+                case BlockStatement block -> block.getBody().stream().anyMatch(State::containsArgumentsOrSuperCall);
+                case ExpressionStatement stmt -> containsArgumentsOrSuperCall(stmt.getExpression());
+                case ReturnStatement ret -> containsArgumentsOrSuperCall(ret.getArgument());
+                case VariableDeclaration decl ->
+                    decl.getDeclarations().stream().anyMatch(State::containsArgumentsOrSuperCall);
+                case VariableDeclarator declarator -> containsArgumentsOrSuperCall(declarator.getInit());
+                case IfStatement ifStmt -> containsArgumentsOrSuperCall(ifStmt.getTest())
+                        || containsArgumentsOrSuperCall(ifStmt.getConsequent())
+                        || containsArgumentsOrSuperCall(ifStmt.getAlternate());
+                default -> false;
+            };
         }
 
         private StaticBlock parseStaticBlock() {
@@ -1589,7 +1717,9 @@ public final class Parser {
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
             if (isSeparator('{')) {
-                return new ArrowFunctionExpression(params, inFunctionScope(params, this::parseBlockBody), false, async);
+                final var body = inFunctionScope(params, this::parseBlockBody);
+                checkUseStrictWithSimpleParams(params, body);
+                return new ArrowFunctionExpression(params, body, false, async);
             }
             return new ArrowFunctionExpression(params, parseAssignment(), true, async);
         }

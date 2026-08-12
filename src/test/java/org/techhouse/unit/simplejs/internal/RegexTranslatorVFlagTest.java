@@ -113,4 +113,14 @@ public class RegexTranslatorVFlagTest {
         assertTrue(RegexTranslator.compile("\\p{Lu}", "u").getPattern().matcher("A").find());
         assertTrue(RegexTranslator.compile("\\p{Script=Greek}", "u").getPattern().matcher("\u03b1").find());
     }
+
+    // ASCII_Hex_Digit is the ASCII-only subset [0-9A-Fa-f], in both u-mode and v-mode
+    @Test
+    public void test_ascii_hex_digit_binary_property() {
+        assertTrue(RegexTranslator.compile("\\p{ASCII_Hex_Digit}", "u").getPattern().matcher("f").find());
+        assertFalse(RegexTranslator.compile("\\p{ASCII_Hex_Digit}", "u").getPattern().matcher("g").find());
+        assertTrue(RegexTranslator.compile("\\P{ASCII_Hex_Digit}", "u").getPattern().matcher("g").find());
+        assertTrue(find("[\\p{ASCII_Hex_Digit}]", "A"));
+        assertFalse(find("[\\p{ASCII_Hex_Digit}]", "G"));
+    }
 }

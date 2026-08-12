@@ -263,7 +263,13 @@ public final class ExpressionEvaluator {
                 yield JsBoolean.TRUE;
             }
             case JsArray array -> JsBoolean.of(deleteArrayElement(array, key));
-            case JsCallableProperties callable -> JsBoolean.of(callable.deleteProperty(key));
+            case JsCallableProperties callable -> {
+                if (("name".equals(key) || "length".equals(key)) && !callable.hasProperty(key)) {
+                    callable.markMetadataDeleted(key);
+                    yield JsBoolean.TRUE;
+                }
+                yield JsBoolean.of(callable.deleteProperty(key));
+            }
             default -> JsBoolean.TRUE;
         };
     }

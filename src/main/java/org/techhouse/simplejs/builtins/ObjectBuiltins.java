@@ -125,6 +125,9 @@ public final class ObjectBuiltins {
     // name/length/prototype are synthesised at lookup time rather than stored, so the reflective
     // surface has to report them explicitly.
     private static boolean callableMetadataKey(JsCallableProperties callable, String key) {
+        if (callable.isMetadataDeleted(key)) {
+            return false;
+        }
         return "name".equals(key) || "length".equals(key) || ("prototype".equals(key) && hasPrototype(callable));
     }
 
@@ -580,7 +583,10 @@ public final class ObjectBuiltins {
     }
 
     private static List<String> callableMetadataKeys(JsCallableProperties callable) {
-        return hasPrototype(callable) ? List.of("length", "name", "prototype") : List.of("length", "name");
+        final var candidates = hasPrototype(callable)
+                ? List.of("length", "name", "prototype")
+                : List.of("length", "name");
+        return candidates.stream().filter(key -> callableMetadataKey(callable, key)).toList();
     }
 
     public static JsValue getOwnPropertyDescriptor(List<JsValue> args) {

@@ -247,6 +247,9 @@ public final class MemberEvaluator {
         if (function instanceof JsNativeFunction nf && "prototype".equals(key)) {
             return orUndefined(nf.getPrototype());
         }
+        if (function instanceof JsCallableProperties callable && callable.isMetadataDeleted(key)) {
+            return JsUndefined.getInstance();
+        }
         final var metadata = FunctionProtoBuiltins.metadata(function, key);
         if (metadata != null) {
             return metadata;
@@ -422,6 +425,9 @@ public final class MemberEvaluator {
             case JsUndefined ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
             case JsCallableProperties callable -> {
+                if (isNonWritableMetadata(callable, key)) {
+                    yield false;
+                }
                 if (!"prototype".equals(key)) {
                     callable.setEnumerableProperty(key, value);
                 }
@@ -429,6 +435,11 @@ public final class MemberEvaluator {
             }
             default -> true;
         };
+    }
+
+    private static boolean isNonWritableMetadata(JsCallableProperties callable, String key) {
+        return ("name".equals(key) || "length".equals(key)) && !callable.hasProperty(key)
+                && !callable.isMetadataDeleted(key);
     }
 
     public static String writeRejectionMessage(JsValue target, JsValue key) {
@@ -440,6 +451,9 @@ public final class MemberEvaluator {
             if (object.has(name)) {
                 return "Cannot assign to read only property '" + name + "' of object";
             }
+        }
+        if (target instanceof JsCallableProperties callable && isNonWritableMetadata(callable, name)) {
+            return "Cannot assign to read only property '" + name + "' of object";
         }
         if (target instanceof JsArray array && array.isFrozen()) {
             return "Cannot assign to read only property '" + name + "' of object";

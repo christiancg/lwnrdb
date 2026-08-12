@@ -17,6 +17,10 @@ public interface JsCallableProperties {
 
     boolean deleteProperty(String key);
 
+    void markMetadataDeleted(String key);
+
+    boolean isMetadataDeleted(String key);
+
     List<String> propertyKeys();
 
     List<String> enumerablePropertyKeys();

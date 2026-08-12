@@ -12,6 +12,7 @@ import java.util.Set;
 final class CallablePropertyStore implements JsCallableProperties {
     private Map<String, JsValue> properties;
     private Set<String> enumerableKeys;
+    private Set<String> deletedMetadataKeys;
 
     @Override
     public void setProperty(String key, JsValue value) {
@@ -49,6 +50,19 @@ final class CallablePropertyStore implements JsCallableProperties {
             enumerableKeys.remove(key);
         }
         return true;
+    }
+
+    @Override
+    public void markMetadataDeleted(String key) {
+        if (deletedMetadataKeys == null) {
+            deletedMetadataKeys = new LinkedHashSet<>();
+        }
+        deletedMetadataKeys.add(key);
+    }
+
+    @Override
+    public boolean isMetadataDeleted(String key) {
+        return deletedMetadataKeys != null && deletedMetadataKeys.contains(key);
     }
 
     @Override

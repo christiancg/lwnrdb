@@ -82,4 +82,64 @@ public class EarlyErrorProgramTest {
         assertEquals(1, num("function f(){} function f(){} 1"));
         assertEquals(1, num("var f; function f(){} 1"));
     }
+
+    // a regex literal is validated (compiled) at parse time, before any statement runs
+    @Test
+    public void test_regex_literal_invalid_pattern_is_a_syntax_error() {
+        rejects("/\\P{ASCII=F}/u;");
+        rejects("var ran = false; /(/u; ran = true;");
+    }
+
+    // an instance field named `constructor`, or a static field named `prototype`, clashes
+    @Test
+    public void test_field_named_constructor_is_a_syntax_error() {
+        rejects("class A { constructor = 1; }");
+        rejects("class A { 'constructor' = 1; }");
+    }
+
+    @Test
+    public void test_static_field_named_prototype_is_a_syntax_error() {
+        rejects("class A { static prototype = 1; }");
+        rejects("class A { static 'prototype' = 1; }");
+    }
+
+    // a private name may repeat only as one getter and one setter pair
+    @Test
+    public void test_duplicate_private_name_is_a_syntax_error() {
+        rejects("class A { #x; #x; }");
+        rejects("class A { #x() {} #x() {} }");
+        assertEquals(1, num("class A { get #x(){ return 1; } set #x(v){} m(){ return this.#x; } } new A().m()"));
+    }
+
+    // `arguments` in a field initializer is forbidden, even through a nested arrow, but not
+    // through a nested ordinary function (which has its own `arguments` binding)
+    @Test
+    public void test_arguments_in_field_initializer_is_a_syntax_error() {
+        rejects("class A { x = arguments; }");
+        rejects("class A { x = () => arguments; }");
+        rejects("class A { x = () => { var t = () => arguments; } }");
+        assertEquals(9, num("class A { x = function(){ return arguments[0]; }; } new A().x(9)"));
+    }
+
+    // a bare `super()` call in a field initializer is forbidden; `super.prop` access is fine
+    @Test
+    public void test_super_call_in_field_initializer_is_a_syntax_error() {
+        rejects("class B extends Object { x = super(); }");
+        rejects("class B extends Object { x = () => super(); }");
+        assertEquals(1, num("class B { m(){ return 1; } } " + "class A extends B { x = super.m ? 1 : 0; } new A().x"));
+    }
+
+    // "use strict" in a function body clashes with a non-simple parameter list, across every
+    // function-like form
+    @Test
+    public void test_use_strict_with_non_simple_params_is_a_syntax_error() {
+        rejects("function f([a]) { 'use strict'; }");
+        rejects("function f(a=1) { 'use strict'; }");
+        rejects("function f(...a) { 'use strict'; }");
+        rejects("(a=1) => { 'use strict'; };");
+        rejects("class A { m([a]) { 'use strict'; } }");
+        rejects("class A { static async method([element]) { 'use strict'; } }");
+        rejects("function* g([a]) { 'use strict'; }");
+        assertEquals(1, num("function f(a) { 'use strict'; return a; } f(1)"));
+    }
 }

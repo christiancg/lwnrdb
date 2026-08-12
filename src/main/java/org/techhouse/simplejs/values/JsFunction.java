@@ -104,6 +104,16 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     }
 
     @Override
+    public void markMetadataDeleted(String key) {
+        properties.markMetadataDeleted(key);
+    }
+
+    @Override
+    public boolean isMetadataDeleted(String key) {
+        return properties.isMetadataDeleted(key);
+    }
+
+    @Override
     public List<String> propertyKeys() {
         return properties.propertyKeys();
     }
