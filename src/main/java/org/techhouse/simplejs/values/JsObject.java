@@ -28,6 +28,8 @@ public final class JsObject extends JsValue {
     private JsObject proto;
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
+    private Map<JsSymbol, JsValue> symbolAccessorGetters;
+    private Map<JsSymbol, JsValue> symbolAccessorSetters;
     private Map<String, PropertyFlags> descriptors;
     private JsValue primitive;
 
@@ -292,6 +294,34 @@ public final class JsObject extends JsValue {
 
     public JsValue getAccessorSetter(String key) {
         return accessorSetters == null ? null : accessorSetters.get(key);
+    }
+
+    public void defineSymbolAccessor(JsSymbol key, JsValue getter, JsValue setter) {
+        if (getter != null) {
+            if (symbolAccessorGetters == null) {
+                symbolAccessorGetters = new LinkedHashMap<>();
+            }
+            symbolAccessorGetters.put(key, getter);
+        }
+        if (setter != null) {
+            if (symbolAccessorSetters == null) {
+                symbolAccessorSetters = new LinkedHashMap<>();
+            }
+            symbolAccessorSetters.put(key, setter);
+        }
+    }
+
+    public JsValue getSymbolAccessorGetter(JsSymbol key) {
+        return symbolAccessorGetters == null ? null : symbolAccessorGetters.get(key);
+    }
+
+    public JsValue getSymbolAccessorSetter(JsSymbol key) {
+        return symbolAccessorSetters == null ? null : symbolAccessorSetters.get(key);
+    }
+
+    public boolean hasSymbolAccessor(JsSymbol key) {
+        return (symbolAccessorGetters != null && symbolAccessorGetters.containsKey(key))
+                || (symbolAccessorSetters != null && symbolAccessorSetters.containsKey(key));
     }
 
     public boolean hasAccessor(String key) {

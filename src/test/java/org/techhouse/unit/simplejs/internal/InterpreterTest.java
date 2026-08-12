@@ -16,6 +16,7 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
@@ -250,10 +251,17 @@ public class InterpreterTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("using x = 1;"));
     }
 
-    // this evaluates to undefined at the top level
+    // this evaluates to the global object at the top level, matching classic Script semantics
     @Test
-    public void test_this_is_undefined() {
-        assertInstanceOf(JsUndefined.class, Interpreter.run("this"));
+    public void test_this_is_global_object() {
+        assertInstanceOf(JsGlobalObject.class, Interpreter.run("this"));
+    }
+
+    // this inside a plain (non-arrow) function call is still undefined, since the engine is
+    // always-strict
+    @Test
+    public void test_this_in_plain_function_call_is_undefined() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("function f() { return this; } f()"));
     }
 
     // Object and array literals build the corresponding value kinds

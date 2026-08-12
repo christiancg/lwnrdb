@@ -171,7 +171,9 @@ public final class ExpressionEvaluator {
             if (property.isComputed()) {
                 final var keyValue = interp.eval(property.getKey(), env);
                 final var evaluated = markIfMethod(interp.eval(value, scope), concise);
-                if (accessor) {
+                if (accessor && keyValue instanceof JsSymbol symbol) {
+                    storeSymbolAccessor(result, symbol, property.getKind(), evaluated);
+                } else if (accessor) {
                     storeAccessor(result, JsCoercion.toStr(keyValue), property.getKind(), evaluated);
                 } else if (keyValue instanceof JsSymbol symbol) {
                     result.setSymbol(symbol, evaluated);
@@ -223,6 +225,14 @@ public final class ExpressionEvaluator {
             target.defineAccessor(key, fn, null);
         } else {
             target.defineAccessor(key, null, fn);
+        }
+    }
+
+    private void storeSymbolAccessor(JsObject target, JsSymbol key, String kind, JsValue fn) {
+        if ("get".equals(kind)) {
+            target.defineSymbolAccessor(key, fn, null);
+        } else {
+            target.defineSymbolAccessor(key, null, fn);
         }
     }
 

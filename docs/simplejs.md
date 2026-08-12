@@ -1065,6 +1065,57 @@ The following were previously listed as gaps and are now implemented:
   `indices` (numbered and named groups, `undefined` for a non-participating group); and primitive
   wrapper objects (`new String/Number/Boolean`) plus `new Object()`.
 
+### test262 conformance pass (2026-08-12)
+
+A failure-message clustering pass over a fresh full-corpus run found four independent, high-leverage
+defects, plus two more that a correct fix immediately unmasked:
+
+- **Top-level `this` was `undefined` instead of the global object.** `Environment.global()` never
+  called `defineThis`, so a classic Script's top-level `this` fell through to `JsUndefined` — wrong
+  per spec (only a strict *function* call gets `this === undefined`; Script code gets the realm's
+  global object regardless of strict mode). `GlobalScope.install` now returns the `JsGlobalObject` it
+  builds, and `Interpreter.runModule` binds it as the top environment's `this`.
+- **A computed accessor key that evaluates to a `Symbol` threw instead of installing a symbol
+  accessor.** `{ get [Symbol.iterator]() {…} }` called `JsCoercion.toStr` unconditionally on the
+  computed key in `ExpressionEvaluator.evalObject`'s accessor branch, throwing `TypeError: Cannot
+  convert value to string` even though the sibling non-accessor branch already special-cased a
+  `JsSymbol` key correctly. `JsObject` gained symbol-keyed accessor tables
+  (`defineSymbolAccessor`/`getSymbolAccessorGetter`/`getSymbolAccessorSetter`/`hasSymbolAccessor`),
+  consulted by `MemberEvaluator.objectSymbolMember` (get) and `Interpreter.setMemberByKey` (set)
+  ahead of the plain symbol-property path — mirroring the string-keyed accessor precedence and the
+  symbol-accessor support `JsClass` already has for class instances.
+- **Array/typed-array callback validation skipped `IsCallable`.** `ArrayBuiltins.callback`/
+  `TypedArrayBuiltins.callback` only checked `args.isEmpty()`, so e.g. `[].find(null)` on an *empty*
+  array silently returned `undefined` instead of throwing — the callback is never invoked when there
+  is nothing to iterate, so the missing check went unnoticed. Both now validate
+  `InterpreterUtils.isCallable` unconditionally.
+- **`Array.from`/`%TypedArray%` didn't fall back to array-like semantics for a non-iterable
+  source.** Per spec, `Array.from(object)` and `new %TypedArray%(object)` first check for a callable
+  `@@iterator`; only when it is absent do they treat `object` as array-like (`length` + indexed
+  `Get`). Both builtins instead called the throwing `iterableToList.drain` unconditionally, so a
+  plain `{length: n, 0: …}` object was rejected as "not iterable". A shared
+  `InterpreterUtils.arrayLikeOrIterableToList` now checks for a callable `@@iterator` first (treating
+  a generator or an `arguments` object as always iterable, since `Iteration` drives those
+  structurally rather than through a real `@@iterator` member) and only then falls back to
+  `arrayLikeElements`. Map/Set/`Promise.all`-family/`Object.fromEntries` are untouched — those
+  require a true iterable, no array-like fallback.
+- **Unmasked by the array-like fix: `Array.from` ignored its receiver and the `CreateDataProperty`
+  failure path.** A plain array-like source used to always throw "not iterable" before reaching
+  construction, which accidentally satisfied tests expecting `Array.from.call(CustomCtor, items)` to
+  throw — for the wrong reason. `Array.from` now honours `IsConstructor(C)` on its `this`
+  (`InterpreterUtils.isConstructor`, mirroring `Interpreter.constructValue`'s own type switch),
+  constructing via the receiver when it is a constructor, and defines each index through
+  `CreateDataPropertyOrThrow` semantics (`JsArray.set` for a plain array, `ops.defineProperty` with a
+  full descriptor otherwise), so a non-extensible or non-configurable target throws instead of
+  silently succeeding. The mapfn's `thisArg` (`Array.from`'s third argument) is now threaded through
+  too, closing the same class of bug.
+- **Unmasked by the `this`-binding fix:** `Array.prototype.every`/`some`/`map`/`filter`/`forEach`
+  ignored their optional `thisArg` argument (hardcoding `JsUndefined`), and `NaN`/`Infinity`/
+  `undefined` were plain writable global bindings. Both were previously invisible because top-level
+  `this` was itself `undefined`, so a test comparing a passed-in `this` against `undefined` passed
+  for the wrong reason. `Environment` gained a `writable` flag on bindings (`declareNonWritableBuiltin`,
+  enforced in `assign`), and the five array methods now thread an actual `thisArg`.
+
 ## Testing conventions
 
 Tests use **JUnit 5**, live under `src/test/java/org/techhouse/unit/simplejs/`

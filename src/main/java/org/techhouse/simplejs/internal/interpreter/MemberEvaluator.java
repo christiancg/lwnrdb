@@ -95,6 +95,10 @@ public final class MemberEvaluator {
     }
 
     private JsValue objectSymbolMember(JsObject object, JsSymbol symbol) {
+        if (object.hasSymbolAccessor(symbol)) {
+            final var getter = object.getSymbolAccessorGetter(symbol);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, object, List.of());
+        }
         if (object.hasSymbol(symbol)) {
             return object.getSymbol(symbol);
         }

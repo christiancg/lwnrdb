@@ -280,8 +280,9 @@ public final class Interpreter {
 
     private ProgramOutcome runModule(Program program) {
         final var env = Environment.global();
-        GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList, host.console(), ops, host.network(),
-                host.limits(), intrinsics);
+        final var globalThis = GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList,
+                host.console(), ops, host.network(), host.limits(), intrinsics);
+        env.defineThis(globalThis);
         for (final var statement : program.getBody()) {
             if (statement instanceof ImportDeclaration importDeclaration) {
                 modules.bindImport(importDeclaration, env);
@@ -643,6 +644,13 @@ public final class Interpreter {
         }
         if (keyValue instanceof JsSymbol symbol) {
             if (target instanceof JsObject object) {
+                if (object.hasSymbolAccessor(symbol)) {
+                    final var setter = object.getSymbolAccessorSetter(symbol);
+                    if (setter != null) {
+                        callValue(setter, object, List.of(value));
+                    }
+                    return true;
+                }
                 final var cls = object.getKlass();
                 if (cls != null && !object.hasSymbol(symbol)) {
                     final var setter = cls.findInstanceSymbolSetter(symbol);

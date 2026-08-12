@@ -49,6 +49,15 @@ public class ArrayBuiltinsTest {
         assertEquals(6, num("let s = 0; [1, 2, 3].forEach(x => { s += x; }); s"));
     }
 
+    // A non-callable predicate throws immediately, even on an empty array
+    @Test
+    public void test_find_throws_on_non_callable_predicate_even_on_empty_array() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].find(null)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[1, 2, 3].find(null)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].map(1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].forEach('')"));
+    }
+
     // includes/indexOf use strict equality
     @Test
     public void test_includes_indexof() {
@@ -155,6 +164,40 @@ public class ArrayBuiltinsTest {
         assertEquals("a,b", str("Array.from('ab').join(',')"));
         assertEquals("2,4", str("Array.from([1, 2], x => x * 2).join(',')"));
         assertEquals("1,2,3", str("Array.from(new Set([1, 2, 3])).join(',')"));
+    }
+
+    // Array.from falls back to array-like semantics for a non-iterable source
+    @Test
+    public void test_array_from_array_like_object() {
+        assertEquals("a,b,c", str("Array.from({length: 3, 0: 'a', 1: 'b', 2: 'c'}).join(',')"));
+        assertEquals("", str("Array.from({length: 0}).join(',')"));
+    }
+
+    // Array.from honours the mapfn's thisArg
+    @Test
+    public void test_array_from_map_this_arg() {
+        assertEquals(5, num("let o = {v: 5}; Array.from([1], function() { return this.v; }, o)[0]"));
+    }
+
+    // Array.from called with a custom constructor builds via that constructor instead of a plain array
+    @Test
+    public void test_array_from_call_custom_constructor() {
+        final var source = """
+                function Ctor(len) { this.length = 0; this.fromCtor = true; }
+                let a = Array.from.call(Ctor, [1, 2]);
+                a.fromCtor + ',' + a[0] + ',' + a[1]
+                """;
+        assertEquals("true,1,2", str(source));
+    }
+
+    // A non-extensible custom-constructed target rejects the new indexed property with a TypeError
+    @Test
+    public void test_array_from_call_custom_constructor_rejects_definition() {
+        final var source = """
+                function Ctor() { this.length = 0; Object.preventExtensions(this); }
+                Array.from.call(Ctor, [1]);
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
     // the not-found and non-array branches

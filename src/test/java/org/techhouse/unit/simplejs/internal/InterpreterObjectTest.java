@@ -175,6 +175,26 @@ public class InterpreterObjectTest {
         assertEquals(42, num("let o = { get answer() { return 42; } }; o.answer"));
     }
 
+    // A computed accessor key that evaluates to a Symbol installs a symbol-keyed accessor
+    @Test
+    public void test_object_literal_symbol_computed_accessor_get() {
+        assertEquals(1, num("let o = { get [Symbol.iterator]() { return 1; } }; o[Symbol.iterator]"));
+    }
+
+    // A computed symbol setter accessor runs on write
+    @Test
+    public void test_object_literal_symbol_computed_accessor_set() {
+        assertEquals(10,
+                num("let v = 0; let o = { set [Symbol.iterator](n) { v = n * 2; } }; o[Symbol.iterator] = 5; v"));
+    }
+
+    // A throwing symbol-keyed getter propagates its original error, not a string-conversion TypeError
+    @Test
+    public void test_object_literal_symbol_computed_accessor_throwing_getter_propagates() {
+        assertThrows(org.techhouse.simplejs.exceptions.JsThrowException.class, () -> Interpreter
+                .run("let o = { get [Symbol.iterator]() { throw new RangeError('boom'); } }; o[Symbol.iterator]"));
+    }
+
     // A property literally named get/set is not treated as an accessor
     @Test
     public void test_object_get_set_as_keys() {

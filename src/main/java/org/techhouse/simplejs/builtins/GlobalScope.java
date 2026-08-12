@@ -19,13 +19,13 @@ public final class GlobalScope {
     private GlobalScope() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, IterableToList iterableToList,
-            Consumer<String> consoleSink, InterpreterOps ops, NetworkAccess network, ResourceLimits limits,
-            Intrinsics intrinsics) {
+    public static JsGlobalObject install(Environment global, EventLoop eventLoop, Invoker invoker,
+            IterableToList iterableToList, Consumer<String> consoleSink, InterpreterOps ops, NetworkAccess network,
+            ResourceLimits limits, Intrinsics intrinsics) {
         final var globalThis = new JsGlobalObject(global);
-        define(global, "NaN", new JsNumber(Double.NaN));
-        define(global, "Infinity", new JsNumber(Double.POSITIVE_INFINITY));
-        define(global, "undefined", JsUndefined.getInstance());
+        global.declareNonWritableBuiltin("NaN", new JsNumber(Double.NaN));
+        global.declareNonWritableBuiltin("Infinity", new JsNumber(Double.POSITIVE_INFINITY));
+        global.declareNonWritableBuiltin("undefined", JsUndefined.getInstance());
         ErrorBuiltins.install(global, intrinsics);
         constructor(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker), intrinsics.objectProto());
         constructor(global, "Function", functionConstructor(), intrinsics.functionProto());
@@ -60,7 +60,7 @@ public final class GlobalScope {
         constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(), intrinsics.arrayBufferProto());
         constructor(global, "DataView", TypedArrayBuiltins.dataView(), intrinsics.dataViewProto());
         for (final var kind : JsTypedArray.Kind.values()) {
-            constructor(global, kind.ctorName(), TypedArrayBuiltins.create(kind, invoker, iterableToList),
+            constructor(global, kind.ctorName(), TypedArrayBuiltins.create(kind, invoker, iterableToList, ops),
                     intrinsics.typedArrayProto(kind));
         }
         final var bigInt = NumberBuiltins.bigIntFunction();
@@ -73,6 +73,7 @@ public final class GlobalScope {
         GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops);
         FetchBuiltins.install(global, eventLoop, network, limits);
         define(global, "globalThis", globalThis);
+        return globalThis;
     }
 
     // Installed only so `Function.prototype` resolves and `f instanceof Function` works: runtime code

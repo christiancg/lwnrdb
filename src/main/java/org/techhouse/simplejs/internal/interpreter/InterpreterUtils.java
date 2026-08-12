@@ -7,6 +7,7 @@ import java.util.Set;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Intrinsics;
+import org.techhouse.simplejs.builtins.IterableToList;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -29,11 +30,14 @@ import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
@@ -58,6 +62,20 @@ public final class InterpreterUtils {
 
     public static boolean isCallable(JsValue value) {
         return value instanceof JsFunction || value instanceof JsNativeFunction;
+    }
+
+    // Mirrors Interpreter.constructValue's own type switch: everything reachable via `new` there
+    // must answer true here, so Array.from can decide whether to build via its receiver or a plain
+    // array without actually attempting (and possibly failing) a construction.
+    public static boolean isConstructor(JsValue value) {
+        return switch (value) {
+            case JsProxy ignored -> true;
+            case JsClass ignored -> true;
+            case JsNativeFunction nativeFunction ->
+                !nativeFunction.isBound() || isConstructor(nativeFunction.getBoundTarget());
+            case JsFunction function -> !function.isArrow();
+            default -> false;
+        };
     }
 
     // A deny-list, not an allow-list: every non-primitive JsValue subtype is an object to the spec,
@@ -204,6 +222,21 @@ public final class InterpreterUtils {
             Collections.reverse(elements);
         }
         return elements;
+    }
+
+    // Array.from and the %TypedArray% constructor/from check for a callable @@iterator first and
+    // only fall back to array-like (length + indexed Get) semantics when it is absent — unlike a
+    // plain iterableToList.drain, which requires a true iterable. A throwing @@iterator getter still
+    // propagates here, since the lookup itself runs through the member seam. A generator or an
+    // arguments object is iterated structurally by Iteration (not via a real @@iterator member), so
+    // both are treated as having a callable iterator without consulting the member seam.
+    public static List<JsValue> arrayLikeOrIterableToList(JsValue source, IterableToList iterableToList,
+            InterpreterOps ops) {
+        if (source instanceof JsGenerator || source instanceof JsArguments
+                || isCallable(ops.getMember(source, JsSymbol.ITERATOR))) {
+            return iterableToList.drain(source);
+        }
+        return arrayLikeElements(source, ops, false);
     }
 
     // A length past the int range cannot be materialised by the snapshot model, and every spec path

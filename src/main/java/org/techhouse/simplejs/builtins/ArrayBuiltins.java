@@ -38,32 +38,56 @@ public final class ArrayBuiltins {
         final var array = new JsNativeFunction("Array", (_, args) -> construct(args));
         array.setProperty("isArray", new JsNativeFunction("isArray",
                 (_, args) -> JsBoolean.of(!args.isEmpty() && args.getFirst() instanceof JsArray)));
-        array.setProperty("from", new JsNativeFunction("from", (_, args) -> from(args, invoker, iterableToList)));
+        array.setProperty("from",
+                new JsNativeFunction("from", (receiver, args) -> from(receiver, args, invoker, iterableToList, ops)));
         array.setProperty("of", new JsNativeFunction("of", (_, args) -> new JsArray(new ArrayList<>(args))));
         array.setProperty("fromAsync", new JsNativeFunction("fromAsync", (_, args) -> AsyncIteratorBuiltins
                 .drainToArray(ops, eventLoop, args.isEmpty() ? JsUndefined.getInstance() : args.getFirst())));
         return array;
     }
 
-    private static JsValue from(List<JsValue> args, Invoker invoker, IterableToList iterableToList) {
+    private static JsValue from(JsValue receiver, List<JsValue> args, Invoker invoker, IterableToList iterableToList,
+            InterpreterOps ops) {
         final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var mapFn = args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? args.get(1) : null;
+        final var mapThisArg = args.size() > 2 ? args.get(2) : JsUndefined.getInstance();
         final List<JsValue> items;
         if (source instanceof JsArray array) {
             items = new ArrayList<>(array.getElements());
         } else if (source instanceof JsString string) {
             items = new ArrayList<>(InterpreterUtils.stringCodePoints(string.getValue()));
         } else {
-            items = iterableToList.drain(source);
+            items = InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
         }
-        final var result = new JsArray();
+        final var result = InterpreterUtils.isConstructor(receiver)
+                ? ops.construct(receiver, List.of(new JsNumber(items.size())))
+                : new JsArray();
         for (var i = 0; i < items.size(); i++) {
             final var element = items.get(i);
-            result.push(mapFn == null
+            final var mapped = mapFn == null
                     ? element
-                    : invoker.call(mapFn, JsUndefined.getInstance(), List.of(element, new JsNumber(i))));
+                    : invoker.call(mapFn, mapThisArg, List.of(element, new JsNumber(i)));
+            createDataPropertyOrThrow(result, i, mapped, ops);
+        }
+        if (!(result instanceof JsArray)) {
+            ops.setMember(result, new JsString("length"), new JsNumber(items.size()));
         }
         return result;
+    }
+
+    private static void createDataPropertyOrThrow(JsValue target, int index, JsValue value, InterpreterOps ops) {
+        if (target instanceof JsArray array) {
+            if (!array.set(index, value)) {
+                throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
+            }
+            return;
+        }
+        final var descriptor = new JsObject();
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.of(true));
+        descriptor.set("enumerable", JsBoolean.of(true));
+        descriptor.set("configurable", JsBoolean.of(true));
+        ops.defineProperty(target, new JsString(Integer.toString(index)), descriptor);
     }
 
     private static JsValue construct(List<JsValue> args) {
@@ -345,6 +369,7 @@ public final class ArrayBuiltins {
 
     private static JsValue map(JsArray receiver, List<JsValue> args, Invoker invoker) {
         final var callback = callback(args);
+        final var self = thisArg(args);
         final var result = new JsArray();
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
@@ -352,14 +377,14 @@ public final class ArrayBuiltins {
                 result.pushHole();
                 continue;
             }
-            result.push(invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(elements.get(i), new JsNumber(i), receiver)));
+            result.push(invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver)));
         }
         return result;
     }
 
     private static JsValue filter(JsArray receiver, List<JsValue> args, Invoker invoker) {
         final var callback = callback(args);
+        final var self = thisArg(args);
         final var result = new JsArray();
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
@@ -367,8 +392,7 @@ public final class ArrayBuiltins {
                 continue;
             }
             final var element = elements.get(i);
-            if (JsCoercion.toBoolean(
-                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
+            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), receiver)))) {
                 result.push(element);
             }
         }
@@ -400,12 +424,13 @@ public final class ArrayBuiltins {
 
     private static JsValue forEach(JsArray receiver, List<JsValue> args, Invoker invoker) {
         final var callback = callback(args);
+        final var self = thisArg(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
             if (receiver.isHole(i)) {
                 continue;
             }
-            invoker.call(callback, JsUndefined.getInstance(), List.of(elements.get(i), new JsNumber(i), receiver));
+            invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver));
         }
         return JsUndefined.getInstance();
     }
@@ -428,10 +453,11 @@ public final class ArrayBuiltins {
 
     private static boolean some(JsArray receiver, List<JsValue> args, Invoker invoker) {
         final var callback = callback(args);
+        final var self = thisArg(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
-            if (!receiver.isHole(i) && JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(elements.get(i), new JsNumber(i), receiver)))) {
+            if (!receiver.isHole(i) && JsCoercion
+                    .toBoolean(invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver)))) {
                 return true;
             }
         }
@@ -440,10 +466,11 @@ public final class ArrayBuiltins {
 
     private static boolean every(JsArray receiver, List<JsValue> args, Invoker invoker) {
         final var callback = callback(args);
+        final var self = thisArg(args);
         final var elements = receiver.getElements();
         for (var i = 0; i < elements.size(); i++) {
-            if (!receiver.isHole(i) && !JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(elements.get(i), new JsNumber(i), receiver)))) {
+            if (!receiver.isHole(i) && !JsCoercion
+                    .toBoolean(invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver)))) {
                 return false;
             }
         }
@@ -616,10 +643,15 @@ public final class ArrayBuiltins {
     }
 
     private static JsValue callback(List<JsValue> args) {
-        if (args.isEmpty()) {
-            throw new TypeErrorException("undefined is not a function");
+        final var fn = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        if (!InterpreterUtils.isCallable(fn)) {
+            throw new TypeErrorException(JsCoercion.toStr(fn) + " is not a function");
         }
-        return args.getFirst();
+        return fn;
+    }
+
+    private static JsValue thisArg(List<JsValue> args) {
+        return args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
     }
 
     private static int clampIndex(int index, int length) {

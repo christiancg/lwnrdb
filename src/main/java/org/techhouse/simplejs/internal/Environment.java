@@ -18,12 +18,18 @@ public final class Environment {
         private final String kind;
         private boolean initialized;
         private final boolean enumerable;
+        private final boolean writable;
 
         private Binding(JsValue value, String kind, boolean initialized, boolean enumerable) {
+            this(value, kind, initialized, enumerable, true);
+        }
+
+        private Binding(JsValue value, String kind, boolean initialized, boolean enumerable, boolean writable) {
             this.value = value;
             this.kind = kind;
             this.initialized = initialized;
             this.enumerable = enumerable;
+            this.writable = writable;
         }
     }
 
@@ -113,6 +119,12 @@ public final class Environment {
         bindings.put(name, new Binding(value, "var", true, false));
     }
 
+    // NaN/Infinity/undefined are the global object's non-writable, non-configurable data
+    // properties (unlike every other global builtin, which stays plain-writable).
+    public void declareNonWritableBuiltin(String name, JsValue value) {
+        bindings.put(name, new Binding(value, "var", true, false, false));
+    }
+
     public boolean hasLocal(String name) {
         return bindings.containsKey(name);
     }
@@ -150,6 +162,9 @@ public final class Environment {
         }
         if ("const".equals(binding.kind) && binding.initialized) {
             throw new TypeErrorException("Assignment to constant variable.");
+        }
+        if (!binding.writable) {
+            throw new TypeErrorException("Cannot assign to read only property '" + name + "' of object");
         }
         binding.value = value;
         binding.initialized = true;

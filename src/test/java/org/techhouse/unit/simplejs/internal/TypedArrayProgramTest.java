@@ -38,6 +38,14 @@ public class TypedArrayProgramTest {
         assertEquals(2, num("new Uint8Array([1, 2, 3])[1]"));
     }
 
+    // A typed array constructed from a plain array-like object (no Symbol.iterator) falls back to
+    // array-like semantics instead of throwing "is not iterable"
+    @Test
+    public void test_construct_from_array_like_object() {
+        assertEquals(2, num("new Uint8Array({length: 3, 0: 1, 1: 2, 2: 3})[1]"));
+        assertEquals(0, num("new Uint8Array({length: 0}).length"));
+    }
+
     // A typed array constructed over a buffer views it, and the length derives from the buffer size
     @Test
     public void test_construct_over_buffer() {
@@ -290,6 +298,13 @@ public class TypedArrayProgramTest {
     @Test
     public void test_missing_callback_throws() {
         assertEquals("TypeError", str("let n; try { new Int8Array([1]).map(); } catch (e) { n = e.name } n"));
+    }
+
+    // A non-callable predicate throws immediately, even on an empty typed array
+    @Test
+    public void test_non_callable_callback_throws_even_on_empty_array() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Int8Array(0).find(null)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Int8Array([1, 2]).find(null)"));
     }
 
     // JSON.stringify emits a typed array as a JSON array of its elements

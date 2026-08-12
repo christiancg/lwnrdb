@@ -10,6 +10,7 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsBigInt;
@@ -80,10 +81,13 @@ public final class TypedArrayBuiltins {
         return new JsNativeFunction("DataView", (_, args) -> constructDataView(args));
     }
 
-    public static JsNativeFunction create(JsTypedArray.Kind kind, Invoker invoker, IterableToList iterableToList) {
-        final var ctor = new JsNativeFunction(kind.ctorName(), (_, args) -> constructTyped(kind, args, iterableToList));
+    public static JsNativeFunction create(JsTypedArray.Kind kind, Invoker invoker, IterableToList iterableToList,
+            InterpreterOps ops) {
+        final var ctor = new JsNativeFunction(kind.ctorName(),
+                (_, args) -> constructTyped(kind, args, iterableToList, ops));
         ctor.setProperty("BYTES_PER_ELEMENT", new JsNumber(kind.bytesPerElement()));
-        ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(kind, args, invoker, iterableToList)));
+        ctor.setProperty("from",
+                new JsNativeFunction("from", (_, args) -> from(kind, args, invoker, iterableToList, ops)));
         ctor.setProperty("of", new JsNativeFunction("of", (_, args) -> fromItems(kind, args)));
         if (kind == JsTypedArray.Kind.UINT8) {
             ctor.setProperty("fromBase64",
@@ -106,7 +110,8 @@ public final class TypedArrayBuiltins {
         return new JsDataView(buffer, byteOffset, byteLength, !explicitLength && buffer.isResizable());
     }
 
-    private static JsValue constructTyped(JsTypedArray.Kind kind, List<JsValue> args, IterableToList iterableToList) {
+    private static JsValue constructTyped(JsTypedArray.Kind kind, List<JsValue> args, IterableToList iterableToList,
+            InterpreterOps ops) {
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
             return allocate(kind, 0);
         }
@@ -117,7 +122,7 @@ public final class TypedArrayBuiltins {
         if (first instanceof JsNumber n) {
             return allocate(kind, (int) n.getValue());
         }
-        return fromItems(kind, sourceItems(first, iterableToList));
+        return fromItems(kind, sourceItems(first, iterableToList, ops));
     }
 
     private static JsValue viewOverBuffer(JsTypedArray.Kind kind, JsArrayBuffer buffer, List<JsValue> args) {
@@ -149,14 +154,14 @@ public final class TypedArrayBuiltins {
         return new JsTypedArray(kind, new JsArrayBuffer(safe * kind.bytesPerElement()), 0, safe);
     }
 
-    private static List<JsValue> sourceItems(JsValue source, IterableToList iterableToList) {
+    private static List<JsValue> sourceItems(JsValue source, IterableToList iterableToList, InterpreterOps ops) {
         if (source instanceof JsArray array) {
             return new ArrayList<>(array.getElements());
         }
         if (source instanceof JsTypedArray typed) {
             return elements(typed);
         }
-        return iterableToList.drain(source);
+        return InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
     }
 
     private static JsTypedArray fromItems(JsTypedArray.Kind kind, List<JsValue> items) {
@@ -168,10 +173,10 @@ public final class TypedArrayBuiltins {
     }
 
     private static JsValue from(JsTypedArray.Kind kind, List<JsValue> args, Invoker invoker,
-            IterableToList iterableToList) {
+            IterableToList iterableToList, InterpreterOps ops) {
         final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var mapFn = args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? args.get(1) : null;
-        final var items = sourceItems(source, iterableToList);
+        final var items = sourceItems(source, iterableToList, ops);
         final var result = allocate(kind, items.size());
         for (var i = 0; i < items.size(); i++) {
             final var element = mapFn == null
@@ -704,10 +709,11 @@ public final class TypedArrayBuiltins {
     }
 
     private static JsValue callback(List<JsValue> args) {
-        if (args.isEmpty()) {
-            throw new TypeErrorException("undefined is not a function");
+        final var fn = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        if (!InterpreterUtils.isCallable(fn)) {
+            throw new TypeErrorException(JsCoercion.toStr(fn) + " is not a function");
         }
-        return args.getFirst();
+        return fn;
     }
 
     private static JsValue arg(List<JsValue> args, int index) {
