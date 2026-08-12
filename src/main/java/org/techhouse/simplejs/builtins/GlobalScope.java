@@ -37,7 +37,7 @@ public final class GlobalScope {
         define(global, "Math", MathBuiltins.create(iterableToList));
         define(global, "JSON", JsonBuiltins.create(ops, invoker));
         define(global, "console", consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
-        constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, iterableToList),
+        constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, iterableToList, intrinsics),
                 intrinsics.promiseProto());
         TimerBuiltins.install(global, eventLoop, invoker);
         constructor(global, "RegExp", RegexBuiltins.create(), intrinsics.regexpProto());

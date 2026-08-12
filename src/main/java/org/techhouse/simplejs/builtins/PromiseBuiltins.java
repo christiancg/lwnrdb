@@ -4,6 +4,7 @@ import java.util.List;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
@@ -21,18 +22,19 @@ public final class PromiseBuiltins {
     private PromiseBuiltins() {
     }
 
-    public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker, IterableToList iterableToList) {
+    public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker, IterableToList iterableToList,
+            Intrinsics intrinsics) {
         final var promise = new JsNativeFunction("Promise", (_, args) -> construct(eventLoop, invoker, args));
         promise.setProperty("resolve", new JsNativeFunction("resolve", (_, args) -> resolved(eventLoop, arg0(args))));
         promise.setProperty("reject", new JsNativeFunction("reject", (_, args) -> rejected(eventLoop, arg0(args))));
         promise.setProperty("all",
-                new JsNativeFunction("all", (_, args) -> all(eventLoop, arg0(args), iterableToList)));
+                new JsNativeFunction("all", (_, args) -> all(eventLoop, arg0(args), iterableToList, intrinsics)));
         promise.setProperty("race",
-                new JsNativeFunction("race", (_, args) -> race(eventLoop, arg0(args), iterableToList)));
-        promise.setProperty("allSettled",
-                new JsNativeFunction("allSettled", (_, args) -> allSettled(eventLoop, arg0(args), iterableToList)));
+                new JsNativeFunction("race", (_, args) -> race(eventLoop, arg0(args), iterableToList, intrinsics)));
+        promise.setProperty("allSettled", new JsNativeFunction("allSettled",
+                (_, args) -> allSettled(eventLoop, arg0(args), iterableToList, intrinsics)));
         promise.setProperty("any",
-                new JsNativeFunction("any", (_, args) -> any(eventLoop, arg0(args), iterableToList)));
+                new JsNativeFunction("any", (_, args) -> any(eventLoop, arg0(args), iterableToList, intrinsics)));
         promise.setProperty("withResolvers", new JsNativeFunction("withResolvers", (_, _) -> withResolvers(eventLoop)));
         promise.setProperty("try", new JsNativeFunction("try", (_, args) -> tryCall(eventLoop, invoker, args)));
         return promise;
@@ -168,8 +170,21 @@ public final class PromiseBuiltins {
         return promise;
     }
 
-    private static JsValue all(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
-        final var elements = elements(iterable, iterableToList);
+    private static JsPromise rejectedFrom(EventLoop eventLoop, SimpleJsRuntimeException error, Intrinsics intrinsics) {
+        final var reason = error instanceof JsThrowException thrown
+                ? thrown.getValue()
+                : InterpreterUtils.toErrorValue(error, intrinsics);
+        return rejected(eventLoop, reason);
+    }
+
+    private static JsValue all(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList,
+            Intrinsics intrinsics) {
+        final List<JsValue> elements;
+        try {
+            elements = elements(iterable, iterableToList);
+        } catch (SimpleJsRuntimeException error) {
+            return rejectedFrom(eventLoop, error, intrinsics);
+        }
         final var derived = new JsPromise(eventLoop);
         final var results = new JsArray();
         final var remaining = new int[]{elements.size()};
@@ -191,16 +206,29 @@ public final class PromiseBuiltins {
         return derived;
     }
 
-    private static JsValue race(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
+    private static JsValue race(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList,
+            Intrinsics intrinsics) {
         final var derived = new JsPromise(eventLoop);
-        for (final var element : elements(iterable, iterableToList)) {
+        final List<JsValue> elements;
+        try {
+            elements = elements(iterable, iterableToList);
+        } catch (SimpleJsRuntimeException error) {
+            return rejectedFrom(eventLoop, error, intrinsics);
+        }
+        for (final var element : elements) {
             resolved(eventLoop, element).subscribe(derived::resolve, derived::reject);
         }
         return derived;
     }
 
-    private static JsValue allSettled(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
-        final var elements = elements(iterable, iterableToList);
+    private static JsValue allSettled(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList,
+            Intrinsics intrinsics) {
+        final List<JsValue> elements;
+        try {
+            elements = elements(iterable, iterableToList);
+        } catch (SimpleJsRuntimeException error) {
+            return rejectedFrom(eventLoop, error, intrinsics);
+        }
         final var derived = new JsPromise(eventLoop);
         final var results = new JsArray();
         final var remaining = new int[]{elements.size()};
@@ -226,8 +254,14 @@ public final class PromiseBuiltins {
         return derived;
     }
 
-    private static JsValue any(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList) {
-        final var elements = elements(iterable, iterableToList);
+    private static JsValue any(EventLoop eventLoop, JsValue iterable, IterableToList iterableToList,
+            Intrinsics intrinsics) {
+        final List<JsValue> elements;
+        try {
+            elements = elements(iterable, iterableToList);
+        } catch (SimpleJsRuntimeException error) {
+            return rejectedFrom(eventLoop, error, intrinsics);
+        }
         final var derived = new JsPromise(eventLoop);
         if (elements.isEmpty()) {
             derived.reject(ErrorBuiltins.makeAggregateError(List.of(), "All promises were rejected"));

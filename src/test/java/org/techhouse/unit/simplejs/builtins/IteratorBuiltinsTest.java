@@ -127,4 +127,45 @@ public class IteratorBuiltinsTest {
     public void test_iterator_prototype_symbol_iterator() {
         assertEquals("1,2", str("function* g(){yield 1;yield 2;} [...g().map(x => x)].join(',')"));
     }
+
+    // new Iterator() still throws when called directly, not through a subclass
+    @Test
+    public void test_iterator_direct_new_throws() {
+        final var source = """
+                let result = 'no throw';
+                try {
+                    new Iterator();
+                } catch (e) {
+                    result = e.name;
+                }
+                result
+                """;
+        assertEquals("TypeError", str(source));
+    }
+
+    // a class extending Iterator can be constructed via the super() chain
+    @Test
+    public void test_iterator_subclass_construction_succeeds() {
+        final var source = """
+                class SubIterator extends Iterator {}
+                let s = new SubIterator();
+                (s instanceof SubIterator) + ',' + (s instanceof Iterator)
+                """;
+        assertEquals("true,true", str(source));
+    }
+
+    // the helpers dispatch correctly on a subclass instance whose next() is a prototype method
+    @Test
+    public void test_iterator_subclass_helpers_dispatch() {
+        final var source = """
+                class Counter extends Iterator {
+                    #i = 0;
+                    next() {
+                        return this.#i < 3 ? { value: this.#i++, done: false } : { value: undefined, done: true };
+                    }
+                }
+                new Counter().map(x => x * 2).toArray().join(',')
+                """;
+        assertEquals("0,2,4", str(source));
+    }
 }

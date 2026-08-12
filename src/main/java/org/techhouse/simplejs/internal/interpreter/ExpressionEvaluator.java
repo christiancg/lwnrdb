@@ -42,6 +42,7 @@ import org.techhouse.simplejs.nodes.UpdateExpression;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
@@ -268,6 +269,12 @@ public final class ExpressionEvaluator {
             case JsProxy proxy -> JsBoolean.of(proxies.delete(proxy, new JsString(key)));
             case JsObject object -> {
                 if (!object.delete(key)) {
+                    throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
+                }
+                yield JsBoolean.TRUE;
+            }
+            case JsClass cls -> {
+                if (!cls.getStaticOwner().delete(key)) {
                     throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
                 }
                 yield JsBoolean.TRUE;

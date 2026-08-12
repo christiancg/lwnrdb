@@ -60,7 +60,6 @@ IGNORED_FLAGS = {"generated", "CanBlockIsFalse", "CanBlockIsTrue", "non-determin
 # The confirmed divergences the first run has to reproduce. A row that comes back all-green means the
 # filter, the prelude or the verdict logic is wrong — not that the engine improved.
 DIVERGENCES = [
-    ("user thenables are never assimilated", ["built-ins/Promise/"]),
     ("for-in skips the prototype chain", ["language/statements/for-in/"]),
     ("super.x = v is a SyntaxError", ["language/expressions/super/", "language/statements/class/"]),
     ("Date component accessors are UTC, not local", ["built-ins/Date/"]),

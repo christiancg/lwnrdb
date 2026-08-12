@@ -40,6 +40,7 @@ import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsCallableProperties;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -396,6 +397,16 @@ public final class StatementEvaluator {
             final var keys = new ArrayList<String>();
             for (final var key : object.keys()) {
                 if (object.isEnumerable(key)) {
+                    keys.add(key);
+                }
+            }
+            return keys;
+        }
+        if (target instanceof JsClass cls) {
+            final var owner = cls.getStaticOwner();
+            final var keys = new ArrayList<String>();
+            for (final var key : owner.keys()) {
+                if (owner.isEnumerable(key)) {
                     keys.add(key);
                 }
             }

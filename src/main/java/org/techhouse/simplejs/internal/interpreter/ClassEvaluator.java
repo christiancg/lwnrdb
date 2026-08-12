@@ -210,8 +210,11 @@ public final class ClassEvaluator {
 
     // A native super has no method tables to chain into, so its result's own state is copied onto the
     // instance and the instance is linked to the native prototype for method lookup and instanceof.
+    // The instance under construction is passed as thisArg (a plain `new NativeCtor()` passes
+    // JsUndefined instead), giving an abstract native constructor like Iterator's a signal to
+    // distinguish a super() call from a subclass from direct construction.
     private void applyNativeSuper(JsNativeFunction nativeSuper, JsObject instance, List<JsValue> args) {
-        final var produced = nativeSuper.invoke(JsUndefined.getInstance(), args);
+        final var produced = nativeSuper.invoke(instance, args);
         if (produced instanceof JsObject object) {
             for (final var key : object.keys()) {
                 instance.defineValue(key, object.get(key));

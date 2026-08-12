@@ -12,6 +12,7 @@ import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -109,6 +110,7 @@ public final class ObjectBuiltins {
     static boolean hasOwnKey(JsValue target, String key) {
         return switch (target) {
             case JsObject object -> object.has(key) || object.hasAccessor(key);
+            case JsClass cls -> cls.getStaticOwner().has(key) || cls.getStaticOwner().hasAccessor(key);
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
             case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
@@ -119,6 +121,9 @@ public final class ObjectBuiltins {
     }
 
     static boolean hasOwnSymbol(JsValue target, JsSymbol key) {
+        if (target instanceof JsClass cls) {
+            return cls.getStaticOwner().hasSymbol(key);
+        }
         return target instanceof JsObject object && object.hasSymbol(key);
     }
 
@@ -188,6 +193,14 @@ public final class ObjectBuiltins {
             case JsObject object -> {
                 for (final var key : object.keys()) {
                     if (object.isEnumerable(key)) {
+                        result.push(new JsString(key));
+                    }
+                }
+            }
+            case JsClass cls -> {
+                final var owner = cls.getStaticOwner();
+                for (final var key : owner.keys()) {
+                    if (owner.isEnumerable(key)) {
                         result.push(new JsString(key));
                     }
                 }
@@ -396,8 +409,12 @@ public final class ObjectBuiltins {
 
     public static JsValue defineProperty(List<JsValue> args) {
         final var target = first(args);
-        if (target instanceof JsObject object && args.size() > 2 && args.get(2) instanceof JsObject descriptor) {
-            applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor);
+        if (args.size() > 2 && args.get(2) instanceof JsObject descriptor) {
+            if (target instanceof JsObject object) {
+                applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor);
+            } else if (target instanceof JsClass cls) {
+                applyDescriptor(cls.getStaticOwner(), JsCoercion.toStr(args.get(1)), descriptor);
+            }
         }
         return target;
     }
@@ -555,6 +572,11 @@ public final class ObjectBuiltins {
                     result.push(new JsString(key));
                 }
             }
+            case JsClass cls -> {
+                for (final var key : cls.getStaticOwner().keys()) {
+                    result.push(new JsString(key));
+                }
+            }
             case JsArray array -> {
                 for (var i = 0; i < array.length(); i++) {
                     result.push(new JsString(Integer.toString(i)));
@@ -596,7 +618,8 @@ public final class ObjectBuiltins {
         if (args.size() > 1 && first(args) instanceof JsGlobalObject global) {
             return globalDescriptor(global, args.get(1));
         }
-        if (!(first(args) instanceof JsObject object) || args.size() < 2) {
+        final var target = first(args) instanceof JsClass cls ? cls.getStaticOwner() : first(args);
+        if (!(target instanceof JsObject object) || args.size() < 2) {
             return JsUndefined.getInstance();
         }
         if (args.get(1) instanceof JsSymbol symbol) {

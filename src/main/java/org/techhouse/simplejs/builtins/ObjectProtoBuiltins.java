@@ -128,13 +128,12 @@ public final class ObjectProtoBuiltins {
         if (!ObjectBuiltins.hasOwnKey(receiver, key)) {
             return false;
         }
-        if (receiver instanceof JsObject object) {
-            return object.isEnumerable(key);
-        }
-        if (receiver instanceof JsCallableProperties callable) {
-            return callable.enumerablePropertyKeys().contains(key);
-        }
-        return !"length".equals(key);
+        return switch (receiver) {
+            case JsObject object -> object.isEnumerable(key);
+            case JsClass cls -> cls.getStaticOwner().isEnumerable(key);
+            case JsCallableProperties callable -> callable.enumerablePropertyKeys().contains(key);
+            default -> !"length".equals(key);
+        };
     }
 
     // A value's builtin prototype is reached through Intrinsics.protoFor rather than a proto link, and

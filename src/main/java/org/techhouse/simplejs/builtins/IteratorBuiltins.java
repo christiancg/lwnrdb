@@ -36,8 +36,14 @@ public final class IteratorBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Iterator", (_, _) -> {
-            throw new TypeErrorException("Abstract class Iterator not directly constructable");
+        // Direct construction passes JsUndefined as thisArg; a super() call from a subclass passes
+        // the instance under construction instead (see ClassEvaluator.applyNativeSuper), which is the
+        // only signal that distinguishes the spec-legal super() case from a direct `new Iterator()`.
+        final var ctor = new JsNativeFunction("Iterator", (thisArg, _) -> {
+            if (thisArg instanceof JsUndefined) {
+                throw new TypeErrorException("Abstract class Iterator not directly constructable");
+            }
+            return thisArg;
         });
         final var prototype = new JsObject();
         for (final var name : HELPERS) {

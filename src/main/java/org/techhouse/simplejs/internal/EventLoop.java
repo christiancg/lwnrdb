@@ -10,6 +10,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.LockSupport;
+import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.values.JsPromise;
@@ -51,6 +53,25 @@ public final class EventLoop {
     private volatile Thread drainThread;
     private long nextTimerId = 1;
     private long nextSeq;
+    private InterpreterOps ops;
+    private Intrinsics intrinsics;
+
+    // Wired once by the owning Interpreter so values like JsPromise (constructed all over the
+    // builtins/internal layers, never with direct interpreter access) can call back into it for
+    // duck-typed member access (e.g. thenable assimilation) without threading these through every
+    // call site.
+    public void wireInterpreter(InterpreterOps ops, Intrinsics intrinsics) {
+        this.ops = ops;
+        this.intrinsics = intrinsics;
+    }
+
+    public InterpreterOps ops() {
+        return ops;
+    }
+
+    public Intrinsics intrinsics() {
+        return intrinsics;
+    }
 
     public void queueMicrotask(Runnable task) {
         microtasks.add(task);

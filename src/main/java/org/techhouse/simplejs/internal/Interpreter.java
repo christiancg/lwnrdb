@@ -238,6 +238,7 @@ public final class Interpreter {
     private Interpreter(HostBindings host) {
         this.host = host;
         this.modules = new ModuleEvaluator(this, classes, host, eventLoop);
+        eventLoop.wireInterpreter(ops, intrinsics);
         final var limits = host.limits();
         this.maxDepth = limits.maxDepth();
         this.instructionsRemaining = limits.instructionBudget();
@@ -518,6 +519,8 @@ public final class Interpreter {
             case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue));
             case JsObject object when keyValue instanceof JsSymbol symbol -> hasSymbolMember(object, symbol);
             case JsObject object -> object.has(JsCoercion.toStr(keyValue));
+            case JsClass cls when keyValue instanceof JsSymbol symbol -> hasStaticSymbolMember(cls, symbol);
+            case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue));
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue));
             case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue));
             default -> throw new TypeErrorException(
@@ -534,6 +537,35 @@ public final class Interpreter {
         }
         for (var proto = intrinsics.protoFor((JsValue) callable); proto != null; proto = proto.getProto()) {
             if (proto.has(key) || proto.hasAccessor(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasStaticMember(JsClass cls, String key) {
+        if ("prototype".equals(key) || "name".equals(key)) {
+            return true;
+        }
+        if (cls.findStaticGetter(key) != null || cls.findStaticSetter(key) != null
+                || cls.findStaticMethod(key) != null) {
+            return true;
+        }
+        for (var current = cls; current != null; current = current.getSuperClass()) {
+            if (current.hasStaticProp(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasStaticSymbolMember(JsClass cls, JsSymbol symbol) {
+        if (cls.findStaticSymbolGetter(symbol) != null || cls.findStaticSymbolSetter(symbol) != null
+                || cls.findStaticSymbolMethod(symbol) != null) {
+            return true;
+        }
+        for (var current = cls; current != null; current = current.getSuperClass()) {
+            if (current.hasStaticSymbolProp(symbol)) {
                 return true;
             }
         }
@@ -1113,6 +1145,7 @@ public final class Interpreter {
         return switch (target) {
             case JsProxy proxy -> proxies.ownKeys(proxy);
             case JsObject object -> objectOwnKeys(object);
+            case JsClass cls -> objectOwnKeys(cls.getStaticOwner());
             case JsArray array -> arrayOwnKeys(array);
             case JsCallableProperties callable -> callableOwnKeys(callable);
             default -> new ArrayList<>();
@@ -1131,6 +1164,7 @@ public final class Interpreter {
         return switch (target) {
             case JsProxy proxy -> proxies.delete(proxy, keyValue);
             case JsObject object -> object.delete(JsCoercion.toStr(keyValue));
+            case JsClass cls -> cls.getStaticOwner().delete(JsCoercion.toStr(keyValue));
             case JsArray array -> deleteArrayElement(array, JsCoercion.toStr(keyValue));
             case JsCallableProperties callable -> callable.deleteProperty(JsCoercion.toStr(keyValue));
             default -> true;

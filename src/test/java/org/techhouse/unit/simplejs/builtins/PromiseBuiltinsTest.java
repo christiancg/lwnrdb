@@ -259,4 +259,81 @@ public class PromiseBuiltinsTest {
                 """;
         assertEquals(11, num(arr(source), 0));
     }
+
+    // Promise.all on a non-iterable settles rejected instead of throwing out of the native call
+    @Test
+    public void test_all_non_iterable_rejects() {
+        final var source = """
+                let out = [];
+                Promise.all({}).catch(e => out.push('caught'));
+                out
+                """;
+        assertEquals("caught", string(arr(source)));
+    }
+
+    // Promise.race on a non-iterable settles rejected instead of throwing out of the native call
+    @Test
+    public void test_race_non_iterable_rejects() {
+        final var source = """
+                let out = [];
+                Promise.race({}).catch(e => out.push('caught'));
+                out
+                """;
+        assertEquals("caught", string(arr(source)));
+    }
+
+    // Promise.allSettled on a non-iterable settles rejected instead of throwing out of the native call
+    @Test
+    public void test_all_settled_non_iterable_rejects() {
+        final var source = """
+                let out = [];
+                Promise.allSettled({}).catch(e => out.push('caught'));
+                out
+                """;
+        assertEquals("caught", string(arr(source)));
+    }
+
+    // Promise.any on a non-iterable settles rejected instead of throwing out of the native call
+    @Test
+    public void test_any_non_iterable_rejects() {
+        final var source = """
+                let out = [];
+                Promise.any({}).catch(e => out.push('caught'));
+                out
+                """;
+        assertEquals("caught", string(arr(source)));
+    }
+
+    // Promise.resolve assimilates a user thenable instead of fulfilling with the thenable itself
+    @Test
+    public void test_resolve_assimilates_thenable() {
+        final var source = """
+                let out = [];
+                Promise.resolve({ then(res) { res(42); } }).then(v => out.push(v));
+                out
+                """;
+        assertEquals(42, num(arr(source), 0));
+    }
+
+    // a thenable whose then throws synchronously rejects the derived promise
+    @Test
+    public void test_thenable_sync_throw_rejects() {
+        final var source = """
+                let out = [];
+                Promise.resolve({ then() { throw 'boom'; } }).catch(e => out.push(e));
+                out
+                """;
+        assertEquals("boom", string(arr(source)));
+    }
+
+    // a thenable that never invokes its resolve/reject callback leaves the promise pending forever
+    @Test
+    public void test_thenable_never_settling_stays_pending() {
+        final var source = """
+                let out = [];
+                Promise.resolve({ then() {} }).then(v => out.push(v), e => out.push(e));
+                out
+                """;
+        assertEquals(0, arr(source).length());
+    }
 }

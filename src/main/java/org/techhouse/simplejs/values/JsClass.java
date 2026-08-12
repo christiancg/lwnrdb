@@ -9,14 +9,13 @@ import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.nodes.FieldDefinition;
 
 public final class JsClass extends JsValue {
+    private static final JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(true, false, true);
+
     private final String name;
     private final JsClass superClass;
     private JsFunction constructor;
     private final JsObject prototype = new JsObject();
-    private final Map<String, JsFunction> staticMethods = new LinkedHashMap<>();
-    private final Map<String, JsFunction> staticGetters = new LinkedHashMap<>();
-    private final Map<String, JsFunction> staticSetters = new LinkedHashMap<>();
-    private final Map<String, JsValue> staticProps = new LinkedHashMap<>();
+    private final JsObject staticOwner = new JsObject();
     private final List<FieldDefinition> instanceFields = new ArrayList<>();
     private final Map<String, JsFunction> privateInstanceMethods = new LinkedHashMap<>();
     private final Map<String, JsFunction> privateInstanceGetters = new LinkedHashMap<>();
@@ -28,10 +27,6 @@ public final class JsClass extends JsValue {
     private final Map<JsSymbol, JsFunction> instanceSymbolMethods = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolGetters = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolSetters = new LinkedHashMap<>();
-    private final Map<JsSymbol, JsFunction> staticSymbolMethods = new LinkedHashMap<>();
-    private final Map<JsSymbol, JsFunction> staticSymbolGetters = new LinkedHashMap<>();
-    private final Map<JsSymbol, JsFunction> staticSymbolSetters = new LinkedHashMap<>();
-    private final Map<JsSymbol, JsValue> staticSymbolProps = new LinkedHashMap<>();
     private final Environment methodScope;
     private JsNativeFunction nativeSuperClass;
 
@@ -48,6 +43,10 @@ public final class JsClass extends JsValue {
 
     public JsObject getPrototype() {
         return prototype;
+    }
+
+    public JsObject getStaticOwner() {
+        return staticOwner;
     }
 
     public JsNativeFunction getNativeSuperClass() {
@@ -102,7 +101,14 @@ public final class JsClass extends JsValue {
     }
 
     public void addStaticMethod(String key, String kind, JsFunction fn) {
-        selectAccessor(staticMethods, staticGetters, staticSetters, kind).put(key, fn);
+        if ("get".equals(kind)) {
+            staticOwner.defineAccessor(key, fn, null);
+        } else if ("set".equals(kind)) {
+            staticOwner.defineAccessor(key, null, fn);
+        } else {
+            staticOwner.defineValue(key, fn);
+        }
+        staticOwner.setFlags(key, HIDDEN);
     }
 
     public void addPrivateInstanceMethod(String key, String kind, JsFunction fn) {
@@ -156,7 +162,13 @@ public final class JsClass extends JsValue {
     }
 
     public void addStaticSymbolMethod(JsSymbol key, String kind, JsFunction fn) {
-        selectAccessor(staticSymbolMethods, staticSymbolGetters, staticSymbolSetters, kind).put(key, fn);
+        if ("get".equals(kind)) {
+            staticOwner.defineSymbolAccessor(key, fn, null);
+        } else if ("set".equals(kind)) {
+            staticOwner.defineSymbolAccessor(key, null, fn);
+        } else {
+            staticOwner.setSymbol(key, fn);
+        }
     }
 
     public JsFunction findInstanceSymbolMethod(JsSymbol key) {
@@ -171,28 +183,43 @@ public final class JsClass extends JsValue {
         return findInChain(cls -> cls.instanceSymbolSetters, key);
     }
 
+    private JsClass staticSymbolOwnerFor(JsSymbol key) {
+        for (var cls = this; cls != null; cls = cls.superClass) {
+            if (cls.staticOwner.hasSymbol(key) || cls.staticOwner.hasSymbolAccessor(key)) {
+                return cls;
+            }
+        }
+        return null;
+    }
+
     public JsFunction findStaticSymbolMethod(JsSymbol key) {
-        return findInChain(cls -> cls.staticSymbolMethods, key);
+        final var owner = staticSymbolOwnerFor(key);
+        if (owner == null || owner.staticOwner.hasSymbolAccessor(key)) {
+            return null;
+        }
+        return owner.staticOwner.getSymbol(key) instanceof JsFunction fn ? fn : null;
     }
 
     public JsFunction findStaticSymbolGetter(JsSymbol key) {
-        return findInChain(cls -> cls.staticSymbolGetters, key);
+        final var owner = staticSymbolOwnerFor(key);
+        return owner == null ? null : (JsFunction) owner.staticOwner.getSymbolAccessorGetter(key);
     }
 
     public JsFunction findStaticSymbolSetter(JsSymbol key) {
-        return findInChain(cls -> cls.staticSymbolSetters, key);
+        final var owner = staticSymbolOwnerFor(key);
+        return owner == null ? null : (JsFunction) owner.staticOwner.getSymbolAccessorSetter(key);
     }
 
     public void setStaticSymbolProp(JsSymbol key, JsValue value) {
-        staticSymbolProps.put(key, value);
+        staticOwner.setSymbol(key, value);
     }
 
     public JsValue getStaticSymbolProp(JsSymbol key) {
-        return staticSymbolProps.get(key);
+        return staticOwner.getSymbol(key);
     }
 
     public boolean hasStaticSymbolProp(JsSymbol key) {
-        return staticSymbolProps.containsKey(key);
+        return staticOwner.hasSymbol(key);
     }
 
     public void addInstanceField(FieldDefinition field) {
@@ -204,27 +231,42 @@ public final class JsClass extends JsValue {
     }
 
     public void setStaticProp(String key, JsValue value) {
-        staticProps.put(key, value);
+        staticOwner.set(key, value);
     }
 
     public JsValue getStaticProp(String key) {
-        return staticProps.get(key);
+        return staticOwner.get(key);
     }
 
     public boolean hasStaticProp(String key) {
-        return staticProps.containsKey(key);
+        return staticOwner.has(key);
+    }
+
+    private JsClass staticOwnerFor(String key) {
+        for (var cls = this; cls != null; cls = cls.superClass) {
+            if (cls.staticOwner.has(key) || cls.staticOwner.hasAccessor(key)) {
+                return cls;
+            }
+        }
+        return null;
     }
 
     public JsFunction findStaticMethod(String key) {
-        return findInChain(cls -> cls.staticMethods, key);
+        final var owner = staticOwnerFor(key);
+        if (owner == null || owner.staticOwner.hasAccessor(key)) {
+            return null;
+        }
+        return owner.staticOwner.get(key) instanceof JsFunction fn ? fn : null;
     }
 
     public JsFunction findStaticGetter(String key) {
-        return findInChain(cls -> cls.staticGetters, key);
+        final var owner = staticOwnerFor(key);
+        return owner == null ? null : (JsFunction) owner.staticOwner.getAccessorGetter(key);
     }
 
     public JsFunction findStaticSetter(String key) {
-        return findInChain(cls -> cls.staticSetters, key);
+        final var owner = staticOwnerFor(key);
+        return owner == null ? null : (JsFunction) owner.staticOwner.getAccessorSetter(key);
     }
 
     private <K> JsFunction findInChain(Function<JsClass, Map<K, JsFunction>> table, K key) {

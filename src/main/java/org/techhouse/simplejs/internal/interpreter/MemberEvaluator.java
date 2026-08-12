@@ -489,8 +489,18 @@ public final class MemberEvaluator {
         return IteratorBuiltins.helper(interp.ops(), key);
     }
 
+    // Checks the instance and its immediate prototype (not the whole chain) so a class extending
+    // Iterator with a `next()` instance method - stored on its own prototype, not the instance
+    // itself - is still recognised. Stopping at one level avoids reaching a shared native
+    // superclass prototype (e.g. Iterator's, which aliases Generator.prototype and always carries
+    // a generic `next` wrapper) that would otherwise make every Iterator subclass instance a false
+    // positive regardless of whether it defines its own `next`.
     private boolean isIteratorLike(JsObject object) {
-        return object.has("next") && isCallable(object.get("next"));
+        if (object.has("next")) {
+            return isCallable(object.get("next"));
+        }
+        final var proto = object.getProto();
+        return proto != null && proto.has("next") && isCallable(proto.get("next"));
     }
 
     private boolean isAsyncIteratorLike(JsObject object) {

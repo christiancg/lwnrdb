@@ -1,9 +1,20 @@
 package org.techhouse.simplejs.values;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.ReferenceErrorException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 
 public final class JsPromise extends JsValue {
     public enum State {
@@ -44,7 +55,50 @@ public final class JsPromise extends JsValue {
             other.subscribe(this::resolve, this::reject);
             return;
         }
+        final var ops = eventLoop.ops();
+        if (ops != null && isObjectLike(value)) {
+            final JsValue then;
+            try {
+                then = ops.getMember(value, new JsString("then"));
+            } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                    | SyntaxErrorException error) {
+                reject(errorValueOf(error));
+                return;
+            }
+            if (isCallable(then)) {
+                resolveThenable(value, then, ops);
+                return;
+            }
+        }
         settle(State.FULFILLED, value);
+    }
+
+    // Spec [[Resolve]] for a thenable: schedule a job that calls `then` with fresh resolve/reject
+    // functions bound to this promise, rather than fulfilling with the thenable object itself.
+    private void resolveThenable(JsValue thenable, JsValue then, InterpreterOps ops) {
+        eventLoop.queueMicrotask(() -> {
+            final var resolveFn = new JsNativeFunction("resolve", (_, args) -> {
+                resolve(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
+                return JsUndefined.getInstance();
+            });
+            final var rejectFn = new JsNativeFunction("reject", (_, args) -> {
+                reject(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
+                return JsUndefined.getInstance();
+            });
+            try {
+                ops.call(then, thenable, List.of(resolveFn, rejectFn));
+            } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
+                    | SyntaxErrorException error) {
+                reject(errorValueOf(error));
+            }
+        });
+    }
+
+    private JsValue errorValueOf(SimpleJsRuntimeException error) {
+        if (error instanceof JsThrowException thrown) {
+            return thrown.getValue();
+        }
+        return InterpreterUtils.toErrorValue(error, eventLoop.intrinsics());
     }
 
     public void reject(JsValue reason) {
