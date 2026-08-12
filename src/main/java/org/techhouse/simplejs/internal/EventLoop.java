@@ -120,6 +120,12 @@ public final class EventLoop {
                     awaitAsyncCompletion(deadlineNanos);
                     continue;
                 }
+                // An async job may have completed (queuing its completion and decrementing the
+                // counter) between the poll() above and the counter check just now; re-check the
+                // queue before giving up so that completion is not silently dropped.
+                if (!asyncCompletions.isEmpty()) {
+                    continue;
+                }
                 return;
             }
             if (!awaitUntil(timer.dueNanos, deadlineNanos)) {
