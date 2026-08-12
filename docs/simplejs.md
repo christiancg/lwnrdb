@@ -25,7 +25,7 @@ describes the engine **as built**. The engine is reachable only through
 expose it to clients is still a deferred follow-up.
 
 Two lists bound what the engine does **not** do: the
-[verified gaps and divergences](#known-gaps-and-divergences-verified-2026-08-11)
+[verified gaps and divergences](#known-gaps-and-divergences)
 (things a conformant engine has that this one is missing or gets wrong — candidates
 for closing) and the
 [deliberately unimplemented features](#deliberately-unimplemented-es2026-features-out-of-scope-for-a-database-interpreter)
@@ -225,7 +225,7 @@ each describes the state at the end of that phase, and a "deferred"/"limitation"
 inside one is superseded whenever a later phase or follow-up section says otherwise
 (e.g. 6b's deferred `arguments` object and object method shorthand both landed later).
 The authoritative statement of what is *still* missing is
-[Known gaps and divergences](#known-gaps-and-divergences-verified-2026-08-11).
+[Known gaps and divergences](#known-gaps-and-divergences).
 
 - **6a — evaluation core ✅** — the value model (`values/`), lexical
   scopes/environments (`Environment`, with `var` hoisting to the function scope and
@@ -674,7 +674,15 @@ properties** (`Alphabetic`, `White_Space`, `Uppercase`, `Lowercase`, `Hex_Digit`
 outside these tables (e.g. `\p{Emoji}`, an unknown key, an invalid script) throws a JS
 `SyntaxError`. `Pattern.UNICODE_CHARACTER_CLASS` is **deliberately not** enabled, so `\d`/`\w`/`\s`/
 `\b` stay ASCII in `u`-mode exactly as ECMAScript requires (enabling it would make them Unicode-
-aware, a conformance regression). `Intl` and `Temporal` remain out of scope.
+aware, a conformance regression). The **Unicode version is the build JDK's**, not something the
+engine pins: with no ICU dependency the character data comes from `java.util.regex`, so JDK 25
+resolves these escapes against Unicode 16.0 and JDK 26 against 17.0. Property escapes therefore
+answer differently across the two supported build JDKs for code points and scripts added in 17.0
+(on 25, `\p{Script=Sidetic}` and friends do not compile at all). That is why
+`built-ins/RegExp/property-escapes/generated/` — exhaustive per-code-point assertions generated
+from one UCD version — is excluded from the conformance gate rather than baselined; the
+hand-written property-escapes tests, which cover the translation and validation this class
+actually performs, stay measured. `Intl` and `Temporal` remain out of scope.
 
 **Automatic Semicolon Insertion.** The lexer records, parallel to the token stream, a
 `newlineBefore` flag per token (`Lexer.LexResult.newlineBefore`) — true when the trivia skipped
@@ -724,7 +732,7 @@ exclusion/skip breakdown). The pieces:
 | File | Role |
 |---|---|
 | `config/test262.properties` | pinned corpus commit + tarball URL + sha256 |
-| `config/test262-exclusions.txt` | what is deliberately **not** measured; the machine-readable form of *Deliberately unimplemented ES2026 features* below |
+| `config/test262-exclusions.txt` | what is deliberately **not** measured; the machine-readable form of *Deliberately unimplemented ES2026 features* below. A `keep:` line re-admits a subtree from a broader `dir:` exclusion, so a directory-wide omission cannot quietly swallow tests that fail for a reason we own |
 | `config/test262-baseline.txt` | known-failing test ids, with the corpus SHA in the header |
 | `config/test262-features.txt` | features already accounted for, so a corpus bump surfaces only the new ones |
 | `test_utils/test262_shims/` | the `print`/`$DONE` and `$262` shims the corpus harness expects |
@@ -758,6 +766,7 @@ commands above; the limitations below are the ones that need an explanation rath
 | 5 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
 | 6 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. |
 | 7 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
+| 8 | **The Unicode version is the build JDK's, not a pinned one** | A conformant engine pins the UCD version the spec requires; with no ICU dependency ours is whatever `java.util.regex` ships — Unicode 16.0 on JDK 25, 17.0 on JDK 26. So `\p{…}` escapes answer differently across the two supported build JDKs for anything added in 17.0, and on JDK 25 the scripts added there (`Sidetic`, `Tolong_Siki`, `Tai_Yo`, `Beria_Erfe`) throw a `SyntaxError` instead of compiling. This is why `built-ins/RegExp/property-escapes/generated/` is excluded from the gate rather than baselined — see `config/test262-exclusions.txt`. **Properties of strings** (`\p{RGI_Emoji}`, `\p{Basic_Emoji}`, …) are a separate, genuine gap and stay measured. |
 
 ### Host-contract notes
 
@@ -860,6 +869,13 @@ entry here is a number being flattered.
   by-copy methods always allocate the default type.
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
+
+One `dir:` exclusion is not a feature decision but a measurement one:
+`built-ins/RegExp/property-escapes/generated/` asserts, code point by code point, the contents of a
+single Unicode version. Property escapes are implemented (see *Unicode property escapes* above), but
+their data is the build JDK's — Unicode 16.0 on JDK 25, 17.0 on JDK 26 — so those files answer
+differently on the two supported build JDKs and no single baseline can be green on both. The
+hand-written property-escapes tests next to them stay measured.
 
 ### ES2026 conformance follow-up (2026-08-11)
 

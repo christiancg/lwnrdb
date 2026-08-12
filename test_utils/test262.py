@@ -249,7 +249,7 @@ def parse_list(value):
 def load_exclusions():
     if not EXCLUSIONS.is_file():
         raise HarnessError(f"missing {EXCLUSIONS.relative_to(ROOT)}")
-    dirs, features, patterns = [], {}, []
+    dirs, keeps, features, patterns = [], [], {}, []
     for number, raw in enumerate(EXCLUSIONS.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -262,13 +262,15 @@ def load_exclusions():
             raise HarnessError(f"{EXCLUSIONS.name}:{number}: every exclusion needs a trailing '# reason'")
         if kind == "dir":
             dirs.append((value, reason))
+        elif kind == "keep":
+            keeps.append((value, reason))
         elif kind == "feature":
             features[value] = reason
         elif kind == "pattern":
             patterns.append((re.compile(value), value, reason))
         else:
             raise HarnessError(f"{EXCLUSIONS.name}:{number}: unknown exclusion kind {kind!r}")
-    return {"dirs": dirs, "features": features, "patterns": patterns}
+    return {"dirs": dirs, "keeps": keeps, "features": features, "patterns": patterns}
 
 
 def classify(test_id, source, meta, exclusions):
@@ -276,9 +278,10 @@ def classify(test_id, source, meta, exclusions):
 
     verdict is one of RUN / SKIP / EXCLUDED; detail is the reason for the latter two.
     """
-    for prefix, reason in exclusions["dirs"]:
-        if test_id.startswith(prefix):
-            return "EXCLUDED", reason
+    if not any(test_id.startswith(prefix) for prefix, _ in exclusions["keeps"]):
+        for prefix, reason in exclusions["dirs"]:
+            if test_id.startswith(prefix):
+                return "EXCLUDED", reason
     flags = set(meta["flags"])
     if "module" in flags:
         return "EXCLUDED", "module resolution is limited to the args/db host built-ins"
@@ -807,9 +810,33 @@ def self_test():
         repr(round_trip),
     ) and ok
     ok = self_test_frontmatter() and ok
+    ok = self_test_classify() and ok
     ok = self_test_robustness() and ok
     ok = self_test_gate() and ok
     print(f"\nself-test: {'all checks passed' if ok else 'FAILURES above'}")
+    return ok
+
+
+def self_test_classify():
+    print("self-test — classification")
+    empty_meta = {"flags": [], "features": [], "negative": {}}
+    rules = {
+        "dirs": [("area/skipme/", "excluded subtree")],
+        "keeps": [("area/skipme/inner/", "measured anyway")],
+        "features": {"Temporal": "deliberate"},
+        "patterns": [],
+    }
+    checks = [
+        ("dir excludes", "area/skipme/a.js", "", empty_meta, "EXCLUDED"),
+        ("keep beats dir", "area/skipme/inner/a.js", "", empty_meta, "RUN"),
+        ("dir leaves siblings alone", "area/other/a.js", "", empty_meta, "RUN"),
+        ("feature still applies under keep", "area/skipme/inner/b.js", "",
+         {"flags": [], "features": ["Temporal"], "negative": {}}, "EXCLUDED"),
+    ]
+    ok = True
+    for label, test_id, source, meta, expected in checks:
+        got = classify(test_id, source, meta, rules)[0]
+        ok = report_check(label, got == expected, f"{got} != {expected}") and ok
     return ok
 
 

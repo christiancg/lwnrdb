@@ -6,8 +6,13 @@
 #
 # Line kinds:
 #   dir:     <path prefix relative to test262/test/>   # reason
+#   keep:    <path prefix re-admitted from a dir:>     # reason
 #   feature: <features: value>                         # reason
 #   pattern: <python regex matched against the source> # reason
+#
+# A `keep:` line wins over any `dir:` line, and exists so a broad directory exclusion cannot
+# silently swallow a subtree that is failing for a reason we own. It overrides `dir:` only —
+# `feature:` and `pattern:` still apply.
 #
 # A `pattern:` line is a source scan, not a feature flag, because test262 does not flag `eval` or the
 # Function constructor. It can false-positive on a test that merely mentions the word; the count is
@@ -21,6 +26,19 @@
 dir:     intl402/                    # Intl not implemented (deliberate)
 dir:     staging/                    # not part of the conformance corpus
 dir:     annexB/                     # normative-optional web-legacy semantics; not required of a non-browser host
+dir:     built-ins/RegExp/property-escapes/generated/  # exhaustive per-code-point assertions against one UCD version
+keep:    built-ins/RegExp/property-escapes/generated/strings/  # properties of strings: our own gap, not the JDK's
+#
+# The property-escapes pair is not a feature gap. With no ICU dependency our Unicode data is
+# whatever the JDK ships, and the project builds on both 25 (Unicode 16.0) and 26 (Unicode 17.0),
+# so those generated files disagree across supported build JDKs (new scripts such as Sidetic and
+# Tolong_Siki do not even compile on 25) and no single baseline can be green on both. Measured
+# either way: the hand-written property-escapes tests beside them (grammar-extension,
+# loose-matching, unsupported-property, non-existent-property), which exercise RegexTranslator's
+# own grammar and validation, and the generated/strings/ subtree kept above — those fail because
+# properties of strings (\p{RGI_Emoji} and friends) are unimplemented, which is our gap to own,
+# and they answer identically on both JDKs since the translator rejects the property before
+# java.util.regex ever sees it.
 
 feature: Temporal                    # deliberate: Date is the only temporal type
 feature: SharedArrayBuffer           # deliberate: single-threaded per-request VM
