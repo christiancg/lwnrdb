@@ -682,9 +682,12 @@ def test_node_failure_quorum_maintained():
 
     # Wait for the survivors to detect the death and reassign ownership, then a
     # write+read cycle over all collections must succeed with just 2 nodes.
-    create_coll(nodes[0].client_port, DB, "after_fail")
-
+    # CREATE_COLLECTION is a coordinated admin op: right after the kill, the
+    # admin-coordinator hash-ring slot may still resolve to the dead node until
+    # SUSPECT->DEAD is detected, so retry it (idempotent) instead of firing once.
     def _write_read_ok():
+        if create_coll(nodes[0].client_port, DB, "after_fail").get("status") != "OK":
+            return False
         r = save(nodes[0].client_port, DB, "after_fail", {"_id": "f1", "v": 111})
         if r.get("status") != "OK":
             return False
