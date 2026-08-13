@@ -1,11 +1,13 @@
 package org.techhouse.simplejs.builtins;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
@@ -50,8 +52,24 @@ public final class IteratorBuiltins {
             prototype.set(name, helper(ops, name));
         }
         prototype.setSymbol(JsSymbol.ITERATOR, new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
+        prototype.defineValue("constructor", ctor);
+        prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         ctor.setProperty("prototype", prototype);
+        // The dedicated field (not just the "prototype" own property) is what `instanceof`/`new`
+        // consult for a JsNativeFunction (see ClassEvaluator.evalInstanceof/Interpreter.constructValue)
+        // - GlobalScope must not overwrite this with the unrelated Generator.prototype intrinsic.
+        ctor.setPrototype(prototype);
         ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(ops, arg0(args))));
+        ctor.setProperty("concat", new JsNativeFunction("concat", (thisArg, args) -> {
+            // `constructNative`'s fallback path passes JsUndefined as thisArg specifically to signal
+            // a `new` call (there being no other construct-vs-call distinction it can make for a
+            // plain utility native function), the same signal the Iterator/TypedArray abstract
+            // constructors above use - Iterator.concat is a non-constructor per spec.
+            if (thisArg instanceof JsUndefined) {
+                throw new TypeErrorException("Iterator.concat is not a constructor");
+            }
+            return concat(ops, args, prototype);
+        }));
         return ctor;
     }
 
@@ -79,7 +97,49 @@ public final class IteratorBuiltins {
 
     private static JsValue from(InterpreterOps ops, JsValue value) {
         final var driver = new Driver(ops, iteratorOf(ops, value));
-        return lazyIterator(driver::next);
+        return lazyIterator(driver::next, driver::close);
+    }
+
+    // Iterator.concat(...items): each item's Symbol.iterator method is fetched and validated
+    // eagerly, in argument order, before any iteration starts - but the method is only *called*
+    // (opening the actual inner iterator) lazily, item by item, as the result is driven.
+    private static JsValue concat(InterpreterOps ops, List<JsValue> items, JsObject proto) {
+        final var openMethods = new ArrayList<JsValue[]>();
+        for (final var item : items) {
+            if (!InterpreterUtils.isObjectLike(item)) {
+                throw new TypeErrorException("Iterator.concat argument must be an object");
+            }
+            final var method = ops.getMember(item, JsSymbol.ITERATOR);
+            if (!(method instanceof JsFunction) && !(method instanceof JsNativeFunction)) {
+                throw new TypeErrorException("Iterator.concat argument is not iterable");
+            }
+            openMethods.add(new JsValue[]{item, method});
+        }
+        final var index = new int[]{0};
+        final var current = new Driver[]{null};
+        final var result = lazyIterator(() -> {
+            while (true) {
+                if (current[0] == null) {
+                    if (index[0] >= openMethods.size()) {
+                        return null;
+                    }
+                    final var pair = openMethods.get(index[0]++);
+                    current[0] = new Driver(ops, ops.call(pair[1], pair[0], List.of()));
+                }
+                final var value = current[0].next();
+                if (value != null) {
+                    return value;
+                }
+                current[0] = null;
+            }
+        }, () -> {
+            if (current[0] != null) {
+                current[0].close();
+            }
+            index[0] = openMethods.size();
+        });
+        result.setProto(proto);
+        return result;
     }
 
     private static JsValue map(InterpreterOps ops, Driver source, JsValue fn) {
@@ -90,7 +150,7 @@ public final class IteratorBuiltins {
                 return null;
             }
             return ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index[0]++)));
-        });
+        }, source::close);
     }
 
     private static JsValue filter(InterpreterOps ops, Driver source, JsValue fn) {
@@ -104,7 +164,7 @@ public final class IteratorBuiltins {
                 }
             }
             return null;
-        });
+        }, source::close);
     }
 
     private static JsValue take(Driver source, long count) {
@@ -116,7 +176,7 @@ public final class IteratorBuiltins {
             }
             remaining[0]--;
             return source.next();
-        });
+        }, source::close);
     }
 
     private static JsValue drop(Driver source, long count) {
@@ -129,7 +189,7 @@ public final class IteratorBuiltins {
                 }
             }
             return source.next();
-        });
+        }, source::close);
     }
 
     private static JsValue flatMap(InterpreterOps ops, Driver source, JsValue fn) {
@@ -151,6 +211,11 @@ public final class IteratorBuiltins {
                 final var mapped = ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index[0]++)));
                 inner[0] = new Driver(ops, iteratorOf(ops, mapped));
             }
+        }, () -> {
+            if (inner[0] != null) {
+                inner[0].close();
+            }
+            source.close();
         });
     }
 
@@ -221,13 +286,30 @@ public final class IteratorBuiltins {
         return JsUndefined.getInstance();
     }
 
-    private static JsObject lazyIterator(Supplier<JsValue> nextValue) {
+    // Every %IteratorHelperPrototype% instance has a real, directly-callable `return` (not merely
+    // observed by for-of/spread's own early-exit forwarding) that closes the underlying source and
+    // permanently exhausts this helper; `closed` makes both effects idempotent.
+    private static JsObject lazyIterator(Supplier<JsValue> nextValue, Runnable onClose) {
         final var iterator = new JsObject();
+        final var closed = new boolean[]{false};
         iterator.set("next", new JsNativeFunction("next", (_, _) -> {
-            final var value = nextValue.get();
+            final var value = closed[0] ? null : nextValue.get();
+            if (value == null) {
+                closed[0] = true;
+            }
             final var step = new JsObject();
             step.set("value", value == null ? JsUndefined.getInstance() : value);
             step.set("done", JsBoolean.of(value == null));
+            return step;
+        }));
+        iterator.set("return", new JsNativeFunction("return", (_, _) -> {
+            if (!closed[0]) {
+                closed[0] = true;
+                onClose.run();
+            }
+            final var step = new JsObject();
+            step.set("value", JsUndefined.getInstance());
+            step.set("done", JsBoolean.of(true));
             return step;
         }));
         iterator.setSymbol(JsSymbol.ITERATOR, new JsNativeFunction("[Symbol.iterator]", (_, _) -> iterator));

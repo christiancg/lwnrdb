@@ -49,8 +49,14 @@ public final class AsyncIteratorBuiltins {
         }
         prototype.setSymbol(JsSymbol.ASYNC_ITERATOR,
                 new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
+        prototype.defineValue("constructor", ctor);
+        prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         ctor.setProperty("prototype", prototype);
         ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> getAsyncIterator(ops, loop, arg0(args))));
+        // The dedicated field (not just the "prototype" own property) is what `instanceof`/`new`
+        // consult for a JsNativeFunction - GlobalScope must not overwrite this with the unrelated
+        // AsyncGenerator.prototype intrinsic.
+        ctor.setPrototype(prototype);
         return ctor;
     }
 

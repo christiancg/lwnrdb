@@ -168,4 +168,61 @@ public class IteratorBuiltinsTest {
                 """;
         assertEquals("0,2,4", str(source));
     }
+
+    // Iterator.concat lazily drains each iterable in argument order, opening each one's iterator
+    // only when reached (not eagerly for every argument up front)
+    @Test
+    public void test_iterator_concat_lazy_in_order() {
+        final var source = """
+                let opened = [];
+                function makeIterable(name, values) {
+                    return { [Symbol.iterator]() { opened.push(name); return values[Symbol.iterator](); } };
+                }
+                let result = Iterator.concat(makeIterable('a', [1, 2]), makeIterable('b', [3, 4]));
+                let openedBeforeIteration = opened.join(',');
+                let values = result.toArray().join(',');
+                JSON.stringify([openedBeforeIteration, values, opened.join(',')])
+                """;
+        assertEquals("[\"\",\"1,2,3,4\",\"a,b\"]", str(source));
+    }
+
+    // Iterator.concat validates every argument is an object with a callable Symbol.iterator before
+    // returning, and throws a catchable TypeError otherwise
+    @Test
+    public void test_iterator_concat_rejects_non_iterable_argument() {
+        assertEquals("TypeError", str("let n; try { Iterator.concat({}); } catch (e) { n = e.name; } n"));
+        assertEquals("TypeError", str("let n; try { Iterator.concat(null); } catch (e) { n = e.name; } n"));
+    }
+
+    // `new Iterator.concat()` throws - it is a non-constructor
+    @Test
+    public void test_iterator_concat_not_constructible() {
+        assertEquals("TypeError", str("let n; try { new Iterator.concat(); } catch (e) { n = e.name; } n"));
+    }
+
+    // Iterator.concat's result is a real instance of the Iterator global (its [[Prototype]] is
+    // Iterator.prototype), and Iterator itself now has a correctly-wired [[Prototype]] field
+    // (`instanceof` reads that field directly, not the "prototype" own property)
+    @Test
+    public void test_iterator_concat_result_is_instance_of_iterator() {
+        assertEquals("true", str("String(Iterator.concat([1]) instanceof Iterator)"));
+    }
+
+    // An iterator helper's own `return` forwards to (and closes) the underlying source iterator
+    @Test
+    public void test_iterator_helper_return_forwards_to_source() {
+        final var source = """
+                let returned = false;
+                let source = {
+                    [Symbol.iterator]() { return this; },
+                    next() { return { value: 1, done: false }; },
+                    return() { returned = true; return { done: true }; },
+                };
+                let mapped = Iterator.from(source).map(x => x);
+                mapped.next();
+                mapped.return();
+                String(returned)
+                """;
+        assertEquals("true", str(source));
+    }
 }

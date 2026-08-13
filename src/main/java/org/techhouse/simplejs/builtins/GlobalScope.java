@@ -41,9 +41,11 @@ public final class GlobalScope {
                 intrinsics.promiseProto());
         TimerBuiltins.install(global, eventLoop, invoker);
         constructor(global, "RegExp", RegexBuiltins.create(), intrinsics.regexpProto());
-        constructor(global, "Iterator", IteratorBuiltins.create(ops), intrinsics.iteratorProto());
-        constructor(global, "AsyncIterator", AsyncIteratorBuiltins.create(ops, eventLoop),
-                intrinsics.asyncIteratorProto());
+        // Iterator/AsyncIterator wire their own dedicated [[Prototype]] internally (it's their own
+        // map/filter/... helper surface, not the unrelated Generator/AsyncGenerator.prototype
+        // intrinsic `constructor(...)` below would otherwise overwrite it with).
+        global.declareBuiltin("Iterator", IteratorBuiltins.create(ops));
+        global.declareBuiltin("AsyncIterator", AsyncIteratorBuiltins.create(ops, eventLoop));
         constructor(global, "Symbol", SymbolBuiltins.create(), intrinsics.symbolProto());
         constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, false), intrinsics.mapProto());
         constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true), intrinsics.mapProto());
