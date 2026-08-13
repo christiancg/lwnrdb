@@ -71,6 +71,7 @@ public final class Intrinsics {
     private final JsObject arrayBufferProto;
     private final JsObject dataViewProto;
     private final Map<JsTypedArray.Kind, JsObject> typedArrayProtos = new EnumMap<>(JsTypedArray.Kind.class);
+    private final JsObject typedArrayProto;
     private final JsObject disposableStackProto;
     private final JsObject asyncDisposableStackProto;
     private final JsObject errorProto = new JsObject();
@@ -110,8 +111,15 @@ public final class Intrinsics {
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
                 (receiver, name) -> TypedArrayBuiltins.dataViewMethod(requireView(receiver, name), name));
-        JsObject typedArrayProto = prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype",
+        typedArrayProto = prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype",
                 (receiver, name) -> TypedArrayBuiltins.getMethod(requireTypedArray(receiver, name), name, invoker));
+        // Per spec, %TypedArray%.prototype[Symbol.iterator] is the very same function object as
+        // %TypedArray%.prototype.values (not just an equivalent one).
+        typedArrayProto.setSymbol(JsSymbol.ITERATOR, typedArrayProto.get("values"));
+        // Real accessor properties (not just the fast-dispatch special-casing MemberEvaluator does
+        // for actual JsTypedArray receivers) so `TypedArray.prototype.length` etc, invoked with a
+        // non-typed-array `this`, throws per spec instead of silently reading through as undefined.
+        installTypedArrayGeometryAccessors(typedArrayProto);
         for (final var kind : JsTypedArray.Kind.values()) {
             final var proto = new JsObject();
             proto.setProto(typedArrayProto);
@@ -301,6 +309,10 @@ public final class Intrinsics {
         return typedArrayProtos.get(kind);
     }
 
+    public JsObject typedArrayProto() {
+        return typedArrayProto;
+    }
+
     public JsObject errorProto(String name) {
         return errorProtos.getOrDefault(name, errorProto);
     }
@@ -326,6 +338,12 @@ public final class Intrinsics {
         if (receiver instanceof JsObject object && ops != null && !MUTATING_ARRAY_METHODS.contains(method)
                 && !(ops.getMember(object, new JsString("length")) instanceof JsUndefined)) {
             return new JsArray(InterpreterUtils.arrayLikeElements(object, ops, REVERSE_ARRAY_METHODS.contains(method)));
+        }
+        // ToObject on a raw primitive (other than null/undefined, which ToObject rejects) succeeds
+        // and yields a wrapper with no own `length`/indexed properties, i.e. an empty array-like.
+        if (receiver instanceof JsBoolean || receiver instanceof JsNumber || receiver instanceof JsBigInt
+                || receiver instanceof JsSymbol) {
+            return new JsArray();
         }
         throw incompatible("Array.prototype." + method, receiver);
     }
@@ -462,6 +480,21 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("DataView.prototype." + method, receiver);
+    }
+
+    private void installTypedArrayGeometryAccessors(JsObject proto) {
+        proto.defineAccessor("length", new JsNativeFunction("get length",
+                (thisArg, _) -> new JsNumber(requireTypedArray(thisArg, "length").length())), null);
+        proto.defineAccessor("byteLength", new JsNativeFunction("get byteLength",
+                (thisArg, _) -> new JsNumber(requireTypedArray(thisArg, "byteLength").byteLength())), null);
+        proto.defineAccessor("byteOffset", new JsNativeFunction("get byteOffset",
+                (thisArg, _) -> new JsNumber(requireTypedArray(thisArg, "byteOffset").byteOffset())), null);
+        proto.defineAccessor("buffer",
+                new JsNativeFunction("get buffer", (thisArg, _) -> requireTypedArray(thisArg, "buffer").getBuffer()),
+                null);
+        for (final var name : List.of("length", "byteLength", "byteOffset", "buffer")) {
+            proto.setFlags(name, new JsObject.PropertyFlags(true, false, true));
+        }
     }
 
     private JsTypedArray requireTypedArray(JsValue receiver, String method) {

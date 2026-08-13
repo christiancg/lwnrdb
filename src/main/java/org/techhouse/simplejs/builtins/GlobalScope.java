@@ -59,9 +59,18 @@ public final class GlobalScope {
         define(global, "Proxy", ProxyBuiltins.create());
         constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(), intrinsics.arrayBufferProto());
         constructor(global, "DataView", TypedArrayBuiltins.dataView(), intrinsics.dataViewProto());
+        // %TypedArray% is a real spec intrinsic but - unlike Iterator - is never itself exposed as
+        // a named global by a conforming host; it's only reachable via Object.getPrototypeOf(Int8Array)
+        // (which testTypedArray.js's own `var TypedArray = ...` line relies on), so this wires the
+        // constructor-level [[Prototype]] chain without declaring a "TypedArray" global binding.
+        final var typedArrayCtor = TypedArrayBuiltins.abstractTypedArray();
+        typedArrayCtor.setPrototype(intrinsics.typedArrayProto());
+        intrinsics.typedArrayProto().defineValue("constructor", typedArrayCtor);
+        intrinsics.typedArrayProto().setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         for (final var kind : JsTypedArray.Kind.values()) {
-            constructor(global, kind.ctorName(), TypedArrayBuiltins.create(kind, invoker, iterableToList, ops),
-                    intrinsics.typedArrayProto(kind));
+            final var ctor = TypedArrayBuiltins.create(kind, invoker, iterableToList, ops);
+            ctor.setOwnProto(typedArrayCtor);
+            constructor(global, kind.ctorName(), ctor, intrinsics.typedArrayProto(kind));
         }
         final var bigInt = NumberBuiltins.bigIntFunction();
         BigIntBuiltins.installStatics(bigInt);

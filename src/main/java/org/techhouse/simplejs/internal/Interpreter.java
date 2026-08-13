@@ -173,6 +173,9 @@ public final class Interpreter {
             if (target instanceof JsProxy proxy) {
                 return proxies.getPrototypeOf(proxy);
             }
+            if (target instanceof JsNativeFunction nativeFunction && nativeFunction.getOwnProto() != null) {
+                return nativeFunction.getOwnProto();
+            }
             if (target instanceof JsObject || isNullish(target)) {
                 return ObjectBuiltins.getPrototypeOf(List.of(target));
             }
@@ -209,7 +212,7 @@ public final class Interpreter {
             if (target instanceof JsProxy proxy) {
                 return proxies.defineProperty(proxy, key, descriptor);
             }
-            ObjectBuiltins.defineProperty(List.of(target, key, descriptor));
+            ObjectBuiltins.defineProperty(List.of(target, key, descriptor), this);
             return true;
         }
 
@@ -518,7 +521,7 @@ public final class Interpreter {
             case JsProxy proxy -> proxies.has(proxy, keyValue);
             case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue));
             case JsObject object when keyValue instanceof JsSymbol symbol -> hasSymbolMember(object, symbol);
-            case JsObject object -> object.has(JsCoercion.toStr(keyValue));
+            case JsObject object -> hasStringMember(object, JsCoercion.toStr(keyValue));
             case JsClass cls when keyValue instanceof JsSymbol symbol -> hasStaticSymbolMember(cls, symbol);
             case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue));
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue));
@@ -566,6 +569,15 @@ public final class Interpreter {
         }
         for (var current = cls; current != null; current = current.getSuperClass()) {
             if (current.hasStaticSymbolProp(symbol)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasStringMember(JsObject object, String key) {
+        for (var current = object; current != null; current = current.getProto()) {
+            if (current.has(key) || current.hasAccessor(key)) {
                 return true;
             }
         }

@@ -10,6 +10,7 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
     private JsValue boundTarget;
     private List<JsValue> boundArgs;
     private JsObject prototype;
+    private JsValue ownProto;
 
     public JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation) {
         this.name = name;
@@ -92,5 +93,18 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
 
     public void setPrototype(JsObject prototype) {
         this.prototype = prototype;
+    }
+
+    // The own [[Prototype]] this function object reports to Object.getPrototypeOf/instanceof-chain
+    // walks - distinct from `prototype` above (the object `new` links instances to). Null falls
+    // back to the generic Function.prototype-equivalent shared by every native function; a native
+    // superclass constructor (e.g. %TypedArray% for the concrete typed array constructors) sets it
+    // to model the real spec constructor-level inheritance chain.
+    public JsValue getOwnProto() {
+        return ownProto;
+    }
+
+    public void setOwnProto(JsValue ownProto) {
+        this.ownProto = ownProto;
     }
 }

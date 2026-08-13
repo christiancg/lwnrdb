@@ -296,6 +296,29 @@ public final class JsObject extends JsValue {
         return accessorSetters == null ? null : accessorSetters.get(key);
     }
 
+    // Used when a redefine converts an accessor property into a data property: the accessor
+    // entries must not linger, or a later read would still find the stale getter/setter.
+    public void clearAccessor(String key) {
+        clearAccessorGetter(key);
+        clearAccessorSetter(key);
+    }
+
+    // defineAccessor is intentionally additive (a null side is "leave as-is", relied on by object
+    // literals installing a getter and setter via two separate calls) - these let a caller that
+    // means "explicitly remove this side" (e.g. a defineProperty redefine with `get: undefined`)
+    // say so without also wiping the side it isn't touching.
+    public void clearAccessorGetter(String key) {
+        if (accessorGetters != null) {
+            accessorGetters.remove(key);
+        }
+    }
+
+    public void clearAccessorSetter(String key) {
+        if (accessorSetters != null) {
+            accessorSetters.remove(key);
+        }
+    }
+
     public void defineSymbolAccessor(JsSymbol key, JsValue getter, JsValue setter) {
         if (getter != null) {
             if (symbolAccessorGetters == null) {

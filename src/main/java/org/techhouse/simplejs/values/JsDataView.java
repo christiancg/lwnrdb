@@ -6,6 +6,7 @@ import java.nio.ByteOrder;
 
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 
 /**
  * A JavaScript {@code DataView} over a {@link JsArrayBuffer}. Unlike a typed array, each getter/setter
@@ -44,19 +45,28 @@ public final class JsDataView extends JsValue {
         return byteLength;
     }
 
-    private void checkBounds(int offset, int size) {
+    // offset arrives as a long (post-ToIndex, so it may exceed Integer.MAX_VALUE) - the comparison
+    // must not overflow the way `int + int` would for a huge, spec-legal-but-out-of-buffer offset.
+    private int checkBounds(long offset, int size) {
+        // A detached buffer's backing bytes are truncated to zero-length, so this must be checked
+        // before the bounds comparison below - otherwise a non-lengthTracking view still reports
+        // its original (now-stale) byteLength and the out-of-range ByteBuffer access throws a raw
+        // IndexOutOfBoundsException instead of the spec TypeError.
+        if (buffer.isDetached()) {
+            throw new TypeErrorException("Cannot perform DataView access on a detached ArrayBuffer");
+        }
         if (offset < 0 || offset + size > byteLength()) {
             throw new RangeErrorException("Offset is outside the bounds of the DataView");
         }
+        return (int) offset;
     }
 
     private ByteBuffer view(boolean littleEndian) {
         return ByteBuffer.wrap(buffer.getBytes()).order(littleEndian ? ByteOrder.LITTLE_ENDIAN : ByteOrder.BIG_ENDIAN);
     }
 
-    public double getNumber(String kind, int offset, boolean littleEndian) {
-        checkBounds(offset, elementSize(kind));
-        final var pos = byteOffset + offset;
+    public double getNumber(String kind, long offset, boolean littleEndian) {
+        final var pos = byteOffset + checkBounds(offset, elementSize(kind));
         final var bb = view(littleEndian);
         return switch (kind) {
             case "getInt8" -> bb.get(pos);
@@ -71,9 +81,8 @@ public final class JsDataView extends JsValue {
         };
     }
 
-    public void setNumber(String kind, int offset, double value, boolean littleEndian) {
-        checkBounds(offset, elementSize(kind));
-        final var pos = byteOffset + offset;
+    public void setNumber(String kind, long offset, double value, boolean littleEndian) {
+        final var pos = byteOffset + checkBounds(offset, elementSize(kind));
         final var bb = view(littleEndian);
         switch (kind) {
             case "setInt8", "setUint8" -> bb.put(pos, (byte) NumberFormatter.toInt32(value));
@@ -85,18 +94,18 @@ public final class JsDataView extends JsValue {
         }
     }
 
-    public BigInteger getBigInt(boolean unsigned, int offset, boolean littleEndian) {
-        checkBounds(offset, 8);
-        final var raw = view(littleEndian).getLong(byteOffset + offset);
+    public BigInteger getBigInt(boolean unsigned, long offset, boolean littleEndian) {
+        final var pos = byteOffset + checkBounds(offset, 8);
+        final var raw = view(littleEndian).getLong(pos);
         if (!unsigned || raw >= 0) {
             return BigInteger.valueOf(raw);
         }
         return BigInteger.valueOf(raw).add(BigInteger.ONE.shiftLeft(64));
     }
 
-    public void setBigInt(int offset, BigInteger value, boolean littleEndian) {
-        checkBounds(offset, 8);
-        view(littleEndian).putLong(byteOffset + offset, value.mod(BigInteger.ONE.shiftLeft(64)).longValue());
+    public void setBigInt(long offset, BigInteger value, boolean littleEndian) {
+        final var pos = byteOffset + checkBounds(offset, 8);
+        view(littleEndian).putLong(pos, value.mod(BigInteger.ONE.shiftLeft(64)).longValue());
     }
 
     private static int elementSize(String kind) {

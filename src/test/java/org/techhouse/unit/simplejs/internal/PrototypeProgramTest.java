@@ -141,10 +141,12 @@ public class PrototypeProgramTest {
         assertEquals("TypeError", errorName("Array.prototype.join = 1; [1].join()"));
     }
 
-    // A wrong receiver for a delegating wrapper names the method it was called on
+    // A wrong receiver for a delegating wrapper names the method it was called on. A raw number is
+    // no longer "wrong" (ToObject boxes it into an empty array-like), so null - which ToObject
+    // rejects - stands in as a receiver that is genuinely still incompatible.
     @Test
     public void test_wrong_receiver_throws_type_error() {
-        assertEquals("[true,true]", run("try { Array.prototype.push.call(1, 2) } catch (e) {"
+        assertEquals("[true,true]", run("try { Array.prototype.push.call(null, 2) } catch (e) {"
                 + " return [e instanceof TypeError, e.message.indexOf('Array.prototype.push') === 0] }"));
     }
 

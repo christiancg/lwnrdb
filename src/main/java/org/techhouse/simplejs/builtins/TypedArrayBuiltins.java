@@ -81,6 +81,19 @@ public final class TypedArrayBuiltins {
         return new JsNativeFunction("DataView", (_, args) -> constructDataView(args));
     }
 
+    // The abstract %TypedArray% intrinsic: not directly constructable (mirrors IteratorBuiltins'
+    // thisArg-based direct-vs-super-call signal), but is every concrete typed array constructor's
+    // own [[Prototype]] (Object.getPrototypeOf(Int8Array) === TypedArray) and owns the shared
+    // TypedArray.prototype that every concrete kind's prototype chains up to.
+    public static JsNativeFunction abstractTypedArray() {
+        return new JsNativeFunction("TypedArray", (thisArg, _) -> {
+            if (thisArg instanceof JsUndefined) {
+                throw new TypeErrorException("Abstract class TypedArray not directly constructable");
+            }
+            return thisArg;
+        });
+    }
+
     public static JsNativeFunction create(JsTypedArray.Kind kind, Invoker invoker, IterableToList iterableToList,
             InterpreterOps ops) {
         final var ctor = new JsNativeFunction(kind.ctorName(),
@@ -343,21 +356,21 @@ public final class TypedArrayBuiltins {
     private static JsValue dataViewAccessor(JsDataView view, String name) {
         if (name.startsWith("getBig")) {
             return new JsNativeFunction(name, (_, args) -> new JsBigInt(
-                    view.getBigInt(name.contains("Uint"), (int) intArg(args, 0, 0), boolArg(args, 1))));
+                    view.getBigInt(name.contains("Uint"), toIndexArg(args), boolArg(args, 1))));
         }
         if (name.startsWith("setBig")) {
             return new JsNativeFunction(name, (_, args) -> {
-                view.setBigInt((int) intArg(args, 0, 0), bigArg(args), boolArg(args, 2));
+                view.setBigInt(toIndexArg(args), bigArg(args), boolArg(args, 2));
                 return JsUndefined.getInstance();
             });
         }
         if (name.startsWith("get")) {
             return new JsNativeFunction(name,
-                    (_, args) -> new JsNumber(view.getNumber(name, (int) intArg(args, 0, 0), boolArg(args, 1))));
+                    (_, args) -> new JsNumber(view.getNumber(name, toIndexArg(args), boolArg(args, 1))));
         }
         if (name.startsWith("set")) {
             return new JsNativeFunction(name, (_, args) -> {
-                view.setNumber(name, (int) intArg(args, 0, 0), JsCoercion.toNumber(arg(args, 1)), boolArg(args, 2));
+                view.setNumber(name, toIndexArg(args), JsCoercion.toNumber(arg(args, 1)), boolArg(args, 2));
                 return JsUndefined.getInstance();
             });
         }
@@ -718,6 +731,26 @@ public final class TypedArrayBuiltins {
 
     private static JsValue arg(List<JsValue> args, int index) {
         return index < args.size() ? args.get(index) : JsUndefined.getInstance();
+    }
+
+    // ToIndex: unlike intArg's relative/clamping indices, a DataView byteOffset is an absolute
+    // position that must reject negative/too-large values with a RangeError rather than silently
+    // truncating - `(int) hugeDouble` clamps to Integer.MAX_VALUE, which then overflowed the old
+    // int bounds check in JsDataView and let a raw IndexOutOfBoundsException escape from the
+    // ByteBuffer instead of a spec RangeError.
+    private static long toIndexArg(List<JsValue> args) {
+        if (0 >= args.size() || args.getFirst() instanceof JsUndefined) {
+            return 0;
+        }
+        final var value = JsCoercion.toNumber(args.getFirst());
+        if (Double.isNaN(value)) {
+            return 0;
+        }
+        final var integer = value < 0 ? Math.ceil(value) : Math.floor(value);
+        if (integer < 0 || integer > 9007199254740991.0) {
+            throw new RangeErrorException("Invalid DataView offset: " + value);
+        }
+        return (long) integer;
     }
 
     private static double intArg(List<JsValue> args, int index, double fallback) {

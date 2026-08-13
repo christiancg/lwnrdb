@@ -179,11 +179,16 @@ public final class MemberEvaluator {
     }
 
     private JsValue getObjectMember(JsObject object, String key, JsValue receiver) {
-        if (!object.has(key)) {
+        if (object.hasAccessor(key)) {
             final var accessorGetter = object.getAccessorGetter(key);
-            if (accessorGetter != null) {
-                return interp.callValue(accessorGetter, receiver, List.of());
-            }
+            // An own accessor - even a setter-only one with no getter - is still the own property
+            // found for this key, so it terminates the lookup rather than falling through to the
+            // prototype chain (mirrors setObjectMember's symmetric `hasAccessor` short-circuit).
+            return accessorGetter != null
+                    ? interp.callValue(accessorGetter, receiver, List.of())
+                    : JsUndefined.getInstance();
+        }
+        if (!object.has(key)) {
             for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
                 final var protoGetter = proto.getAccessorGetter(key);
                 if (protoGetter != null) {
@@ -317,6 +322,13 @@ public final class MemberEvaluator {
         if (index != null) {
             return typed.getElement(index);
         }
+        // A CanonicalNumericIndexString that isn't a valid array index (negative, non-integer,
+        // out of Integer range, "-0", "NaN", "Infinity", ...) resolves via the exotic
+        // IntegerIndexedElementGet, which returns undefined directly - it must never fall through
+        // to the prototype chain the way an ordinary property miss would.
+        if (InterpreterUtils.isCanonicalNumericIndexString(key)) {
+            return JsUndefined.getInstance();
+        }
         return intrinsicMember(typed, key);
     }
 
@@ -432,7 +444,18 @@ public final class MemberEvaluator {
                 if (isNonWritableMetadata(callable, key)) {
                     yield false;
                 }
-                if (!"prototype".equals(key)) {
+                // `new` only consumes an object-valued `.prototype` (falling back to the intrinsic
+                // Object.prototype otherwise), so a non-object assignment is accepted as a no-op
+                // rather than stored, matching the common case without widening the field to `JsValue`.
+                if ("prototype".equals(key)) {
+                    if (value instanceof JsObject object) {
+                        if (callable instanceof JsFunction fn) {
+                            fn.setPrototype(object);
+                        } else if (callable instanceof JsNativeFunction nf) {
+                            nf.setPrototype(object);
+                        }
+                    }
+                } else {
                     callable.setEnumerableProperty(key, value);
                 }
                 yield true;

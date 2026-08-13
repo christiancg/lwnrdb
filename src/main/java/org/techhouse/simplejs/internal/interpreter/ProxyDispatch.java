@@ -122,7 +122,7 @@ public final class ProxyDispatch {
     public boolean defineProperty(JsProxy proxy, JsValue key, JsValue descriptor) {
         final var trap = trapOf(proxy, "defineProperty");
         if (trap == null) {
-            ObjectBuiltins.defineProperty(List.of(proxy.getTarget(), key, descriptor));
+            ObjectBuiltins.defineProperty(List.of(proxy.getTarget(), key, descriptor), ops);
             return true;
         }
         return JsCoercion.toBoolean(ops.call(trap, proxy.getHandler(), List.of(proxy.getTarget(), key, descriptor)));

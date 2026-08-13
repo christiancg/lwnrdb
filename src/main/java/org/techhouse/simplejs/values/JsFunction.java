@@ -78,6 +78,10 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         return prototype;
     }
 
+    public void setPrototype(JsObject prototype) {
+        this.prototype = prototype;
+    }
+
     @Override
     public void setProperty(String key, JsValue value) {
         properties.setProperty(key, value);

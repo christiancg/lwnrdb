@@ -105,6 +105,23 @@ public final class InterpreterUtils {
         }
     }
 
+    // Spec CanonicalNumericIndexString: a key that round-trips through Number->String is an
+    // "integer-indexed" access on a typed array even when it isn't a valid array index (e.g.
+    // "1.1", "-1", "-0", "NaN") - such keys must resolve via the exotic [[Get]]/[[Set]] (returning
+    // undefined / no-op) and never fall through to the prototype chain, unlike an ordinary object.
+    public static boolean isCanonicalNumericIndexString(String key) {
+        if ("-0".equals(key)) {
+            return true;
+        }
+        final double parsed;
+        try {
+            parsed = Double.parseDouble(key);
+        } catch (NumberFormatException ignored) {
+            return false;
+        }
+        return org.techhouse.ejson.internal.NumberFormatter.toJsString(parsed).equals(key);
+    }
+
     public static JsValue numericOld(JsValue oldValue, InterpreterOps ops) {
         if (oldValue instanceof JsBigInt) {
             return oldValue;

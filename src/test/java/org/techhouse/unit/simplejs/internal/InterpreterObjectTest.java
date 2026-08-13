@@ -1,6 +1,7 @@
 package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -394,5 +395,82 @@ public class InterpreterObjectTest {
     @Test
     public void test_for_in_lists_accessor() {
         assertEquals("x", str("let out = ''; for (const k in {get x() { return 1; }}) out += k; out"));
+    }
+
+    // the `in` operator walks the prototype chain, not just own properties
+    @Test
+    public void test_in_operator_walks_prototype_chain() {
+        assertTrue(flag("'foo' in Object.create({foo: 1})"));
+        assertTrue(flag("'foo' in Object.create({get foo() { return 1; }})"));
+        assertTrue(flag("'foo' in {foo: 1}"));
+        assertFalse(flag("'bar' in Object.create({foo: 1})"));
+    }
+
+    // Object.defineProperty/defineProperties read a descriptor argument's get/set/value/writable
+    // fields via HasProperty+Get (honouring an inherited accessor on the descriptor object), not
+    // just its own properties
+    @Test
+    public void test_define_property_descriptor_fields_are_inherited() {
+        final var source = """
+                let sunk;
+                let fun = function (v) { sunk = 'unset:' + v; };
+                let proto = {};
+                Object.defineProperty(proto, 'set', { get() { return fun; }, set(v) { fun = v; } });
+                function Con() {}
+                Con.prototype = proto;
+                let descriptorLike = new Con();
+                descriptorLike.set = function (v) { sunk = 'doubled:' + (v * 2); };
+                let obj = {};
+                Object.defineProperty(obj, 'prop', descriptorLike);
+                obj.prop = 5;
+                sunk
+                """;
+        assertEquals("doubled:10", str(source));
+    }
+
+    // an own accessor with only a setter (no getter) terminates property lookup at that level -
+    // reading it yields undefined rather than falling through to an inherited getter of the same name
+    @Test
+    public void test_setter_only_own_accessor_shadows_inherited_getter() {
+        final var source = """
+                let proto = {};
+                Object.defineProperty(proto, 'x', { get() { return 'inherited'; } });
+                let child = Object.create(proto);
+                Object.defineProperty(child, 'x', { set() {} });
+                typeof child.x
+                """;
+        assertEquals("undefined", str(source));
+    }
+
+    // redefining an accessor property with a data descriptor (no get/set fields) must drop the
+    // stale getter, or a later read still finds the old accessor instead of the new value
+    @Test
+    public void test_redefine_accessor_as_data_property_clears_stale_getter() {
+        final var source = """
+                let obj = {};
+                Object.defineProperty(obj, 'x', { get() { return 'stale'; }, configurable: true });
+                Object.defineProperty(obj, 'x', { value: 'fresh' });
+                obj.x
+                """;
+        assertEquals("fresh", str(source));
+    }
+
+    // redefining only one of get/set on an existing accessor must preserve the untouched side,
+    // and an explicit `get: undefined` must actually clear the prior getter rather than leaving it
+    @Test
+    public void test_redefine_partial_accessor_preserves_untouched_side() {
+        final var source = """
+                let calls = [];
+                let obj = {};
+                Object.defineProperty(obj, 'x', {
+                    get() { return 'old-get'; },
+                    set(v) { calls.push(v); },
+                    configurable: true
+                });
+                Object.defineProperty(obj, 'x', { get: undefined });
+                obj.x = 'set-after-redefine';
+                JSON.stringify([calls, typeof obj.x])
+                """;
+        assertEquals("[[\"set-after-redefine\"],\"undefined\"]", str(source));
     }
 }

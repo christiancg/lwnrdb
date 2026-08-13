@@ -149,6 +149,55 @@ public class TypedArrayProgramTest {
         assertEquals(2, num("Array.from(new Uint8Array([1, 2])).length"));
     }
 
+    // Every concrete typed array constructor's own [[Prototype]] is the shared abstract
+    // %TypedArray% intrinsic (Object.getPrototypeOf(Int8Array)), matching what test262's
+    // testTypedArray.js harness (`var TypedArray = Object.getPrototypeOf(Int8Array)`) relies on
+    @Test
+    public void test_shared_typed_array_intrinsic() {
+        final var source = """
+                let TypedArray = Object.getPrototypeOf(Int8Array);
+                let sameForEveryKind = TypedArray === Object.getPrototypeOf(Uint8Array)
+                    && TypedArray === Object.getPrototypeOf(Float64Array);
+                let protoLinked = Object.getPrototypeOf(Int8Array.prototype) === TypedArray.prototype;
+                let iteratorIsValues = TypedArray.prototype[Symbol.iterator] === TypedArray.prototype.values;
+                let notDirectlyConstructable;
+                try { new TypedArray(); notDirectlyConstructable = false; }
+                catch (e) { notDirectlyConstructable = e instanceof TypeError; }
+                JSON.stringify([sameForEveryKind, protoLinked, iteratorIsValues, notDirectlyConstructable])
+                """;
+        assertEquals("[true,true,true,true]", str(source));
+    }
+
+    // TypedArray.prototype's geometry accessors (length/byteLength/byteOffset/buffer) throw when
+    // invoked with a non-typed-array receiver instead of silently reading through as undefined
+    @Test
+    public void test_typed_array_geometry_accessor_rejects_wrong_receiver() {
+        final var source = """
+                let TypedArrayPrototype = Object.getPrototypeOf(Int8Array).prototype;
+                let names = ['length', 'byteLength', 'byteOffset', 'buffer'];
+                let results = names.map(name => {
+                    try { TypedArrayPrototype[name]; return 'no-throw'; }
+                    catch (e) { return e instanceof TypeError; }
+                });
+                JSON.stringify(results)
+                """;
+        assertEquals("[true,true,true,true]", str(source));
+    }
+
+    // A typed array's [[Get]] on a canonical-numeric-index-string key that isn't a valid index
+    // (non-integer, negative, out of range) returns undefined directly rather than falling through
+    // to a poisoned property on the shared TypedArray.prototype
+    @Test
+    public void test_typed_array_non_integer_numeric_key_bypasses_prototype() {
+        final var source = """
+                let TypedArrayPrototype = Object.getPrototypeOf(Int8Array).prototype;
+                Object.defineProperty(TypedArrayPrototype, '1.5', { get() { throw new Error('should not run'); } });
+                let a = new Int8Array([1, 2, 3]);
+                typeof a['1.5']
+                """;
+        assertEquals("undefined", str(source));
+    }
+
     // A typed array view exposes the buffer it wraps
     @Test
     public void test_buffer_accessor() {
@@ -279,6 +328,34 @@ public class TypedArrayProgramTest {
     @Test
     public void test_data_view_requires_buffer() {
         assertEquals("TypeError", str("let n; try { new DataView(5); } catch (e) { n = e.name } n"));
+    }
+
+    // A DataView accessor with an out-of-range byteOffset throws a catchable RangeError rather
+    // than letting a raw ByteBuffer exception (e.g. IndexOutOfBoundsException) escape - a huge
+    // offset must not silently overflow when narrowed to an int bounds check
+    @Test
+    public void test_data_view_out_of_range_offset_throws_range_error() {
+        assertEquals("RangeError", str(
+                "let n; try { new DataView(new ArrayBuffer(8)).getInt8(100000000000); } catch (e) { n = e.name } n"));
+        assertEquals("RangeError",
+                str("let n; try { new DataView(new ArrayBuffer(8)).getBigInt64(-1); } catch (e) { n = e.name } n"));
+        assertEquals("RangeError", str(
+                "let n; try { new DataView(new ArrayBuffer(8)).setInt8(100000000000, 1); } catch (e) { n = e.name } n"));
+    }
+
+    // Accessing a DataView after its buffer is detached throws a catchable TypeError rather than
+    // a raw exception from reading the now-empty backing byte array
+    @Test
+    public void test_data_view_detached_buffer_throws_type_error() {
+        final var source = """
+                let n;
+                const b = new ArrayBuffer(8);
+                const d = new DataView(b);
+                b.transfer();
+                try { d.getInt8(0); } catch (e) { n = e.name; }
+                n
+                """;
+        assertEquals("TypeError", str(source));
     }
 
     // An out-of-range typed-array offset throws a catchable RangeError

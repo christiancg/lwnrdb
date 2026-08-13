@@ -301,18 +301,28 @@ public final class ObjectBuiltins {
     }
 
     private static JsValue assign(List<JsValue> args, InterpreterOps ops) {
-        if (args.isEmpty() || !(args.getFirst() instanceof JsObject target)) {
-            return first(args);
+        final var targetArg = first(args);
+        if (targetArg instanceof JsNull || targetArg instanceof JsUndefined) {
+            throw new TypeErrorException("Cannot convert undefined or null to object");
+        }
+        if (!(targetArg instanceof JsObject target)) {
+            return targetArg;
         }
         for (var i = 1; i < args.size(); i++) {
             if (args.get(i) instanceof JsObject source) {
                 for (final var key : source.keys()) {
-                    if (source.isEnumerable(key)) {
-                        target.set(key, ownValue(source, key, ops));
+                    // Routed through the interpreter's [[Set]] (not the raw property map) so a
+                    // target accessor's setter fires and a rejected write (non-writable,
+                    // non-extensible) throws per spec's Set(..., throwOnFailure=true).
+                    if (source.isEnumerable(key)
+                            && !ops.setMember(target, new JsString(key), ownValue(source, key, ops))) {
+                        throw new TypeErrorException("Cannot assign to read only property '" + key + "' of object");
                     }
                 }
                 for (final var symbol : source.symbolKeys()) {
-                    target.setSymbol(symbol, source.getSymbol(symbol));
+                    if (!ops.setMember(target, symbol, source.getSymbol(symbol))) {
+                        throw new TypeErrorException("Cannot assign to read only property of object");
+                    }
                 }
             } else if (args.get(i) instanceof JsCallableProperties callable) {
                 for (final var key : callable.enumerablePropertyKeys()) {
@@ -381,13 +391,24 @@ public final class ObjectBuiltins {
     }
 
     private static JsValue createObject(List<JsValue> args, InterpreterOps ops) {
-        final var object = new JsObject();
         final var proto = first(args);
+        if (!(proto instanceof JsObject) && !(proto instanceof JsNull)) {
+            throw new TypeErrorException("Object prototype may only be an Object or null: " + JsCoercion.toStr(proto));
+        }
+        final var object = new JsObject();
         if (proto instanceof JsObject protoObject) {
             object.setProto(protoObject);
         }
-        if (args.size() > 1 && args.get(1) instanceof JsObject props) {
-            applyProperties(object, props, ops);
+        if (args.size() > 1 && !(args.get(1) instanceof JsUndefined)) {
+            // ToObject(Properties) throws only for null/undefined; other non-plain-object values
+            // (Date, Array, ...) are accepted by spec but this engine's exotic value types have no
+            // generic own-property bag to enumerate, so there is nothing to apply - not a throw.
+            if (args.get(1) instanceof JsNull) {
+                throw new TypeErrorException("Cannot convert undefined or null to object");
+            }
+            if (args.get(1) instanceof JsObject props) {
+                applyProperties(object, props, ops);
+            }
         }
         return object;
     }
@@ -407,13 +428,13 @@ public final class ObjectBuiltins {
         return target;
     }
 
-    public static JsValue defineProperty(List<JsValue> args) {
+    public static JsValue defineProperty(List<JsValue> args, InterpreterOps ops) {
         final var target = first(args);
         if (args.size() > 2 && args.get(2) instanceof JsObject descriptor) {
             if (target instanceof JsObject object) {
-                applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor);
+                applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor, ops);
             } else if (target instanceof JsClass cls) {
-                applyDescriptor(cls.getStaticOwner(), JsCoercion.toStr(args.get(1)), descriptor);
+                applyDescriptor(cls.getStaticOwner(), JsCoercion.toStr(args.get(1)), descriptor, ops);
             }
         }
         return target;
@@ -430,78 +451,132 @@ public final class ObjectBuiltins {
     private static void applyProperties(JsObject object, JsObject props, InterpreterOps ops) {
         for (final var key : props.keys()) {
             if (ownValue(props, key, ops) instanceof JsObject descriptor) {
-                applyDescriptor(object, key, descriptor);
+                applyDescriptor(object, key, descriptor, ops);
             }
         }
     }
 
-    private static void applyDescriptor(JsObject object, String key, JsObject descriptor) {
+    // A descriptor argument's fields (get/set/value/writable/enumerable/configurable) are read via
+    // HasProperty+Get per ToPropertyDescriptor, honouring inherited accessors on the descriptor
+    // object itself - not just its own properties.
+    private static boolean descHas(JsObject descriptor, String key, InterpreterOps ops) {
+        return ops.has(descriptor, new JsString(key));
+    }
+
+    private static JsValue descGet(JsObject descriptor, String key, InterpreterOps ops) {
+        return ops.getMember(descriptor, new JsString(key));
+    }
+
+    private static void applyDescriptor(JsObject object, String key, JsObject descriptor, InterpreterOps ops) {
         final var exists = object.has(key) || object.hasAccessor(key);
         if (!exists && !object.isExtensible()) {
             throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
         }
         if (exists && object.isNotConfigurable(key)) {
-            checkNonConfigurableRedefine(object, key, descriptor);
+            checkNonConfigurableRedefine(object, key, descriptor, ops);
         }
-        final var flags = flagsFrom(descriptor, object, key, exists);
-        final var getter = descriptor.has("get") ? descriptor.get("get") : null;
-        final var setter = descriptor.has("set") ? descriptor.get("set") : null;
-        if (getter != null || setter != null) {
+        final var flags = flagsFrom(descriptor, object, key, exists, ops);
+        final var hasGetter = descHas(descriptor, "get", ops);
+        final var hasSetter = descHas(descriptor, "set", ops);
+        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
+            throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
+                    + "and a value or writable attribute, " + key);
+        }
+        if (hasGetter || hasSetter) {
+            // A field absent from the new descriptor keeps the property's current getter/setter
+            // (only meaningful if it was already an accessor) rather than defaulting to none, so a
+            // {get: fn2} redefine doesn't silently drop an untouched existing setter.
+            final var wasAccessor = object.hasAccessor(key);
+            final var existingGetter = wasAccessor ? object.getAccessorGetter(key) : null;
+            final var existingSetter = wasAccessor ? object.getAccessorSetter(key) : null;
+            final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
+            final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
+            if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
+                throw new TypeErrorException("Getter must be a function");
+            }
+            if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
+                throw new TypeErrorException("Setter must be a function");
+            }
+            final var getter = hasGetter ? (isCallable(getterValue) ? getterValue : null) : existingGetter;
+            final var setter = hasSetter ? (isCallable(setterValue) ? setterValue : null) : existingSetter;
             object.getProperties().remove(key);
-            object.defineAccessor(key, isCallable(getter) ? getter : null, isCallable(setter) ? setter : null);
+            // defineAccessor only ever adds a non-null side, so a field the new descriptor names
+            // but resolves to null (e.g. an explicit `get: undefined`) must be cleared separately.
+            if (hasGetter && getter == null) {
+                object.clearAccessorGetter(key);
+            }
+            if (hasSetter && setter == null) {
+                object.clearAccessorSetter(key);
+            }
+            if (getter != null || setter != null) {
+                object.defineAccessor(key, getter, setter);
+            } else {
+                // 'get'/'set' were both present but neither was callable: still a real accessor
+                // property per spec (reads as undefined, rejects writes), approximated here as an
+                // inert always-undefined value since defineAccessor needs at least one callable
+                // function to register the key at all.
+                object.defineValue(key, JsUndefined.getInstance());
+            }
         } else {
+            // Converting an accessor property into a data property must drop the stale
+            // getter/setter, or a later read would still find the old accessor entry.
+            object.clearAccessor(key);
             object.defineValue(key,
-                    descriptor.has("value")
-                            ? descriptor.get("value")
+                    descHas(descriptor, "value", ops)
+                            ? descGet(descriptor, "value", ops)
                             : exists && object.has(key) ? object.get(key) : JsUndefined.getInstance());
         }
         object.setFlags(key, flags);
     }
 
-    private static PropertyFlags flagsFrom(JsObject descriptor, JsObject object, String key, boolean exists) {
+    private static PropertyFlags flagsFrom(JsObject descriptor, JsObject object, String key, boolean exists,
+            InterpreterOps ops) {
         final var current = exists ? object.getFlags(key) : new PropertyFlags(false, false, false);
-        final var writable = descriptor.has("writable")
-                ? JsCoercion.toBoolean(descriptor.get("writable"))
+        final var writable = descHas(descriptor, "writable", ops)
+                ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
                 : current.writable();
-        final var enumerable = descriptor.has("enumerable")
-                ? JsCoercion.toBoolean(descriptor.get("enumerable"))
+        final var enumerable = descHas(descriptor, "enumerable", ops)
+                ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
                 : current.enumerable();
-        final var configurable = descriptor.has("configurable")
-                ? JsCoercion.toBoolean(descriptor.get("configurable"))
+        final var configurable = descHas(descriptor, "configurable", ops)
+                ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
                 : current.configurable();
         return new PropertyFlags(writable, enumerable, configurable);
     }
 
-    private static void checkNonConfigurableRedefine(JsObject object, String key, JsObject descriptor) {
-        if (descriptor.has("configurable") && JsCoercion.toBoolean(descriptor.get("configurable"))) {
+    private static void checkNonConfigurableRedefine(JsObject object, String key, JsObject descriptor,
+            InterpreterOps ops) {
+        if (descHas(descriptor, "configurable", ops)
+                && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
             throw redefineError(key);
         }
-        if (descriptor.has("enumerable")
-                && JsCoercion.toBoolean(descriptor.get("enumerable")) != object.isEnumerable(key)) {
+        if (descHas(descriptor, "enumerable", ops)
+                && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != object.isEnumerable(key)) {
             throw redefineError(key);
         }
         final var currentIsAccessor = object.hasAccessor(key);
-        final var descriptorIsAccessor = descriptor.has("get") || descriptor.has("set");
-        final var descriptorIsData = descriptor.has("value") || descriptor.has("writable");
+        final var descriptorIsAccessor = descHas(descriptor, "get", ops) || descHas(descriptor, "set", ops);
+        final var descriptorIsData = descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops);
         if ((descriptorIsAccessor && !currentIsAccessor) || (descriptorIsData && currentIsAccessor)) {
             throw redefineError(key);
         }
         if (currentIsAccessor) {
-            if (descriptor.has("get")
-                    && isNotSameValue(descriptor.get("get"), orUndefined(object.getAccessorGetter(key)))) {
+            if (descHas(descriptor, "get", ops)
+                    && isNotSameValue(descGet(descriptor, "get", ops), orUndefined(object.getAccessorGetter(key)))) {
                 throw redefineError(key);
             }
-            if (descriptor.has("set")
-                    && isNotSameValue(descriptor.get("set"), orUndefined(object.getAccessorSetter(key)))) {
+            if (descHas(descriptor, "set", ops)
+                    && isNotSameValue(descGet(descriptor, "set", ops), orUndefined(object.getAccessorSetter(key)))) {
                 throw redefineError(key);
             }
             return;
         }
         if (object.has(key) && !object.isWritable(key)) {
-            if (descriptor.has("writable") && JsCoercion.toBoolean(descriptor.get("writable"))) {
+            if (descHas(descriptor, "writable", ops) && JsCoercion.toBoolean(descGet(descriptor, "writable", ops))) {
                 throw redefineError(key);
             }
-            if (descriptor.has("value") && isNotSameValue(object.get(key), descriptor.get("value"))) {
+            if (descHas(descriptor, "value", ops)
+                    && isNotSameValue(object.get(key), descGet(descriptor, "value", ops))) {
                 throw redefineError(key);
             }
         }

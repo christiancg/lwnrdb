@@ -322,4 +322,12 @@ public class ArrayBuiltinsTest {
         assertTrue(bool("[undefined].includes()"));
         assertFalse(bool("[1].includes()"));
     }
+
+    // a raw primitive receiver is ToObject-boxed into an empty array-like rather than rejected
+    @Test
+    public void test_generic_methods_accept_primitive_receiver() {
+        assertEquals(0, num("Array.prototype.map.call(5, x => x).length"));
+        assertTrue(bool("Array.prototype.every.call(false, () => false)"));
+        assertEquals(1, num("Array.prototype.push.call(true, 'x')"));
+    }
 }

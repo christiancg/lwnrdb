@@ -188,13 +188,15 @@ public class IntrinsicsTest {
         assertNull(FunctionProtoBuiltins.metadata(new JsNativeFunction("f", (_, _) -> null), "nope"));
     }
 
-    // Invoking a delegating wrapper with the wrong receiver names the method
+    // Invoking a delegating wrapper with the wrong receiver names the method. A raw number is no
+    // longer "wrong" for Array.prototype methods (ToObject boxes it into an empty array-like), so
+    // undefined - which ToObject rejects - stands in as a receiver that is genuinely incompatible.
     @Test
     public void test_wrong_receiver_throws_type_error() {
         final var realm = intrinsics();
         final var push = (JsNativeFunction) realm.arrayProto().get("push");
         final var error = assertThrows(TypeErrorException.class,
-                () -> push.invoke(new JsNumber(1), List.of(new JsNumber(2))));
+                () -> push.invoke(JsUndefined.getInstance(), List.of(new JsNumber(2))));
         assertTrue(error.getMessage().startsWith("Array.prototype.push"), error.getMessage());
         final var toFixed = (JsNativeFunction) realm.numberProto().get("toFixed");
         assertThrows(TypeErrorException.class, () -> toFixed.invoke(new JsString("a"), List.of()));
@@ -277,10 +279,13 @@ public class IntrinsicsTest {
                 () -> Interpreter.run("Array.prototype.copyWithin.call({length: 43}, 42, 0)"));
     }
 
-    // a receiver that is not array-like still reports an incompatible-receiver TypeError
+    // a receiver that is not array-like still reports an incompatible-receiver TypeError. A raw
+    // number ToObject-boxes into an empty array-like rather than being "not array-like", so
+    // undefined - which ToObject rejects outright - is used here instead.
     @Test
     public void test_array_method_on_a_non_array_like_still_throws() {
-        final var error = assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call(1)"));
+        final var error = assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Array.prototype.push.call(undefined)"));
         assertTrue(error.getMessage().contains("Array.prototype.push"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.map.call({}, x => x)"));
     }

@@ -295,4 +295,19 @@ public class FunctionProgramTest {
                 """;
         assertEquals("prelude-ok", str(source));
     }
+
+    // reassigning a plain function's .prototype changes what `new` links instances to, and what
+    // instance property/method lookups (e.g. an inherited valueOf) resolve through
+    @Test
+    public void test_reassigned_prototype_used_by_new_and_inheritance() {
+        final var source = """
+                function Base() {}
+                Base.prototype.greet = function () { return 'hi'; };
+                function Con() {}
+                Con.prototype = Base.prototype;
+                var child = new Con();
+                JSON.stringify([child instanceof Base, child.greet()])
+                """;
+        assertEquals("[true,\"hi\"]", str(source));
+    }
 }
