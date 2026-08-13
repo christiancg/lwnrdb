@@ -1,7 +1,7 @@
 # test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline
 # corpus: 3655e7464de3d52643ecddd4b5f9f4f3e7f62398
 # generated: 2026-08-13
-# entries: 11381
+# entries: 11332
 FAIL  built-ins/AggregateError/cause-property.js
 FAIL  built-ins/AggregateError/errors-iterabletolist-failures.js
 FAIL  built-ins/AggregateError/errors-iterabletolist.js
@@ -77,7 +77,7 @@ FAIL  built-ins/Array/fromAsync/mapfn-sync-arraylike.js
 FAIL  built-ins/Array/fromAsync/mapfn-sync-iterable-async.js
 FAIL  built-ins/Array/fromAsync/mapfn-sync-iterable-sync.js
 FAIL  built-ins/Array/fromAsync/mapfn-sync-throws-close-async-iterator.js
-HANG  built-ins/Array/fromAsync/mapfn-sync-throws-close-sync-iterator.js
+FAIL  built-ins/Array/fromAsync/mapfn-sync-throws-close-sync-iterator.js
 FAIL  built-ins/Array/fromAsync/mapfn-sync-throws.js
 FAIL  built-ins/Array/fromAsync/non-iterable-input-does-not-use-array-prototype.js
 FAIL  built-ins/Array/fromAsync/non-iterable-input-with-thenable-async-mapped-awaits-callback-result-once.js
@@ -221,13 +221,8 @@ FAIL  built-ins/Array/prototype/every/15.4.4.16-1-6.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-1-7.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-1-8.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-1-9.js
-FAIL  built-ins/Array/prototype/every/15.4.4.16-2-11.js
-FAIL  built-ins/Array/prototype/every/15.4.4.16-2-12.js
-FAIL  built-ins/Array/prototype/every/15.4.4.16-2-13.js
-FAIL  built-ins/Array/prototype/every/15.4.4.16-2-14.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-2-17.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-2-19.js
-FAIL  built-ins/Array/prototype/every/15.4.4.16-3-1.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-3-14.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-3-29.js
 FAIL  built-ins/Array/prototype/every/15.4.4.16-3-8.js
@@ -296,12 +291,7 @@ FAIL  built-ins/Array/prototype/filter/15.4.4.20-1-7.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-1-8.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-1-9.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-10-3.js
-FAIL  built-ins/Array/prototype/filter/15.4.4.20-2-11.js
-FAIL  built-ins/Array/prototype/filter/15.4.4.20-2-12.js
-FAIL  built-ins/Array/prototype/filter/15.4.4.20-2-13.js
-FAIL  built-ins/Array/prototype/filter/15.4.4.20-2-14.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-2-19.js
-FAIL  built-ins/Array/prototype/filter/15.4.4.20-3-1.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-4-15.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-5-7.js
 FAIL  built-ins/Array/prototype/filter/15.4.4.20-6-2.js
@@ -379,7 +369,6 @@ FAIL  built-ins/Array/prototype/findLastIndex/predicate-called-for-each-array-pr
 FAIL  built-ins/Array/prototype/findLastIndex/resizable-buffer-grow-mid-iteration.js
 FAIL  built-ins/Array/prototype/findLastIndex/resizable-buffer-shrink-mid-iteration.js
 FAIL  built-ins/Array/prototype/findLastIndex/resizable-buffer.js
-FAIL  built-ins/Array/prototype/flat/array-like-objects.js
 FAIL  built-ins/Array/prototype/flat/non-object-ctor-throws.js
 FAIL  built-ins/Array/prototype/flat/not-a-constructor.js
 FAIL  built-ins/Array/prototype/flat/proxy-access-count.js
@@ -403,13 +392,8 @@ FAIL  built-ins/Array/prototype/forEach/15.4.4.18-1-6.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-1-7.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-1-8.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-1-9.js
-FAIL  built-ins/Array/prototype/forEach/15.4.4.18-2-11.js
-FAIL  built-ins/Array/prototype/forEach/15.4.4.18-2-12.js
-FAIL  built-ins/Array/prototype/forEach/15.4.4.18-2-13.js
-FAIL  built-ins/Array/prototype/forEach/15.4.4.18-2-14.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-2-17.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-2-19.js
-FAIL  built-ins/Array/prototype/forEach/15.4.4.18-3-1.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-4-15.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-5-7.js
 FAIL  built-ins/Array/prototype/forEach/15.4.4.18-7-1.js
@@ -459,20 +443,13 @@ FAIL  built-ins/Array/prototype/includes/resizable-buffer-special-float-values.j
 FAIL  built-ins/Array/prototype/includes/resizable-buffer.js
 FAIL  built-ins/Array/prototype/includes/return-abrupt-tointeger-fromindex.js
 FAIL  built-ins/Array/prototype/includes/tointeger-fromindex.js
-FAIL  built-ins/Array/prototype/includes/tolength-length.js
-FAIL  built-ins/Array/prototype/includes/values-are-not-cached.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-1-11.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-1-12.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-1-3.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-1-5.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-1-9.js
-FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-2-11.js
-FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-2-12.js
-FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-2-13.js
-FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-2-14.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-2-17.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-2-19.js
-FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-3-1.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-3-14.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-3-28.js
 FAIL  built-ins/Array/prototype/indexOf/15.4.4.14-3-29.js
@@ -527,7 +504,6 @@ FAIL  built-ins/Array/prototype/indexOf/length.js
 FAIL  built-ins/Array/prototype/indexOf/not-a-constructor.js
 FAIL  built-ins/Array/prototype/indexOf/resizable-buffer-special-float-values.js
 FAIL  built-ins/Array/prototype/indexOf/resizable-buffer.js
-FAIL  built-ins/Array/prototype/join/S15.4.4.5_A2_T1.js
 FAIL  built-ins/Array/prototype/join/S15.4.4.5_A3.1_T2.js
 FAIL  built-ins/Array/prototype/join/S15.4.4.5_A3.2_T2.js
 FAIL  built-ins/Array/prototype/join/S15.4.4.5_A5_T1.js
@@ -546,14 +522,9 @@ FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-12.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-3.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-5.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-1-9.js
-FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-11.js
-FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-12.js
-FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-13.js
-FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-14.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-17.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-19.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-2-8.js
-FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-1.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-3-28.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-1.js
 FAIL  built-ins/Array/prototype/lastIndexOf/15.4.4.15-5-10.js
@@ -630,12 +601,7 @@ FAIL  built-ins/Array/prototype/map/15.4.4.19-1-6.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-1-7.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-1-8.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-1-9.js
-FAIL  built-ins/Array/prototype/map/15.4.4.19-2-11.js
-FAIL  built-ins/Array/prototype/map/15.4.4.19-2-12.js
-FAIL  built-ins/Array/prototype/map/15.4.4.19-2-13.js
-FAIL  built-ins/Array/prototype/map/15.4.4.19-2-14.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-2-19.js
-FAIL  built-ins/Array/prototype/map/15.4.4.19-3-1.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-3-14.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-3-28.js
 FAIL  built-ins/Array/prototype/map/15.4.4.19-3-29.js
@@ -733,13 +699,8 @@ FAIL  built-ins/Array/prototype/reduce/15.4.4.21-10-3.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-10-4.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-10-6.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-10-7.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-2-11.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-2-12.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-2-13.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-2-14.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-2-17.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-2-19.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-3-1.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-4-15.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-7-2.js
 FAIL  built-ins/Array/prototype/reduce/15.4.4.21-7-3.js
@@ -819,12 +780,7 @@ FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-10-3.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-10-4.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-10-6.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-10-7.js
-FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-2-11.js
-FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-2-12.js
-FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-2-13.js
-FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-2-14.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-2-19.js
-FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-3-1.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-4-15.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-7-2.js
 FAIL  built-ins/Array/prototype/reduceRight/15.4.4.22-7-3.js
@@ -941,13 +897,8 @@ FAIL  built-ins/Array/prototype/some/15.4.4.17-1-6.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-1-7.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-1-8.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-1-9.js
-FAIL  built-ins/Array/prototype/some/15.4.4.17-2-11.js
-FAIL  built-ins/Array/prototype/some/15.4.4.17-2-12.js
-FAIL  built-ins/Array/prototype/some/15.4.4.17-2-13.js
-FAIL  built-ins/Array/prototype/some/15.4.4.17-2-14.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-2-17.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-2-19.js
-FAIL  built-ins/Array/prototype/some/15.4.4.17-3-1.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-3-14.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-3-28.js
 FAIL  built-ins/Array/prototype/some/15.4.4.17-3-29.js

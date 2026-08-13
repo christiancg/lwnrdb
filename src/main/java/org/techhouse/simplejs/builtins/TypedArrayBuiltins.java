@@ -355,8 +355,8 @@ public final class TypedArrayBuiltins {
 
     private static JsValue dataViewAccessor(JsDataView view, String name) {
         if (name.startsWith("getBig")) {
-            return new JsNativeFunction(name, (_, args) -> new JsBigInt(
-                    view.getBigInt(name.contains("Uint"), toIndexArg(args), boolArg(args, 1))));
+            return new JsNativeFunction(name, (_,
+                    args) -> new JsBigInt(view.getBigInt(name.contains("Uint"), toIndexArg(args), boolArg(args, 1))));
         }
         if (name.startsWith("setBig")) {
             return new JsNativeFunction(name, (_, args) -> {

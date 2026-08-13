@@ -31,7 +31,6 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
-import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 // The realm's intrinsic prototype objects. Deliberately per-Interpreter (never static): a shared
@@ -335,8 +334,11 @@ public final class Intrinsics {
         if (receiver instanceof JsArguments || receiver instanceof JsTypedArray || receiver instanceof JsString) {
             return new JsArray(InterpreterUtils.arrayLikeElements(receiver));
         }
-        if (receiver instanceof JsObject object && ops != null && !MUTATING_ARRAY_METHODS.contains(method)
-                && !(ops.getMember(object, new JsString("length")) instanceof JsUndefined)) {
+        // A generic (non-mutating) Array method works on any object per spec, treating a missing
+        // or non-numeric "length" as 0 (LengthOfArrayLike -> ToLength) rather than requiring the
+        // property to already be present - e.g. `every`/`map`/`forEach`.call({}, ...) is valid and
+        // vacuously iterates zero elements, it does not reject the receiver.
+        if (receiver instanceof JsObject object && ops != null && !MUTATING_ARRAY_METHODS.contains(method)) {
             return new JsArray(InterpreterUtils.arrayLikeElements(object, ops, REVERSE_ARRAY_METHODS.contains(method)));
         }
         // ToObject on a raw primitive (other than null/undefined, which ToObject rejects) succeeds

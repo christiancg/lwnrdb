@@ -279,15 +279,22 @@ public class IntrinsicsTest {
                 () -> Interpreter.run("Array.prototype.copyWithin.call({length: 43}, 42, 0)"));
     }
 
-    // a receiver that is not array-like still reports an incompatible-receiver TypeError. A raw
-    // number ToObject-boxes into an empty array-like rather than being "not array-like", so
-    // undefined - which ToObject rejects outright - is used here instead.
+    // undefined/null still report an incompatible-receiver TypeError - ToObject rejects them
+    // outright, unlike every other value (which ToObject always succeeds on).
     @Test
-    public void test_array_method_on_a_non_array_like_still_throws() {
+    public void test_array_method_on_null_or_undefined_still_throws() {
         final var error = assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("Array.prototype.push.call(undefined)"));
         assertTrue(error.getMessage().contains("Array.prototype.push"));
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.map.call({}, x => x)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call(null)"));
+    }
+
+    // a generic (non-mutating) Array method works on any plain object per spec, treating a missing
+    // "length" as 0 (LengthOfArrayLike) rather than rejecting the receiver
+    @Test
+    public void test_non_mutating_array_method_on_lengthless_object_iterates_zero_elements() {
+        assertEquals("[]", run("JSON.stringify(Array.prototype.map.call({}, x => x))"));
+        assertEquals("true", run("String(Array.prototype.every.call({}, x => false))"));
     }
 
     // Boolean.prototype.valueOf/toString accept a real boolean receiver and reject anything else
