@@ -206,7 +206,7 @@ public final class MemberEvaluator {
                 return AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key);
             }
             if (IteratorBuiltins.isHelperName(key) && isIteratorLike(object)) {
-                return IteratorBuiltins.helper(interp.ops(), key);
+                return IteratorBuiltins.helper(interp.ops(), key, interp.intrinsics().objectProto());
             }
             if (object.getPrimitive() != null) {
                 return getMember(object.getPrimitive(), key);
@@ -509,7 +509,7 @@ public final class MemberEvaluator {
         if (!(intrinsic instanceof JsUndefined) || !IteratorBuiltins.isHelperName(key)) {
             return intrinsic;
         }
-        return IteratorBuiltins.helper(interp.ops(), key);
+        return IteratorBuiltins.helper(interp.ops(), key, interp.intrinsics().objectProto());
     }
 
     // Checks the instance and its immediate prototype (not the whole chain) so a class extending

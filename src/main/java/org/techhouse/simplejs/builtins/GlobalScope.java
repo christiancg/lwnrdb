@@ -44,7 +44,7 @@ public final class GlobalScope {
         // Iterator/AsyncIterator wire their own dedicated [[Prototype]] internally (it's their own
         // map/filter/... helper surface, not the unrelated Generator/AsyncGenerator.prototype
         // intrinsic `constructor(...)` below would otherwise overwrite it with).
-        global.declareBuiltin("Iterator", IteratorBuiltins.create(ops));
+        global.declareBuiltin("Iterator", IteratorBuiltins.create(ops, intrinsics.objectProto()));
         global.declareBuiltin("AsyncIterator", AsyncIteratorBuiltins.create(ops, eventLoop));
         constructor(global, "Symbol", SymbolBuiltins.create(), intrinsics.symbolProto());
         constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, false), intrinsics.mapProto());

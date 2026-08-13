@@ -208,6 +208,63 @@ public class IteratorBuiltinsTest {
         assertEquals("true", str("String(Iterator.concat([1]) instanceof Iterator)"));
     }
 
+    // Every iterator helper's {value,done} step object is a plain Object.prototype-linked object
+    // (CreateIteratorResultObject), not a bare object with no prototype at all
+    @Test
+    public void test_iterator_helper_step_result_has_object_prototype() {
+        final var source = """
+                function* g() { yield 1; }
+                JSON.stringify([
+                    Object.getPrototypeOf(g().map(x => x).next()) === Object.prototype,
+                    Object.getPrototypeOf(Iterator.concat([1]).next()) === Object.prototype,
+                ])
+                """;
+        assertEquals("[true,true]", str(source));
+    }
+
+    // Iterator.zip zips same-length arrays positionally, in "shortest" mode by default
+    @Test
+    public void test_iterator_zip_basic() {
+        assertEquals("[[1,\"a\"],[2,\"b\"]]", str("JSON.stringify(Iterator.zip([[1, 2], ['a', 'b']]).toArray())"));
+    }
+
+    // "shortest" mode (the default) stops as soon as the shortest input is exhausted
+    @Test
+    public void test_iterator_zip_shortest_mode_stops_early() {
+        assertEquals("[[1,\"a\"]]", str("JSON.stringify(Iterator.zip([[1, 2, 3], ['a']]).toArray())"));
+    }
+
+    // "longest" mode pads exhausted inputs with the padding value at their own position (padding
+    // is positional: the second input's pad comes from padding[1], not padding[0])
+    @Test
+    public void test_iterator_zip_longest_mode_pads() {
+        final var source = "JSON.stringify(Iterator.zip([[1, 2, 3], ['a']], "
+                + "{ mode: 'longest', padding: [undefined, 'pad'] }).toArray())";
+        assertEquals("[[1,\"a\"],[2,\"pad\"],[3,\"pad\"]]", str(source));
+    }
+
+    // "strict" mode throws a TypeError when the inputs have different lengths
+    @Test
+    public void test_iterator_zip_strict_mode_throws_on_length_mismatch() {
+        final var source = "let n; try { Iterator.zip([[1, 2], ['a']], { mode: 'strict' }).toArray(); }"
+                + " catch (e) { n = e.name; } n";
+        assertEquals("TypeError", str(source));
+    }
+
+    // Iterator.zip rejects an invalid mode option
+    @Test
+    public void test_iterator_zip_rejects_invalid_mode() {
+        assertEquals("TypeError",
+                str("let n; try { Iterator.zip([], { mode: 'bogus' }); } catch (e) { n = e.name; } n"));
+    }
+
+    // Iterator.zipKeyed zips by the own enumerable keys of an object, producing keyed objects
+    @Test
+    public void test_iterator_zip_keyed_basic() {
+        assertEquals("[{\"x\":1,\"y\":\"a\"},{\"x\":2,\"y\":\"b\"}]",
+                str("JSON.stringify(Iterator.zipKeyed({x: [1, 2], y: ['a', 'b']}).toArray())"));
+    }
+
     // An iterator helper's own `return` forwards to (and closes) the underlying source iterator
     @Test
     public void test_iterator_helper_return_forwards_to_source() {
