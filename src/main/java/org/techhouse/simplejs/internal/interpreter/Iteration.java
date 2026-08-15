@@ -34,8 +34,7 @@ public final class Iteration {
             this.generator = gen;
             this.buffer = null;
             this.iterator = null;
-        } else if (iterable instanceof JsArray || iterable instanceof JsString || iterable instanceof JsArguments
-                || iterable instanceof JsTypedArray) {
+        } else if (usesDefaultIterator(interp, iterable)) {
             this.generator = null;
             this.buffer = iterableElements(iterable);
             this.iterator = null;
@@ -72,6 +71,17 @@ public final class Iteration {
                 interp.callValue(returnFn, iterator, List.of());
             }
         }
+    }
+
+    // Reading straight out of the backing storage is only equivalent to running the protocol while
+    // @@iterator is still the intrinsic one, so a script that replaces or deletes it drops onto the
+    // general external-iterator path.
+    public static boolean usesDefaultIterator(Interpreter interp, JsValue iterable) {
+        if (!(iterable instanceof JsArray || iterable instanceof JsString || iterable instanceof JsArguments
+                || iterable instanceof JsTypedArray)) {
+            return false;
+        }
+        return interp.intrinsics().isDefaultIterator(iterable, interp.getMemberByKey(iterable, JsSymbol.ITERATOR));
     }
 
     private JsValue openIterator(JsValue iterable) {

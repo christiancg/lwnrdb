@@ -263,7 +263,10 @@ public final class AsyncIteratorBuiltins {
             }
             array.push(source.valueOf(result));
             toArrayStep(source, array, out);
-        }, out::reject);
+        }, error -> {
+            source.close();
+            out.reject(error);
+        });
     }
 
     private static JsValue forEach(InterpreterOps ops, EventLoop loop, AsyncDriver source, JsValue fn) {
@@ -370,7 +373,7 @@ public final class AsyncIteratorBuiltins {
     }
 
     private static JsValue syncToAsync(InterpreterOps ops, EventLoop loop, JsValue syncIterator) {
-        return asyncIterator(() -> {
+        final var wrapper = asyncIterator(() -> {
             final var out = new JsPromise(loop);
             final var nextFn = ops.getMember(syncIterator, new JsString("next"));
             if (!isCallable(nextFn)) {
@@ -388,6 +391,18 @@ public final class AsyncIteratorBuiltins {
             });
             return out;
         });
+        // Closing the wrapper has to close the wrapped sync iterator, or a generator source never
+        // runs its finally blocks when the consumer stops early or a value rejects.
+        wrapper.set("return", new JsNativeFunction("return", (_, _) -> {
+            final var returnFn = ops.getMember(syncIterator, new JsString("return"));
+            if (isCallable(returnFn)) {
+                ops.call(returnFn, syncIterator, List.of());
+            }
+            final var out = new JsPromise(loop);
+            out.resolve(step(JsUndefined.getInstance(), true));
+            return out;
+        }));
+        return wrapper;
     }
 
     private static JsPromise toPromise(EventLoop loop, JsValue value) {

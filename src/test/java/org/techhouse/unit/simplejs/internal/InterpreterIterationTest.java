@@ -453,4 +453,53 @@ public class InterpreterIterationTest {
         assertFalse(InterpreterUtils.isObjectLike(new JsBigInt(java.math.BigInteger.ONE)));
         assertFalse(InterpreterUtils.isObjectLike(new JsSymbol("s")));
     }
+    // @@iterator is a real own property of the intrinsic prototypes, shared with its named alias
+    @Test
+    public void test_iterator_symbol_is_a_real_prototype_property() {
+        assertTrue(bool("Array.prototype.values === Array.prototype[Symbol.iterator]"));
+        assertTrue(bool("Map.prototype.entries === Map.prototype[Symbol.iterator]"));
+        assertTrue(bool("Set.prototype.values === Set.prototype[Symbol.iterator]"));
+        assertTrue(bool("typeof String.prototype[Symbol.iterator] === 'function'"));
+        assertTrue(bool("[1][Symbol.iterator] === Array.prototype[Symbol.iterator]"));
+    }
+
+    // a replaced Array.prototype[Symbol.iterator] is honoured by for-of, spread and destructuring
+    @Test
+    public void test_patched_array_iterator_is_used_by_every_iteration_form() {
+        final var patch = """
+                Array.prototype[Symbol.iterator] = function () {
+                  let sent = false;
+                  return { next() { return sent ? { done: true } : (sent = true, { value: 42, done: false }); } };
+                };
+                """;
+        assertEquals(42, num(patch + "let r = 0; for (const x of [1, 2, 3]) r = x; r"));
+        assertEquals(42, num(patch + "[...[1, 2, 3]][0]"));
+        assertEquals(42, num(patch + "const [a] = [1, 2, 3]; a"));
+    }
+
+    // deleting Array.prototype[Symbol.iterator] makes an array non-iterable
+    @Test
+    public void test_deleted_array_iterator_makes_arrays_non_iterable() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("delete Array.prototype[Symbol.iterator]; const [a] = [1];"));
+    }
+
+    // the array iterator reads the live array, so a mutation between steps is observed
+    @Test
+    public void test_array_iterator_reads_the_array_lazily() {
+        final var source = """
+                const a = [1, 2, 3];
+                const it = a[Symbol.iterator]();
+                it.next();
+                a[1] = 8;
+                it.next().value
+                """;
+        assertEquals(8, num(source));
+    }
+
+    // a proxy over an array iterates through the target's intrinsic iterator
+    @Test
+    public void test_proxy_over_an_array_is_iterable() {
+        assertEquals(6, num("let s = 0; for (const x of new Proxy([1, 2, 3], {})) s += x; s"));
+    }
 }

@@ -2,7 +2,9 @@ package org.techhouse.simplejs.values;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -24,6 +26,7 @@ public final class JsObject extends JsValue {
     private boolean errorData;
     private JsClass klass;
     private Map<String, JsValue> privateFields;
+    private Set<JsClass> privateBrands;
     private Map<JsSymbol, JsValue> symbolProperties;
     private Map<JsSymbol, PropertyFlags> symbolFlags;
     private JsObject proto;
@@ -228,6 +231,17 @@ public final class JsObject extends JsValue {
 
     public boolean hasPrivate(String key) {
         return privateFields != null && privateFields.containsKey(key);
+    }
+
+    public void addPrivateBrand(JsClass owner) {
+        if (privateBrands == null) {
+            privateBrands = Collections.newSetFromMap(new IdentityHashMap<>());
+        }
+        privateBrands.add(owner);
+    }
+
+    public boolean hasPrivateBrand(JsClass owner) {
+        return privateBrands != null && privateBrands.contains(owner);
     }
 
     public JsValue getSymbol(JsSymbol key) {

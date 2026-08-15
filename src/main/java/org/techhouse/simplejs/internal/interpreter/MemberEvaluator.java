@@ -1,22 +1,17 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayIndex;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.arrayLikeElements;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.cannotReadProperties;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.orUndefined;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stepResult;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stringCodePoints;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
 import java.util.List;
 import org.techhouse.simplejs.builtins.AsyncIteratorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.IteratorBuiltins;
-import org.techhouse.simplejs.builtins.JsIterators;
-import org.techhouse.simplejs.builtins.MapBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
-import org.techhouse.simplejs.builtins.SetBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -78,16 +73,8 @@ public final class MemberEvaluator {
 
     public JsValue getSymbolMember(JsValue target, JsSymbol symbol) {
         return switch (target) {
-            case JsMap map when symbol == JsSymbol.ITERATOR ->
-                new JsNativeFunction("[Symbol.iterator]", (_, _) -> MapBuiltins.entriesIterator(map));
-            case JsTypedArray typed when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
-                    (_, _) -> JsIterators.of(TypedArrayBuiltins.elements(typed).iterator()));
-            case JsSet set when symbol == JsSymbol.ITERATOR ->
-                new JsNativeFunction("[Symbol.iterator]", (_, _) -> SetBuiltins.valuesIterator(set));
-            case JsArray array when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
-                    (_, _) -> JsIterators.of(arrayLikeElements(array).iterator()));
-            case JsString string when symbol == JsSymbol.ITERATOR -> new JsNativeFunction("[Symbol.iterator]",
-                    (_, _) -> JsIterators.of(stringCodePoints(string.getValue()).iterator()));
+            case JsArguments ignored when symbol == JsSymbol.ITERATOR ->
+                interp.intrinsics().arrayProto().getSymbol(symbol);
             case JsObject object -> objectSymbolMember(object, symbol);
             case JsClass cls -> classSymbolMember(cls, symbol);
             default -> intrinsicSymbolMember(target, symbol);

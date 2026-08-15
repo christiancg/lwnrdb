@@ -275,6 +275,7 @@ public final class ClassEvaluator {
     }
 
     private void initFields(JsClass cls, JsObject instance) {
+        instance.addPrivateBrand(cls);
         for (final var field : cls.getInstanceFields()) {
             final var fieldScope = cls.getMethodScope().child();
             fieldScope.defineThis(instance);
@@ -414,7 +415,7 @@ public final class ClassEvaluator {
                 return JsBoolean.TRUE;
             }
             if (env.resolveHomeClass() instanceof JsClass cls && cls.declaresPrivate(name)) {
-                return JsBoolean.of(object.getKlass() != null && object.getKlass().isSubclassOf(cls));
+                return JsBoolean.of(object.hasPrivateBrand(cls));
             }
         }
         return JsBoolean.FALSE;

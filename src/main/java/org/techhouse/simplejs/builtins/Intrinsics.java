@@ -27,6 +27,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
@@ -80,6 +81,9 @@ public final class Intrinsics {
     private final JsObject disposableStackProto;
     private final JsObject asyncDisposableStackProto;
     private final JsObject errorProto = new JsObject();
+    private JsValue defaultArrayIterator;
+    private JsValue defaultStringIterator;
+    private JsValue defaultTypedArrayIterator;
     private final Map<String, JsObject> errorProtos = new LinkedHashMap<>();
 
     public Intrinsics(Invoker invoker, InterpreterOps ops, EventLoop eventLoop, GeneratorBuiltins.AsyncDriver driver) {
@@ -121,7 +125,7 @@ public final class Intrinsics {
                 name) -> TypedArrayBuiltins.getMethod(requireTypedArray(receiver, name), name, invoker, ops));
         // Per spec, %TypedArray%.prototype[Symbol.iterator] is the very same function object as
         // %TypedArray%.prototype.values (not just an equivalent one).
-        typedArrayProto.setSymbol(JsSymbol.ITERATOR, typedArrayProto.get("values"));
+        defineSymbol(typedArrayProto, JsSymbol.ITERATOR, typedArrayProto.get("values"));
         // Real accessor properties (not just the fast-dispatch special-casing MemberEvaluator does
         // for actual JsTypedArray receivers) so `TypedArray.prototype.length` etc, invoked with a
         // non-typed-array `this`, throws per spec instead of silently reading through as undefined.
@@ -149,6 +153,45 @@ public final class Intrinsics {
         DisposableStackBuiltins.installAccessors(asyncDisposableStackProto, true);
         installObjectPrototype();
         installErrorPrototypes();
+        installIteratorSymbols();
+    }
+
+    // Per spec these are the very same function objects as the named methods they alias, so a script
+    // can compare, replace or delete them and every iteration site has to observe the change.
+    private void installIteratorSymbols() {
+        defineSymbol(arrayProto, JsSymbol.ITERATOR, arrayProto.get("values"));
+        defineSymbol(mapProto, JsSymbol.ITERATOR, mapProto.get("entries"));
+        defineSymbol(setProto, JsSymbol.ITERATOR, setProto.get("values"));
+        defineSymbol(stringProto, JsSymbol.ITERATOR,
+                new JsNativeFunction("[Symbol.iterator]", (thisArg,
+                        _) -> JsIterators.of(InterpreterUtils
+                                .stringCodePoints(JsCoercion.toStr(requireString(thisArg, "[Symbol.iterator]"), ops))
+                                .iterator())));
+        defineSymbol(iteratorProto, JsSymbol.ITERATOR,
+                new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
+        defineSymbol(asyncIteratorProto, JsSymbol.ASYNC_ITERATOR,
+                new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
+        defaultArrayIterator = arrayProto.getSymbol(JsSymbol.ITERATOR);
+        defaultStringIterator = stringProto.getSymbol(JsSymbol.ITERATOR);
+        defaultTypedArrayIterator = typedArrayProto.getSymbol(JsSymbol.ITERATOR);
+    }
+
+    private static void defineSymbol(JsObject target, JsSymbol key, JsValue value) {
+        target.setSymbol(key, value);
+        target.setSymbolFlags(key, HIDDEN);
+    }
+
+    // The array-like values iterate straight out of their backing storage; that shortcut is only
+    // legal while their @@iterator is still the intrinsic one a script has not replaced.
+    public boolean isDefaultIterator(JsValue target, JsValue candidate) {
+        final var expected = switch (target) {
+            case JsArray ignored -> defaultArrayIterator;
+            case JsArguments ignored -> defaultArrayIterator;
+            case JsString ignored -> defaultStringIterator;
+            case JsTypedArray ignored -> defaultTypedArrayIterator;
+            default -> null;
+        };
+        return expected != null && candidate == expected;
     }
 
     private void installObjectPrototype() {
@@ -429,8 +472,9 @@ public final class Intrinsics {
         // or non-numeric "length" as 0 (LengthOfArrayLike -> ToLength) rather than requiring the
         // property to already be present - e.g. `every`/`map`/`forEach`.call({}, ...) is valid and
         // vacuously iterates zero elements, it does not reject the receiver.
-        if (receiver instanceof JsObject object && ops != null) {
-            return new JsArray(InterpreterUtils.arrayLikeElements(object, ops, REVERSE_ARRAY_METHODS.contains(method)));
+        if ((receiver instanceof JsObject || receiver instanceof JsProxy) && ops != null) {
+            return new JsArray(
+                    InterpreterUtils.arrayLikeElements(receiver, ops, REVERSE_ARRAY_METHODS.contains(method)));
         }
         // ToObject on a raw primitive (other than null/undefined, which ToObject rejects) succeeds
         // and yields a wrapper with no own `length`/indexed properties, i.e. an empty array-like.

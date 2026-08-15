@@ -256,16 +256,16 @@ public final class InterpreterUtils {
     // method that iterates backwards reads the indices in descending order (`fromEnd`) so a throwing
     // getter is observed in the same order as the spec's lazy walk.
     public static List<JsValue> arrayLikeElements(JsValue value, InterpreterOps ops, boolean fromEnd) {
-        if (ops == null || !(value instanceof JsObject object)) {
+        if (ops == null || !(value instanceof JsObject || value instanceof JsProxy)) {
             return arrayLikeElements(value);
         }
-        final var length = toLength(ops.getMember(object, new JsString("length")), ops);
+        final var length = toLength(ops.getMember(value, new JsString("length")), ops);
         final var elements = new ArrayList<JsValue>(length);
         for (var i = 0; i < length; i++) {
             final var index = fromEnd ? length - 1 - i : i;
             final var key = new JsString(Integer.toString(index));
-            final var element = ops.getMember(object, key);
-            elements.add(element instanceof JsUndefined && !ops.has(object, key) ? JsUndefined.getHole() : element);
+            final var element = ops.getMember(value, key);
+            elements.add(element instanceof JsUndefined && !ops.has(value, key) ? JsUndefined.getHole() : element);
         }
         if (fromEnd) {
             Collections.reverse(elements);

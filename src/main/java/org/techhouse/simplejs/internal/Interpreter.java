@@ -1115,10 +1115,11 @@ public final class Interpreter {
             }
             if (env.resolveHomeClass() instanceof JsClass cls) {
                 final var getter = cls.getPrivateInstanceGetter(name);
+                final var method = cls.getPrivateInstanceMethod(name);
+                requirePrivateBrand(object, cls, name, getter != null || method != null);
                 if (getter != null) {
                     return callFunction(getter, object, List.of());
                 }
-                final var method = cls.getPrivateInstanceMethod(name);
                 if (method != null) {
                     return method;
                 }
@@ -1137,24 +1138,47 @@ public final class Interpreter {
             final var setter = cls.getPrivateStaticSetter(name);
             if (setter != null) {
                 callFunction(setter, cls, List.of(value));
-            } else {
-                cls.setPrivateStaticField(name, value);
+                return;
             }
-            return;
+            if (cls.getPrivateStaticMethod(name) != null || cls.getPrivateStaticGetter(name) != null) {
+                throw new TypeErrorException("Cannot write to private member #" + name + ", it has no setter");
+            }
+            if (cls.hasPrivateStaticField(name)) {
+                cls.setPrivateStaticField(name, value);
+                return;
+            }
         }
         if (target instanceof JsObject object) {
             if (env.resolveHomeClass() instanceof JsClass cls) {
                 final var setter = cls.getPrivateInstanceSetter(name);
+                final var readOnly = cls.getPrivateInstanceGetter(name) != null
+                        || cls.getPrivateInstanceMethod(name) != null;
+                requirePrivateBrand(object, cls, name, setter != null || readOnly);
                 if (setter != null) {
                     callFunction(setter, object, List.of(value));
                     return;
                 }
+                if (readOnly) {
+                    throw new TypeErrorException("Cannot write to private member #" + name + ", it has no setter");
+                }
             }
-            object.setPrivate(name, value);
-            return;
+            if (object.hasPrivate(name)) {
+                object.setPrivate(name, value);
+                return;
+            }
         }
         throw new TypeErrorException(
                 "Cannot write private member #" + name + " to an object whose class did not declare it");
+    }
+
+    // A private method or accessor lives on the class, not the instance, so the only thing that makes
+    // it reachable through a given object is the brand installed when that object was initialized as
+    // an instance of the declaring class.
+    private static void requirePrivateBrand(JsObject object, JsClass cls, String name, boolean declared) {
+        if (declared && !object.hasPrivateBrand(cls)) {
+            throw new TypeErrorException(
+                    "Cannot access private member #" + name + " from an object whose class did not declare it");
+        }
     }
 
     public JsValue assignToPrivate(MemberExpression member, PrivateIdentifier priv, AssignmentExpression assignment,

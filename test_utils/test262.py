@@ -69,7 +69,6 @@ DIVERGENCES = [
     ("Object.assign bypasses the target's setter", ["built-ins/Object/assign/"]),
     ("instanceof survives F.prototype reassignment", ["language/expressions/instanceof/"]),
     ("in on a typed array throws", ["built-ins/TypedArray/", "built-ins/TypedArrayConstructors/"]),
-    ("generators lack [Symbol.iterator] returning self", ["built-ins/GeneratorPrototype/"]),
     ("String(symbol) throws", ["built-ins/Symbol/", "built-ins/String/"]),
     ("Math.round(-0.5) yields +0", ["built-ins/Math/"]),
     ("primitive wrappers are shallow", ["built-ins/Object/", "language/expressions/equals/"]),

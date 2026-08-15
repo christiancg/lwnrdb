@@ -661,4 +661,67 @@ public class InterpreterClassTest {
         assertEquals(1, num("class C { static p = 1; } Object.keys(C).length"));
         assertTrue(bool("class C { static m() {} } Object.getOwnPropertyDescriptor(C, 'm').enumerable === false"));
     }
+    // a private method is reachable only through an object branded as an instance of its class
+    @Test
+    public void test_private_method_requires_the_declaring_class_brand() {
+        assertEquals(1, num("class C { #m() { return 1; } run() { return this.#m(); } } new C().run()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("class C { #m() { return 1; } run() { return this.#m(); } } " + "new C().run.call({})"));
+    }
+
+    // a private accessor is brand-checked on both the read and the write side
+    @Test
+    public void test_private_accessor_requires_the_declaring_class_brand() {
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("class C { get #g() { return 1; } run() { return this.#g; } } " + "new C().run.call({})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("class C { set #s(v) {} run() { this.#s = 1; } } new C().run.call({})"));
+    }
+
+    // an inner class's private name is not reachable through an instance of the outer class
+    @Test
+    public void test_nested_class_private_name_does_not_leak_to_the_outer_instance() {
+        final var source = """
+                class C {
+                  get #m() { return 'outer'; }
+                  B = class {
+                    get #m() { return 'inner'; }
+                    read(o) { return o.#m; }
+                  };
+                }
+                const c = new C();
+                const b = new c.B();
+                b.read(c)
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // a derived class's private methods are installed only once super() returns
+    @Test
+    public void test_private_method_is_not_installed_before_super_returns() {
+        final var source = """
+                class C { constructor() { this.f(); } }
+                class D extends C { f() { return this.#m(); } #m() { return 42; } }
+                new D()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // writing to a private method or a getter-only accessor is a TypeError, not a silent field add
+    @Test
+    public void test_private_method_and_getter_only_accessor_are_not_writable() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("class C { #m() {} run() { this.#m = 1; } } new C().run()"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("class C { get #g() { return 1; } run() { this.#g = 1; } } new C().run()"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("class C { static #m() {} static run() { C.#m = 1; } } C.run()"));
+    }
+
+    // `#x in obj` reports the brand, so it stays false for a foreign object
+    @Test
+    public void test_private_brand_check_operator_follows_the_brand() {
+        assertTrue(bool("class C { #m() {} static has(o) { return #m in o; } } C.has(new C())"));
+        assertFalse(bool("class C { #m() {} static has(o) { return #m in o; } } C.has({})"));
+    }
 }

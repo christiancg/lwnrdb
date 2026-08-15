@@ -133,12 +133,13 @@ public final class ExpressionEvaluator {
 
     public void spreadInto(List<JsValue> target, JsValue value) {
         switch (value) {
-            case JsArray array -> {
+            case JsArray array when Iteration.usesDefaultIterator(interp, array) -> {
                 for (var i = 0; i < array.length(); i++) {
                     target.add(array.isHole(i) ? JsUndefined.getInstance() : array.get(i));
                 }
             }
-            case JsString string -> target.addAll(stringCodePoints(string.getValue()));
+            case JsString string when Iteration.usesDefaultIterator(interp, string) ->
+                target.addAll(stringCodePoints(string.getValue()));
             default -> {
                 final var iteration = new Iteration(interp, value);
                 var element = iteration.next();

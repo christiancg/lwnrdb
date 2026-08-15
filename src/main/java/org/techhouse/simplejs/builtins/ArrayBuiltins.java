@@ -355,7 +355,12 @@ public final class ArrayBuiltins {
     }
 
     private static JsValue valuesIterator(JsArray receiver) {
-        return JsIterators.of(new ArrayList<>(receiver.getElements()).iterator());
+        return JsIterators.lazy(index -> {
+            if (index >= receiver.length()) {
+                return null;
+            }
+            return receiver.isHole(index) ? JsUndefined.getInstance() : receiver.get(index);
+        });
     }
 
     private static JsValue entriesIterator(JsArray receiver) {
