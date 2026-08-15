@@ -172,12 +172,19 @@ public final class ExpressionEvaluator {
             if (property.isComputed()) {
                 final var keyValue = interp.eval(property.getKey(), env);
                 final var evaluated = markIfMethod(interp.eval(value, scope), concise);
+                nameMember(property, value, evaluated,
+                        keyValue instanceof JsSymbol symbol
+                                ? ClassEvaluator.symbolMethodName(symbol)
+                                : JsCoercion.toStr(keyValue));
                 if (accessor && keyValue instanceof JsSymbol symbol) {
                     storeSymbolAccessor(result, symbol, property.getKind(), evaluated);
                 } else if (accessor) {
                     storeAccessor(result, JsCoercion.toStr(keyValue), property.getKind(), evaluated);
                 } else if (keyValue instanceof JsSymbol symbol) {
                     result.setSymbol(symbol, evaluated);
+                    if (concise) {
+                        result.setSymbolFlags(symbol, new JsObject.PropertyFlags(true, false, true));
+                    }
                 } else {
                     result.set(JsCoercion.toStr(keyValue), evaluated);
                 }
@@ -185,6 +192,7 @@ public final class ExpressionEvaluator {
             }
             final var name = staticKeyName(property.getKey());
             final var evaluated = markIfMethod(interp.eval(value, scope), concise);
+            nameMember(property, value, evaluated, name);
             if (accessor) {
                 storeAccessor(result, name, property.getKind(), evaluated);
             } else if ("__proto__".equals(name)) {
@@ -194,6 +202,17 @@ public final class ExpressionEvaluator {
             }
         }
         return result;
+    }
+
+    // A shorthand method or accessor is always an anonymous definition, so it is named
+    // unconditionally; a plain `key: value` only takes the key when the value is one.
+    private static void nameMember(Property property, Expression value, JsValue evaluated, String key) {
+        final var kind = property.getKind();
+        if ("method".equals(kind) || "get".equals(kind) || "set".equals(kind)) {
+            InterpreterUtils.setFunctionName(evaluated, ClassEvaluator.accessorName(kind, key));
+        } else {
+            InterpreterUtils.applyInferredName(value, evaluated, key);
+        }
     }
 
     private static JsValue markIfMethod(JsValue value, boolean concise) {
@@ -379,6 +398,7 @@ public final class ExpressionEvaluator {
         final var operator = assignment.getOperator();
         if ("=".equals(operator)) {
             final var value = interp.eval(assignment.getValue(), env);
+            InterpreterUtils.applyInferredName(assignment.getValue(), value, name);
             env.assign(name, value);
             return value;
         }
@@ -388,6 +408,7 @@ public final class ExpressionEvaluator {
                 return current;
             }
             final var value = interp.eval(assignment.getValue(), env);
+            InterpreterUtils.applyInferredName(assignment.getValue(), value, name);
             env.assign(name, value);
             return value;
         }

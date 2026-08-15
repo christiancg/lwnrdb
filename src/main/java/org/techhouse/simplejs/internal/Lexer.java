@@ -344,13 +344,21 @@ public final class Lexer {
         return Character.digit(c, radix) >= 0;
     }
 
+    // Every word a unicode escape may not spell: the real keywords plus the literals and the
+    // words kept contextual or unsupported (see ESCAPE_RESERVED).
+    public static boolean isReservedWord(String word) {
+        return JS_KEYWORD.contains(word) || ESCAPE_RESERVED.contains(word);
+    }
+
     private static Lexed lexWord(String src, int start) {
         final var scan = scanIdentifier(src, start);
         final var word = scan.name();
-        // A reserved word may not be written with an escape, so an escaped `if` is a SyntaxError
-        // rather than an identifier named "if".
+        // An escape sequence never forms a keyword, so an escaped `break` lexes as an identifier
+        // named "break". Whether that is legal is position-dependent - fine as an IdentifierName
+        // (`obj.break`, a property key, a class member name), a SyntaxError as a binding or
+        // reference - so the decision belongs to the parser, which alone knows the position.
         if (scan.escaped() && (JS_KEYWORD.contains(word) || ESCAPE_RESERVED.contains(word))) {
-            throw new SyntaxErrorException("Keyword must not contain escaped characters: " + word);
+            return new Lexed(new JsIdentifier(word, true), scan.next());
         }
         final JsBaseElement token = switch (word) {
             case "true" -> new JsBoolean(true);

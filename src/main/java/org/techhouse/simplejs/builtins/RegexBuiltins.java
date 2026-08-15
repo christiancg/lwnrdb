@@ -20,7 +20,11 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class RegexBuiltins {
-    public static final List<String> NAMES = List.of("test", "exec");
+    public static final List<String> NAMES = List.of("test", "exec", "toString");
+    // lastIndex is deliberately absent: it is an own data property of each instance, not an accessor
+    // inherited from RegExp.prototype.
+    public static final List<String> PROTO_ACCESSORS = List.of("source", "flags", "global", "ignoreCase", "multiline",
+            "dotAll", "sticky", "hasIndices", "unicode", "unicodeSets");
     private static final Set<String> ACCESSORS = Set.of("source", "flags", "global", "ignoreCase", "multiline",
             "dotAll", "sticky", "lastIndex", "hasIndices", "unicode", "unicodeSets");
 
@@ -107,10 +111,27 @@ public final class RegexBuiltins {
         return ACCESSORS.contains(name);
     }
 
+    // The prototype accessors are generic: a non-RegExp receiver is a TypeError, except
+    // %RegExp.prototype% itself, which the spec makes report the "(?:)" / undefined placeholders so
+    // that reading a flag off the bare prototype does not throw.
+    public static JsValue protoAccessor(JsValue receiver, String name, JsObject regexpProto) {
+        if (receiver instanceof JsRegExp regexp) {
+            return getMethod(regexp, name);
+        }
+        if (receiver == regexpProto) {
+            return "source".equals(name) || "flags".equals(name)
+                    ? new JsString("source".equals(name) ? "(?:)" : "")
+                    : JsUndefined.getInstance();
+        }
+        throw new TypeErrorException("RegExp.prototype." + name + " called on an incompatible receiver");
+    }
+
     public static JsValue getMethod(JsRegExp receiver, String name) {
         return switch (name) {
             case "test" -> new JsNativeFunction("test", (_, args) -> JsBoolean.of(test(receiver, str(args))));
             case "exec" -> new JsNativeFunction("exec", (_, args) -> exec(receiver, str(args)));
+            case "toString" -> new JsNativeFunction("toString",
+                    (_, _) -> new JsString("/" + receiver.getSource() + "/" + receiver.getFlags()));
             case "source" -> new JsString(receiver.getSource());
             case "flags" -> new JsString(receiver.getFlags());
             case "global" -> JsBoolean.of(receiver.isGlobal());
@@ -349,8 +370,7 @@ public final class RegexBuiltins {
                 }
                 replacement = JsCoercion.toStr(invoker.call(replaceValue, JsUndefined.getInstance(), replacerArgs));
             } else {
-                replacement = getSubstitution(matched, s, position, captures, namedCaptures, replacementTemplate,
-                        ops);
+                replacement = getSubstitution(matched, s, position, captures, namedCaptures, replacementTemplate, ops);
             }
             if (position >= nextSourcePosition) {
                 accumulated.append(s, nextSourcePosition, position).append(replacement);

@@ -150,10 +150,11 @@ public class PrototypeProgramTest {
                 + " return [e instanceof TypeError, e.message.indexOf('Array.prototype.push') === 0] }"));
     }
 
-    // Function name/length/toString metadata
+    // Function name/length/toString metadata; `g` takes its name from the declarator per
+    // NamedEvaluation, even though the function expression itself is anonymous
     @Test
     public void test_function_metadata() {
-        assertEquals("[\"f\",2,true,\"\",0]", run("function f(a, b, c = 1) {} const g = function () {};"
+        assertEquals("[\"f\",2,true,\"g\",0]", run("function f(a, b, c = 1) {} const g = function () {};"
                 + " return [f.name, f.length, f.toString().indexOf('function f') === 0, g.name, g.length]"));
     }
 

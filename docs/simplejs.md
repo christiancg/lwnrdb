@@ -733,7 +733,8 @@ sloppy-function allowance.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted**. The official tc39/test262 corpus runs against
+Conformance is **measured, not asserted** (currently **78.54%**, 29,217/37,202). The official
+tc39/test262 corpus runs against
 `SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
 the language + built-ins surface a database script host actually exposes, and gated on a tracked
 baseline of known failures so the number can only ratchet upward:

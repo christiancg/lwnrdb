@@ -92,15 +92,15 @@ public final class DateBuiltins {
         }
     }
 
-    public static JsValue getMethod(JsDate receiver, String name) {
-        final var method = instanceMethod(receiver, name);
+    public static JsValue getMethod(JsDate receiver, String name, InterpreterOps ops) {
+        final var method = instanceMethod(receiver, name, ops);
         if (method != null) {
             return method;
         }
         return getter(receiver, name);
     }
 
-    private static JsValue instanceMethod(JsDate receiver, String name) {
+    private static JsValue instanceMethod(JsDate receiver, String name, InterpreterOps ops) {
         return switch (name) {
             case "getTime", "valueOf" -> new JsNativeFunction(name, (_, _) -> new JsNumber(receiver.getTime()));
             case "setTime" -> new JsNativeFunction("setTime", (_, args) -> {
@@ -114,18 +114,23 @@ public final class DateBuiltins {
             case "toLocaleString", "toLocaleDateString", "toLocaleTimeString" ->
                 new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(receiver, name)));
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(0));
-            default -> setter(receiver, name);
+            default -> setter(receiver, name, ops);
         };
     }
 
-    private static JsValue setter(JsDate receiver, String name) {
+    private static JsValue setter(JsDate receiver, String name, InterpreterOps ops) {
         if (applySet(Instant.EPOCH.atZone(ZoneOffset.UTC), name, 0) == null) {
             return null;
         }
         return new JsNativeFunction(name, (_, args) -> {
-            final var base = receiver.isValid() ? receiver.atUtc() : Instant.EPOCH.atZone(ZoneOffset.UTC);
+            // The argument is coerced before the invalid-date check, so a valueOf side effect still
+            // runs exactly once even when the result is discarded as NaN.
+            final var value = intArg(args, 0, 0, ops);
+            if (!receiver.isValid()) {
+                return new JsNumber(Double.NaN);
+            }
             receiver.setTime(
-                    Objects.requireNonNull(applySet(base, name, intArg(args, 0, 0))).toInstant().toEpochMilli());
+                    Objects.requireNonNull(applySet(receiver.atUtc(), name, value)).toInstant().toEpochMilli());
             return new JsNumber(receiver.getTime());
         });
     }
@@ -209,10 +214,14 @@ public final class DateBuiltins {
     }
 
     private static int intArg(List<JsValue> args, int position, int fallback) {
+        return intArg(args, position, fallback, null);
+    }
+
+    private static int intArg(List<JsValue> args, int position, int fallback, InterpreterOps ops) {
         if (position >= args.size() || args.get(position) instanceof JsUndefined) {
             return fallback;
         }
-        final var value = JsCoercion.toNumber(args.get(position));
+        final var value = JsCoercion.toNumber(args.get(position), ops);
         return Double.isNaN(value) ? 0 : (int) value;
     }
 

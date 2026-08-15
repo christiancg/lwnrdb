@@ -11,7 +11,7 @@ import org.techhouse.simplejs.nodes.FieldDefinition;
 public final class JsClass extends JsValue {
     private static final JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(true, false, true);
 
-    private final String name;
+    private String name;
     private final JsClass superClass;
     private JsFunction constructor;
     private final JsObject prototype = new JsObject();
@@ -71,6 +71,12 @@ public final class JsClass extends JsValue {
 
     public String getName() {
         return name;
+    }
+
+    public void setInferredName(String inferred) {
+        if (name == null) {
+            name = inferred;
+        }
     }
 
     public JsClass getSuperClass() {

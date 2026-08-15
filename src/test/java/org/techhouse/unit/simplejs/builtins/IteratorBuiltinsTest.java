@@ -282,4 +282,57 @@ public class IteratorBuiltinsTest {
                 """;
         assertEquals("true", str(source));
     }
+
+    // Iterator.prototype.chunks buffers into fixed-size arrays, emitting a short final chunk
+    @Test
+    public void test_iterator_chunks() {
+        assertEquals("[[0,1],[2,3],[4]]",
+                str("function* g(){yield 0;yield 1;yield 2;yield 3;yield 4;} JSON.stringify(g().chunks(2).toArray())"));
+        assertEquals("[[0,1,2,3,4]]",
+                str("function* g(){yield 0;yield 1;yield 2;yield 3;yield 4;} JSON.stringify(g().chunks(9).toArray())"));
+    }
+
+    // Iterator.prototype.windows slides a fixed-size window, yielding nothing when the source is
+    // shorter than the window
+    @Test
+    public void test_iterator_windows() {
+        assertEquals("[[0,1],[1,2],[2,3],[3,4]]", str(
+                "function* g(){yield 0;yield 1;yield 2;yield 3;yield 4;} JSON.stringify(g().windows(2).toArray())"));
+        assertEquals("[]", str("function* g(){yield 0;yield 1;} JSON.stringify(g().windows(9).toArray())"));
+    }
+
+    // A non-integral chunk/window size is a TypeError while an out-of-range one is a RangeError
+    @Test
+    public void test_iterator_chunk_size_validation() {
+        assertEquals("TypeError", str("function* g(){yield 1;} let caught = 'none';"
+                + " try { g().chunks(1.5); } catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("RangeError", str("function* g(){yield 1;} let caught = 'none';"
+                + " try { g().chunks(0); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // Iterator.prototype.includes searches with SameValueZero and honours the skipCount argument
+    @Test
+    public void test_iterator_includes() {
+        assertEquals("true,false",
+                str("String([3, 6, 9].values().includes(6)) + ',' + [3, 6, 9].values().includes(5)"));
+        assertEquals("false,true",
+                str("String([4, 5, 6, 7].values().includes(4, 1)) + ',' + [4, 5, 6, 7].values().includes(6, 2)"));
+        assertEquals("true", str("String([NaN].values().includes(NaN))"));
+    }
+
+    // Iterator.prototype.join defaults to a comma and renders null/undefined as empty
+    @Test
+    public void test_iterator_join() {
+        assertEquals("one,two", str("['one', 'two'].values().join()"));
+        assertEquals("", str("[].values().join()"));
+        assertEquals("one,,two,", str("['one', null, 'two', undefined].values().join()"));
+        assertEquals("a-b", str("['a', 'b'].values().join('-')"));
+    }
+
+    // Each helper reports its spec-declared length
+    @Test
+    public void test_iterator_helper_lengths() {
+        assertEquals("1,1,1,0", str("[Iterator.prototype.chunks.length, Iterator.prototype.windows.length,"
+                + " Iterator.prototype.includes.length, Iterator.prototype.join.length].join(',')"));
+    }
 }

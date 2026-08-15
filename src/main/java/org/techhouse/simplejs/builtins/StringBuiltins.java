@@ -75,7 +75,8 @@ public final class StringBuiltins {
 
     private static void requireGlobalRegExp(List<JsValue> args) {
         if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp && !regexp.isGlobal()) {
-            throw new TypeErrorException("String.prototype." + "replaceAll" + " called with a non-global RegExp argument");
+            throw new TypeErrorException(
+                    "String.prototype." + "replaceAll" + " called with a non-global RegExp argument");
         }
     }
 

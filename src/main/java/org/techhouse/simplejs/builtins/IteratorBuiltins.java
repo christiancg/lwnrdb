@@ -20,6 +20,7 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.SameValueZero;
 
 /**
  * ES2025 iterator helpers. The {@code Iterator} global exposes {@code Iterator.from} plus a
@@ -30,7 +31,11 @@ import org.techhouse.simplejs.values.JsValue;
  */
 public final class IteratorBuiltins {
     private static final Set<String> HELPERS = Set.of("map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
-            "forEach", "some", "every", "find");
+            "forEach", "some", "every", "find", "chunks", "windows", "includes", "join");
+
+    private static final Set<String> ZERO_ARG_HELPERS = Set.of("toArray", "join");
+
+    private static final double MAX_SAFE_INTEGER = 9007199254740991d;
 
     private IteratorBuiltins() {
     }
@@ -90,7 +95,9 @@ public final class IteratorBuiltins {
     }
 
     public static JsNativeFunction helper(InterpreterOps ops, String name, JsObject objectProto) {
-        return new JsNativeFunction(name, (thisArg, args) -> dispatch(ops, name, thisArg, args, objectProto));
+        final var fn = new JsNativeFunction(name, (thisArg, args) -> dispatch(ops, name, thisArg, args, objectProto));
+        fn.setLength(ZERO_ARG_HELPERS.contains(name) ? 0 : 1);
+        return fn;
     }
 
     private static JsValue dispatch(InterpreterOps ops, String name, JsValue thisArg, List<JsValue> args,
@@ -108,6 +115,10 @@ public final class IteratorBuiltins {
             case "some" -> JsBoolean.of(matchAny(ops, source, callback(args)));
             case "every" -> JsBoolean.of(matchAll(ops, source, callback(args)));
             case "find" -> find(ops, source, callback(args));
+            case "chunks" -> chunks(source, windowSize(arg0(args), "chunkSize"), objectProto);
+            case "windows" -> windows(source, windowSize(arg0(args), "windowSize"), objectProto);
+            case "includes" -> JsBoolean.of(includes(source, arg0(args), skipCount(args)));
+            case "join" -> join(source, args);
             default -> JsUndefined.getInstance();
         };
     }
@@ -533,7 +544,7 @@ public final class IteratorBuiltins {
     }
 
     private static JsValue requireIterator(JsValue value) {
-        if (value instanceof JsUndefined || value == null) {
+        if (value == null || !InterpreterUtils.isObjectLike(value)) {
             throw new TypeErrorException("Iterator helper called on non-iterator");
         }
         return value;
@@ -545,6 +556,107 @@ public final class IteratorBuiltins {
             throw new TypeErrorException("Iterator helper callback is not a function");
         }
         return fn;
+    }
+
+    // chunks/windows take an integral size in [1, 2^53-1]: a non-integral or NaN size is a
+    // TypeError (not a RangeError), which is what separates it from `take`/`drop`'s limit.
+    private static int windowSize(JsValue value, String label) {
+        if (!(value instanceof JsNumber size)) {
+            throw new TypeErrorException(label + " must be a Number");
+        }
+        final var number = size.getValue();
+        if (Double.isNaN(number) || number != Math.floor(number) || Double.isInfinite(number)) {
+            throw new TypeErrorException(label + " must be an integral Number");
+        }
+        if (number < 1 || number > MAX_SAFE_INTEGER) {
+            throw new RangeErrorException(label + " is out of range");
+        }
+        return (int) Math.min(number, Integer.MAX_VALUE);
+    }
+
+    private static long skipCount(List<JsValue> args) {
+        if (args.size() < 2 || args.get(1) instanceof JsUndefined) {
+            return 0;
+        }
+        if (!(args.get(1) instanceof JsNumber skip)) {
+            throw new TypeErrorException("skipCount must be a Number");
+        }
+        final var number = skip.getValue();
+        if (Double.isNaN(number) || (number != Math.floor(number) && !Double.isInfinite(number))) {
+            throw new TypeErrorException("skipCount must be an integral Number");
+        }
+        if (number < 0 || number > MAX_SAFE_INTEGER) {
+            throw new RangeErrorException("skipCount is out of range");
+        }
+        return (long) number;
+    }
+
+    private static JsValue chunks(Driver source, int size, JsObject objectProto) {
+        final var buffer = new ArrayList<JsValue>();
+        return lazyIterator(() -> {
+            for (var value = source.next(); value != null; value = source.next()) {
+                buffer.add(value);
+                if (buffer.size() == size) {
+                    final var chunk = new JsArray(new ArrayList<>(buffer));
+                    buffer.clear();
+                    return chunk;
+                }
+            }
+            if (buffer.isEmpty()) {
+                return null;
+            }
+            final var tail = new JsArray(new ArrayList<>(buffer));
+            buffer.clear();
+            return tail;
+        }, source::close, objectProto);
+    }
+
+    private static JsValue windows(Driver source, int size, JsObject objectProto) {
+        final var buffer = new ArrayList<JsValue>();
+        return lazyIterator(() -> {
+            for (var value = source.next(); value != null; value = source.next()) {
+                if (buffer.size() == size) {
+                    buffer.removeFirst();
+                }
+                buffer.add(value);
+                if (buffer.size() == size) {
+                    return new JsArray(new ArrayList<>(buffer));
+                }
+            }
+            return null;
+        }, source::close, objectProto);
+    }
+
+    private static boolean includes(Driver source, JsValue searched, long skip) {
+        var index = 0L;
+        for (var value = source.next(); value != null; value = source.next()) {
+            if (index++ < skip) {
+                continue;
+            }
+            if (SameValueZero.equal(value, searched)) {
+                source.close();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static JsValue join(Driver source, List<JsValue> args) {
+        final var separator = args.isEmpty() || args.getFirst() instanceof JsUndefined
+                ? ","
+                : JsCoercion.toStr(args.getFirst());
+        final var result = new StringBuilder();
+        var first = true;
+        for (var value = source.next(); value != null; value = source.next()) {
+            if (!first) {
+                result.append(separator);
+            }
+            first = false;
+            if (!InterpreterUtils.isNullish(value)) {
+                result.append(JsCoercion.toStr(value));
+            }
+        }
+        return new JsString(result.toString());
     }
 
     private static long limit(JsValue value) {

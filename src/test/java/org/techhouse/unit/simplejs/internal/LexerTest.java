@@ -214,10 +214,14 @@ public class LexerTest {
         assertEquals("constructor", ((JsIdentifier) tokens.getFirst()).getValue());
     }
 
-    // A reserved word spelled with an escape is rejected rather than lexed as an identifier
+    // An escape sequence never forms a keyword, so a reserved word spelled with one lexes as an
+    // escaped identifier; rejecting it is the parser's job, since it is legal as an IdentifierName
     @Test
-    public void test_lex_escaped_keyword_throws() {
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("\\u0069\\u0066"));
+    public void test_lex_escaped_keyword_is_an_escaped_identifier() {
+        final var tokens = Lexer.lex("\\u0069\\u0066");
+        final var identifier = (org.techhouse.simplejs.elements.JsIdentifier) tokens.getFirst();
+        assertEquals("if", identifier.getValue());
+        assertTrue(identifier.isEscaped());
     }
 
     // A # not followed by an identifier is an unexpected character

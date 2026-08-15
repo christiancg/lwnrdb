@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.internal.Lexer;
@@ -1506,10 +1507,13 @@ public class ParserTest {
         assertThrows(UnexpectedTokenException.class, () -> parse("import x from \"m\" with { type: json };"));
     }
 
-    // `with` remains a valid identifier outside a module clause
+    // `with` is contextual in the sense that matters - it is not a lexer keyword, so an import
+    // clause can use it - but it is still a reserved word, so it cannot be a binding identifier
+    // (the engine is always strict).
     @Test
-    public void test_with_is_contextual_identifier() {
-        assertEquals("let", assertInstanceOf(VariableDeclaration.class, firstStatement("let with = 1;")).getKind());
+    public void test_with_is_contextual_in_an_import_clause_only() {
+        assertInstanceOf(ImportDeclaration.class, firstStatement("import x from \"m\" with { type: \"json\" };"));
+        assertThrows(SyntaxErrorException.class, () -> parse("let with = 1;"));
     }
 
     // A namespace import binds `* as name`

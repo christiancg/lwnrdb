@@ -17,8 +17,11 @@ import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.nodes.ArrayPattern;
+import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentPattern;
+import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.Expression;
+import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.NumberLiteral;
@@ -62,6 +65,35 @@ public final class InterpreterUtils {
 
     public static boolean isCallable(JsValue value) {
         return value instanceof JsFunction || value instanceof JsNativeFunction;
+    }
+
+    // IsAnonymousFunctionDefinition: only a function/class *expression* without its own binding
+    // identifier takes the name of what it is assigned to. A parenthesized expression parses to the
+    // inner node (so it still qualifies), while `(0, function(){})` parses to a SequenceExpression
+    // and must not.
+    public static boolean isAnonymousFunctionDefinition(JsNode node) {
+        return switch (node) {
+            case null -> false;
+            case ArrowFunctionExpression ignored -> true;
+            case FunctionExpression function -> function.getName() == null;
+            case ClassExpression classExpression -> classExpression.getId() == null;
+            default -> false;
+        };
+    }
+
+    public static void setFunctionName(JsValue value, String name) {
+        switch (value) {
+            case JsFunction function -> function.setInferredName(name);
+            case JsClass classValue -> classValue.setInferredName(name);
+            default -> {
+            }
+        }
+    }
+
+    public static void applyInferredName(JsNode source, JsValue value, String name) {
+        if (name != null && isAnonymousFunctionDefinition(source)) {
+            setFunctionName(value, name);
+        }
     }
 
     // Mirrors Interpreter.constructValue's own type switch: everything reachable via `new` there

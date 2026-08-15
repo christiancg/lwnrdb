@@ -5,7 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import org.techhouse.ejson.internal.NumberFormatter;
-import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.builtins.NumberBuiltins;
 import org.techhouse.simplejs.internal.JsCoercion;
 
 /**
@@ -138,10 +138,7 @@ public final class JsTypedArray extends JsValue {
     }
 
     private static BigInteger reduceBig(JsValue value) {
-        if (!(value instanceof JsBigInt b)) {
-            throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(value) + " to a BigInt");
-        }
-        return b.getValue().mod(BigInteger.ONE.shiftLeft(64));
+        return NumberBuiltins.toBigIntValue(value).getValue().mod(BigInteger.ONE.shiftLeft(64));
     }
 
     private static BigInteger toUnsignedBig(long raw) {

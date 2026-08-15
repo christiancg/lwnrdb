@@ -55,10 +55,19 @@ public final class NumberBuiltins {
     }
 
     private static JsBigInt toBigInt(JsValue value) {
+        if (value instanceof JsNumber number) {
+            return fromNumber(number.getValue());
+        }
+        return toBigIntValue(value);
+    }
+
+    // Spec ToBigInt, used wherever a value is *stored* as a BigInt (a BigInt typed array element,
+    // DataView.setBigInt64, ...). Unlike the BigInt() function it rejects a Number outright: only
+    // the explicit constructor call applies NumberToBigInt.
+    public static JsBigInt toBigIntValue(JsValue value) {
         return switch (value) {
             case JsBigInt bigInt -> bigInt;
             case JsBoolean bool -> new JsBigInt(bool.getValue() ? BigInteger.ONE : BigInteger.ZERO);
-            case JsNumber number -> fromNumber(number.getValue());
             case JsString string -> fromString(string.getValue());
             default -> throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(value) + " to a BigInt");
         };

@@ -96,4 +96,20 @@ public class IdentifierEscapeProgramTest {
     public void test_astral_identifier() {
         assertEquals(5, num("var \\u{1D45A} = 5; \\u{1D45A}"));
     }
+
+    // An escaped reserved word IS legal as an IdentifierName: a member-access property, an object
+    // literal key and a class member name are all IdentifierName positions
+    @Test
+    public void test_escaped_keyword_is_legal_as_an_identifier_name() {
+        assertEquals(1, num("var o = { bre\\u0061k: 1 }; o.break"));
+        assertEquals(2, num("var o = { break: 2 }; o.bre\\u0061k"));
+        assertEquals(3, num("class C { \\u0064efault() { return 3; } } new C().default()"));
+    }
+
+    // but not in a reference position, nor as a shorthand property (whose value is a reference)
+    @Test
+    public void test_escaped_keyword_is_rejected_as_a_reference() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("var x = { bre\\u0061k } = { break: 1 }"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("bre\\u0061k"));
+    }
 }

@@ -118,6 +118,7 @@ public final class ClassEvaluator {
             fn.markMethod();
         }
         if (method.getKey() instanceof PrivateIdentifier priv) {
+            fn.setInferredName(accessorName(kind, "#" + priv.getName()));
             if (method.isStatic()) {
                 cls.addPrivateStaticMethod(priv.getName(), kind, fn);
             } else {
@@ -128,10 +129,13 @@ public final class ClassEvaluator {
         if (method.isComputed()) {
             final var keyValue = interp.eval(method.getKey(), classScope);
             if (keyValue instanceof JsSymbol symbol) {
+                fn.setInferredName(accessorName(kind, symbolMethodName(symbol)));
                 if (method.isStatic()) {
                     cls.addStaticSymbolMethod(symbol, kind, fn);
+                    publishSymbolMember(cls.getStaticOwner(), symbol, kind, fn);
                 } else {
                     cls.addInstanceSymbolMethod(symbol, kind, fn);
+                    publishSymbolMember(cls.getPrototype(), symbol, kind, fn);
                 }
                 return;
             }
@@ -141,7 +145,36 @@ public final class ClassEvaluator {
         installStringMethod(cls, method, kind, fn, staticKeyName(method.getKey()));
     }
 
+    // SetFunctionName's accessor prefix, plus the "[description]" form a symbol-keyed member takes.
+    static String accessorName(String kind, String key) {
+        return "get".equals(kind) || "set".equals(kind) ? kind + " " + key : key;
+    }
+
+    // The symbol tables stay authoritative for dispatch, but the member is mirrored onto the real
+    // prototype/static object so it is reflectively visible (getOwnPropertySymbols,
+    // getOwnPropertyDescriptor) with the spec's non-enumerable method attributes.
+    private static void publishSymbolMember(JsObject owner, JsSymbol symbol, String kind, JsFunction fn) {
+        if ("get".equals(kind)) {
+            owner.defineSymbolAccessor(symbol, fn, null);
+        } else if ("set".equals(kind)) {
+            owner.defineSymbolAccessor(symbol, null, fn);
+        } else {
+            owner.setSymbol(symbol, fn);
+        }
+        owner.setSymbolFlags(symbol, new JsObject.PropertyFlags(true, false, true));
+    }
+
+    private static void nameField(FieldDefinition field, JsValue value, String key) {
+        InterpreterUtils.applyInferredName(field.getValue(), value, key);
+    }
+
+    static String symbolMethodName(JsSymbol symbol) {
+        final var description = symbol.getDescription();
+        return description == null ? "" : "[" + description + "]";
+    }
+
     private void installStringMethod(JsClass cls, MethodDefinition method, String kind, JsFunction fn, String key) {
+        fn.setInferredName(accessorName(kind, key));
         if (method.isStatic()) {
             cls.addStaticMethod(key, kind, fn);
         } else {
@@ -158,16 +191,22 @@ public final class ClassEvaluator {
                         ? JsUndefined.getInstance()
                         : interp.eval(field.getValue(), staticScope);
                 if (field.getKey() instanceof PrivateIdentifier priv) {
+                    nameField(field, value, "#" + priv.getName());
                     cls.setPrivateStaticField(priv.getName(), value);
                 } else if (field.isComputed()) {
                     final var keyValue = interp.eval(field.getKey(), staticScope);
                     if (keyValue instanceof JsSymbol symbol) {
+                        nameField(field, value, symbolMethodName(symbol));
                         cls.setStaticSymbolProp(symbol, value);
                     } else {
-                        cls.setStaticProp(JsCoercion.toStr(keyValue), value);
+                        final var key = JsCoercion.toStr(keyValue);
+                        nameField(field, value, key);
+                        cls.setStaticProp(key, value);
                     }
                 } else {
-                    cls.setStaticProp(staticKeyName(field.getKey()), value);
+                    final var key = staticKeyName(field.getKey());
+                    nameField(field, value, key);
+                    cls.setStaticProp(key, value);
                 }
             } else {
                 final var block = (StaticBlock) node;
@@ -239,16 +278,22 @@ public final class ClassEvaluator {
                     ? JsUndefined.getInstance()
                     : interp.eval(field.getValue(), fieldScope);
             if (field.getKey() instanceof PrivateIdentifier priv) {
+                nameField(field, value, "#" + priv.getName());
                 instance.setPrivate(priv.getName(), value);
             } else if (field.isComputed()) {
                 final var keyValue = interp.eval(field.getKey(), fieldScope);
                 if (keyValue instanceof JsSymbol symbol) {
+                    nameField(field, value, symbolMethodName(symbol));
                     instance.setSymbol(symbol, value);
                 } else {
-                    instance.set(JsCoercion.toStr(keyValue), value);
+                    final var key = JsCoercion.toStr(keyValue);
+                    nameField(field, value, key);
+                    instance.set(key, value);
                 }
             } else {
-                instance.set(staticKeyName(field.getKey()), value);
+                final var key = staticKeyName(field.getKey());
+                nameField(field, value, key);
+                instance.set(key, value);
             }
         }
     }

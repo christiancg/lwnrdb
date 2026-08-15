@@ -205,4 +205,71 @@ public class InterpreterAsyncGeneratorTest {
                 """));
     }
 
+    // GetIterator(obj, async) prefers @@asyncIterator and must not touch @@iterator at all when it
+    // is present - the corpus asserts this with a poisoned @@iterator getter
+    @Test
+    public void test_async_yield_star_ignores_sync_iterator_when_async_present() {
+        final var source = """
+                let out = [];
+                const obj = {
+                    get [Symbol.iterator]() { out.push('sync-read'); return undefined; },
+                    [Symbol.asyncIterator]() {
+                        let i = 0;
+                        return { next() { return Promise.resolve(i < 2 ? {value: i++, done: false} : {done: true}); } };
+                    }
+                };
+                async function* g() { yield* obj; }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("0,1", joined(source));
+    }
+
+    // A present-but-non-callable @@asyncIterator is a TypeError per GetMethod, not a silent
+    // fallback to synchronous iteration
+    @Test
+    public void test_async_yield_star_non_callable_async_iterator_throws() {
+        final var source = """
+                let out = [];
+                const obj = { [Symbol.asyncIterator]: 0 };
+                async function* g() { yield* obj; }
+                async function main() {
+                    try { for await (const v of g()) out.push(v); }
+                    catch (e) { out.push(e.constructor.name); }
+                }
+                main();
+                out
+                """;
+        assertEquals("TypeError", joined(source));
+    }
+
+    // A sync-only iterable is opened through CreateAsyncFromSyncIterator, awaiting each value
+    @Test
+    public void test_async_yield_star_awaits_sync_iterator_values() {
+        final var source = """
+                let out = [];
+                const obj = { *[Symbol.iterator]() { yield Promise.resolve('a'); yield 'b'; } };
+                async function* g() { yield* obj; }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("a,b", joined(source));
+    }
+
+    // for await applies the same GetIterator rules as async yield*
+    @Test
+    public void test_for_await_rejects_non_callable_async_iterator() {
+        final var source = """
+                let out = [];
+                async function main() {
+                    try { for await (const v of { [Symbol.asyncIterator]: 0 }) out.push(v); }
+                    catch (e) { out.push(e.constructor.name); }
+                }
+                main();
+                out
+                """;
+        assertEquals("TypeError", joined(source));
+    }
 }

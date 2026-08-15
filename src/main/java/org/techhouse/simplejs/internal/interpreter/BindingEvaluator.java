@@ -66,6 +66,9 @@ public final class BindingEvaluator {
             if (id instanceof Identifier identifier) {
                 final var name = identifier.getName();
                 final var value = init == null ? JsUndefined.getInstance() : interp.eval(init, env);
+                if (init != null) {
+                    InterpreterUtils.applyInferredName(init, value, name);
+                }
                 if (LEXICAL_KINDS.contains(kind)) {
                     env.initialize(name, value);
                 } else if (init != null) {
@@ -198,7 +201,13 @@ public final class BindingEvaluator {
     private void destructure(JsNode target, JsValue value, Environment env, LeafBinder leaf) {
         switch (target) {
             case AssignmentPattern pattern -> {
-                final var resolved = value instanceof JsUndefined ? interp.eval(pattern.getRight(), env) : value;
+                var resolved = value;
+                if (value instanceof JsUndefined) {
+                    resolved = interp.eval(pattern.getRight(), env);
+                    if (pattern.getLeft() instanceof Identifier id) {
+                        InterpreterUtils.applyInferredName(pattern.getRight(), resolved, id.getName());
+                    }
+                }
                 destructure(pattern.getLeft(), resolved, env, leaf);
             }
             case ArrayPattern pattern -> destructureArray(pattern, value, env, leaf);

@@ -48,6 +48,10 @@ public final class Intrinsics {
             "copyWithin", "fill", "reverse", "sort");
     private static final Set<String> REVERSE_ARRAY_METHODS = Set.of("lastIndexOf", "reduceRight", "findLast",
             "findLastIndex");
+    // Methods that stop early or deliberately skip an index: materialising every index getter up
+    // front would run side effects the spec says never happen.
+    private static final Set<String> SHORT_CIRCUITING_ARRAY_METHODS = Set.of("indexOf", "lastIndexOf", "includes",
+            "with");
     private static final List<String> ERROR_NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError",
             "URIError", "ReferenceError", "EvalError", "SuppressedError", "AggregateError");
 
@@ -89,8 +93,7 @@ public final class Intrinsics {
                 name) -> GeneratorBuiltins.getAsyncMethod(requireAsyncGenerator(receiver, name), name, driver));
         functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype",
                 (receiver, name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker));
-        arrayProto = prototypeOf(ArrayBuiltins.NAMES, "Array.prototype",
-                (receiver, name) -> ArrayBuiltins.getMethod(requireArray(receiver, name), name, invoker, ops));
+        arrayProto = arrayPrototype();
         stringProto = prototypeOf(StringBuiltins.NAMES, "String.prototype",
                 (receiver, name) -> StringBuiltins.getMethod(requireString(receiver, name), name, invoker, ops));
         numberProto = prototypeOf(NumberBuiltins.NAMES, "Number.prototype",
@@ -103,18 +106,19 @@ public final class Intrinsics {
         regexpProto = prototypeOf(RegexBuiltins.NAMES, "RegExp.prototype",
                 (receiver, name) -> RegexBuiltins.getMethod(requireRegExp(receiver, name), name));
         installRegExpSymbolMethods(regexpProto);
+        installRegExpAccessors(regexpProto);
         mapProto = prototypeOf(MapBuiltins.NAMES, "Map.prototype",
                 (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name), name, invoker));
         setProto = prototypeOf(SetBuiltins.NAMES, "Set.prototype",
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name), name, invoker));
         dateProto = prototypeOf(DateBuiltins.NAMES, "Date.prototype",
-                (receiver, name) -> DateBuiltins.getMethod(requireDate(receiver, name), name));
+                (receiver, name) -> DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
                 (receiver, name) -> TypedArrayBuiltins.dataViewMethod(requireView(receiver, name), name));
-        typedArrayProto = prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype",
-                (receiver, name) -> TypedArrayBuiltins.getMethod(requireTypedArray(receiver, name), name, invoker));
+        typedArrayProto = prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype", (receiver,
+                name) -> TypedArrayBuiltins.getMethod(requireTypedArray(receiver, name), name, invoker, ops));
         // Per spec, %TypedArray%.prototype[Symbol.iterator] is the very same function object as
         // %TypedArray%.prototype.values (not just an equivalent one).
         typedArrayProto.setSymbol(JsSymbol.ITERATOR, typedArrayProto.get("values"));
@@ -122,6 +126,10 @@ public final class Intrinsics {
         // for actual JsTypedArray receivers) so `TypedArray.prototype.length` etc, invoked with a
         // non-typed-array `this`, throws per spec instead of silently reading through as undefined.
         installTypedArrayGeometryAccessors(typedArrayProto);
+        installGeometryAccessors(arrayBufferProto, TypedArrayBuiltins.bufferAccessorNames(),
+                (thisArg, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(thisArg, name), name));
+        installGeometryAccessors(dataViewProto, TypedArrayBuiltins.viewAccessorNames(),
+                (thisArg, name) -> TypedArrayBuiltins.dataViewMethod(requireView(thisArg, name), name));
         for (final var kind : JsTypedArray.Kind.values()) {
             final var proto = new JsObject();
             proto.setProto(typedArrayProto);
@@ -156,6 +164,7 @@ public final class Intrinsics {
                 new JsNativeFunction("toString", (thisArg, _) -> new JsString(errorText(requireObject(thisArg)))));
         // Error.prototype is the shared base so `e instanceof Error` holds for every error subtype.
         define(errorProto, "name", new JsString("Error"));
+        define(errorProto, "message", new JsString(""));
         errorProtos.put("Error", errorProto);
         for (final var name : ERROR_NAMES) {
             if (errorProtos.containsKey(name)) {
@@ -164,6 +173,7 @@ public final class Intrinsics {
             final var proto = new JsObject();
             proto.setProto(errorProto);
             define(proto, "name", new JsString(name));
+            define(proto, "message", new JsString(""));
             errorProtos.put(name, proto);
         }
     }
@@ -183,6 +193,82 @@ public final class Intrinsics {
         return proto;
     }
 
+    // Array.prototype needs its own wrapper rather than the shared one: a generic array-like
+    // receiver is snapshotted into a JsArray to run the method against, so a *mutating* method's
+    // effects have to be copied back onto the real receiver afterwards or they are silently lost.
+    private JsObject arrayPrototype() {
+        final var proto = new JsObject();
+        for (final var name : ArrayBuiltins.NAMES) {
+            final var method = new JsNativeFunction(name, (thisArg, args) -> callArrayMethod(thisArg, name, args));
+            method.setLength(BuiltinLengths.lengthOf("Array.prototype", name));
+            define(proto, name, method);
+        }
+        proto.setProto(objectProto);
+        return proto;
+    }
+
+    private JsValue callArrayMethod(JsValue thisArg, String name, List<JsValue> args) {
+        final var target = SHORT_CIRCUITING_ARRAY_METHODS.contains(name)
+                ? requireArray(thisArg, name)
+                : materializeAccessors(requireArray(thisArg, name));
+        final var resolved = ArrayBuiltins.getMethod(target, name, invoker, ops);
+        if (resolved == null) {
+            throw incompatible("Array.prototype." + name, thisArg);
+        }
+        final var snapshot = target != thisArg && unwrap(thisArg) != target;
+        final var before = snapshot ? target.getElements().size() : 0;
+        final var result = invoker.call(resolved, thisArg, args);
+        if (snapshot && MUTATING_ARRAY_METHODS.contains(name)) {
+            writeBackArray(thisArg, target, before);
+        }
+        return result;
+    }
+
+    // A rejected [[Set]]/[[Delete]] on the receiver is a TypeError, not a silent skip: the whole
+    // point of the writeback is that a mutating method on a frozen/read-only array-like still fails
+    // the way it would on a real array.
+    // ArrayBuiltins reads the backing element list directly, which would skip a getter installed on
+    // an index by defineProperty. Invoking those getters in ascending index order up front matches
+    // the spec's own read order closely enough that a getter which installs a later index's getter
+    // (a shape the corpus tests repeatedly) still observes it.
+    private JsArray materializeAccessors(JsArray target) {
+        if (!target.hasAnyIndexAccessor()) {
+            return target;
+        }
+        final var length = target.getElements().size();
+        final var materialized = new JsArray();
+        for (var i = 0; i < length; i++) {
+            final var getter = target.getIndexAccessorGetter(i);
+            if (getter != null) {
+                materialized.defineIndexValue(i, invoker.call(getter, target, List.of()));
+            } else if (!target.isHole(i)) {
+                materialized.defineIndexValue(i, target.get(i));
+            }
+        }
+        materialized.setLength(length);
+        return materialized;
+    }
+
+    private void writeBackArray(JsValue receiver, JsArray target, int before) {
+        final var after = target.getElements().size();
+        for (var i = 0; i < after; i++) {
+            writeBackIndex(receiver, String.valueOf(i), target.get(i));
+        }
+        for (var i = after; i < before; i++) {
+            final var key = new JsString(String.valueOf(i));
+            if (!ops.deleteMember(receiver, key)) {
+                throw new TypeErrorException("Cannot delete property '" + i + "' of the receiver");
+            }
+        }
+        writeBackIndex(receiver, "length", new JsNumber(after));
+    }
+
+    private void writeBackIndex(JsValue receiver, String key, JsValue value) {
+        if (!ops.setMember(receiver, new JsString(key), value)) {
+            throw new TypeErrorException("Cannot assign to read only property '" + key + "' of the receiver");
+        }
+    }
+
     private JsObject prototypeOf(List<String> names, String label, MethodResolver resolver) {
         final var proto = new JsObject();
         for (final var name : names) {
@@ -193,13 +279,15 @@ public final class Intrinsics {
     }
 
     private JsNativeFunction wrapper(String name, String label, MethodResolver resolver) {
-        return new JsNativeFunction(name, (thisArg, args) -> {
+        final var wrapped = new JsNativeFunction(name, (thisArg, args) -> {
             final var method = resolver.resolve(thisArg, name);
             if (method == null) {
                 throw incompatible(label + "." + name, thisArg);
             }
             return invoker.call(method, thisArg, args);
         });
+        wrapped.setLength(BuiltinLengths.lengthOf(label, name));
+        return wrapped;
     }
 
     private static void define(JsObject target, String key, JsValue value) {
@@ -341,7 +429,7 @@ public final class Intrinsics {
         // or non-numeric "length" as 0 (LengthOfArrayLike -> ToLength) rather than requiring the
         // property to already be present - e.g. `every`/`map`/`forEach`.call({}, ...) is valid and
         // vacuously iterates zero elements, it does not reject the receiver.
-        if (receiver instanceof JsObject object && ops != null && !MUTATING_ARRAY_METHODS.contains(method)) {
+        if (receiver instanceof JsObject object && ops != null) {
             return new JsArray(InterpreterUtils.arrayLikeElements(object, ops, REVERSE_ARRAY_METHODS.contains(method)));
         }
         // ToObject on a raw primitive (other than null/undefined, which ToObject rejects) succeeds
@@ -419,9 +507,29 @@ public final class Intrinsics {
         throw incompatible("RegExp.prototype." + method, receiver);
     }
 
+    private void installRegExpAccessors(JsObject proto) {
+        for (final var name : RegexBuiltins.PROTO_ACCESSORS) {
+            final var getter = new JsNativeFunction("get " + name,
+                    (thisArg, _) -> RegexBuiltins.protoAccessor(regExpReceiver(thisArg), name, proto));
+            proto.defineAccessor(name, getter, null);
+            proto.setFlags(name, HIDDEN);
+        }
+    }
+
+    // A `class extends RegExp` instance keeps its JsRegExp state in the wrapped primitive slot, so
+    // the accessor has to unwrap before deciding the receiver is incompatible.
+    private JsValue regExpReceiver(JsValue receiver) {
+        return receiver instanceof JsRegExp ? receiver : orSelf(unwrap(receiver), receiver);
+    }
+
+    private static JsValue orSelf(JsValue unwrapped, JsValue receiver) {
+        return unwrapped instanceof JsRegExp ? unwrapped : receiver;
+    }
+
     // Installed as real callable symbol-keyed methods (not just consulted internally by
     // String.prototype's delegation) so a direct call/exposure via RegExp.prototype[Symbol.match]
     // etc. works, per docs/simplejs.md's "well-known symbol hooks" note.
+
     private void installRegExpSymbolMethods(JsObject proto) {
         final var match = new JsNativeFunction("[Symbol.match]",
                 (thisArg, args) -> RegexBuiltins.symbolMatch(thisArg, argStr(args), ops));
@@ -518,6 +626,16 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("DataView.prototype." + method, receiver);
+    }
+
+    // ArrayBuffer/DataView geometry are accessor properties on the prototype, not data methods, so
+    // reading one off a foreign receiver has to throw rather than resolve to undefined.
+    private void installGeometryAccessors(JsObject proto, List<String> names, MethodResolver resolver) {
+        for (final var name : names) {
+            proto.defineAccessor(name,
+                    new JsNativeFunction("get " + name, (thisArg, _) -> resolver.resolve(thisArg, name)), null);
+            proto.setFlags(name, HIDDEN);
+        }
     }
 
     private void installTypedArrayGeometryAccessors(JsObject proto) {

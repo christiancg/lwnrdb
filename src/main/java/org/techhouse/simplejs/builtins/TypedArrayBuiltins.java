@@ -33,8 +33,19 @@ public final class TypedArrayBuiltins {
     public static final List<String> UINT8_NAMES = List.of("toBase64", "toHex", "setFromBase64", "setFromHex");
     public static final List<String> BUFFER_NAMES = List.of("slice", "resize", "transfer", "transferToFixedLength");
     public static final List<String> VIEW_NAMES = viewNames();
-    private static final Set<String> BUFFER_ACCESSORS = Set.of("byteLength", "maxByteLength", "resizable", "detached");
-    private static final Set<String> VIEW_ACCESSORS = Set.of("buffer", "byteLength", "byteOffset");
+    private static final List<String> BUFFER_ACCESSOR_NAMES = List.of("byteLength", "maxByteLength", "resizable",
+            "detached");
+    private static final List<String> VIEW_ACCESSOR_NAMES = List.of("buffer", "byteLength", "byteOffset");
+    private static final Set<String> BUFFER_ACCESSORS = Set.copyOf(BUFFER_ACCESSOR_NAMES);
+    private static final Set<String> VIEW_ACCESSORS = Set.copyOf(VIEW_ACCESSOR_NAMES);
+
+    public static List<String> bufferAccessorNames() {
+        return BUFFER_ACCESSOR_NAMES;
+    }
+
+    public static List<String> viewAccessorNames() {
+        return VIEW_ACCESSOR_NAMES;
+    }
 
     private static List<String> viewNames() {
         final var elementTypes = List.of("Int8", "Uint8", "Int16", "Uint16", "Int32", "Uint32", "Float16", "Float32",
@@ -377,7 +388,7 @@ public final class TypedArrayBuiltins {
         return null;
     }
 
-    public static JsValue getMethod(JsTypedArray receiver, String name, Invoker invoker) {
+    public static JsValue getMethod(JsTypedArray receiver, String name, Invoker invoker, InterpreterOps ops) {
         return switch (name) {
             case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
             case "map" -> new JsNativeFunction("map", (_, args) -> map(receiver, args, invoker));
@@ -399,7 +410,7 @@ public final class TypedArrayBuiltins {
             case "join" -> new JsNativeFunction("join", (_, args) -> new JsString(join(receiver, args)));
             case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(receiver, args));
             case "subarray" -> new JsNativeFunction("subarray", (_, args) -> subarray(receiver, args));
-            case "set" -> new JsNativeFunction("set", (_, args) -> set(receiver, args));
+            case "set" -> new JsNativeFunction("set", (_, args) -> set(receiver, args, ops));
             case "fill" -> new JsNativeFunction("fill", (_, args) -> fill(receiver, args));
             case "reverse" -> new JsNativeFunction("reverse", (_, _) -> reverse(receiver));
             case "at" -> new JsNativeFunction("at", (_, args) -> at(receiver, args));
@@ -651,12 +662,19 @@ public final class TypedArrayBuiltins {
         return new JsTypedArray(receiver.kind(), receiver.getBuffer(), byteOffset, length);
     }
 
-    private static JsValue set(JsTypedArray receiver, List<JsValue> args) {
+    private static JsValue set(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
         final var source = arg(args, 0);
-        final var offset = (int) intArg(args, 1, 0);
+        // The offset is coerced and range-checked before the source is even looked at, and a
+        // negative offset is a RangeError rather than an out-of-bounds write.
+        final var offsetValue = args.size() > 1 ? JsCoercion.toNumber(args.get(1)) : 0;
+        if (!Double.isNaN(offsetValue) && offsetValue < 0) {
+            throw new RangeErrorException("Start offset must be non-negative");
+        }
+        final var offset = (int) (Double.isNaN(offsetValue) ? 0 : Math.floor(offsetValue));
         final List<JsValue> items = switch (source) {
             case JsArray array -> array.getElements();
             case JsTypedArray typed -> elements(typed);
+            case JsObject object when ops != null -> InterpreterUtils.arrayLikeElements(object, ops, false);
             default -> List.of();
         };
         if (offset + items.size() > receiver.length()) {
@@ -766,10 +784,6 @@ public final class TypedArrayBuiltins {
     }
 
     private static BigInteger bigArg(List<JsValue> args) {
-        final var value = arg(args, 1);
-        if (!(value instanceof JsBigInt b)) {
-            throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(value) + " to a BigInt");
-        }
-        return b.getValue();
+        return NumberBuiltins.toBigIntValue(arg(args, 1)).getValue();
     }
 }

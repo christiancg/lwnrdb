@@ -25,6 +25,7 @@ public final class JsObject extends JsValue {
     private JsClass klass;
     private Map<String, JsValue> privateFields;
     private Map<JsSymbol, JsValue> symbolProperties;
+    private Map<JsSymbol, PropertyFlags> symbolFlags;
     private JsObject proto;
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
@@ -252,6 +253,18 @@ public final class JsObject extends JsValue {
 
     public Set<JsSymbol> symbolKeys() {
         return symbolProperties == null ? Set.of() : symbolProperties.keySet();
+    }
+
+    public void setSymbolFlags(JsSymbol key, PropertyFlags flags) {
+        if (symbolFlags == null) {
+            symbolFlags = new LinkedHashMap<>();
+        }
+        symbolFlags.put(key, flags);
+    }
+
+    public PropertyFlags getSymbolFlags(JsSymbol key) {
+        final var flags = symbolFlags == null ? null : symbolFlags.get(key);
+        return flags == null ? PropertyFlags.DEFAULT : flags;
     }
 
     public JsValue getPrimitive() {

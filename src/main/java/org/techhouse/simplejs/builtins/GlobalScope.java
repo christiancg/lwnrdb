@@ -84,7 +84,41 @@ public final class GlobalScope {
         GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops);
         FetchBuiltins.install(global, eventLoop, network, limits);
         define(global, "globalThis", globalThis);
+        applyStaticLengths(global);
         return globalThis;
+    }
+
+    // Static builtins are installed one-by-one across a dozen files with no shared choke point, so
+    // their spec `length` is stamped on in a single pass here rather than at each construction site.
+    private static void applyStaticLengths(Environment global) {
+        for (final var owner : BuiltinLengths.staticOwners()) {
+            final var value = global.tryGet(owner);
+            if (value instanceof JsNativeFunction ownerFunction) {
+                setLength(ownerFunction, BuiltinLengths.globalLength(owner, ownerFunction.getExplicitLength()));
+                for (final var key : ownerFunction.propertyKeys()) {
+                    if (ownerFunction.getProperty(key) instanceof JsNativeFunction member) {
+                        setLength(member, BuiltinLengths.lengthOf(owner, key));
+                    }
+                }
+            } else if (value instanceof JsObject namespace) {
+                for (final var key : namespace.keys()) {
+                    if (namespace.get(key) instanceof JsNativeFunction member) {
+                        setLength(member, BuiltinLengths.lengthOf(owner, key));
+                    }
+                }
+            }
+        }
+        for (final var name : BuiltinLengths.plainGlobals()) {
+            if (global.tryGet(name) instanceof JsNativeFunction function) {
+                setLength(function, BuiltinLengths.globalLength(name, 1));
+            }
+        }
+    }
+
+    private static void setLength(JsNativeFunction function, int length) {
+        if (!function.hasExplicitLength()) {
+            function.setLength(length);
+        }
     }
 
     // Installed only so `Function.prototype` resolves and `f instanceof Function` works: runtime code

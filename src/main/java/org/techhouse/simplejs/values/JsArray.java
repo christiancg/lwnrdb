@@ -122,6 +122,10 @@ public final class JsArray extends JsValue {
         return indexSetters == null ? null : indexSetters.get(index);
     }
 
+    public boolean hasAnyIndexAccessor() {
+        return (indexGetters != null && !indexGetters.isEmpty()) || (indexSetters != null && !indexSetters.isEmpty());
+    }
+
     public boolean hasIndexAccessor(int index) {
         return (indexGetters != null && indexGetters.containsKey(index))
                 || (indexSetters != null && indexSetters.containsKey(index));

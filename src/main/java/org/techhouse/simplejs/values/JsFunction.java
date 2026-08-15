@@ -5,7 +5,7 @@ import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.nodes.JsNode;
 
 public final class JsFunction extends JsValue implements JsCallableProperties {
-    private final String name;
+    private String name;
     private final List<JsNode> params;
     private final JsNode body;
     private final boolean arrow;
@@ -32,6 +32,12 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
 
     public String getName() {
         return name;
+    }
+
+    public void setInferredName(String inferred) {
+        if (name == null) {
+            name = inferred;
+        }
     }
 
     public List<JsNode> getParams() {

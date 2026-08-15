@@ -450,7 +450,13 @@ public final class ObjectBuiltins {
 
     public static JsValue defineProperty(List<JsValue> args, InterpreterOps ops) {
         final var target = first(args);
-        if (args.size() > 2 && args.get(2) instanceof JsObject descriptor) {
+        if (!InterpreterUtils.isObjectLike(target)) {
+            throw new TypeErrorException("Object.defineProperty called on non-object");
+        }
+        if (args.size() < 3 || !InterpreterUtils.isObjectLike(args.get(2))) {
+            throw new TypeErrorException("Property description must be an object");
+        }
+        if (args.get(2) instanceof JsObject descriptor) {
             if (target instanceof JsArray array && !(args.get(1) instanceof JsSymbol)) {
                 applyArrayDescriptor(array, JsCoercion.toStr(args.get(1)), descriptor, ops);
                 return target;
@@ -681,6 +687,9 @@ public final class ObjectBuiltins {
 
     private static JsValue defineProperties(List<JsValue> args, InterpreterOps ops) {
         final var target = first(args);
+        if (!InterpreterUtils.isObjectLike(target)) {
+            throw new TypeErrorException("Object.defineProperties called on non-object");
+        }
         if (args.size() > 1 && args.get(1) instanceof JsObject props) {
             if (target instanceof JsArray array) {
                 for (final var key : props.keys()) {
@@ -1042,14 +1051,15 @@ public final class ObjectBuiltins {
     }
 
     private static JsValue symbolDescriptor(JsObject object, JsSymbol symbol) {
+        final var flags = object.getSymbolFlags(symbol);
         if (object.hasSymbolAccessor(symbol)) {
             final var getter = object.getSymbolAccessorGetter(symbol);
             final var setter = object.getSymbolAccessorSetter(symbol);
             final var descriptor = new JsObject();
             descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
             descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
-            descriptor.set("enumerable", JsBoolean.of(true));
-            descriptor.set("configurable", JsBoolean.of(true));
+            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
             return descriptor;
         }
         if (!object.hasSymbol(symbol)) {
@@ -1057,9 +1067,9 @@ public final class ObjectBuiltins {
         }
         final var descriptor = new JsObject();
         descriptor.set("value", object.getSymbol(symbol));
-        descriptor.set("writable", JsBoolean.of(true));
-        descriptor.set("enumerable", JsBoolean.of(true));
-        descriptor.set("configurable", JsBoolean.of(true));
+        descriptor.set("writable", JsBoolean.of(flags.writable()));
+        descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+        descriptor.set("configurable", JsBoolean.of(flags.configurable()));
         return descriptor;
     }
 

@@ -23,6 +23,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.SimpleHostBindings;
+import org.techhouse.simplejs.internal.interpreter.AsyncIteration;
 import org.techhouse.simplejs.internal.interpreter.BindingEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ClassEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ExpressionEvaluator;
@@ -974,6 +975,9 @@ public final class Interpreter {
         if (iterable instanceof JsAsyncGenerator generator && coroutine.isAsync()) {
             return yieldDelegateAsync(coroutine, generator);
         }
+        if (coroutine.isAsync()) {
+            return yieldDelegateAsyncIterable(coroutine, iterable);
+        }
         if (iterable instanceof JsGenerator generator) {
             final var inner = generator.getCoroutine();
             var sent = (JsValue) JsUndefined.getInstance();
@@ -992,6 +996,18 @@ public final class Interpreter {
             value = iteration.next();
         }
         return JsUndefined.getInstance();
+    }
+
+    private JsValue yieldDelegateAsyncIterable(Coroutine coroutine, JsValue iterable) {
+        final var iteration = AsyncIteration.open(this, iterable);
+        var sent = (JsValue) JsUndefined.getInstance();
+        while (true) {
+            final var step = iteration.step(coroutine, sent);
+            if (step.done()) {
+                return step.value();
+            }
+            sent = coroutine.yieldOut(step.value());
+        }
     }
 
     private JsValue yieldDelegateAsync(Coroutine coroutine, JsAsyncGenerator generator) {

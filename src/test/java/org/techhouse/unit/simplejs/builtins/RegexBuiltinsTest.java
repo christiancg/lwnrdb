@@ -388,4 +388,36 @@ public class RegexBuiltinsTest {
                 new R('a')[Symbol.match]('a');
                 """));
     }
+
+    // The flag accessors are real accessor properties on RegExp.prototype, not just a receiver-keyed
+    // special case, so getOwnPropertyDescriptor finds a getter for each
+    @Test
+    public void test_prototype_flag_accessors_are_real_properties() {
+        assertEquals("true", str(
+                "String(typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'global').get" + " === 'function')"));
+        assertEquals("true,false", str("String(/a/g.global) + ',' + /a/g.sticky"));
+        assertEquals("gi", str("/a/gi.flags"));
+    }
+
+    // Reading a flag off %RegExp.prototype% itself yields the spec placeholders rather than throwing
+    @Test
+    public void test_prototype_accessor_on_bare_prototype() {
+        assertEquals("(?:)", str("RegExp.prototype.source"));
+        assertEquals("undefined", str("String(RegExp.prototype.global)"));
+    }
+
+    // Any other non-RegExp receiver is an incompatible-receiver TypeError
+    @Test
+    public void test_prototype_accessor_on_foreign_receiver_throws() {
+        assertEquals("TypeError",
+                str("let caught = 'none';"
+                        + " try { Object.getOwnPropertyDescriptor(RegExp.prototype, 'global').get.call({}); }"
+                        + " catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // RegExp.prototype.toString renders the literal form
+    @Test
+    public void test_prototype_to_string() {
+        assertEquals("/ab+c/gi", str("/ab+c/gi.toString()"));
+    }
 }

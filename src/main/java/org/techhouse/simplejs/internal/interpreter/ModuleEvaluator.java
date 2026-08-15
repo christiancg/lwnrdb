@@ -115,7 +115,9 @@ public final class ModuleEvaluator {
     public JsValue evalExportDefault(ExportDefaultDeclaration declaration, Environment env) {
         final var value = declaration.getDeclaration();
         if (value instanceof FunctionDeclaration functionDeclaration) {
-            final var name = functionDeclaration.getName() == null ? null : functionDeclaration.getName().getName();
+            final var name = functionDeclaration.getName() == null
+                    ? "default"
+                    : functionDeclaration.getName().getName();
             return interp.makeFunction(name, functionDeclaration.getParams(), functionDeclaration.getBody(), false,
                     false, functionDeclaration.isAsync(), functionDeclaration.isGenerator(), env);
         }
@@ -123,7 +125,9 @@ public final class ModuleEvaluator {
             classes.evalClassDeclaration(classDeclaration, env);
             return env.get(classDeclaration.getId().getName());
         }
-        return interp.eval((Expression) value, env);
+        final var evaluated = interp.eval((Expression) value, env);
+        InterpreterUtils.applyInferredName(value, evaluated, "default");
+        return evaluated;
     }
 
     public void evalExportNamed(ExportNamedDeclaration declaration, Environment env, Map<String, JsValue> exports) {

@@ -357,6 +357,7 @@ public final class Parser {
         }
 
         private LabeledStatement parseLabeledStatement() {
+            rejectEscapedReserved();
             final var label = parseIdentifier();
             expectOperator(":");
             return new LabeledStatement(label, parseStatement());
@@ -887,13 +888,31 @@ public final class Parser {
         }
 
         private Identifier parseBindingIdentifier() {
+            rejectEscapedReserved();
             final var id = parseIdentifier();
             validateBindingName(id.getName());
             return id;
         }
 
+        private static boolean isReservedWord(String name) {
+            return Lexer.isReservedWord(name) || ParserTables.STRICT_RESERVED.contains(name)
+                    || ParserTables.RESTRICTED_BINDINGS.contains(name);
+        }
+
+        // An escaped reserved word reaches the parser as an ordinary identifier token because an
+        // escape never forms a keyword. Binding and label positions are LabelIdentifier/
+        // BindingIdentifier, not IdentifierName, so it is a SyntaxError there - checked on the token
+        // rather than the name so a contextual word like `with` is only rejected when escaped.
+        private void rejectEscapedReserved() {
+            if (current() instanceof JsIdentifier token && token.isEscaped()
+                    && Lexer.isReservedWord(token.getValue())) {
+                throw new SyntaxErrorException("Keyword must not contain escaped characters: " + token.getValue());
+            }
+        }
+
         private static void validateBindingName(String name) {
-            if (ParserTables.STRICT_RESERVED.contains(name) || ParserTables.RESTRICTED_BINDINGS.contains(name)) {
+            if (ParserTables.STRICT_RESERVED.contains(name) || ParserTables.RESTRICTED_BINDINGS.contains(name)
+                    || Lexer.isReservedWord(name)) {
                 throw new SyntaxErrorException("'" + name + "' cannot be used as a binding identifier in strict mode");
             }
         }
@@ -1318,6 +1337,11 @@ public final class Parser {
 
         private Expression parseIdentifierOrArrow() {
             final var t = (JsIdentifier) current();
+            // An escaped keyword lexes as an identifier so it can serve as an IdentifierName; in a
+            // reference position it is still the reserved word, and so a SyntaxError.
+            if (t.isEscaped() && Lexer.isReservedWord(t.getValue())) {
+                throw new SyntaxErrorException("Keyword must not contain escaped characters: " + t.getValue());
+            }
             if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
                 if (newlineBeforePeek()) {
                     throw error();
@@ -1777,6 +1801,8 @@ public final class Parser {
             }
             final var computed = isSeparator('[');
             final var fromIdentifier = current().getType() == JsType.IDENTIFIER;
+            final var escapedReserved = fromIdentifier && ((JsIdentifier) current()).isEscaped()
+                    && isReservedWord(((JsIdentifier) current()).getValue());
             final var key = parsePropertyKey();
             if (isSeparator('(')) {
                 final var parts = parseFunctionParts();
@@ -1793,6 +1819,12 @@ public final class Parser {
                 // CoverInitializedName: `{a = 1}` is only valid as a destructuring pattern, but a
                 // single-token lookahead cannot tell it apart from an object literal, so keep it as
                 // an assignment-valued shorthand and let toAssignmentPattern reinterpret it.
+                // A shorthand property's value is an IdentifierReference, so an escaped reserved
+                // word is a SyntaxError here even though it is a legal IdentifierName as the key.
+                if (escapedReserved) {
+                    throw new SyntaxErrorException(
+                            "Keyword must not contain escaped characters: " + ((Identifier) key).getName());
+                }
                 if (matchOperator("=")) {
                     return new Property(key, new AssignmentExpression("=", key, parseAssignment()), false, true);
                 }

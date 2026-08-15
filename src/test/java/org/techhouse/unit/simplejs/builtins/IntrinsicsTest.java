@@ -98,28 +98,37 @@ public class IntrinsicsTest {
         assertKeys(realm.numberProto(), NumberBuiltins.NAMES);
         assertKeys(realm.bigintProto(), BigIntBuiltins.NAMES);
         assertKeys(realm.symbolProto(), SymbolBuiltins.NAMES);
-        assertKeys(realm.regexpProto(), RegexBuiltins.NAMES);
+        assertKeys(realm.regexpProto(), RegexBuiltins.NAMES, RegexBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.dateProto(), DateBuiltins.NAMES);
         assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES);
         assertKeys(realm.functionProto(), FunctionProtoBuiltins.NAMES);
         assertKeys(realm.promiseProto(), org.techhouse.simplejs.builtins.PromiseBuiltins.PROTO_NAMES);
         assertKeys(realm.iteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
         assertKeys(realm.asyncIteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
-        assertKeys(realm.arrayBufferProto(), TypedArrayBuiltins.BUFFER_NAMES);
-        assertKeys(realm.dataViewProto(), TypedArrayBuiltins.VIEW_NAMES);
+        assertKeys(realm.arrayBufferProto(), TypedArrayBuiltins.BUFFER_NAMES, TypedArrayBuiltins.bufferAccessorNames());
+        assertKeys(realm.dataViewProto(), TypedArrayBuiltins.VIEW_NAMES, TypedArrayBuiltins.viewAccessorNames());
         assertKeys(realm.mapProto(), MapBuiltins.NAMES);
         assertKeys(realm.setProto(), SetBuiltins.NAMES);
     }
 
     private static void assertKeys(JsObject proto, List<String> names) {
+        assertKeys(proto, names, List.of());
+    }
+
+    private static void assertKeys(JsObject proto, List<String> names, List<String> accessors) {
         for (final var name : names) {
             assertTrue(proto.has(name), () -> "prototype is missing " + name);
             assertFalse(proto.isEnumerable(name), () -> name + " must be non-enumerable");
             assertTrue(proto.getFlags(name).configurable(), () -> name + " must be configurable");
         }
+        for (final var name : accessors) {
+            assertNotNull(proto.getAccessorGetter(name), () -> "prototype is missing accessor " + name);
+            assertFalse(proto.isEnumerable(name), () -> name + " must be non-enumerable");
+            assertTrue(proto.getFlags(name).configurable(), () -> name + " must be configurable");
+        }
         for (final var key : proto.keys()) {
-            assertTrue("constructor".equals(key) || "name".equals(key) || names.contains(key),
-                    () -> "prototype has an unlisted key " + key);
+            assertTrue("constructor".equals(key) || "name".equals(key) || "message".equals(key) || names.contains(key)
+                    || accessors.contains(key), () -> "prototype has an unlisted key " + key);
         }
     }
 
@@ -146,7 +155,7 @@ public class IntrinsicsTest {
             assertNotNull(RegexBuiltins.getMethod(RegexTranslator.compile("a", ""), name), name);
         }
         for (final var name : DateBuiltins.NAMES) {
-            assertNotNull(DateBuiltins.getMethod(new JsDate(0), name), name);
+            assertNotNull(DateBuiltins.getMethod(new JsDate(0), name, null), name);
         }
         for (final var name : ObjectProtoBuiltins.NAMES) {
             assertNotNull(ObjectProtoBuiltins.getMethod(new JsObject(), name, null, null), name);
@@ -161,9 +170,8 @@ public class IntrinsicsTest {
             assertNotNull(TypedArrayBuiltins.dataViewMethod(new JsDataView(buffer, 0, 8), name), name);
         }
         for (final var name : TypedArrayBuiltins.NAMES) {
-            assertNotNull(
-                    TypedArrayBuiltins.getMethod(new JsTypedArray(JsTypedArray.Kind.INT8, buffer, 0, 0), name, null),
-                    name);
+            assertNotNull(TypedArrayBuiltins.getMethod(new JsTypedArray(JsTypedArray.Kind.INT8, buffer, 0, 0), name,
+                    null, null), name);
         }
         for (final var name : MapBuiltins.NAMES) {
             assertNotNull(MapBuiltins.getMethod(new JsMap(false), name, null), name);
@@ -271,12 +279,17 @@ public class IntrinsicsTest {
                 run("Array.prototype.reduceRight.call({length: 3, 0: 'a', 1: 'b', 2: 'c'}, (a, b) => a + b)"));
     }
 
-    // a mutating method is refused on a plain array-like rather than discarding the write
+    // a mutating method runs against a snapshot, so its effects are written back onto the real
+    // array-like receiver (indices, removed trailing indices, and length) rather than discarded
     @Test
-    public void test_mutating_array_method_on_plain_array_like_throws() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call({length: 0}, 1)"));
-        assertThrows(TypeErrorException.class,
-                () -> Interpreter.run("Array.prototype.copyWithin.call({length: 43}, 42, 0)"));
+    public void test_mutating_array_method_writes_back_to_plain_array_like() {
+        assertEquals("[1,1]", run("const o = {length: 0}; const n = Array.prototype.push.call(o, 1);"
+                + " JSON.stringify([n, o.length])"));
+        assertEquals("[\"c\",2,false]",
+                run("const o = {0: 'a', 1: 'b', 2: 'c', length: 3};" + " const popped = Array.prototype.pop.call(o);"
+                        + " JSON.stringify([popped, o.length, o.hasOwnProperty('2')])"));
+        assertEquals("[3,2,1]", run("const o = {0: 1, 1: 2, 2: 3, length: 3}; Array.prototype.reverse.call(o);"
+                + " JSON.stringify([o[0], o[1], o[2]])"));
     }
 
     // undefined/null still report an incompatible-receiver TypeError - ToObject rejects them

@@ -41,13 +41,10 @@ import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsClass;
-import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGlobalObject;
-import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
-import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -269,29 +266,23 @@ public final class StatementEvaluator {
         if (source instanceof JsAsyncGenerator generator) {
             return iterateAsyncGenerator(statement, env, label, coroutine, generator);
         }
-        final var asyncIterFn = interp.getMemberByKey(source, JsSymbol.ASYNC_ITERATOR);
-        if (asyncIterFn instanceof JsFunction || asyncIterFn instanceof JsNativeFunction) {
-            final var iterator = interp.callValue(asyncIterFn, source, List.of());
-            return iterateAsyncIterator(statement, env, label, coroutine, iterator);
-        }
-        return iterateAsyncValues(statement, env, label, coroutine, new Iteration(interp, source));
+        return iterateAsyncIterator(statement, env, label, coroutine, AsyncIteration.open(interp, source));
     }
 
     private Completion iterateAsyncIterator(ForOfStatement statement, Environment env, String label,
-            Coroutine coroutine, JsValue iterator) {
+            Coroutine coroutine, AsyncIteration iteration) {
         while (true) {
             interp.tick();
-            final var nextFn = members.getMember(iterator, "next");
-            final var step = coroutine.await(interp.toPromise(interp.callValue(nextFn, iterator, List.of())));
-            if (JsCoercion.toBoolean(members.getMember(step, "done"))) {
+            final var step = iteration.step(coroutine, JsUndefined.getInstance());
+            if (step.done()) {
                 break;
             }
             final var iterationEnv = env.child();
-            interp.bindForTarget(statement.getLeft(), members.getMember(step, "value"), iterationEnv);
+            interp.bindForTarget(statement.getLeft(), step.value(), iterationEnv);
             final var completion = evalIterationBody(statement.getBody(), iterationEnv);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE || action == LoopAction.BREAK_LOOP) {
-                closeAsyncIterator(iterator);
+                iteration.close();
                 if (action == LoopAction.PROPAGATE) {
                     return completion;
                 }
@@ -299,13 +290,6 @@ public final class StatementEvaluator {
             }
         }
         return Completion.empty();
-    }
-
-    private void closeAsyncIterator(JsValue iterator) {
-        final var returnFn = members.getMember(iterator, "return");
-        if (returnFn instanceof JsFunction || returnFn instanceof JsNativeFunction) {
-            interp.callValue(returnFn, iterator, List.of());
-        }
     }
 
     private Completion iterateAsyncGenerator(ForOfStatement statement, Environment env, String label,
@@ -329,29 +313,6 @@ public final class StatementEvaluator {
                 members.driveAsyncGenerator(generator, MemberEvaluator.AsyncStep.RETURN, JsUndefined.getInstance());
                 break;
             }
-        }
-        return Completion.empty();
-    }
-
-    private Completion iterateAsyncValues(ForOfStatement statement, Environment env, String label, Coroutine coroutine,
-            Iteration iteration) {
-        var value = iteration.next();
-        while (value != null) {
-            interp.tick();
-            final var awaited = coroutine.await(interp.toPromise(value));
-            final var iterationEnv = env.child();
-            interp.bindForTarget(statement.getLeft(), awaited, iterationEnv);
-            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
-            final var action = classify(completion, label);
-            if (action == LoopAction.PROPAGATE) {
-                iteration.close();
-                return completion;
-            }
-            if (action == LoopAction.BREAK_LOOP) {
-                iteration.close();
-                break;
-            }
-            value = iteration.next();
         }
         return Completion.empty();
     }
