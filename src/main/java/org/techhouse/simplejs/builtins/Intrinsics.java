@@ -22,6 +22,7 @@ import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
@@ -31,6 +32,7 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
+import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 // The realm's intrinsic prototype objects. Deliberately per-Interpreter (never static): a shared
@@ -100,6 +102,7 @@ public final class Intrinsics {
                 (receiver, name) -> SymbolBuiltins.getMethod(requireSymbol(receiver, name), name));
         regexpProto = prototypeOf(RegexBuiltins.NAMES, "RegExp.prototype",
                 (receiver, name) -> RegexBuiltins.getMethod(requireRegExp(receiver, name), name));
+        installRegExpSymbolMethods(regexpProto);
         mapProto = prototypeOf(MapBuiltins.NAMES, "Map.prototype",
                 (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name), name, invoker));
         setProto = prototypeOf(SetBuiltins.NAMES, "Set.prototype",
@@ -350,6 +353,9 @@ public final class Intrinsics {
         throw incompatible("Array.prototype." + method, receiver);
     }
 
+    // Every String.prototype method is generic per spec: RequireObjectCoercible(this value) then
+    // ToString(this value) - there is no requirement that the receiver already be a string, so a
+    // number/object/etc. receiver is coerced rather than rejected. Only null/undefined throw.
     private JsString requireString(JsValue receiver, String method) {
         if (receiver instanceof JsString string) {
             return string;
@@ -357,7 +363,10 @@ public final class Intrinsics {
         if (unwrap(receiver) instanceof JsString wrapped) {
             return wrapped;
         }
-        throw incompatible("String.prototype." + method, receiver);
+        if (receiver instanceof JsNull || receiver instanceof JsUndefined) {
+            throw incompatible("String.prototype." + method, receiver);
+        }
+        return new JsString(JsCoercion.toStr(receiver, ops));
     }
 
     private JsNumber requireNumber(JsValue receiver, String method) {
@@ -408,6 +417,33 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("RegExp.prototype." + method, receiver);
+    }
+
+    // Installed as real callable symbol-keyed methods (not just consulted internally by
+    // String.prototype's delegation) so a direct call/exposure via RegExp.prototype[Symbol.match]
+    // etc. works, per docs/simplejs.md's "well-known symbol hooks" note.
+    private void installRegExpSymbolMethods(JsObject proto) {
+        final var match = new JsNativeFunction("[Symbol.match]",
+                (thisArg, args) -> RegexBuiltins.symbolMatch(thisArg, argStr(args), ops));
+        match.setLength(1);
+        proto.setSymbol(JsSymbol.MATCH, match);
+        final var search = new JsNativeFunction("[Symbol.search]",
+                (thisArg, args) -> RegexBuiltins.symbolSearch(thisArg, argStr(args), ops));
+        search.setLength(1);
+        proto.setSymbol(JsSymbol.SEARCH, search);
+        final var replace = new JsNativeFunction("[Symbol.replace]",
+                (thisArg, args) -> RegexBuiltins.symbolReplace(thisArg, argStr(args),
+                        args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), ops, invoker));
+        replace.setLength(2);
+        proto.setSymbol(JsSymbol.REPLACE, replace);
+        final var split = new JsNativeFunction("[Symbol.split]", (thisArg, args) -> RegexBuiltins.symbolSplit(thisArg,
+                argStr(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), ops));
+        split.setLength(2);
+        proto.setSymbol(JsSymbol.SPLIT, split);
+    }
+
+    private String argStr(List<JsValue> args) {
+        return !args.isEmpty() ? JsCoercion.toStr(args.getFirst(), ops) : "undefined";
     }
 
     private JsPromise requirePromise(JsValue receiver, String method) {

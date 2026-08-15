@@ -90,8 +90,24 @@ public final class MemberEvaluator {
                     (_, _) -> JsIterators.of(stringCodePoints(string.getValue()).iterator()));
             case JsObject object -> objectSymbolMember(object, symbol);
             case JsClass cls -> classSymbolMember(cls, symbol);
-            default -> JsUndefined.getInstance();
+            default -> intrinsicSymbolMember(target, symbol);
         };
+    }
+
+    // Fallback for value types with no dedicated case above (JsRegExp, JsDate, JsPromise, numeric/
+    // boolean wrappers, ...): walk the realm's intrinsic prototype chain for a symbol-keyed method,
+    // mirroring what intrinsicMember already does for string-keyed lookups.
+    private JsValue intrinsicSymbolMember(JsValue target, JsSymbol symbol) {
+        for (var proto = interp.intrinsics().protoFor(target); proto != null; proto = proto.getProto()) {
+            if (proto.hasSymbolAccessor(symbol)) {
+                final var getter = proto.getSymbolAccessorGetter(symbol);
+                return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, target, List.of());
+            }
+            if (proto.hasSymbol(symbol)) {
+                return proto.getSymbol(symbol);
+            }
+        }
+        return JsUndefined.getInstance();
     }
 
     private JsValue objectSymbolMember(JsObject object, JsSymbol symbol) {
@@ -350,7 +366,15 @@ public final class MemberEvaluator {
         }
         final var index = arrayIndex(key);
         if (index != null) {
+            if (array.hasIndexAccessor(index)) {
+                final var getter = array.getIndexAccessorGetter(index);
+                return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, array, List.of());
+            }
             return array.get(index);
+        }
+        if (array.hasPropAccessor(key)) {
+            final var getter = array.getPropAccessorGetter(key);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, array, List.of());
         }
         if (array.hasProperty(key)) {
             return array.getProperty(key);
@@ -488,11 +512,25 @@ public final class MemberEvaluator {
         return "Cannot add property " + name + ", object is not extensible";
     }
 
-    private static boolean setArrayMember(JsArray array, String key, JsValue value) {
+    private boolean setArrayMember(JsArray array, String key, JsValue value) {
         if ("length".equals(key)) {
             return array.setLength(requireLength(value));
         }
+        if (array.hasPropAccessor(key)) {
+            final var setter = array.getPropAccessorSetter(key);
+            if (setter != null) {
+                interp.callValue(setter, array, List.of(value));
+            }
+            return true;
+        }
         final var index = arrayIndex(key);
+        if (index != null && array.hasIndexAccessor(index)) {
+            final var setter = array.getIndexAccessorSetter(index);
+            if (setter != null) {
+                interp.callValue(setter, array, List.of(value));
+            }
+            return true;
+        }
         return index == null ? array.setProperty(key, value) : array.set(index, value);
     }
 

@@ -279,7 +279,12 @@ public final class ExpressionEvaluator {
                 }
                 yield JsBoolean.TRUE;
             }
-            case JsArray array -> JsBoolean.of(deleteArrayElement(array, key));
+            case JsArray array -> {
+                if (!deleteArrayElement(array, key)) {
+                    throw new TypeErrorException("Cannot delete property '" + key + "' of #<Array>");
+                }
+                yield JsBoolean.TRUE;
+            }
             case JsCallableProperties callable -> {
                 if (("name".equals(key) || "length".equals(key)) && !callable.hasProperty(key)) {
                     callable.markMetadataDeleted(key);

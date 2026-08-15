@@ -797,4 +797,210 @@ public class ObjectBuiltinsTest {
     public void test_get_own_property_descriptor_of_absent_symbol() {
         assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor({}, Symbol('x'))"));
     }
+
+    // Object.defineProperty/defineProperties on an Array: data descriptors for indices, "length",
+    // and named own properties, matching the same flags/redefinition rules as a plain object.
+    @Test
+    public void test_define_property_on_array_index() {
+        assertEquals(1001,
+                num("""
+                        var arr = [1];
+                        Object.defineProperty(arr, "0", { value: 1001, writable: false, enumerable: false, configurable: false });
+                        arr[0]
+                        """));
+        assertTrue(
+                bool2("""
+                        var arr = [1];
+                        Object.defineProperty(arr, "0", { value: 1001, writable: false, enumerable: false, configurable: false });
+                        var d = Object.getOwnPropertyDescriptor(arr, "0");
+                        d.value === 1001 && d.writable === false && d.enumerable === false && d.configurable === false
+                        """));
+    }
+
+    @Test
+    public void test_define_property_on_array_new_index_beyond_length() {
+        assertTrue(bool2("""
+                var arr = [];
+                Object.defineProperty(arr, "2", { value: 9 });
+                arr.length === 3 && arr[2] === 9 && arr[0] === undefined
+                """));
+    }
+
+    @Test
+    public void test_define_property_non_configurable_index_rejects_redefine() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var arr = [1];
+                Object.defineProperty(arr, "0", { configurable: false });
+                Object.defineProperty(arr, "0", { configurable: true });
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var arr = [1];
+                Object.defineProperty(arr, "0", { writable: false, configurable: false });
+                Object.defineProperty(arr, "0", { value: 2 });
+                """));
+    }
+
+    @Test
+    public void test_define_property_on_array_length() {
+        assertTrue(bool2("""
+                var arr = [1, 2, 3];
+                Object.defineProperty(arr, "length", { value: 1 });
+                arr.length === 1 && arr[1] === undefined
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var arr = [1];
+                Object.defineProperty(arr, "length", { writable: false });
+                Object.defineProperty(arr, "length", { value: 5 });
+                """));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], 'length', { get() { return 1; } })"));
+    }
+
+    @Test
+    public void test_define_property_on_array_named_property() {
+        assertTrue(
+                bool2("""
+                        var arr = [];
+                        Object.defineProperty(arr, "foo", { value: "bar", enumerable: true, writable: true, configurable: true });
+                        arr.foo === "bar" && Object.keys(arr).includes("foo")
+                        """));
+    }
+
+    @Test
+    public void test_define_property_accessor_on_array_named_property() {
+        assertTrue(bool2("""
+                var arr = [];
+                var log = [];
+                Object.defineProperty(arr, "foo", {
+                  get() { return 42; },
+                  set(v) { log.push(v); },
+                  enumerable: true,
+                  configurable: true
+                });
+                arr.foo = 7;
+                arr.foo === 42 && log[0] === 7
+                """));
+    }
+
+    @Test
+    public void test_define_property_accessor_on_array_index() {
+        assertTrue(bool2("""
+                var arr = [];
+                Object.defineProperty(arr, "0", { get() { return 5; }, enumerable: true, configurable: true });
+                arr[0] === 5 && arr.length === 1
+                """));
+    }
+
+    @Test
+    public void test_define_property_accessor_with_value_throws() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], '0', { get() {}, value: 1 })"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], 'foo', { get() {}, value: 1 })"));
+    }
+
+    @Test
+    public void test_define_properties_on_array() {
+        assertTrue(bool2("""
+                var arr = [1, 2];
+                Object.defineProperties(arr, { "0": { value: 9 }, length: { value: 1 } });
+                arr[0] === 9 && arr.length === 1
+                """));
+    }
+
+    @Test
+    public void test_array_delete_configurable_makes_hole() {
+        assertTrue(bool2("""
+                var arr = [1, 2, 3];
+                delete arr[1];
+                !(1 in arr) && arr.length === 3
+                """));
+    }
+
+    @Test
+    public void test_array_delete_non_configurable_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var arr = [1];
+                Object.defineProperty(arr, "0", { configurable: false });
+                delete arr[0];
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var arr = [];
+                Object.defineProperty(arr, "foo", { value: 1, configurable: false });
+                delete arr.foo;
+                """));
+    }
+
+    @Test
+    public void test_array_delete_absent_or_named_property() {
+        assertTrue(bool2("var arr = [1]; delete arr[5]"));
+        assertTrue(bool2("""
+                var arr = [];
+                arr.foo = 1;
+                delete arr.foo;
+                !('foo' in arr)
+                """));
+    }
+
+    @Test
+    public void test_object_extension_checks_on_array() {
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("var arr = []; Object.preventExtensions(arr); Object.defineProperty(arr, '0', {value: 1});"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("var arr = []; Object.preventExtensions(arr); Object.defineProperty(arr, 'x', {value: 1});"));
+    }
+
+    // keys/values/entries/getOwnPropertyNames on an Array reflect enumerability and skip holes
+    @Test
+    public void test_array_keys_values_entries_respect_enumerable_and_holes() {
+        assertTrue(bool2("""
+                var arr = [1, 2];
+                Object.defineProperty(arr, "0", { enumerable: false });
+                Object.keys(arr).join(',') === '1'
+                """));
+        assertTrue(bool2("""
+                var arr = [1, 2];
+                Object.defineProperty(arr, "0", { enumerable: false });
+                Object.values(arr).join(',') === '2'
+                """));
+        assertTrue(bool2("""
+                var arr = [1, 2];
+                Object.defineProperty(arr, "0", { enumerable: false });
+                Object.entries(arr).length === 1
+                """));
+        assertTrue(bool2("""
+                var arr = [1, 2, 3];
+                delete arr[1];
+                Object.getOwnPropertyNames(arr).join(',') === '0,2,length'
+                """));
+        assertTrue(bool2("""
+                var arr = [];
+                arr.foo = 1;
+                Object.getOwnPropertyNames(arr).includes('foo')
+                """));
+    }
+
+    @Test
+    public void test_for_in_over_array_respects_enumerable_and_holes() {
+        assertTrue(bool2("""
+                var arr = [1, 2, 3];
+                delete arr[1];
+                var seen = [];
+                for (var k in arr) { seen.push(k); }
+                seen.join(',') === '0,2'
+                """));
+        assertTrue(bool2("""
+                var arr = [];
+                arr.foo = 1;
+                var seen = [];
+                for (var k in arr) { seen.push(k); }
+                seen.join(',') === 'foo'
+                """));
+    }
+
+    @Test
+    public void test_array_index_get_own_property_descriptor_hole_is_undefined() {
+        assertInstanceOf(JsUndefined.class,
+                Interpreter.run("var arr = [1,2,3]; delete arr[1]; Object.getOwnPropertyDescriptor(arr, '1')"));
+    }
 }

@@ -44,6 +44,9 @@ public final class FunctionProtoBuiltins {
     }
 
     private static int declaredLength(JsValue target) {
+        if (target instanceof JsNativeFunction nf && nf.hasExplicitLength()) {
+            return nf.getExplicitLength();
+        }
         if (!(target instanceof JsFunction fn)) {
             return 0;
         }

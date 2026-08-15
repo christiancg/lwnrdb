@@ -415,7 +415,14 @@ public final class StatementEvaluator {
         if (target instanceof JsArray array) {
             final var keys = new ArrayList<String>();
             for (var i = 0; i < array.length(); i++) {
-                keys.add(Integer.toString(i));
+                if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
+                    keys.add(Integer.toString(i));
+                }
+            }
+            for (final var key : array.namedPropertyKeys()) {
+                if (array.getPropFlags(key).enumerable()) {
+                    keys.add(key);
+                }
             }
             return keys;
         }

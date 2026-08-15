@@ -319,10 +319,12 @@ public class IntrinsicsTest {
         assertEquals("5.00", run("(new Number(5)).toFixed(2)"));
     }
 
-    // every prototype family reports the same incompatible-receiver TypeError for a plain number
+    // every prototype family reports the same incompatible-receiver TypeError for a plain number,
+    // except String.prototype methods which are spec-generic (ToString the receiver) and only
+    // reject null/undefined (RequireObjectCoercible)
     @Test
     public void test_incompatible_receiver_throws_for_every_prototype_family() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.charAt.call(5, 0)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.charAt.call(null, 0)"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.prototype.toString.call(5)"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Symbol.prototype.toString.call(5)"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("RegExp.prototype.test.call(5, 'a')"));
@@ -340,6 +342,14 @@ public class IntrinsicsTest {
                 () -> Interpreter.run("let g = (function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("let g = (async function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
+    }
+
+    // String.prototype methods are generic: a non-string receiver is coerced via ToString rather
+    // than rejected (RequireObjectCoercible only rejects null/undefined)
+    @Test
+    public void test_string_prototype_methods_coerce_non_string_receiver() {
+        assertEquals("5", run("String.prototype.charAt.call(5, 0)"));
+        assertEquals("[object Object]", run("String.prototype.trim.call({})"));
     }
 
     // a subclass of BigInt with no JsObject internal state wraps the produced primitive, so a

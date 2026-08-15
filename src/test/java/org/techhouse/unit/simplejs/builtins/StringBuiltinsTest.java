@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -421,5 +422,70 @@ public class StringBuiltinsTest {
     @Test
     public void test_new_string_of_symbol_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new String(Symbol())"));
+    }
+
+    // String.prototype methods are generic: a non-string receiver (number, object with valueOf/
+    // toString) is coerced via ToString rather than rejected; only null/undefined still throw
+    @Test
+    public void test_string_methods_generic_receiver() {
+        assertEquals("[object Object]", str("String.prototype.trim.call({})"));
+        assertEquals("5", str("String.prototype.charAt.call(5, 0)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.trim.call(null)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.trim.call(undefined)"));
+    }
+
+    // includes/startsWith/endsWith reject a RegExp argument, and a plain object with a throwing
+    // @@match getter propagates that error rather than converting to string first
+    @Test
+    public void test_includes_start_ends_with_reject_regexp() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("'abc'.includes(/b/)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("'abc'.startsWith(/a/)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("'abc'.endsWith(/c/)"));
+        assertThrows(JsThrowException.class, () -> Interpreter.run("""
+                var obj = {};
+                Object.defineProperty(obj, Symbol.match, { get() { throw new TypeError('boom'); } });
+                'abc'.endsWith(obj);
+                """));
+    }
+
+    // indexOf/lastIndexOf honor the fromIndex/position argument
+    @Test
+    public void test_index_of_and_last_index_of_position() {
+        assertEquals(3, num("'abcabc'.indexOf('a', 1)"));
+        assertEquals(3, num("'abcabc'.lastIndexOf('a')"));
+        assertEquals(0, num("'abcabc'.lastIndexOf('a', 2)"));
+        assertEquals(-1, num("'abc'.indexOf('a', 5)"));
+    }
+
+    // fromCodePoint validates each argument is an integral Number in range, coercing via valueOf
+    @Test
+    public void test_from_code_point_validation() {
+        assertEquals("a", str("String.fromCodePoint(97)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("String.fromCodePoint(1.5)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("String.fromCodePoint(-1)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("String.fromCodePoint(0x110000)"));
+        assertEquals(97, num("String.fromCodePoint({valueOf(){return 97;}}).charCodeAt(0)"));
+    }
+
+    // fromCharCode/fromCodePoint/raw report the spec length (1) despite the rest parameter
+    @Test
+    public void test_from_char_code_and_from_code_point_length() {
+        assertEquals(1, num("String.fromCharCode.length"));
+        assertEquals(1, num("String.fromCodePoint.length"));
+        assertEquals(1, num("String.raw.length"));
+    }
+
+    // normalize rejects an invalid form with a RangeError instead of leaking the JDK exception
+    @Test
+    public void test_normalize_invalid_form_throws_range_error() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("'a'.normalize('bogus')"));
+        assertEquals("a", str("'a'.normalize()"));
+    }
+
+    // replaceAll throws for a non-global RegExp search value
+    @Test
+    public void test_replace_all_non_global_regexp_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("'abc'.replaceAll(/a/, 'x')"));
+        assertEquals("xbc", str("'abc'.replaceAll(/a/g, 'x')"));
     }
 }

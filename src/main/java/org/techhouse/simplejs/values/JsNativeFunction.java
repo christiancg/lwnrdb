@@ -11,10 +11,27 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
     private List<JsValue> boundArgs;
     private JsObject prototype;
     private JsValue ownProto;
+    private int explicitLength = -1;
 
     public JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation) {
         this.name = name;
         this.implementation = implementation;
+    }
+
+    // Overrides the "length" metadata FunctionProtoBuiltins would otherwise report (0, since a
+    // native's real parameter count isn't reflectively available) while keeping it non-writable,
+    // non-enumerable, configurable - the spec shape for a builtin's length - by never putting it in
+    // the mutable property map.
+    public void setLength(int length) {
+        this.explicitLength = length;
+    }
+
+    public boolean hasExplicitLength() {
+        return explicitLength >= 0;
+    }
+
+    public int getExplicitLength() {
+        return explicitLength;
     }
 
     public String getName() {

@@ -71,4 +71,12 @@ public final class JsRegExp extends JsValue {
     public boolean hasIndices() {
         return flags.indexOf('d') >= 0;
     }
+
+    public boolean isUnicode() {
+        return flags.indexOf('u') >= 0;
+    }
+
+    public boolean isUnicodeSets() {
+        return flags.indexOf('v') >= 0;
+    }
 }

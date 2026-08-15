@@ -275,4 +275,117 @@ public class RegexBuiltinsTest {
         assertEquals(1, num("'abc'.match(/b/d).indices[0][0]"));
         assertEquals(1, num("'abc'.matchAll(/b/dg)[0].indices[0][0]"));
     }
+
+    // exec() returns a real Array (not just an array-like object)
+    @Test
+    public void test_exec_result_is_array() {
+        assertTrue(bool("/a/.exec('a') instanceof Array"));
+        assertEquals(1, num("/a/.exec('a').length"));
+    }
+
+    // unicode/unicodeSets accessors reflect the u/v flags
+    @Test
+    public void test_unicode_accessors() {
+        assertTrue(bool("/a/u.unicode"));
+        assertFalse(bool("/a/.unicode"));
+        assertTrue(bool("/a/v.unicodeSets"));
+    }
+
+    // RegExp.prototype[Symbol.match]/[Symbol.search]/[Symbol.replace]/[Symbol.split] are real,
+    // directly-callable methods
+    @Test
+    public void test_symbol_methods_are_functions() {
+        assertTrue(bool("typeof RegExp.prototype[Symbol.match] === 'function'"));
+        assertTrue(bool("typeof RegExp.prototype[Symbol.search] === 'function'"));
+        assertTrue(bool("typeof RegExp.prototype[Symbol.replace] === 'function'"));
+        assertTrue(bool("typeof RegExp.prototype[Symbol.split] === 'function'"));
+    }
+
+    @Test
+    public void test_symbol_match_non_global() {
+        assertEquals("a", str("/a/[Symbol.match]('abc')[0]"));
+        assertInstanceOf(JsNull.class, Interpreter.run("/z/[Symbol.match]('abc')"));
+    }
+
+    @Test
+    public void test_symbol_match_global_collects_all() {
+        assertEquals("a,a,a", str("/a/g[Symbol.match]('aaa').join(',')"));
+        assertInstanceOf(JsNull.class, Interpreter.run("/z/g[Symbol.match]('abc')"));
+    }
+
+    @Test
+    public void test_symbol_match_global_advances_past_empty_match() {
+        assertEquals(4, num("/(?:)/g[Symbol.match]('abc').length"));
+    }
+
+    @Test
+    public void test_symbol_search() {
+        assertEquals(1, num("/b/[Symbol.search]('abc')"));
+        assertEquals(-1, num("/z/[Symbol.search]('abc')"));
+    }
+
+    @Test
+    public void test_symbol_search_restores_lastindex() {
+        assertEquals(2, num("""
+                var r = /b/g;
+                r.lastIndex = 2;
+                var pos = r[Symbol.search]('abc');
+                r.lastIndex
+                """));
+    }
+
+    @Test
+    public void test_symbol_replace_literal_and_function() {
+        assertEquals("aXc", str("/b/[Symbol.replace]('abc', 'X')"));
+        assertEquals("aXcXe", str("/b/g[Symbol.replace]('abcbe', 'X')"));
+        assertEquals("a1c", str("/b/[Symbol.replace]('abc', (m) => '1')"));
+    }
+
+    @Test
+    public void test_symbol_replace_capture_groups_and_dollar_patterns() {
+        assertEquals("a-b-c", str("/(a)(b)(c)/[Symbol.replace]('abc', '$1-$2-$3')"));
+        assertEquals("[a]bc", str("/a/[Symbol.replace]('abc', '[$&]')"));
+        assertEquals("aabcc", str("/b/[Symbol.replace](\"abc\", \"$`$&$'\")"));
+    }
+
+    @Test
+    public void test_symbol_replace_named_groups() {
+        assertEquals("aX", str("/(?<x>a)/[Symbol.replace]('a', '$<x>X')"));
+    }
+
+    @Test
+    public void test_symbol_split_basic() {
+        assertEquals("a,b,c", str("/,/[Symbol.split]('a,b,c').join('|').replace(/\\|/g, ',')"));
+        assertEquals("3", str("String(/,/[Symbol.split]('a,b,c').length)"));
+    }
+
+    @Test
+    public void test_symbol_split_with_limit_and_captures() {
+        assertEquals(2, num("/,/[Symbol.split]('a,b,c', 2).length"));
+        assertEquals(0, num("/,/[Symbol.split]('a,b,c', 0).length"));
+        assertTrue(bool("/(,)/[Symbol.split]('a,b').includes(',')"));
+    }
+
+    // Symbol.match/replace/search/split dispatch through a user-overridden "exec" (RegExpExec)
+    @Test
+    public void test_symbol_methods_dispatch_through_custom_exec() {
+        assertEquals(1, num("""
+                var calls = 0;
+                class R extends RegExp {
+                  exec(s) { calls++; return null; }
+                }
+                new R('a')[Symbol.match]('a');
+                calls
+                """));
+    }
+
+    @Test
+    public void test_reg_exp_exec_rejects_non_object_non_null_result() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class, () -> Interpreter.run("""
+                class R extends RegExp {
+                  exec(s) { return 5; }
+                }
+                new R('a')[Symbol.match]('a');
+                """));
+    }
 }

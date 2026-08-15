@@ -343,10 +343,23 @@ public final class InterpreterUtils {
 
     public static boolean deleteArrayElement(JsArray array, String key) {
         final var index = arrayIndex(key);
-        if (index != null && index < array.length()) {
-            array.set(index, JsUndefined.getInstance());
+        if (index != null) {
+            if (index >= array.length() || array.isHole(index)) {
+                return true;
+            }
+            if (!array.getIndexFlags(index).configurable()) {
+                return false;
+            }
+            array.clearIndexToHole(index);
+            return true;
         }
-        return true;
+        if (!array.hasProperty(key) && !array.hasPropAccessor(key)) {
+            return true;
+        }
+        if (!array.getPropFlags(key).configurable()) {
+            return false;
+        }
+        return array.deleteProperty(key);
     }
 
     public static boolean hasInPrototypeChain(JsValue left, JsObject prototype) {

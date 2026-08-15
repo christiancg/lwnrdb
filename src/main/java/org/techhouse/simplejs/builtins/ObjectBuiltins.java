@@ -154,12 +154,11 @@ public final class ObjectBuiltins {
     }
 
     private static boolean arrayHasIndex(JsArray array, String key) {
-        try {
-            final var index = Integer.parseInt(key);
-            return index >= 0 && index < array.length();
-        } catch (NumberFormatException ignored) {
-            return array.getProperty(key) != null;
+        final var index = InterpreterUtils.arrayIndex(key);
+        if (index != null) {
+            return (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
         }
+        return array.hasProperty(key) || array.hasPropAccessor(key);
     }
 
     private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
@@ -207,7 +206,14 @@ public final class ObjectBuiltins {
             }
             case JsArray array -> {
                 for (var i = 0; i < array.length(); i++) {
-                    result.push(new JsString(Integer.toString(i)));
+                    if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
+                        result.push(new JsString(Integer.toString(i)));
+                    }
+                }
+                for (final var key : array.namedPropertyKeys()) {
+                    if (array.getPropFlags(key).enumerable()) {
+                        result.push(new JsString(key));
+                    }
                 }
             }
             case JsGlobalObject global -> {
@@ -242,8 +248,15 @@ public final class ObjectBuiltins {
                 }
             }
             case JsArray array -> {
-                for (final var value : array.getElements()) {
-                    result.push(value);
+                for (var i = 0; i < array.length(); i++) {
+                    if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
+                        result.push(ops.getMember(array, new JsString(Integer.toString(i))));
+                    }
+                }
+                for (final var key : array.namedPropertyKeys()) {
+                    if (array.getPropFlags(key).enumerable()) {
+                        result.push(ops.getMember(array, new JsString(key)));
+                    }
                 }
             }
             case JsGlobalObject global -> {
@@ -278,9 +291,16 @@ public final class ObjectBuiltins {
                 }
             }
             case JsArray array -> {
-                final var elements = array.getElements();
-                for (var i = 0; i < elements.size(); i++) {
-                    result.push(new JsArray(List.of(new JsString(Integer.toString(i)), elements.get(i))));
+                for (var i = 0; i < array.length(); i++) {
+                    if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
+                        final var key = Integer.toString(i);
+                        result.push(new JsArray(List.of(new JsString(key), ops.getMember(array, new JsString(key)))));
+                    }
+                }
+                for (final var key : array.namedPropertyKeys()) {
+                    if (array.getPropFlags(key).enumerable()) {
+                        result.push(new JsArray(List.of(new JsString(key), ops.getMember(array, new JsString(key)))));
+                    }
                 }
             }
             case JsGlobalObject global -> {
@@ -431,19 +451,246 @@ public final class ObjectBuiltins {
     public static JsValue defineProperty(List<JsValue> args, InterpreterOps ops) {
         final var target = first(args);
         if (args.size() > 2 && args.get(2) instanceof JsObject descriptor) {
-            if (target instanceof JsObject object) {
-                applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor, ops);
-            } else if (target instanceof JsClass cls) {
-                applyDescriptor(cls.getStaticOwner(), JsCoercion.toStr(args.get(1)), descriptor, ops);
+            if (target instanceof JsArray array && !(args.get(1) instanceof JsSymbol)) {
+                applyArrayDescriptor(array, JsCoercion.toStr(args.get(1)), descriptor, ops);
+                return target;
+            }
+            final var object = target instanceof JsClass cls
+                    ? cls.getStaticOwner()
+                    : target instanceof JsObject obj ? obj : null;
+            if (object != null) {
+                if (args.get(1) instanceof JsSymbol symbol) {
+                    applySymbolDescriptor(object, symbol, descriptor, ops);
+                } else {
+                    applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor, ops);
+                }
             }
         }
         return target;
     }
 
+    // Covers "length"/index/named own-property redefinition (data descriptors) and named-property
+    // accessor descriptors (via JsArray's propGetters/propSetters) - the dominant
+    // built-ins/Object/defineProperty and defineProperties failure cluster against Array targets.
+    // Index accessors are the one gap left (JsArray has no per-index accessor storage).
+    private static void applyArrayDescriptor(JsArray array, String key, JsObject descriptor, InterpreterOps ops) {
+        final var hasGetter = descHas(descriptor, "get", ops);
+        final var hasSetter = descHas(descriptor, "set", ops);
+        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
+            throw new TypeErrorException(
+                    "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, "
+                            + key);
+        }
+        final var accessorIndex = "length".equals(key) ? null : InterpreterUtils.arrayIndex(key);
+        if ((hasGetter || hasSetter) && accessorIndex != null) {
+            applyArrayIndexAccessorDescriptor(array, accessorIndex, descriptor, ops);
+            return;
+        }
+        if ((hasGetter || hasSetter) && !"length".equals(key)) {
+            applyArrayAccessorDescriptor(array, key, descriptor, ops);
+            return;
+        }
+        if (hasGetter || hasSetter) {
+            throw redefineError(key);
+        }
+        final var hasValue = descHas(descriptor, "value", ops);
+        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
+        if ("length".equals(key)) {
+            final var currentFlags = array.getLengthFlags();
+            if (!currentFlags.configurable() && descHas(descriptor, "configurable", ops)
+                    && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
+                throw redefineError(key);
+            }
+            if (!currentFlags.configurable() && descHas(descriptor, "enumerable", ops)
+                    && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != currentFlags.enumerable()) {
+                throw redefineError(key);
+            }
+            final var writable = descHas(descriptor, "writable", ops)
+                    ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
+                    : currentFlags.writable();
+            if (hasValue) {
+                final var newLength = requireArrayLength(value);
+                if (!currentFlags.writable() && newLength != array.length()) {
+                    throw new TypeErrorException("Cannot redefine property: length");
+                }
+                array.defineLength(newLength);
+            } else if (!currentFlags.writable() && writable) {
+                throw redefineError(key);
+            }
+            array.setLengthWritable(writable);
+            return;
+        }
+        final var index = InterpreterUtils.arrayIndex(key);
+        final var exists = index != null
+                ? (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index)
+                : array.hasProperty(key) || array.hasPropAccessor(key);
+        final var currentFlags = exists
+                ? (index != null ? array.getIndexFlags(index) : array.getPropFlags(key))
+                : new JsObject.PropertyFlags(false, false, false);
+        if (!exists && !array.isExtensible()) {
+            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
+        }
+        if (exists && !currentFlags.configurable()) {
+            if (descHas(descriptor, "configurable", ops)
+                    && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
+                throw redefineError(key);
+            }
+            if (descHas(descriptor, "enumerable", ops)
+                    && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != currentFlags.enumerable()) {
+                throw redefineError(key);
+            }
+            if (!currentFlags.writable()) {
+                if (descHas(descriptor, "writable", ops)
+                        && JsCoercion.toBoolean(descGet(descriptor, "writable", ops))) {
+                    throw redefineError(key);
+                }
+                if (hasValue && isNotSameValue(value, index != null ? array.get(index) : array.getProperty(key))) {
+                    throw redefineError(key);
+                }
+            }
+        }
+        final var flags = new JsObject.PropertyFlags(
+                descHas(descriptor, "writable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
+                        : currentFlags.writable(),
+                descHas(descriptor, "enumerable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
+                        : currentFlags.enumerable(),
+                descHas(descriptor, "configurable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
+                        : currentFlags.configurable());
+        final var newValue = hasValue
+                ? value
+                : exists ? (index != null ? array.get(index) : array.getProperty(key)) : JsUndefined.getInstance();
+        if (index != null) {
+            array.clearIndexAccessor(index);
+            array.defineIndexValue(index, newValue);
+            array.setIndexFlags(index, flags);
+        } else {
+            array.clearPropAccessor(key);
+            array.defineOwnProperty(key, newValue);
+            array.setPropFlags(key, flags);
+        }
+    }
+
+    private static void applyArrayAccessorDescriptor(JsArray array, String key, JsObject descriptor,
+            InterpreterOps ops) {
+        final var exists = array.hasProperty(key) || array.hasPropAccessor(key);
+        final var currentFlags = exists ? array.getPropFlags(key) : new JsObject.PropertyFlags(false, false, false);
+        if (!exists && !array.isExtensible()) {
+            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
+        }
+        if (exists && !currentFlags.configurable()) {
+            throw redefineError(key);
+        }
+        final var hasGetter = descHas(descriptor, "get", ops);
+        final var hasSetter = descHas(descriptor, "set", ops);
+        final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
+        final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
+        if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
+            throw new TypeErrorException("Getter must be a function");
+        }
+        if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
+            throw new TypeErrorException("Setter must be a function");
+        }
+        final var flags = new JsObject.PropertyFlags(currentFlags.writable(),
+                descHas(descriptor, "enumerable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
+                        : currentFlags.enumerable(),
+                descHas(descriptor, "configurable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
+                        : currentFlags.configurable());
+        array.deleteProperty(key);
+        array.definePropAccessor(key, isCallable(getterValue) ? getterValue : null,
+                isCallable(setterValue) ? setterValue : null);
+        array.setPropFlags(key, flags);
+    }
+
+    private static void applyArrayIndexAccessorDescriptor(JsArray array, int index, JsObject descriptor,
+            InterpreterOps ops) {
+        final var exists = (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
+        final var currentFlags = exists ? array.getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
+        if (!exists && !array.isExtensible()) {
+            throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
+        }
+        if (exists && !currentFlags.configurable()) {
+            throw redefineError(String.valueOf(index));
+        }
+        final var hasGetter = descHas(descriptor, "get", ops);
+        final var hasSetter = descHas(descriptor, "set", ops);
+        final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
+        final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
+        if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
+            throw new TypeErrorException("Getter must be a function");
+        }
+        if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
+            throw new TypeErrorException("Setter must be a function");
+        }
+        final var flags = new JsObject.PropertyFlags(currentFlags.writable(),
+                descHas(descriptor, "enumerable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
+                        : currentFlags.enumerable(),
+                descHas(descriptor, "configurable", ops)
+                        ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
+                        : currentFlags.configurable());
+        array.defineIndexValue(index, JsUndefined.getInstance());
+        array.clearIndexAccessor(index);
+        array.defineIndexAccessor(index, isCallable(getterValue) ? getterValue : null,
+                isCallable(setterValue) ? setterValue : null);
+        array.setIndexFlags(index, flags);
+    }
+
+    private static int requireArrayLength(JsValue value) {
+        final var number = JsCoercion.toNumber(value);
+        final var length = (int) number;
+        if (length != number || length < 0) {
+            throw new org.techhouse.simplejs.exceptions.RangeErrorException("Invalid array length");
+        }
+        return length;
+    }
+
+    // Symbol keys have no descriptor-flag storage (JsObject.symbolProperties is a plain map), so
+    // this is a pragmatic subset of applyDescriptor: enough to accept get/set/value without
+    // crashing on JsCoercion.toStr(symbol), which unconditionally throws.
+    private static void applySymbolDescriptor(JsObject object, JsSymbol symbol, JsObject descriptor,
+            InterpreterOps ops) {
+        final var hasGetter = descHas(descriptor, "get", ops);
+        final var hasSetter = descHas(descriptor, "set", ops);
+        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
+            throw new TypeErrorException(
+                    "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute");
+        }
+        if (hasGetter || hasSetter) {
+            final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
+            final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
+            if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
+                throw new TypeErrorException("Getter must be a function");
+            }
+            if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
+                throw new TypeErrorException("Setter must be a function");
+            }
+            object.defineSymbolAccessor(symbol, isCallable(getterValue) ? getterValue : null,
+                    isCallable(setterValue) ? setterValue : null);
+        } else {
+            final var value = descHas(descriptor, "value", ops)
+                    ? descGet(descriptor, "value", ops)
+                    : JsUndefined.getInstance();
+            object.setSymbol(symbol, value);
+        }
+    }
+
     private static JsValue defineProperties(List<JsValue> args, InterpreterOps ops) {
         final var target = first(args);
-        if (target instanceof JsObject object && args.size() > 1 && args.get(1) instanceof JsObject props) {
-            applyProperties(object, props, ops);
+        if (args.size() > 1 && args.get(1) instanceof JsObject props) {
+            if (target instanceof JsArray array) {
+                for (final var key : props.keys()) {
+                    if (ownValue(props, key, ops) instanceof JsObject descriptor) {
+                        applyArrayDescriptor(array, key, descriptor, ops);
+                    }
+                }
+            } else if (target instanceof JsObject object) {
+                applyProperties(object, props, ops);
+            }
         }
         return target;
     }
@@ -654,7 +901,12 @@ public final class ObjectBuiltins {
             }
             case JsArray array -> {
                 for (var i = 0; i < array.length(); i++) {
-                    result.push(new JsString(Integer.toString(i)));
+                    if (!array.isHole(i)) {
+                        result.push(new JsString(Integer.toString(i)));
+                    }
+                }
+                for (final var key : array.namedPropertyKeys()) {
+                    result.push(new JsString(key));
                 }
                 result.push(new JsString("length"));
             }
@@ -692,6 +944,9 @@ public final class ObjectBuiltins {
         }
         if (args.size() > 1 && first(args) instanceof JsGlobalObject global) {
             return globalDescriptor(global, args.get(1));
+        }
+        if (args.size() > 1 && first(args) instanceof JsArray array) {
+            return arrayDescriptor(array, args.get(1));
         }
         final var target = first(args) instanceof JsClass cls ? cls.getStaticOwner() : first(args);
         if (!(target instanceof JsObject object) || args.size() < 2) {
@@ -787,6 +1042,16 @@ public final class ObjectBuiltins {
     }
 
     private static JsValue symbolDescriptor(JsObject object, JsSymbol symbol) {
+        if (object.hasSymbolAccessor(symbol)) {
+            final var getter = object.getSymbolAccessorGetter(symbol);
+            final var setter = object.getSymbolAccessorSetter(symbol);
+            final var descriptor = new JsObject();
+            descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
+            descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
+            descriptor.set("enumerable", JsBoolean.of(true));
+            descriptor.set("configurable", JsBoolean.of(true));
+            return descriptor;
+        }
         if (!object.hasSymbol(symbol)) {
             return JsUndefined.getInstance();
         }
@@ -795,6 +1060,58 @@ public final class ObjectBuiltins {
         descriptor.set("writable", JsBoolean.of(true));
         descriptor.set("enumerable", JsBoolean.of(true));
         descriptor.set("configurable", JsBoolean.of(true));
+        return descriptor;
+    }
+
+    private static JsValue arrayDescriptor(JsArray array, JsValue keyValue) {
+        if (keyValue instanceof JsSymbol) {
+            return JsUndefined.getInstance();
+        }
+        final var key = JsCoercion.toStr(keyValue);
+        if ("length".equals(key)) {
+            return dataDescriptor(new JsNumber(array.length()), array.getLengthFlags());
+        }
+        final var index = InterpreterUtils.arrayIndex(key);
+        if (index != null) {
+            if (array.hasIndexAccessor(index)) {
+                final var getter = array.getIndexAccessorGetter(index);
+                final var setter = array.getIndexAccessorSetter(index);
+                final var flags = array.getIndexFlags(index);
+                final var descriptor = new JsObject();
+                descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
+                descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
+                descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+                descriptor.set("configurable", JsBoolean.of(flags.configurable()));
+                return descriptor;
+            }
+            if (index >= array.length() || array.isHole(index)) {
+                return JsUndefined.getInstance();
+            }
+            return dataDescriptor(array.get(index), array.getIndexFlags(index));
+        }
+        if (array.hasPropAccessor(key)) {
+            final var getter = array.getPropAccessorGetter(key);
+            final var setter = array.getPropAccessorSetter(key);
+            final var flags = array.getPropFlags(key);
+            final var descriptor = new JsObject();
+            descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
+            descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
+            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
+            return descriptor;
+        }
+        if (!array.hasProperty(key)) {
+            return JsUndefined.getInstance();
+        }
+        return dataDescriptor(array.getProperty(key), array.getPropFlags(key));
+    }
+
+    private static JsValue dataDescriptor(JsValue value, JsObject.PropertyFlags flags) {
+        final var descriptor = new JsObject();
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.of(flags.writable()));
+        descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+        descriptor.set("configurable", JsBoolean.of(flags.configurable()));
         return descriptor;
     }
 
