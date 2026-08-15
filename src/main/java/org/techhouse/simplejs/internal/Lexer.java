@@ -90,7 +90,7 @@ public final class Lexer {
         JsBaseElement last = null;
         while (pos < n) {
             final var c = sourceCode.charAt(pos);
-            if (Character.isWhitespace(c)) {
+            if (isWhiteSpace(c)) {
                 if (isLineTerminator(c)) {
                     sawNewline = true;
                 }
@@ -144,6 +144,14 @@ public final class Lexer {
 
     private static boolean isLineTerminator(char c) {
         return c == '\n' || c == '\r' || c == '\u2028' || c == '\u2029';
+    }
+
+    // Spec WhiteSpace plus LineTerminator: Character.isWhitespace disagrees at both ends - it rejects
+    // the non-breaking spaces (NBSP, ZWNBSP, and the narrow/figure spaces) and accepts the C0
+    // separators, which are not JS whitespace.
+    private static boolean isWhiteSpace(char c) {
+        return c == '\t' || c == '\u000B' || c == '\f' || c == ' ' || c == '\u00A0' || c == '\uFEFF'
+                || Character.getType(c) == Character.SPACE_SEPARATOR || isLineTerminator(c);
     }
 
     private static boolean containsLineTerminator(String src, int from, int to) {

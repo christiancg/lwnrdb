@@ -7,6 +7,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stati
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
@@ -111,6 +112,9 @@ public final class ClassEvaluator {
                 value.isGenerator(), cls.getMethodScope());
         final var kind = method.getKind();
         if ("constructor".equals(kind)) {
+            if (cls.getSuperClass() != null || cls.getNativeSuperClass() != null) {
+                fn.markDerivedConstructor();
+            }
             cls.setConstructor(fn);
             return;
         }
@@ -300,9 +304,12 @@ public final class ClassEvaluator {
 
     public JsValue evalSuperCall(CallExpression call, Environment env) {
         final var home = superHomeClass(env);
-        final var thisValue = env.resolveThis();
+        final var thisValue = env.resolveThisBeforeSuper();
         if (!(thisValue instanceof JsObject instance)) {
             throw new TypeErrorException("'super' call outside of a constructor");
+        }
+        if (env.isThisInitialized()) {
+            throw new ReferenceErrorException("Super constructor may only be called once");
         }
         final var args = interp.evalArguments(call.getArguments(), env);
         if (home.getSuperClass() == null) {
@@ -310,6 +317,7 @@ public final class ClassEvaluator {
         } else {
             callConstructorChain(home.getSuperClass(), instance, args, env.resolveNewTarget());
         }
+        env.markThisInitialized();
         initFields(home, instance);
         return JsUndefined.getInstance();
     }

@@ -283,7 +283,11 @@ public final class ExpressionEvaluator {
             return JsBoolean.TRUE;
         }
         final var target = interp.eval(member.getObject(), env);
-        final var key = interp.memberKey(member, env);
+        final var keyValue = interp.memberKeyValue(member, env);
+        if (keyValue instanceof JsSymbol symbol) {
+            return deleteSymbolMember(target, symbol);
+        }
+        final var key = JsCoercion.toStr(keyValue, interp.ops());
         return switch (target) {
             case JsProxy proxy -> JsBoolean.of(proxies.delete(proxy, new JsString(key)));
             case JsObject object -> {
@@ -310,6 +314,27 @@ public final class ExpressionEvaluator {
                     yield JsBoolean.TRUE;
                 }
                 yield JsBoolean.of(callable.deleteProperty(key));
+            }
+            default -> JsBoolean.TRUE;
+        };
+    }
+
+    private JsValue deleteSymbolMember(JsValue target, JsSymbol symbol) {
+        return switch (target) {
+            case JsProxy proxy -> JsBoolean.of(proxies.delete(proxy, symbol));
+            case JsObject object -> {
+                if (object.isNotDeleteSymbol(symbol)) {
+                    throw new TypeErrorException(
+                            "Cannot delete property '" + symbol.getDescription() + "' of #<Object>");
+                }
+                yield JsBoolean.TRUE;
+            }
+            case JsClass cls -> {
+                if (cls.getStaticOwner().isNotDeleteSymbol(symbol)) {
+                    throw new TypeErrorException(
+                            "Cannot delete property '" + symbol.getDescription() + "' of #<Object>");
+                }
+                yield JsBoolean.TRUE;
             }
             default -> JsBoolean.TRUE;
         };

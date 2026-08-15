@@ -17,6 +17,7 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private JsObject prototype;
     // Concise methods and accessors are not constructors, so they have no `prototype` property.
     private boolean method;
+    private boolean derivedConstructor;
 
     public JsFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
             boolean async, boolean generator, Environment closure) {
@@ -62,6 +63,14 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
 
     public boolean isGenerator() {
         return generator;
+    }
+
+    public boolean isDerivedConstructor() {
+        return derivedConstructor;
+    }
+
+    public void markDerivedConstructor() {
+        derivedConstructor = true;
     }
 
     public boolean isMethod() {

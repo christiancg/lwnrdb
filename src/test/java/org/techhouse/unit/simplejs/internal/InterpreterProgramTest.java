@@ -1,8 +1,10 @@
 package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
@@ -440,5 +442,38 @@ public class InterpreterProgramTest {
     public void test_classic_for_empty_and_lexical_headers() {
         assertEquals(1, num("let n = 0; for (;;) { n = 1; break; } n"));
         assertEquals(1, num("let n = 0; for (let i = 0;;) { n = 1; break; } n"));
+    }
+
+    // a parameter binding exists but stays uninitialized until its own element is bound
+    @Test
+    public void test_parameter_self_reference_is_a_reference_error() {
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run("function f(a = a) {} f()"));
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run("function f(a = b, b = 1) {} f()"));
+        assertEquals(2, num("function f(a, b = a + 1) { return b; } f(1)"));
+    }
+
+    // a symbol-keyed property is deleted by key, not by a string coercion that would throw
+    @Test
+    public void test_delete_symbol_keyed_property() {
+        assertEquals(1, num("const s = Symbol(); const o = {[s]: 2}; delete o[s]; o[s] === undefined ? 1 : 0"));
+        assertEquals(1, num("const s = Symbol(); const o = {}; delete o[s] ? 1 : 0"));
+    }
+
+    // the lexer's whitespace set is the spec's, not Java's
+    @Test
+    public void test_spec_whitespace_between_tokens() {
+        assertEquals(3, num("var\u00A0a\u00A0=\u00A01;\u2007a\u202F+\u00A02"));
+        assertEquals(1, num("\uFEFF1"));
+    }
+
+    // a var nested in a statement that never runs still has its binding from scope entry
+    @Test
+    public void test_var_hoisting_reaches_nested_statements() {
+        assertEquals(1, num("if (false) { var a = 2; } a === undefined ? 1 : 0"));
+        assertEquals(1, num("while (false) { var b = 2; } b === undefined ? 1 : 0"));
+        assertEquals(1, num("for (var k in undefined) { var c = 2; } c === undefined ? 1 : 0"));
+        assertEquals(1, num("switch (0) { case 1: var d = 2; } d === undefined ? 1 : 0"));
+        assertEquals(1, num("try { } finally { } l: { var e = 2; } e === 2 ? 1 : 0"));
+        assertEquals(1, num("function f() { if (false) { var g = 2; } return g === undefined ? 1 : 0; } f()"));
     }
 }

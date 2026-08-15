@@ -251,6 +251,26 @@ public final class JsObject extends JsValue {
         return symbolProperties != null && symbolProperties.containsKey(key);
     }
 
+    public boolean isNotDeleteSymbol(JsSymbol key) {
+        if (symbolProperties == null || !symbolProperties.containsKey(key)) {
+            return false;
+        }
+        if (!getSymbolFlags(key).configurable()) {
+            return true;
+        }
+        symbolProperties.remove(key);
+        if (symbolFlags != null) {
+            symbolFlags.remove(key);
+        }
+        if (symbolAccessorGetters != null) {
+            symbolAccessorGetters.remove(key);
+        }
+        if (symbolAccessorSetters != null) {
+            symbolAccessorSetters.remove(key);
+        }
+        return false;
+    }
+
     public Set<JsSymbol> symbolKeys() {
         return symbolProperties == null ? Set.of() : symbolProperties.keySet();
     }

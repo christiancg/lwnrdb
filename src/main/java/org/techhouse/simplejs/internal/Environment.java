@@ -38,6 +38,7 @@ public final class Environment {
     private final Map<String, Binding> bindings = new LinkedHashMap<>();
     private JsValue thisValue;
     private boolean hasThis;
+    private boolean thisInitialized = true;
     private JsValue homeClass;
     private boolean hasHomeClass;
     private JsValue newTarget;
@@ -64,17 +65,55 @@ public final class Environment {
     public void defineThis(JsValue value) {
         this.thisValue = value;
         this.hasThis = true;
+        this.thisInitialized = true;
+    }
+
+    // A derived constructor's `this` is in TDZ until super() returns, even though the instance itself
+    // already exists here (it is created before the constructor chain runs).
+    public void defineThisUninitialized(JsValue value) {
+        this.thisValue = value;
+        this.hasThis = true;
+        this.thisInitialized = false;
     }
 
     public JsValue resolveThis() {
+        final var env = thisEnvironment();
+        if (env == null) {
+            return JsUndefined.getInstance();
+        }
+        if (!env.thisInitialized) {
+            throw new ReferenceErrorException(
+                    "Must call super constructor before accessing 'this' in a derived class constructor");
+        }
+        return env.thisValue;
+    }
+
+    public JsValue resolveThisBeforeSuper() {
+        final var env = thisEnvironment();
+        return env == null ? JsUndefined.getInstance() : env.thisValue;
+    }
+
+    public boolean isThisInitialized() {
+        final var env = thisEnvironment();
+        return env == null || env.thisInitialized;
+    }
+
+    public void markThisInitialized() {
+        final var env = thisEnvironment();
+        if (env != null) {
+            env.thisInitialized = true;
+        }
+    }
+
+    private Environment thisEnvironment() {
         var env = this;
         while (env != null) {
             if (env.hasThis) {
-                return env.thisValue;
+                return env;
             }
             env = env.parent;
         }
-        return JsUndefined.getInstance();
+        return null;
     }
 
     public void defineHomeClass(JsValue value) {
@@ -132,6 +171,14 @@ public final class Environment {
     public void declareVar(String name) {
         final var target = functionScope();
         target.bindings.computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", true, true));
+    }
+
+    // FunctionDeclarationInstantiation creates every parameter binding up front but only initializes
+    // it when its own element is bound, so a default that reads a later (or its own) parameter sees
+    // an uninitialized binding.
+    public void declareParam(String name) {
+        final var target = functionScope();
+        target.bindings.computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", false, true));
     }
 
     public void declareLexical(String name, String kind) {

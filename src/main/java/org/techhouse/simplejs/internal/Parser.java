@@ -127,6 +127,10 @@ public final class Parser {
         private final PatternConverter patterns = new PatternConverter(this);
         private DeclarationScope scope = new DeclarationScope(null, true);
         private boolean inStaticBlock;
+        private boolean inGenerator;
+        private boolean inAsync = true;
+        private boolean superCallAllowed;
+        private boolean classHasHeritage;
 
         private State(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore) {
             super(tokens, positions, newlineBefore);
@@ -157,17 +161,52 @@ public final class Parser {
 
         // An arrow keeps the enclosing static block's `arguments` restriction; a real function
         // introduces its own `arguments` binding and so lifts it across both params and body.
-        private FunctionParts parseFunctionParts() {
+        private FunctionParts parseFunctionParts(boolean generator, boolean async) {
+            return parseFunctionParts(generator, async, false);
+        }
+
+        private FunctionParts parseFunctionParts(boolean generator, boolean async, boolean superCall) {
             final var wasInStaticBlock = inStaticBlock;
+            final var wasInGenerator = inGenerator;
+            final var wasInAsync = inAsync;
+            final var wasSuperCallAllowed = superCallAllowed;
             inStaticBlock = false;
+            superCallAllowed = superCall;
             try {
-                final var params = parseParams();
+                final var params = outsideGenerator(this::parseParams);
+                setFunctionKind(generator, async);
                 final var body = inFunctionScope(params, this::parseBlockBody);
                 checkUseStrictWithSimpleParams(params, body);
                 return new FunctionParts(params, body);
             } finally {
                 inStaticBlock = wasInStaticBlock;
+                inGenerator = wasInGenerator;
+                inAsync = wasInAsync;
+                superCallAllowed = wasSuperCallAllowed;
             }
+        }
+
+        // A YieldExpression exists only in a generator body: its parameters, a nested arrow or
+        // ordinary function, and a class field initializer are all outside it, and in always-strict
+        // code `yield` cannot fall back to being an identifier.
+        private <T> T outsideGenerator(Supplier<T> production) {
+            return inFunctionKind(false, production);
+        }
+
+        private <T> T inFunctionKind(boolean async, Supplier<T> production) {
+            final var wasInGenerator = inGenerator;
+            final var wasInAsync = inAsync;
+            setFunctionKind(false, async);
+            try {
+                return production.get();
+            } finally {
+                setFunctionKind(wasInGenerator, wasInAsync);
+            }
+        }
+
+        private void setFunctionKind(boolean generator, boolean async) {
+            inGenerator = generator;
+            inAsync = async;
         }
 
         // It is a Syntax Error if a function body's directive prologue contains "use strict" while
@@ -360,7 +399,28 @@ public final class Parser {
             rejectEscapedReserved();
             final var label = parseIdentifier();
             expectOperator(":");
-            return new LabeledStatement(label, parseStatement());
+            return new LabeledStatement(label, parseNestedStatement());
+        }
+
+        // The body of if/else, a loop or a label is a Statement, never a Declaration: `if (x) let y;`
+        // and `while (x) function f() {}` are early errors, and in strict code so is a labelled
+        // function declaration.
+        private Statement parseNestedStatement() {
+            if (isDeclarationStart()) {
+                throw new SyntaxErrorException("Declaration is not allowed in statement position");
+            }
+            return parseStatement();
+        }
+
+        private boolean isDeclarationStart() {
+            if (isKeyword("function") || isKeyword("class") || isKeyword("let") || isKeyword("const")) {
+                return true;
+            }
+            if (isKeyword("async") && !newlineBeforePeek() && peek().getType() == JsType.KEYWORD
+                    && "function".equals(((JsKeyword) peek()).getValue())) {
+                return true;
+            }
+            return isUsingDeclarationStart() || isAwaitUsingDeclarationStart();
         }
 
         private BlockStatement parseBlock() {
@@ -401,10 +461,10 @@ public final class Parser {
             expectSeparator('(');
             final var test = parseExpression();
             expectSeparator(')');
-            final var consequent = parseStatement();
+            final var consequent = parseNestedStatement();
             Statement alternate = null;
             if (matchKeyword("else")) {
-                alternate = parseStatement();
+                alternate = parseNestedStatement();
             }
             return new IfStatement(test, consequent, alternate);
         }
@@ -414,13 +474,13 @@ public final class Parser {
             expectSeparator('(');
             final var test = parseExpression();
             expectSeparator(')');
-            final var body = parseStatement();
+            final var body = parseNestedStatement();
             return new WhileStatement(test, body);
         }
 
         private DoWhileStatement parseDoWhile() {
             expectKeyword("do");
-            final var body = parseStatement();
+            final var body = parseNestedStatement();
             expectKeyword("while");
             expectSeparator('(');
             final var test = parseExpression();
@@ -447,11 +507,6 @@ public final class Parser {
                 return parseClassicForRest(null);
             }
             final var init = parseForHeaderLeft();
-            final var isUsingHead = init instanceof VariableDeclaration declaration
-                    && "using".equals(declaration.getKind());
-            if (isUsingHead && !isKeyword("of")) {
-                throw error();
-            }
             if (isKeyword("in") || isKeyword("of")) {
                 return parseForInOf(init, isAwait);
             }
@@ -466,15 +521,35 @@ public final class Parser {
                 return parseForVariableDeclaration();
             }
             if (isUsingDeclarationStart()) {
-                return parseForUsingDeclaration();
+                expectContextualKeyword("using");
+                return parseForUsingDeclaration("using");
+            }
+            if (isAwaitUsingDeclarationStart()) {
+                expectKeyword("await");
+                expectContextualKeyword("using");
+                return parseForUsingDeclaration("await using");
             }
             return withNoIn(this::parseExpression);
         }
 
-        private VariableDeclaration parseForUsingDeclaration() {
-            expectContextualKeyword("using");
-            final var id = parseBindingIdentifier();
-            return new VariableDeclaration("using", List.of(new VariableDeclarator(id, null)));
+        // A `for (using x of e)` head binds exactly one name with no initializer, while a classic
+        // `for (using x = e; ;)` head is an ordinary declaration list, so which one this is only
+        // becomes clear at the token following the bindings.
+        private VariableDeclaration parseForUsingDeclaration(String kind) {
+            final var declarations = new ArrayList<VariableDeclarator>();
+            do {
+                final var id = parseBindingIdentifier();
+                Expression init = null;
+                if (matchOperator("=")) {
+                    init = withNoIn(this::parseAssignment);
+                }
+                declareBoundNames(id, true);
+                declarations.add(new VariableDeclarator(id, init));
+            } while (matchSeparator(','));
+            if (!isKeyword("of") && declarations.stream().anyMatch(declarator -> declarator.getInit() == null)) {
+                throw new SyntaxErrorException("Missing initializer in " + kind + " declaration");
+            }
+            return new VariableDeclaration(kind, declarations);
         }
 
         private VariableDeclaration parseForVariableDeclaration() {
@@ -498,15 +573,15 @@ public final class Parser {
             final var target = left instanceof ArrayExpression || left instanceof ObjectExpression
                     ? patterns.toAssignmentPattern((Expression) left)
                     : left;
-            patterns.validateForInOfTarget(target);
             final var isOf = "of".equals(((JsKeyword) current()).getValue());
+            patterns.validateForInOfTarget(target, isOf);
             if (isAwait && !isOf) {
                 throw error();
             }
             advance();
             final var right = isOf ? parseAssignment() : parseExpression();
             expectSeparator(')');
-            final var body = parseStatement();
+            final var body = parseNestedStatement();
             return isOf ? new ForOfStatement(target, right, body, isAwait) : new ForInStatement(target, right, body);
         }
 
@@ -529,7 +604,7 @@ public final class Parser {
                 update = parseExpression();
             }
             expectSeparator(')');
-            final var body = parseStatement();
+            final var body = parseNestedStatement();
             return new ForStatement(init, test, update, body);
         }
 
@@ -599,6 +674,9 @@ public final class Parser {
             expectOperator(":");
             final var consequent = new ArrayList<Statement>();
             while (!isKeyword("case") && !isKeyword("default") && !isSeparator('}') && !atEnd()) {
+                if (isUsingDeclarationStart() || isAwaitUsingDeclarationStart()) {
+                    throw new SyntaxErrorException("using declaration is not allowed in a case or default clause");
+                }
                 consequent.add(parseStatement());
             }
             return new SwitchCase(test, consequent);
@@ -638,7 +716,7 @@ public final class Parser {
             final var name = parseBindingIdentifier();
             // A function declaration is var-scoped at a function boundary and lexical inside a block.
             declareBoundNames(name, !scope.isFunctionBoundary());
-            final var parts = parseFunctionParts();
+            final var parts = parseFunctionParts(generator, async);
             return new FunctionDeclaration(name, parts.params(), parts.body(), async, generator);
         }
 
@@ -1026,6 +1104,9 @@ public final class Parser {
         }
 
         private Expression parseYield() {
+            if (!inGenerator) {
+                throw new SyntaxErrorException("yield is only valid inside a generator");
+            }
             expectKeyword("yield");
             if (newlineBeforeCurrent()) {
                 return new YieldExpression(null, false);
@@ -1132,6 +1213,9 @@ public final class Parser {
                 }
                 if ("await".equals(kw)) {
                     advance();
+                    if (!inAsync) {
+                        throw new SyntaxErrorException("await is only valid inside an async function");
+                    }
                     return new AwaitExpression(parseUnary());
                 }
             }
@@ -1367,6 +1451,10 @@ public final class Parser {
                 case "class" -> parseClassExpression();
                 case "super" -> {
                     advance();
+                    if (isSeparator('(') && !superCallAllowed) {
+                        throw new SyntaxErrorException(
+                                "'super' keyword unexpected here: a super call belongs to a derived constructor");
+                    }
                     yield new SuperExpression();
                 }
                 case "import" -> parseImportExpressionOrMeta();
@@ -1435,7 +1523,7 @@ public final class Parser {
             if (current().getType() == JsType.IDENTIFIER) {
                 name = parseBindingIdentifier();
             }
-            final var parts = parseFunctionParts();
+            final var parts = parseFunctionParts(generator, async);
             return new FunctionExpression(name, parts.params(), parts.body(), async, generator);
         }
 
@@ -1444,7 +1532,7 @@ public final class Parser {
             final var id = parseBindingIdentifier();
             declareBoundNames(id, true);
             final var superClass = parseClassHeritage();
-            return new ClassDeclaration(id, superClass, parseClassBody());
+            return new ClassDeclaration(id, superClass, parseClassBody(superClass != null));
         }
 
         private ClassExpression parseClassExpression() {
@@ -1454,22 +1542,36 @@ public final class Parser {
                 id = parseBindingIdentifier();
             }
             final var superClass = parseClassHeritage();
-            return new ClassExpression(id, superClass, parseClassBody());
+            return new ClassExpression(id, superClass, parseClassBody(superClass != null));
         }
 
         private Expression parseClassHeritage() {
             return matchKeyword("extends") ? parseCallMember() : null;
         }
 
-        private ClassBody parseClassBody() {
+        private ClassBody parseClassBody(boolean hasHeritage) {
+            final var wasClassHasHeritage = classHasHeritage;
+            classHasHeritage = hasHeritage;
             expectSeparator('{');
             final var members = new ArrayList<JsNode>();
             final Map<String, Set<String>> privateNames = new HashMap<>();
-            while (!isSeparator('}') && !atEnd()) {
-                if (matchSeparator(';')) {
-                    continue;
+            var seenConstructor = false;
+            try {
+                while (!isSeparator('}') && !atEnd()) {
+                    if (matchSeparator(';')) {
+                        continue;
+                    }
+                    final var member = parseClassMember(privateNames);
+                    if (member instanceof MethodDefinition method && "constructor".equals(method.getKind())) {
+                        if (seenConstructor) {
+                            throw new SyntaxErrorException("A class may only have one constructor");
+                        }
+                        seenConstructor = true;
+                    }
+                    members.add(member);
                 }
-                members.add(parseClassMember(privateNames));
+            } finally {
+                classHasHeritage = wasClassHasHeritage;
             }
             expectSeparator('}');
             return new ClassBody(members);
@@ -1492,9 +1594,10 @@ public final class Parser {
             }
             final var memberKey = parseClassMemberKey();
             if (isSeparator('(')) {
-                final var parts = parseFunctionParts();
-                final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic, async, generator);
+                final var parts = parseFunctionParts(generator, async,
+                        "constructor".equals(resolvedKind) && classHasHeritage);
+                final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 declarePrivateName(privateNames, memberKey, resolvedKind);
                 return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
             }
@@ -1505,7 +1608,7 @@ public final class Parser {
             declarePrivateName(privateNames, memberKey, "field");
             Expression value = null;
             if (matchOperator("=")) {
-                value = parseAssignment();
+                value = outsideGenerator(this::parseAssignment);
                 if (containsArgumentsOrSuperCall(value)) {
                     throw new SyntaxErrorException(
                             "'arguments' and a bare 'super' call are not allowed in a class field initializer");
@@ -1529,7 +1632,7 @@ public final class Parser {
             } else {
                 return;
             }
-            if (!isStatic && "constructor".equals(name)) {
+            if ("constructor".equals(name)) {
                 throw new SyntaxErrorException("Classes may not have a field named 'constructor'");
             }
             if (isStatic && "prototype".equals(name)) {
@@ -1606,24 +1709,34 @@ public final class Parser {
 
         private StaticBlock parseStaticBlockBody() {
             expectSeparator('{');
-            final var body = new ArrayList<Statement>();
-            while (!isSeparator('}') && !atEnd()) {
-                body.add(parseStatement());
-            }
+            final var body = outsideGenerator(() -> {
+                final var statements = new ArrayList<Statement>();
+                while (!isSeparator('}') && !atEnd()) {
+                    statements.add(parseStatement());
+                }
+                return statements;
+            });
             expectSeparator('}');
             return new StaticBlock(body);
         }
 
         private String resolveMethodKind(String kind, MemberKey memberKey, boolean isStatic, boolean async,
                 boolean generator) {
-            if (!"method".equals(kind)) {
-                return kind;
+            if (isStatic || !isNamedConstructor(memberKey)) {
+                return "method".equals(kind) ? "method" : kind;
             }
-            if (!async && !generator && !isStatic && !memberKey.computed() && memberKey.key() instanceof Identifier id
-                    && "constructor".equals(id.getName())) {
-                return "constructor";
+            if (async || generator || !"method".equals(kind)) {
+                throw new SyntaxErrorException("A class constructor may not be a generator, async or an accessor");
             }
-            return "method";
+            return "constructor";
+        }
+
+        private boolean isNamedConstructor(MemberKey memberKey) {
+            if (memberKey.computed()) {
+                return false;
+            }
+            return memberKey.key() instanceof Identifier id && "constructor".equals(id.getName())
+                    || memberKey.key() instanceof StringLiteral str && "constructor".equals(str.getValue());
         }
 
         private MemberKey parseClassMemberKey() {
@@ -1740,44 +1853,52 @@ public final class Parser {
         }
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
-            if (isSeparator('{')) {
-                final var body = inFunctionScope(params, this::parseBlockBody);
-                checkUseStrictWithSimpleParams(params, body);
-                return new ArrowFunctionExpression(params, body, false, async);
-            }
-            return new ArrowFunctionExpression(params, parseAssignment(), true, async);
+            return inFunctionKind(async, () -> {
+                if (isSeparator('{')) {
+                    final var body = inFunctionScope(params, this::parseBlockBody);
+                    checkUseStrictWithSimpleParams(params, body);
+                    return new ArrowFunctionExpression(params, body, false, async);
+                }
+                return new ArrowFunctionExpression(params, parseAssignment(), true, async);
+            });
         }
 
         private ArrayExpression parseArray() {
             expectSeparator('[');
             final var elements = new ArrayList<Expression>();
+            var trailingComma = false;
             while (!isSeparator(']')) {
                 if (matchSeparator(',')) {
                     elements.add(null);
+                    trailingComma = false;
                     continue;
                 }
                 elements.add(parseSpreadableExpression());
+                trailingComma = false;
                 if (!isSeparator(']')) {
                     expectSeparator(',');
+                    trailingComma = true;
                 }
             }
             expectSeparator(']');
-            return new ArrayExpression(elements);
+            return new ArrayExpression(elements, trailingComma);
         }
 
         private ObjectExpression parseObject() {
             expectSeparator('{');
             final var properties = new ArrayList<JsNode>();
+            var trailingComma = false;
             if (!isSeparator('}')) {
                 do {
                     if (isSeparator('}')) {
                         break;
                     }
                     properties.add(parseObjectMember());
-                } while (matchSeparator(','));
+                    trailingComma = matchSeparator(',');
+                } while (trailingComma);
             }
             expectSeparator('}');
-            return new ObjectExpression(properties);
+            return new ObjectExpression(properties, trailingComma);
         }
 
         private JsNode parseObjectMember() {
@@ -1805,7 +1926,7 @@ public final class Parser {
                     && isReservedWord(((JsIdentifier) current()).getValue());
             final var key = parsePropertyKey();
             if (isSeparator('(')) {
-                final var parts = parseFunctionParts();
+                final var parts = parseFunctionParts(generator, async);
                 final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 return new Property(key, value, computed, false, "init".equals(kind) ? "method" : kind);
             }
@@ -1875,9 +1996,21 @@ public final class Parser {
         private TemplateLiteral parseTemplate(JsTemplateString template) {
             final var expressions = new ArrayList<Expression>();
             for (final var expressionTokens : template.getExpressions()) {
-                expressions.add(new State(expressionTokens, null, null).parseTemplateExpression());
+                expressions.add(forTemplateExpression(expressionTokens).parseTemplateExpression());
             }
             return new TemplateLiteral(template.getQuasis(), template.getRawQuasis(), expressions);
+        }
+
+        // A template's substitutions are lexed into their own token lists, so the nested parser has to
+        // inherit the grammar context the template itself sits in.
+        private State forTemplateExpression(List<JsBaseElement> tokens) {
+            final var nested = new State(tokens, null, null);
+            nested.inGenerator = inGenerator;
+            nested.inAsync = inAsync;
+            nested.superCallAllowed = superCallAllowed;
+            nested.inStaticBlock = inStaticBlock;
+            nested.classHasHeritage = classHasHeritage;
+            return nested;
         }
 
         private Expression parseTemplateExpression() {

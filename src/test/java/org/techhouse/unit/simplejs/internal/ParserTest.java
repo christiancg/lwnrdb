@@ -452,11 +452,27 @@ public class ParserTest {
         assertInstanceOf(Identifier.class, statement.getLeft());
     }
 
-    // a using declaration is rejected in a for-in head and in a classic for head
+    // a using declaration is rejected in a for-in head, and needs an initializer in a classic head
     @Test
-    public void test_using_rejected_outside_for_of() {
-        assertThrows(UnexpectedTokenException.class, () -> parse("for (using k in obj) {}"));
-        assertThrows(UnexpectedTokenException.class, () -> parse("for (using i = 0; i < 1; i++) {}"));
+    public void test_using_rejected_in_for_in_head() {
+        assertThrows(SyntaxErrorException.class, () -> parse("for (using k in obj) {}"));
+        assertThrows(SyntaxErrorException.class, () -> parse("for (using i; i < 1; i++) {}"));
+    }
+
+    // a classic for head takes an ordinary using declaration list, initializers and all
+    @Test
+    public void test_using_in_classic_for_head() {
+        final var statement = assertInstanceOf(ForStatement.class, firstStatement("for (using i = a, j = b;;) {}"));
+        final var declaration = assertInstanceOf(VariableDeclaration.class, statement.getInit());
+        assertEquals("using", declaration.getKind());
+        assertEquals(2, declaration.getDeclarations().size());
+    }
+
+    // a using declaration may not sit directly in a case or default clause's statement list
+    @Test
+    public void test_using_rejected_in_switch_clause() {
+        assertThrows(SyntaxErrorException.class, () -> parse("switch (x) { case 0: using r = a; }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("switch (x) { default: using r = a; }"));
     }
 
     @Test
@@ -964,11 +980,23 @@ public class ParserTest {
         assertEquals("Named", expr.getId().getName());
     }
 
-    // super(...) parses to a call over a super expression
+    // super(...) parses to a call over a super expression, inside a derived constructor
     @Test
     public void test_super_call() {
-        final var call = assertInstanceOf(CallExpression.class, firstExpression("super(x)"));
+        final var declaration = assertInstanceOf(ClassDeclaration.class,
+                firstStatement("class C extends B { constructor() { super(x); } }"));
+        final var method = assertInstanceOf(MethodDefinition.class, declaration.getBody().getMembers().getFirst());
+        final var statement = method.getValue().getBody().getBody().getFirst();
+        final var call = assertInstanceOf(CallExpression.class, ((ExpressionStatement) statement).getExpression());
         assertInstanceOf(SuperExpression.class, call.getCallee());
+    }
+
+    // a super call outside a derived constructor is an early error
+    @Test
+    public void test_super_call_outside_derived_constructor() {
+        assertThrows(SyntaxErrorException.class, () -> parse("super(x);"));
+        assertThrows(SyntaxErrorException.class, () -> parse("class C extends B { m() { super(); } }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("class C { constructor() { super(); } }"));
     }
 
     // super.m() parses to a call over a member access on super
@@ -1183,10 +1211,15 @@ public class ParserTest {
         assertEquals("async", ((Identifier) field.getKey()).getName());
     }
 
-    // An async member named constructor is a plain method, not the constructor
+    // a constructor member is never async, a generator or an accessor, and never repeats
     @Test
-    public void test_async_constructor_is_method() {
-        final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async constructor() {} }"));
+    public void test_invalid_constructor_member_is_rejected() {
+        assertThrows(SyntaxErrorException.class, () -> parse("class C { async constructor() {} }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("class C { * constructor() {} }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("class C { get constructor() {} }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("class C { constructor() {} constructor() {} }"));
+        final var decl = assertInstanceOf(ClassDeclaration.class,
+                firstStatement("class C { static async constructor() {} }"));
         final var method = assertInstanceOf(MethodDefinition.class, decl.getBody().getMembers().getFirst());
         assertEquals("method", method.getKind());
     }

@@ -32,6 +32,7 @@ import org.techhouse.simplejs.internal.interpreter.MemberEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ModuleEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ProxyDispatch;
 import org.techhouse.simplejs.internal.interpreter.StatementEvaluator;
+import org.techhouse.simplejs.internal.interpreter.VarHoisting;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
@@ -293,6 +294,7 @@ public final class Interpreter {
                 modules.bindImport(importDeclaration, env);
             }
         }
+        VarHoisting.hoistVars(program.getBody(), env);
         hoist(program.getBody(), env);
         final var result = new ModuleResult();
         final var coroutine = new Coroutine();
@@ -870,7 +872,11 @@ public final class Interpreter {
         try {
             final var activation = function.getClosure().functionChild();
             if (!function.isArrow()) {
-                activation.defineThis(thisArg);
+                if (function.isDerivedConstructor()) {
+                    activation.defineThisUninitialized(thisArg);
+                } else {
+                    activation.defineThis(thisArg);
+                }
                 activation.defineNewTarget(newTarget);
                 activation.declareFunction("arguments", makeArguments(function.getParams(), args, activation));
             }
@@ -884,7 +890,12 @@ public final class Interpreter {
             if (function.isAsync()) {
                 return runAsync(function, activation);
             }
-            return runPlainFunction(function, activation);
+            final var result = runPlainFunction(function, activation);
+            if (function.isDerivedConstructor() && !activation.isThisInitialized()) {
+                throw new ReferenceErrorException(
+                        "Must call super constructor before returning from a derived class constructor");
+            }
+            return result;
         } finally {
             depth--;
         }
@@ -909,6 +920,7 @@ public final class Interpreter {
             return eval((Expression) function.getBody(), activation);
         }
         final var body = (BlockStatement) function.getBody();
+        VarHoisting.hoistVars(body.getBody(), activation);
         hoist(body.getBody(), activation);
         final var completion = statements.blockDeclaresUsing(body.getBody())
                 ? statements.runDisposing(activation, () -> statements.execStatements(body.getBody(), activation))

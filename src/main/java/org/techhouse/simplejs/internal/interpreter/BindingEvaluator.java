@@ -86,6 +86,7 @@ public final class BindingEvaluator {
         for (final var declarator : declaration.getDeclarations()) {
             final var name = ((Identifier) declarator.getId()).getName();
             final var value = interp.eval(declarator.getInit(), env);
+            InterpreterUtils.applyInferredName(declarator.getInit(), value, name);
             env.initialize(name, value);
             registerUsingResource(env, value, async);
         }
@@ -164,6 +165,9 @@ public final class BindingEvaluator {
     }
 
     public void bindParams(List<JsNode> params, List<JsValue> args, Environment activation) {
+        for (final var param : params) {
+            declareParamNames(param, activation);
+        }
         for (var i = 0; i < params.size(); i++) {
             final var param = params.get(i);
             if (param instanceof RestElement rest) {
@@ -171,16 +175,13 @@ public final class BindingEvaluator {
                 for (var j = i; j < args.size(); j++) {
                     restArray.push(args.get(j));
                 }
-                declareParamNames(rest.getArgument(), activation);
                 destructure(rest.getArgument(), restArray, activation, paramLeaf());
                 return;
             }
             final var value = i < args.size() ? args.get(i) : JsUndefined.getInstance();
             if (param instanceof Identifier id) {
-                activation.declareVar(id.getName());
                 activation.assign(id.getName(), value);
             } else {
-                declareParamNames(param, activation);
                 destructure(param, value, activation, paramLeaf());
             }
         }
@@ -190,7 +191,7 @@ public final class BindingEvaluator {
         final var names = new ArrayList<String>();
         collectBoundNames(param, names);
         for (final var name : names) {
-            activation.declareVar(name);
+            activation.declareParam(name);
         }
     }
 

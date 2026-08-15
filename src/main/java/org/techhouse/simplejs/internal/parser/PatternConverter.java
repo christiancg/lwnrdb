@@ -34,7 +34,10 @@ public final class PatternConverter {
                 checkAssignable(id);
                 yield id;
             }
-            case MemberExpression member -> member;
+            case MemberExpression member -> {
+                checkNotOptionalChain(member);
+                yield member;
+            }
             case ArrayExpression ignored when "=".equals(op) -> toAssignmentPattern(left);
             case ObjectExpression ignored when "=".equals(op) -> toAssignmentPattern(left);
             default -> throw stream.error();
@@ -53,10 +56,14 @@ public final class PatternConverter {
                 checkAssignable(id);
                 yield id;
             }
-            case MemberExpression member -> member;
+            case MemberExpression member -> {
+                checkNotOptionalChain(member);
+                yield member;
+            }
             case ArrayExpression array -> {
                 final var elements = new ArrayList<JsNode>();
                 for (final var element : array.getElements()) {
+                    checkRestIsLast(element, elements.size(), array.getElements().size(), array.hasTrailingComma());
                     elements.add(toPatternElement(element));
                 }
                 yield new ArrayPattern(elements);
@@ -64,6 +71,8 @@ public final class PatternConverter {
             case ObjectExpression object -> {
                 final var properties = new ArrayList<JsNode>();
                 for (final var property : object.getProperties()) {
+                    checkRestIsLast(property, properties.size(), object.getProperties().size(),
+                            object.hasTrailingComma());
                     properties.add(toPatternProperty(property));
                 }
                 yield new ObjectPattern(properties);
@@ -72,10 +81,13 @@ public final class PatternConverter {
         };
     }
 
-    public void validateForInOfTarget(JsNode left) {
+    public void validateForInOfTarget(JsNode left, boolean isOf) {
         if (left instanceof VariableDeclaration declaration) {
             final var declarations = declaration.getDeclarations();
             if (declarations.size() != 1 || declarations.getFirst().getInit() != null) {
+                throw stream.error();
+            }
+            if (!isOf && ParserTables.USING_KINDS.contains(declaration.getKind())) {
                 throw stream.error();
             }
             return;
@@ -83,6 +95,28 @@ public final class PatternConverter {
         if (!(left instanceof Identifier) && !(left instanceof MemberExpression) && !(left instanceof ArrayPattern)
                 && !(left instanceof ObjectPattern)) {
             throw stream.error();
+        }
+    }
+
+    // AssignmentRestElement/AssignmentRestProperty is the final element of its pattern, and a trailing
+    // comma after it is an elision the grammar has no production for.
+    private void checkRestIsLast(JsNode element, int index, int total, boolean trailingComma) {
+        if (element instanceof SpreadElement && (index != total - 1 || trailingComma)) {
+            throw stream.error();
+        }
+    }
+
+    private void checkNotOptionalChain(MemberExpression member) {
+        var node = member;
+        while (true) {
+            if (node.isOptional()) {
+                throw stream.error();
+            }
+            if (node.getObject() instanceof MemberExpression parent) {
+                node = parent;
+            } else {
+                return;
+            }
         }
     }
 

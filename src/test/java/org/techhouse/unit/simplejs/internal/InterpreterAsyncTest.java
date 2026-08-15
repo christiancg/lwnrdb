@@ -195,16 +195,10 @@ public class InterpreterAsyncTest {
                 () -> Interpreter.run("function* g() { for await (const x of []) {} } g().next()"));
     }
 
-    // yield inside a plain async function (not a generator) is a syntax error, surfaced as a rejection
+    // yield inside a plain async function (not a generator) is an early error, so nothing runs
     @Test
-    public void test_yield_in_plain_async_function_rejects() {
-        final var source = """
-                let out = [];
-                async function f() { yield 1; }
-                f().catch(e => out.push(e.name));
-                out
-                """;
-        assertEquals("SyntaxError", ((JsString) arr(source).get(0)).getValue());
+    public void test_yield_in_plain_async_function_is_a_syntax_error() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("async function f() { yield 1; } f()"));
     }
 
     // Promise.prototype methods live on a real prototype, so a script can patch them

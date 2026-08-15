@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -539,7 +540,7 @@ public class InterpreterClassTest {
                 }
                 Sub.test()
                 """;
-        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run(source));
     }
 
     // super.method() dispatches through a parent static getter that returns a callable
@@ -624,5 +625,40 @@ public class InterpreterClassTest {
     @Test
     public void test_instanceof_native_prototype_mismatch() {
         assertFalse(bool("[] instanceof Map"));
+    }
+
+    // a derived constructor's `this` is unreachable until super() returns
+    @Test
+    public void test_this_before_super_is_a_reference_error() {
+        assertThrows(ReferenceErrorException.class, () -> Interpreter
+                .run("class B {} class C extends B { constructor() { this.x = 1; super(); } } new C()"));
+        assertThrows(ReferenceErrorException.class,
+                () -> Interpreter.run("class B {} class C extends B { constructor() { () => this; this; } } new C()"));
+    }
+
+    // a derived constructor that never calls super(), or calls it twice, is a reference error
+    @Test
+    public void test_missing_or_repeated_super_call_is_a_reference_error() {
+        assertThrows(ReferenceErrorException.class,
+                () -> Interpreter.run("class B {} class C extends B { constructor() {} } new C()"));
+        assertThrows(ReferenceErrorException.class,
+                () -> Interpreter.run("class B {} class C extends B { constructor() { super(); super(); } } new C()"));
+    }
+
+    // super() from an arrow inside the constructor still initializes `this`
+    @Test
+    public void test_super_call_from_arrow_initializes_this() {
+        assertEquals(3,
+                num("class B { constructor() { this.b = 1; } } "
+                        + "class C extends B { constructor() { (() => super())(); this.c = 2; } } "
+                        + "const c = new C(); c.b + c.c"));
+    }
+
+    // static members are real own properties of the class object
+    @Test
+    public void test_class_statics_are_own_properties() {
+        assertTrue(bool("class C { static m() {} } Object.prototype.hasOwnProperty.call(C, 'm')"));
+        assertEquals(1, num("class C { static p = 1; } Object.keys(C).length"));
+        assertTrue(bool("class C { static m() {} } Object.getOwnPropertyDescriptor(C, 'm').enumerable === false"));
     }
 }

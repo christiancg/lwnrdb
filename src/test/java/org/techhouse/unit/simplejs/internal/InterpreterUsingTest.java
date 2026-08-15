@@ -150,8 +150,8 @@ public class InterpreterUsingTest {
     // a using in a switch case disposes when the switch exits
     @Test
     public void test_switch_using_disposes() {
-        final var source = "let log=[]; switch(1){ case 1: using r=" + dispose("log.push('d')")
-                + "; log.push('c'); break; } log.join(',')";
+        final var source = "let log=[]; switch(1){ case 1: { using r=" + dispose("log.push('d')")
+                + "; log.push('c'); } break; } log.join(',')";
         assertEquals("c,d", str(source));
     }
 

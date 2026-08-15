@@ -189,6 +189,14 @@ public final class StatementEvaluator {
 
     public Completion evalFor(ForStatement statement, Environment env, String label) {
         final var loopEnv = env.child();
+        if (statement.getInit() instanceof VariableDeclaration declaration
+                && USING_KINDS.contains(declaration.getKind())) {
+            return runDisposing(loopEnv, () -> runFor(statement, env, loopEnv, label));
+        }
+        return runFor(statement, env, loopEnv, label);
+    }
+
+    private Completion runFor(ForStatement statement, Environment env, Environment loopEnv, String label) {
         final var init = statement.getInit();
         final var perIterationNames = new ArrayList<String>();
         if (init instanceof VariableDeclaration declaration) {

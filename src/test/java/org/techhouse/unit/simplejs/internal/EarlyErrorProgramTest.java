@@ -2,9 +2,11 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsNumber;
 
@@ -15,6 +17,14 @@ public class EarlyErrorProgramTest {
 
     private static void rejects(String source) {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // the parser reports a positional early error as UnexpectedTokenException, a named rule as
+    // SyntaxErrorException; both are parse-time rejections
+    private static void rejectsParse(String source) {
+        final var error = assertThrows(RuntimeException.class, () -> Interpreter.run(source));
+        assertTrue(error instanceof SyntaxErrorException || error instanceof UnexpectedTokenException,
+                "expected a parse rejection but got " + error);
     }
 
     // a const declarator must have an initializer
@@ -141,5 +151,45 @@ public class EarlyErrorProgramTest {
         rejects("class A { static async method([element]) { 'use strict'; } }");
         rejects("function* g([a]) { 'use strict'; }");
         assertEquals(1, num("function f(a) { 'use strict'; return a; } f(1)"));
+    }
+
+    // the body of if/else, a loop or a label is a Statement, so a declaration there is an early error
+    @Test
+    public void test_declaration_in_statement_position_is_a_syntax_error() {
+        rejects("if (true) function f() {}");
+        rejects("if (true) ; else class C {}");
+        rejects("while (false) let x = 1;");
+        rejects("do const x = 1; while (false)");
+        rejects("for (;;) async function f() {}");
+        rejects("for (var a in {}) function* g() {}");
+        rejects("l: function f() {}");
+        rejects("if (false) l1: l2: function f() {}");
+        assertEquals(1, num("if (true) var x = 1; x"));
+    }
+
+    // a yield expression belongs to a generator body and nowhere else
+    @Test
+    public void test_yield_outside_a_generator_is_a_syntax_error() {
+        rejects("function f() { yield 1; }");
+        rejects("async function f() { yield 1; }");
+        rejects("function* g(a = yield) {}");
+        rejects("function* g() { return () => yield; }");
+        rejects("class C { x = yield; }");
+        rejects("for ([a = yield] of [[]]) ;");
+        assertEquals(1, num("function* g() { yield 1; } g().next().value"));
+        assertEquals(1, num("({ yield: 1 }).yield"));
+    }
+
+    // an assignment pattern's rest element is final, and an optional chain is not a valid target
+    @Test
+    public void test_invalid_assignment_pattern_is_a_syntax_error() {
+        rejectsParse("[...a, b] = [];");
+        rejectsParse("[...a,] = [];");
+        rejectsParse("({...a, b} = {});");
+        rejectsParse("({...a,} = {});");
+        rejectsParse("for ([...a, b] of [[]]) ;");
+        rejectsParse("var o = {}; [o?.a] = [1];");
+        rejectsParse("var o = {}; o?.a = 1;");
+        assertEquals(1, num("var a = []; [...a] = [1]; a[0]"));
     }
 }
