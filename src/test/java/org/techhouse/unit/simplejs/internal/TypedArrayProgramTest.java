@@ -644,16 +644,24 @@ public class TypedArrayProgramTest {
         assertEquals(4 * 100 + 1, num(source));
     }
 
-    // an explicit-length view does not track buffer resizes
+    // an explicit-length view does not track buffer resizes: it stays its construction-time length
+    // while it still fits, and reports zero once the buffer has shrunk out from under it
     @Test
     public void test_explicit_length_view_fixed() {
-        final var source = """
+        final var stillFits = """
+                const buf = new ArrayBuffer(16, { maxByteLength: 16 });
+                const view = new Int32Array(buf, 0, 2);
+                buf.resize(12);
+                view.length
+                """;
+        assertEquals(2, num(stillFits));
+        final var outOfBounds = """
                 const buf = new ArrayBuffer(16, { maxByteLength: 16 });
                 const view = new Int32Array(buf, 0, 2);
                 buf.resize(4);
                 view.length
                 """;
-        assertEquals(2, num(source));
+        assertEquals(0, num(outOfBounds));
     }
 
     // a view over a non-resizable buffer keeps its construction-time length

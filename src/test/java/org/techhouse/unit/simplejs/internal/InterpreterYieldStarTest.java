@@ -9,7 +9,9 @@ import org.techhouse.simplejs.values.JsString;
 
 public class InterpreterYieldStarTest {
     private static double num() {
-        return ((JsNumber) Interpreter.run("let reads = 0;\nlet steps = 0;\nlet iterable = {};\niterable[Symbol.iterator] = function() {\n  return {\n    get next() {\n      reads += 1;\n      return function() { steps += 1; return { value: 1, done: steps > 1 }; };\n    }\n  };\n};\nfunction* g() { yield* iterable; }\nlet it = g();\nit.next();\nit.next();\nreads\n")).getValue();
+        return ((JsNumber) Interpreter.run(
+                "let reads = 0;\nlet steps = 0;\nlet iterable = {};\niterable[Symbol.iterator] = function() {\n  return {\n    get next() {\n      reads += 1;\n      return function() { steps += 1; return { value: 1, done: steps > 1 }; };\n    }\n  };\n};\nfunction* g() { yield* iterable; }\nlet it = g();\nit.next();\nit.next();\nreads\n"))
+                .getValue();
     }
 
     private static String str(String source) {

@@ -330,7 +330,12 @@ public final class MemberEvaluator {
         if (InterpreterUtils.isCanonicalNumericIndexString(key)) {
             return JsUndefined.getInstance();
         }
-        return intrinsicMember(typed, key);
+        final var table = typed.ownProperties();
+        if (table.hasAccessor(key)) {
+            final var getter = table.getAccessorGetter(key);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, typed, List.of());
+        }
+        return table.has(key) ? table.get(key) : intrinsicMember(typed, key);
     }
 
     private JsValue numberMember(JsNumber number, String key) {
@@ -355,7 +360,10 @@ public final class MemberEvaluator {
                 final var getter = array.getIndexAccessorGetter(index);
                 return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, array, List.of());
             }
-            return array.get(index);
+            // A hole is not an own property, so the lookup continues up the prototype chain.
+            if (index < array.length() && !array.isHole(index)) {
+                return array.get(index);
+            }
         }
         if (array.hasPropAccessor(key)) {
             final var getter = array.getPropAccessorGetter(key);
@@ -435,15 +443,21 @@ public final class MemberEvaluator {
                 final var index = arrayIndex(key);
                 if (index != null) {
                     typed.setElement(index, value);
+                    yield true;
                 }
-                yield true;
+                // A CanonicalNumericIndexString that is not a valid index is silently discarded by
+                // IntegerIndexedElementSet; it must never become an ordinary own property.
+                yield InterpreterUtils.isCanonicalNumericIndexString(key) || typed.ownProperties().set(key, value);
             }
             case JsRegExp regexp -> {
                 if ("lastIndex".equals(key)) {
                     final var next = JsCoercion.toNumber(value);
                     regexp.setLastIndex(Double.isNaN(next) ? 0 : (int) next);
+                    yield true;
                 }
-                yield true;
+                // Anything else is an ordinary own property: RegExpExec calls the receiver's own
+                // `exec`, which a script can only override if the assignment actually lands.
+                yield regexp.ownProperties().set(key, value);
             }
             case JsNull ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
@@ -714,7 +728,12 @@ public final class MemberEvaluator {
         if (RegexBuiltins.isAccessor(key)) {
             return orUndefined(RegexBuiltins.getMethod(regexp, key));
         }
-        return intrinsicMember(regexp, key);
+        final var table = regexp.ownProperties();
+        if (table.hasAccessor(key)) {
+            final var getter = table.getAccessorGetter(key);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, regexp, List.of());
+        }
+        return table.has(key) ? table.get(key) : intrinsicMember(regexp, key);
     }
 
     private JsValue promiseMethod(JsPromise promise, String key) {

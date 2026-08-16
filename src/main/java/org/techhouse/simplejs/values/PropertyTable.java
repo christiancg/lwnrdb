@@ -219,12 +219,27 @@ public final class PropertyTable {
         if (isNew && !extensible) {
             return false;
         }
+        // A symbol-keyed data property honours [[Writable]] exactly like a string-keyed one, so
+        // Object.freeze(o) rejects `o[sym] = v` rather than silently letting it through.
+        if (!isNew && !getSymbolFlags(key).writable()) {
+            return false;
+        }
         if (symbolProperties == null) {
             symbolProperties = new LinkedHashMap<>();
         }
         symbolProperties.put(key, value);
         registerSymbolKey(key);
         return true;
+    }
+
+    // [[DefineOwnProperty]]'s counterpart to setSymbol: a definition is not an assignment, so it is
+    // not subject to [[Writable]] (a non-writable but configurable symbol property can be redefined).
+    public void defineSymbolValue(JsSymbol key, JsValue value) {
+        if (symbolProperties == null) {
+            symbolProperties = new LinkedHashMap<>();
+        }
+        symbolProperties.put(key, value);
+        registerSymbolKey(key);
     }
 
     public boolean hasSymbol(JsSymbol key) {

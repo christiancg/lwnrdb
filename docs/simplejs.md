@@ -774,7 +774,7 @@ but is not a constructor.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **86.09%**, 31,845/36,992). The official
+Conformance is **measured, not asserted** (currently **90.28%**, 33,398/36,992). The official
 tc39/test262 corpus runs against
 `SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
 the language + built-ins surface a database script host actually exposes, and gated on a tracked
@@ -824,7 +824,7 @@ commands above; the limitations below are the ones that need an explanation rath
 |---|---|---|
 | 1 | **`\k<name>` on a duplicated group name resolves to the first alias** | A duplicated name (`/(?<y>a)\|(?<y>b)/`) compiles by renaming the repeats and resolving `groups.y`/`$<y>` to whichever alias participated, but `java.util.regex` cannot express "whichever alias participated" in a *backreference*, so `\k<y>` always refers to the first one. |
 | 2 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
-| 3 | **Generic array-like receivers are snapshotted** | Any object with a `length` is accepted for the non-mutating methods (`Array.prototype.map.call({length: 2, 0: 'a', 1: 'b'}, f)` works), but the receiver is copied into a fresh `JsArray`. So `arguments`/typed-array/string receivers do not write through for a mutating call (`Array.prototype.push.call(arguments, x)`), a plain object is rejected outright for the mutating methods rather than losing the write silently, and a `length` past the int range is a `TypeError` rather than a materialised snapshot — see *Intrinsic prototypes*. |
+| 3 | **An array index does not resolve an inherited *setter*, and a `JsArray` cannot be a `[[Prototype]]`** | `Array.prototype` itself is fully generic (see *Intrinsic prototypes*), but two array-shaped holes remain below it: a write to an index with no own property goes straight to the backing list instead of consulting a setter installed on the prototype chain, and `JsObject.setProto` takes a `JsObject`, so `foo.prototype = [1, 2, 3]` (and `Object.create([1, 2, 3])`) does not make the array's indices inherited. |
 | 4 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
 | 5 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. `toString` emits the spec's `NativeFunction` form for user functions too, which is legal precisely because no source is retained (`HostHasSourceTextAvailable` is false), so the output is conformant while the underlying gap remains. |
 | 6 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
@@ -881,16 +881,15 @@ brand checks and field initialisation. Only *static* members remain in `JsClass`
 
 What this reaches and what it does not:
 
-- `Array.prototype.slice.call(arguments)` works, as does a plain array-like
-  (`Array.prototype.reduce.call({length: 3, 0: 1, 1: 2, 2: 3}, f, 0)`): any `JsObject` whose `length`
-  is not `undefined` is accepted for a non-mutating method, read through the member seam so getters
-  and inherited index properties are honoured and an absent index becomes a hole. A method that walks
-  backwards (`lastIndexOf`, `reduceRight`, `findLast`, `findLastIndex`) reads the indices in
-  descending order, so a throwing getter aborts where the spec's lazy walk would. The receiver is
-  **snapshotted** into a fresh `JsArray`, so a *mutating* generic call
-  (`Array.prototype.push.call(arguments, x)`) does not write through — accepted limitation, and the
-  reason the wrapper name appears in the `TypeError`. A plain object is therefore refused for the
-  mutating methods rather than accepting a write that would be discarded.
+- `Array.prototype` is **fully generic**, in the spec's own shape: `O = ToObject(this value)` (a
+  primitive receiver is boxed, only `null`/`undefined` are refused), `len = ToLength(Get(O, "length"))`,
+  then a lazy `HasProperty`/`Get`/`Set`/`Delete` per index through the member seam. So getters,
+  proxy traps and inherited index properties are honoured; the callback's third argument is the
+  receiver itself; a mutating method (`Array.prototype.push.call(arguments, x)`) writes through; a
+  rejected write is a `TypeError` rather than a dropped one; and a `length` past the int range is
+  walked, not materialised (`lastIndexOf.call({length: 2**53-1, …}, x)` works). A plain dense
+  `JsArray` without index accessors short-circuits to its backing list, which is observationally
+  identical.
 - A wrong-type receiver throws a `TypeError` naming the method
   (`Array.prototype.push called on an incompatible receiver 1`).
 - **Builtin subclassing** works via `JsClass.nativeSuperClass`: heritage that resolves to a
@@ -1024,7 +1023,7 @@ The final conformance pass, in five phases:
 - **String iteration by code point** — the iterator-protocol paths (`for-of`, spread, array
   destructuring, `String`'s `Symbol.iterator`, `Array.from`) walk a string by code point, so
   `[..."ab😀"].length` is 3. Indexed access, `length`, `split("")`, object spread of a string and the
-  generic array-like receiver snapshot stay code-unit based, as the spec's string exotic object requires.
+  generic array-like receiver paths stay code-unit based, as the spec's string exotic object requires.
 - **Class prototypes, `new.target`, object-literal `super`, patchable `Promise`/generator prototypes** —
   `JsClass` now owns a real `prototype` `JsObject` (non-enumerable entries, `constructor`
   back-reference, `proto`-linked to the superclass prototype), instances are linked to it, and member

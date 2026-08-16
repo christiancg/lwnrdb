@@ -13,6 +13,7 @@ import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
@@ -46,10 +47,18 @@ public final class AsyncIteratorBuiltins {
         });
         final var prototype = new JsObject();
         for (final var name : HELPERS) {
-            prototype.set(name, helper(ops, loop, name));
+            Intrinsics.defineHidden(prototype, name, helper(ops, loop, name));
         }
         prototype.setSymbol(JsSymbol.ASYNC_ITERATOR,
                 new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
+        prototype.setSymbolFlags(JsSymbol.ASYNC_ITERATOR, new JsObject.PropertyFlags(true, false, true));
+        prototype.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("AsyncIterator"));
+        prototype.setSymbolFlags(JsSymbol.TO_STRING_TAG, new JsObject.PropertyFlags(true, false, true));
+        final var asyncDispose = new JsNativeFunction("[Symbol.asyncDispose]",
+                (thisArg, _) -> asyncDispose(ops, loop, thisArg));
+        asyncDispose.setLength(0);
+        prototype.setSymbol(JsSymbol.ASYNC_DISPOSE, asyncDispose);
+        prototype.setSymbolFlags(JsSymbol.ASYNC_DISPOSE, new JsObject.PropertyFlags(true, false, true));
         prototype.defineValue("constructor", ctor);
         prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         ctor.setProperty("prototype", prototype);
@@ -565,6 +574,25 @@ public final class AsyncIteratorBuiltins {
             return out;
         }));
         return wrapper;
+    }
+
+    // %AsyncIteratorPrototype%[@@asyncDispose]: call the receiver's own `return` (if any) and resolve
+    // with undefined once it settles, so `await using it = asyncGen()` closes the iterator.
+    private static JsValue asyncDispose(InterpreterOps ops, EventLoop loop, JsValue receiver) {
+        final var out = new JsPromise(loop);
+        guarded(out, () -> {
+            final var returnMethod = ops.getMember(receiver, new JsString("return"));
+            if (returnMethod instanceof JsUndefined || returnMethod instanceof JsNull) {
+                out.resolve(JsUndefined.getInstance());
+                return;
+            }
+            if (!isCallable(returnMethod)) {
+                throw new TypeErrorException("The iterator's 'return' property is not callable");
+            }
+            toPromise(loop, ops.call(returnMethod, receiver, List.of(JsUndefined.getInstance())))
+                    .subscribe(_ -> out.resolve(JsUndefined.getInstance()), out::reject);
+        });
+        return out;
     }
 
     private static JsPromise toPromise(EventLoop loop, JsValue value) {

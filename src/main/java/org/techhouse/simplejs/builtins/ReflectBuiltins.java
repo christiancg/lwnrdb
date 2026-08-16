@@ -22,33 +22,38 @@ public final class ReflectBuiltins {
 
     public static JsObject create(InterpreterOps ops) {
         final var reflect = new JsObject();
-        reflect.set("get",
+        Intrinsics.defineHidden(reflect, "get",
                 new JsNativeFunction("get",
                         (_, args) -> args.size() > 2
                                 ? ops.getMemberWithReceiver(arg(args, 0), arg(args, 1), arg(args, 2))
                                 : ops.getMember(arg(args, 0), arg(args, 1))));
-        reflect.set("set",
+        Intrinsics.defineHidden(reflect, "set",
                 new JsNativeFunction("set",
                         (_, args) -> JsBoolean.of(args.size() > 3
                                 ? ops.setMemberWithReceiver(arg(args, 0), arg(args, 1), arg(args, 2), arg(args, 3))
                                 : ops.setMember(arg(args, 0), arg(args, 1), arg(args, 2)))));
-        reflect.set("has", new JsNativeFunction("has", (_, args) -> JsBoolean.of(ops.has(arg(args, 0), arg(args, 1)))));
-        reflect.set("deleteProperty", new JsNativeFunction("deleteProperty",
+        Intrinsics.defineHidden(reflect, "has",
+                new JsNativeFunction("has", (_, args) -> JsBoolean.of(ops.has(arg(args, 0), arg(args, 1)))));
+        Intrinsics.defineHidden(reflect, "deleteProperty", new JsNativeFunction("deleteProperty",
                 (_, args) -> JsBoolean.of(ops.deleteMember(arg(args, 0), arg(args, 1)))));
-        reflect.set("ownKeys", new JsNativeFunction("ownKeys", (_, args) -> new JsArray(ops.ownKeys(arg(args, 0)))));
-        reflect.set("apply", new JsNativeFunction("apply", (_, args) -> apply(ops, args)));
-        reflect.set("construct", new JsNativeFunction("construct", (_, args) -> construct(ops, args)));
-        reflect.set("getPrototypeOf",
+        Intrinsics.defineHidden(reflect, "ownKeys",
+                new JsNativeFunction("ownKeys", (_, args) -> new JsArray(ops.ownKeys(arg(args, 0)))));
+        Intrinsics.defineHidden(reflect, "apply", new JsNativeFunction("apply", (_, args) -> apply(ops, args)));
+        Intrinsics.defineHidden(reflect, "construct",
+                new JsNativeFunction("construct", (_, args) -> construct(ops, args)));
+        Intrinsics.defineHidden(reflect, "getPrototypeOf",
                 new JsNativeFunction("getPrototypeOf", (_, args) -> ops.getPrototypeOf(arg(args, 0))));
-        reflect.set("setPrototypeOf", new JsNativeFunction("setPrototypeOf",
+        Intrinsics.defineHidden(reflect, "setPrototypeOf", new JsNativeFunction("setPrototypeOf",
                 (_, args) -> JsBoolean.of(ops.setPrototypeOf(arg(args, 0), arg(args, 1)))));
-        reflect.set("isExtensible",
+        Intrinsics.defineHidden(reflect, "isExtensible",
                 new JsNativeFunction("isExtensible", (_, args) -> JsBoolean.of(ops.isExtensible(arg(args, 0)))));
-        reflect.set("preventExtensions", new JsNativeFunction("preventExtensions",
+        Intrinsics.defineHidden(reflect, "preventExtensions", new JsNativeFunction("preventExtensions",
                 (_, args) -> JsBoolean.of(ops.preventExtensions(arg(args, 0)))));
-        reflect.set("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> defineProperty(ops, args)));
-        reflect.set("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
+        Intrinsics.defineHidden(reflect, "defineProperty",
+                new JsNativeFunction("defineProperty", (_, args) -> defineProperty(ops, args)));
+        Intrinsics.defineHidden(reflect, "getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
                 (_, args) -> ops.getOwnPropertyDescriptor(arg(args, 0), arg(args, 1))));
+        Intrinsics.defineNamespaceTag(reflect, "Reflect");
         return reflect;
     }
 

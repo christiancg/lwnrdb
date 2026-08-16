@@ -1,8 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
-
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -10,15 +9,19 @@ import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.simplejs.values.SameValueZero;
@@ -29,6 +32,10 @@ public final class ArrayBuiltins {
             "shift", "unshift", "sort", "flat", "findIndex", "findLast", "findLastIndex", "lastIndexOf", "reduceRight",
             "flatMap", "fill", "copyWithin", "reverse", "at", "keys", "values", "entries", "toReversed", "toSorted",
             "toSpliced", "with");
+
+    // 2^53-1: the largest index the spec's ToLength admits, so every index walk is done in `long`.
+    private static final long MAX_SAFE_INTEGER = 9007199254740991L;
+    private static final JsString LENGTH = new JsString("length");
 
     private ArrayBuiltins() {
     }
@@ -72,14 +79,14 @@ public final class ArrayBuiltins {
             createDataPropertyOrThrow(result, i, mapped, ops);
         }
         if (!(result instanceof JsArray)) {
-            ops.setMember(result, new JsString("length"), new JsNumber(items.size()));
+            ops.setMember(result, LENGTH, new JsNumber(items.size()));
         }
         return result;
     }
 
-    private static void createDataPropertyOrThrow(JsValue target, int index, JsValue value, InterpreterOps ops) {
+    private static void createDataPropertyOrThrow(JsValue target, long index, JsValue value, InterpreterOps ops) {
         if (target instanceof JsArray array) {
-            if (!array.set(index, value)) {
+            if (index > Integer.MAX_VALUE || !array.set((int) index, value)) {
                 throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
             }
             return;
@@ -89,395 +96,444 @@ public final class ArrayBuiltins {
         descriptor.set("writable", JsBoolean.of(true));
         descriptor.set("enumerable", JsBoolean.of(true));
         descriptor.set("configurable", JsBoolean.of(true));
-        ops.defineProperty(target, new JsString(Integer.toString(index)), descriptor);
+        if (ops == null || !ops.defineProperty(target, new JsString(Long.toString(index)), descriptor)) {
+            throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
+        }
     }
 
+    // Array(len) allocates holes, not undefined elements: a callback method must not visit them.
     private static JsValue construct(List<JsValue> args) {
-        if (args.size() == 1 && args.getFirst() instanceof JsNumber n) {
-            final var result = new JsArray();
-            final var length = (int) n.getValue();
-            for (var i = 0; i < length; i++) {
-                result.push(JsUndefined.getInstance());
+        if (args.size() == 1 && args.getFirst() instanceof JsNumber number) {
+            final var length = number.getValue();
+            if (length < 0 || length != Math.floor(length) || length > 4294967295D) {
+                throw new RangeErrorException("Invalid array length");
             }
-            return result;
+            return newArray((long) length);
         }
         return new JsArray(new ArrayList<>(args));
     }
 
-    public static JsNativeFunction getMethod(JsArray receiver, String name, Invoker invoker, InterpreterOps ops) {
+    public static JsNativeFunction getMethod(JsValue receiver, String name, Invoker invoker, InterpreterOps ops) {
         return switch (name) {
             case "toLocaleString" ->
-                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(receiver, ops)));
-            case "map" -> new JsNativeFunction("map", (_, args) -> map(receiver, args, invoker));
-            case "filter" -> new JsNativeFunction("filter", (_, args) -> filter(receiver, args, invoker));
-            case "reduce" -> new JsNativeFunction("reduce", (_, args) -> reduce(receiver, args, invoker));
-            case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
-            case "find" -> new JsNativeFunction("find", (_, args) -> find(receiver, args, invoker));
-            case "some" -> new JsNativeFunction("some", (_, args) -> JsBoolean.of(some(receiver, args, invoker)));
-            case "every" -> new JsNativeFunction("every", (_, args) -> JsBoolean.of(every(receiver, args, invoker)));
-            case "includes" -> new JsNativeFunction("includes", (_, args) -> JsBoolean.of(includes(receiver, args)));
-            case "indexOf" -> new JsNativeFunction("indexOf", (_, args) -> new JsNumber(indexOf(receiver, args)));
-            case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(receiver, args));
-            case "splice" -> new JsNativeFunction("splice", (_, args) -> splice(receiver, args));
-            case "concat" -> new JsNativeFunction("concat", (_, args) -> concat(receiver, args, ops));
-            case "join" -> new JsNativeFunction("join", (_, args) -> new JsString(join(receiver, args)));
-            case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(join(receiver, List.of())));
-            case "push" -> new JsNativeFunction("push", (_, args) -> push(receiver, args));
-            case "pop" -> new JsNativeFunction("pop", (_, _) -> pop(receiver));
-            case "shift" -> new JsNativeFunction("shift", (_, _) -> shift(receiver));
-            case "unshift" -> new JsNativeFunction("unshift", (_, args) -> unshift(receiver, args));
-            case "sort" -> new JsNativeFunction("sort", (_, args) -> sort(receiver, args, invoker));
-            case "flat" -> new JsNativeFunction("flat", (_, args) -> flat(receiver, args));
-            case "findIndex" ->
-                new JsNativeFunction("findIndex", (_, args) -> new JsNumber(findIndex(receiver, args, invoker)));
-            case "findLast" -> new JsNativeFunction("findLast", (_, args) -> findLast(receiver, args, invoker));
-            case "findLastIndex" -> new JsNativeFunction("findLastIndex",
-                    (_, args) -> new JsNumber(findLastIndex(receiver, args, invoker)));
+                new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(target(receiver, ops), invoker, ops)));
+            case "map" -> new JsNativeFunction(name, (_, args) -> map(target(receiver, ops), args, invoker, ops));
+            case "filter" -> new JsNativeFunction(name, (_, args) -> filter(target(receiver, ops), args, invoker, ops));
+            case "reduce" -> new JsNativeFunction(name, (_, args) -> reduce(target(receiver, ops), args, invoker));
+            case "forEach" -> new JsNativeFunction(name, (_, args) -> forEach(target(receiver, ops), args, invoker));
+            case "find" -> new JsNativeFunction(name, (_, args) -> find(target(receiver, ops), args, invoker, true));
+            case "some" ->
+                new JsNativeFunction(name, (_, args) -> JsBoolean.of(some(target(receiver, ops), args, invoker)));
+            case "every" ->
+                new JsNativeFunction(name, (_, args) -> JsBoolean.of(every(target(receiver, ops), args, invoker)));
+            case "includes" ->
+                new JsNativeFunction(name, (_, args) -> JsBoolean.of(includes(target(receiver, ops), args, ops)));
+            case "indexOf" ->
+                new JsNativeFunction(name, (_, args) -> new JsNumber(indexOf(target(receiver, ops), args, ops)));
+            case "slice" -> new JsNativeFunction(name, (_, args) -> slice(target(receiver, ops), args, ops));
+            case "splice" -> new JsNativeFunction(name, (_, args) -> splice(target(receiver, ops), args, ops));
+            case "concat" -> new JsNativeFunction(name, (_, args) -> concat(target(receiver, ops), args, ops));
+            case "join" ->
+                new JsNativeFunction(name, (_, args) -> new JsString(join(target(receiver, ops), args, ops)));
+            case "toString" ->
+                new JsNativeFunction(name, (_, _) -> toStringMethod(target(receiver, ops), invoker, ops));
+            case "push" -> new JsNativeFunction(name, (_, args) -> push(target(receiver, ops), args));
+            case "pop" -> new JsNativeFunction(name, (_, _) -> pop(target(receiver, ops)));
+            case "shift" -> new JsNativeFunction(name, (_, _) -> shift(target(receiver, ops)));
+            case "unshift" -> new JsNativeFunction(name, (_, args) -> unshift(target(receiver, ops), args));
+            case "sort" -> new JsNativeFunction(name, (_, args) -> sort(target(receiver, ops), args, invoker, ops));
+            case "flat" -> new JsNativeFunction(name, (_, args) -> flat(target(receiver, ops), args, ops));
+            case "findIndex" -> new JsNativeFunction(name,
+                    (_, args) -> new JsNumber(findIndex(target(receiver, ops), args, invoker, true)));
+            case "findLast" ->
+                new JsNativeFunction(name, (_, args) -> find(target(receiver, ops), args, invoker, false));
+            case "findLastIndex" -> new JsNativeFunction(name,
+                    (_, args) -> new JsNumber(findIndex(target(receiver, ops), args, invoker, false)));
             case "lastIndexOf" ->
-                new JsNativeFunction("lastIndexOf", (_, args) -> new JsNumber(lastIndexOf(receiver, args)));
+                new JsNativeFunction(name, (_, args) -> new JsNumber(lastIndexOf(target(receiver, ops), args, ops)));
             case "reduceRight" ->
-                new JsNativeFunction("reduceRight", (_, args) -> reduceRight(receiver, args, invoker));
-            case "flatMap" -> new JsNativeFunction("flatMap", (_, args) -> flatMap(receiver, args, invoker));
-            case "fill" -> new JsNativeFunction("fill", (_, args) -> fill(receiver, args));
-            case "copyWithin" -> new JsNativeFunction("copyWithin", (_, args) -> copyWithin(receiver, args));
-            case "reverse" -> new JsNativeFunction("reverse", (_, _) -> reverse(receiver));
-            case "at" -> new JsNativeFunction("at", (_, args) -> at(receiver, args));
-            case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(receiver));
-            case "values" -> new JsNativeFunction("values", (_, _) -> valuesIterator(receiver));
-            case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(receiver));
-            case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(receiver));
-            case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker));
-            case "toSpliced" -> new JsNativeFunction("toSpliced", (_, args) -> toSpliced(receiver, args));
-            case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, args));
+                new JsNativeFunction(name, (_, args) -> reduceRight(target(receiver, ops), args, invoker));
+            case "flatMap" ->
+                new JsNativeFunction(name, (_, args) -> flatMap(target(receiver, ops), args, invoker, ops));
+            case "fill" -> new JsNativeFunction(name, (_, args) -> fill(target(receiver, ops), args, ops));
+            case "copyWithin" -> new JsNativeFunction(name, (_, args) -> copyWithin(target(receiver, ops), args, ops));
+            case "reverse" -> new JsNativeFunction(name, (_, _) -> reverse(target(receiver, ops)));
+            case "at" -> new JsNativeFunction(name, (_, args) -> at(target(receiver, ops), args, ops));
+            case "keys" -> new JsNativeFunction(name, (_, _) -> indexIterator(target(receiver, ops), "keys"));
+            case "values" -> new JsNativeFunction(name, (_, _) -> indexIterator(target(receiver, ops), "values"));
+            case "entries" -> new JsNativeFunction(name, (_, _) -> indexIterator(target(receiver, ops), "entries"));
+            case "toReversed" -> new JsNativeFunction(name, (_, _) -> toReversed(target(receiver, ops), ops));
+            case "toSorted" ->
+                new JsNativeFunction(name, (_, args) -> toSorted(target(receiver, ops), args, invoker, ops));
+            case "toSpliced" -> new JsNativeFunction(name, (_, args) -> toSpliced(target(receiver, ops), args, ops));
+            case "with" -> new JsNativeFunction(name, (_, args) -> with(target(receiver, ops), args, ops));
             default -> null;
         };
     }
 
-    private static String toLocaleString(JsArray receiver, InterpreterOps ops) {
+    private static ArrayLike target(JsValue receiver, InterpreterOps ops) {
+        return new ArrayLike(receiver, ops);
+    }
+
+    // The spec's array-like receiver: every index is read, written and deleted lazily through the
+    // member seam, so a getter/setter, a proxy trap or a frozen slot behaves exactly as it would on
+    // the receiver itself. A plain dense JsArray without index accessors short-circuits to its
+    // backing list, which is observationally identical and avoids a key allocation per element.
+    private static final class ArrayLike {
+        private final JsValue value;
+        private final InterpreterOps ops;
+
+        ArrayLike(JsValue value, InterpreterOps ops) {
+            this.value = value;
+            this.ops = ops;
+        }
+
+        private JsArray dense() {
+            return value instanceof JsArray array && !array.hasAnyIndexAccessor() ? array : null;
+        }
+
+        long length() {
+            return toLength(getKey(LENGTH), ops);
+        }
+
+        JsValue getKey(JsValue key) {
+            return ops == null ? JsUndefined.getInstance() : ops.getMember(value, key);
+        }
+
+        JsValue get(long index) {
+            final var dense = dense();
+            if (dense != null && index >= 0 && index < dense.length() && !dense.isHole((int) index)) {
+                return dense.get((int) index);
+            }
+            final var element = getKey(key(index));
+            return element == JsUndefined.getHole() ? JsUndefined.getInstance() : element;
+        }
+
+        boolean has(long index) {
+            final var dense = dense();
+            if (dense != null && index >= 0 && index < dense.length() && !dense.isHole((int) index)) {
+                return true;
+            }
+            if (ops == null) {
+                return false;
+            }
+            final var key = key(index);
+            if (supportsHas(value) && ops.has(value, key)) {
+                return true;
+            }
+            return needsReadFallback(value) && !(ops.getMember(value, key) instanceof JsUndefined);
+        }
+
+        // A value type the `in` operator rejects outright, and a primitive wrapper (whose indexed
+        // properties live on the wrapped primitive rather than on the object), are both answered by
+        // a plain read instead.
+        private static boolean needsReadFallback(JsValue value) {
+            return !supportsHas(value) || (value instanceof JsObject object && object.getPrimitive() != null);
+        }
+
+        void set(long index, JsValue element) {
+            if (!trySet(index, element)) {
+                throw new TypeErrorException("Cannot assign to read only property '" + index + "' of the receiver");
+            }
+        }
+
+        private boolean trySet(long index, JsValue element) {
+            final var dense = dense();
+            if (dense != null) {
+                return index <= Integer.MAX_VALUE && dense.set((int) index, element);
+            }
+            if (ops == null) {
+                return true;
+            }
+            // A string's ToObject wrapper has non-writable index and length properties, so an
+            // in-range write is rejected rather than silently dropped.
+            if (wrappedString() instanceof JsString string) {
+                return index >= string.getValue().length();
+            }
+            return ops.setMember(value, key(index), element);
+        }
+
+        void setLength(long length) {
+            if (wrappedString() != null || (ops != null && !ops.setMember(value, LENGTH, new JsNumber(length)))) {
+                throw new TypeErrorException("Cannot assign to read only property 'length' of the receiver");
+            }
+        }
+
+        private JsValue wrappedString() {
+            if (value instanceof JsString) {
+                return value;
+            }
+            return value instanceof JsObject object && object.getPrimitive() instanceof JsString
+                    ? object.getPrimitive()
+                    : null;
+        }
+
+        void delete(long index) {
+            if (ops == null) {
+                final var dense = dense();
+                if (dense != null && index >= 0 && index < dense.length()) {
+                    dense.clearIndexToHole((int) index);
+                }
+                return;
+            }
+            if (!ops.deleteMember(value, key(index))) {
+                throw new TypeErrorException("Cannot delete property '" + index + "' of the receiver");
+            }
+        }
+
+        // HasProperty is only defined over the value types the interpreter's `in` operator accepts;
+        // everything else (a string, an arguments object, a typed array, a Map) answers through a
+        // plain read, which is exact for them because none of them stores an own undefined.
+        private static boolean supportsHas(JsValue value) {
+            return value instanceof JsObject || value instanceof JsProxy || value instanceof JsArray
+                    || value instanceof JsClass || value instanceof JsFunction || value instanceof JsNativeFunction
+                    || value instanceof JsArguments || value instanceof JsTypedArray;
+        }
+    }
+
+    private static JsString key(long index) {
+        return new JsString(Long.toString(index));
+    }
+
+    private static long toLength(JsValue value, InterpreterOps ops) {
+        final var number = toIntegerOrInfinity(value, ops);
+        if (number <= 0) {
+            return 0;
+        }
+        return (long) Math.min(number, (double) MAX_SAFE_INTEGER);
+    }
+
+    private static double toIntegerOrInfinity(JsValue value, InterpreterOps ops) {
+        final var number = JsCoercion.toNumber(value, ops);
+        if (Double.isNaN(number)) {
+            return 0;
+        }
+        if (Double.isInfinite(number)) {
+            return number;
+        }
+        return number < 0 ? Math.ceil(number) : Math.floor(number);
+    }
+
+    private static long relativeIndex(double relative, long length) {
+        if (relative < 0) {
+            return relative == Double.NEGATIVE_INFINITY ? 0 : (long) Math.max(length + relative, 0);
+        }
+        return (long) Math.min(relative, (double) length);
+    }
+
+    private static JsValue arg(List<JsValue> args, int position) {
+        return position < args.size() ? args.get(position) : JsUndefined.getInstance();
+    }
+
+    private static JsArray newArray(long length) {
+        if (length > Integer.MAX_VALUE) {
+            throw new RangeErrorException("Invalid array length");
+        }
+        final var result = new JsArray();
+        result.setLength((int) length);
+        return result;
+    }
+
+    // ArraySpeciesCreate: only an array receiver consults its constructor, and the intrinsic Array
+    // carries no @@species, so the common case still lands on a plain array.
+    private static JsValue speciesCreate(ArrayLike target, long length, InterpreterOps ops) {
+        if (ops == null || !(target.value instanceof JsArray)) {
+            return newArray(length);
+        }
+        var constructor = ops.getMember(target.value, new JsString("constructor"));
+        if (InterpreterUtils.isObjectLike(constructor)) {
+            constructor = ops.getMember(constructor, JsSymbol.SPECIES);
+            if (constructor instanceof JsNull) {
+                constructor = JsUndefined.getInstance();
+            }
+        }
+        if (constructor instanceof JsUndefined) {
+            return newArray(length);
+        }
+        if (!InterpreterUtils.isConstructor(constructor)) {
+            throw new TypeErrorException("The constructor property is not a constructor");
+        }
+        return ops.construct(constructor, List.of(new JsNumber(length)));
+    }
+
+    private static void setResultLength(JsValue result, long length, InterpreterOps ops) {
+        if (result instanceof JsArray array) {
+            array.setLength((int) length);
+        } else if (ops != null) {
+            ops.setMember(result, LENGTH, new JsNumber(length));
+        }
+    }
+
+    private static String toLocaleString(ArrayLike target, Invoker invoker, InterpreterOps ops) {
+        final var length = target.length();
         final var sb = new StringBuilder();
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
+        for (var i = 0L; i < length; i++) {
             if (i > 0) {
                 sb.append(',');
             }
-            final var element = elements.get(i);
+            final var element = target.get(i);
             if (element instanceof JsNull || element instanceof JsUndefined) {
                 continue;
             }
-            final var method = ops.getMember(element, new JsString("toLocaleString"));
-            if (method instanceof JsFunction || method instanceof JsNativeFunction) {
-                sb.append(JsCoercion.toStr(ops.call(method, element, List.of())));
+            final var method = ops == null
+                    ? JsUndefined.getInstance()
+                    : ops.getMember(element, new JsString("toLocaleString"));
+            if (InterpreterUtils.isCallable(method)) {
+                sb.append(JsCoercion.toStr(invoker.call(method, element, List.of()), ops));
             } else {
-                sb.append(JsCoercion.toStr(element));
+                sb.append(JsCoercion.toStr(element, ops));
             }
         }
         return sb.toString();
     }
 
-    private static JsValue toReversed(JsArray receiver) {
-        final var copy = new JsArray(receiver.getElements());
-        return reverse(copy);
-    }
-
-    private static JsValue toSorted(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        return sort(new JsArray(receiver.getElements()), args, invoker);
-    }
-
-    private static JsValue toSpliced(JsArray receiver, List<JsValue> args) {
-        final var copy = new JsArray(receiver.getElements());
-        splice(copy, args);
-        return copy;
-    }
-
-    private static JsValue with(JsArray receiver, List<JsValue> args) {
-        final var elements = receiver.getElements();
-        final var length = elements.size();
-        var index = intArg(args, 0, 0);
-        if (index < 0) {
-            index += length;
-        }
-        if (index < 0 || index >= length) {
-            throw new RangeErrorException("Invalid index : " + intArg(args, 0, 0));
-        }
-        final var copy = new JsArray(elements);
-        copy.set(index, args.size() > 1 ? args.get(1) : JsUndefined.getInstance());
-        return copy;
-    }
-
-    private static int findIndex(JsArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue map(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var length = target.length();
         final var callback = callback(args);
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (!receiver.isHole(i) && JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(elements.get(i), new JsNumber(i), receiver)))) {
-                return i;
+        final var self = thisArg(args);
+        final var result = speciesCreate(target, length, ops);
+        for (var i = 0L; i < length; i++) {
+            if (target.has(i)) {
+                final var mapped = invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value));
+                createDataPropertyOrThrow(result, i, mapped, ops);
             }
         }
-        return -1;
+        return result;
     }
 
-    private static JsValue findLast(JsArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue filter(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var length = target.length();
         final var callback = callback(args);
-        final var elements = receiver.getElements();
-        for (var i = elements.size() - 1; i >= 0; i--) {
-            if (receiver.isHole(i)) {
+        final var self = thisArg(args);
+        final var result = speciesCreate(target, 0, ops);
+        var kept = 0L;
+        for (var i = 0L; i < length; i++) {
+            if (!target.has(i)) {
                 continue;
             }
-            final var element = elements.get(i);
-            if (JsCoercion.toBoolean(
-                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
-                return element;
+            final var element = target.get(i);
+            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), target.value)))) {
+                createDataPropertyOrThrow(result, kept, element, ops);
+                kept++;
             }
         }
-        return JsUndefined.getInstance();
+        return result;
     }
 
-    private static int findLastIndex(JsArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue reduce(ArrayLike target, List<JsValue> args, Invoker invoker) {
+        final var length = target.length();
         final var callback = callback(args);
-        final var elements = receiver.getElements();
-        for (var i = elements.size() - 1; i >= 0; i--) {
-            if (!receiver.isHole(i) && JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(elements.get(i), new JsNumber(i), receiver)))) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static int lastIndexOf(JsArray receiver, List<JsValue> args) {
-        if (args.isEmpty()) {
-            return -1;
-        }
-        final var target = args.getFirst();
-        final var elements = receiver.getElements();
-        for (var i = elements.size() - 1; i >= 0; i--) {
-            if (!receiver.isHole(i) && JsOperators.strictEquals(elements.get(i), target)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static JsValue reduceRight(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var callback = callback(args);
-        final var elements = receiver.getElements();
-        var index = elements.size() - 1;
-        JsValue accumulator;
+        var index = 0L;
+        JsValue accumulator = null;
         if (args.size() >= 2) {
             accumulator = args.get(1);
-        } else if (elements.isEmpty()) {
-            throw new TypeErrorException("Reduce of empty array with no initial value");
         } else {
-            accumulator = elements.get(index);
-            index--;
+            while (accumulator == null && index < length) {
+                if (target.has(index)) {
+                    accumulator = target.get(index);
+                }
+                index++;
+            }
+            if (accumulator == null) {
+                throw new TypeErrorException("Reduce of empty array with no initial value");
+            }
+        }
+        for (var i = index; i < length; i++) {
+            if (target.has(i)) {
+                accumulator = invoker.call(callback, JsUndefined.getInstance(),
+                        List.of(accumulator, target.get(i), new JsNumber(i), target.value));
+            }
+        }
+        return accumulator;
+    }
+
+    private static JsValue reduceRight(ArrayLike target, List<JsValue> args, Invoker invoker) {
+        var index = target.length() - 1;
+        final var callback = callback(args);
+        JsValue accumulator = null;
+        if (args.size() >= 2) {
+            accumulator = args.get(1);
+        } else {
+            while (accumulator == null && index >= 0) {
+                if (target.has(index)) {
+                    accumulator = target.get(index);
+                }
+                index--;
+            }
+            if (accumulator == null) {
+                throw new TypeErrorException("Reduce of empty array with no initial value");
+            }
         }
         for (var i = index; i >= 0; i--) {
-            if (receiver.isHole(i)) {
-                continue;
+            if (target.has(i)) {
+                accumulator = invoker.call(callback, JsUndefined.getInstance(),
+                        List.of(accumulator, target.get(i), new JsNumber(i), target.value));
             }
-            accumulator = invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(accumulator, elements.get(i), new JsNumber(i), receiver));
         }
         return accumulator;
     }
 
-    private static JsValue flatMap(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var callback = callback(args);
-        final var elements = receiver.getElements();
-        final var result = new JsArray();
-        for (var i = 0; i < elements.size(); i++) {
-            final var mapped = invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(elements.get(i), new JsNumber(i), receiver));
-            if (mapped instanceof JsArray array) {
-                for (final var element : array.getElements()) {
-                    result.push(element);
-                }
-            } else {
-                result.push(mapped);
-            }
-        }
-        return result;
-    }
-
-    private static JsValue fill(JsArray receiver, List<JsValue> args) {
-        final var elements = receiver.getElements();
-        final var length = elements.size();
-        final var value = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
-        final var start = clampIndex(intArg(args, 1, 0), length);
-        final var end = args.size() < 3 || args.get(2) instanceof JsUndefined
-                ? length
-                : clampIndex(intArg(args, 2, length), length);
-        for (var i = start; i < end; i++) {
-            elements.set(i, value);
-        }
-        return receiver;
-    }
-
-    private static JsValue copyWithin(JsArray receiver, List<JsValue> args) {
-        final var elements = receiver.getElements();
-        final var length = elements.size();
-        final var target = clampIndex(intArg(args, 0, 0), length);
-        final var start = clampIndex(intArg(args, 1, 0), length);
-        final var end = args.size() < 3 || args.get(2) instanceof JsUndefined
-                ? length
-                : clampIndex(intArg(args, 2, length), length);
-        final var slice = new ArrayList<JsValue>();
-        for (var i = start; i < end; i++) {
-            slice.add(elements.get(i));
-        }
-        for (var i = 0; i < slice.size() && target + i < length; i++) {
-            elements.set(target + i, slice.get(i));
-        }
-        return receiver;
-    }
-
-    private static JsValue reverse(JsArray receiver) {
-        java.util.Collections.reverse(receiver.getElements());
-        return receiver;
-    }
-
-    private static JsValue at(JsArray receiver, List<JsValue> args) {
-        final var elements = receiver.getElements();
-        var index = intArg(args, 0, 0);
-        if (index < 0) {
-            index += elements.size();
-        }
-        if (index < 0 || index >= elements.size()) {
-            return JsUndefined.getInstance();
-        }
-        return elements.get(index);
-    }
-
-    private static JsValue keysIterator(JsArray receiver) {
-        final var snapshot = new ArrayList<JsValue>();
-        for (var i = 0; i < receiver.length(); i++) {
-            snapshot.add(new JsNumber(i));
-        }
-        return JsIterators.of(snapshot.iterator());
-    }
-
-    private static JsValue valuesIterator(JsArray receiver) {
-        return JsIterators.lazy(index -> {
-            if (index >= receiver.length()) {
-                return null;
-            }
-            return receiver.isHole(index) ? JsUndefined.getInstance() : receiver.get(index);
-        });
-    }
-
-    private static JsValue entriesIterator(JsArray receiver) {
-        final var snapshot = new ArrayList<JsValue>();
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            snapshot.add(new JsArray(new ArrayList<>(List.of(new JsNumber(i), elements.get(i)))));
-        }
-        return JsIterators.of(snapshot.iterator());
-    }
-
-    private static JsValue map(JsArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue forEach(ArrayLike target, List<JsValue> args, Invoker invoker) {
+        final var length = target.length();
         final var callback = callback(args);
         final var self = thisArg(args);
-        final var result = new JsArray();
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (receiver.isHole(i)) {
-                result.pushHole();
-                continue;
-            }
-            result.push(invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver)));
-        }
-        return result;
-    }
-
-    private static JsValue filter(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var callback = callback(args);
-        final var self = thisArg(args);
-        final var result = new JsArray();
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (receiver.isHole(i)) {
-                continue;
-            }
-            final var element = elements.get(i);
-            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), receiver)))) {
-                result.push(element);
-            }
-        }
-        return result;
-    }
-
-    private static JsValue reduce(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var callback = callback(args);
-        final var elements = receiver.getElements();
-        var index = 0;
-        JsValue accumulator;
-        if (args.size() >= 2) {
-            accumulator = args.get(1);
-        } else if (elements.isEmpty()) {
-            throw new TypeErrorException("Reduce of empty array with no initial value");
-        } else {
-            accumulator = elements.getFirst();
-            index = 1;
-        }
-        for (var i = index; i < elements.size(); i++) {
-            if (receiver.isHole(i)) {
-                continue;
-            }
-            accumulator = invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(accumulator, elements.get(i), new JsNumber(i), receiver));
-        }
-        return accumulator;
-    }
-
-    private static JsValue forEach(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var callback = callback(args);
-        final var self = thisArg(args);
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (receiver.isHole(i)) {
-                continue;
-            }
-            invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver));
-        }
-        return JsUndefined.getInstance();
-    }
-
-    private static JsValue find(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var callback = callback(args);
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (receiver.isHole(i)) {
-                continue;
-            }
-            final var element = elements.get(i);
-            if (JsCoercion.toBoolean(
-                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
-                return element;
+        for (var i = 0L; i < length; i++) {
+            if (target.has(i)) {
+                invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value));
             }
         }
         return JsUndefined.getInstance();
     }
 
-    private static boolean some(JsArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue find(ArrayLike target, List<JsValue> args, Invoker invoker, boolean forwards) {
+        final var found = findMatch(target, args, invoker, forwards);
+        return found == null ? JsUndefined.getInstance() : found.value;
+    }
+
+    private static long findIndex(ArrayLike target, List<JsValue> args, Invoker invoker, boolean forwards) {
+        final var found = findMatch(target, args, invoker, forwards);
+        return found == null ? -1 : found.index;
+    }
+
+    private record Match(long index, JsValue value) {
+    }
+
+    // find/findIndex/findLast/findLastIndex read every index unconditionally: unlike the callback
+    // family, an absent index is visited with undefined rather than skipped.
+    private static Match findMatch(ArrayLike target, List<JsValue> args, Invoker invoker, boolean forwards) {
+        final var length = target.length();
         final var callback = callback(args);
         final var self = thisArg(args);
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (!receiver.isHole(i) && JsCoercion
-                    .toBoolean(invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver)))) {
+        for (var step = 0L; step < length; step++) {
+            final var i = forwards ? step : length - 1 - step;
+            final var element = target.get(i);
+            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), target.value)))) {
+                return new Match(i, element);
+            }
+        }
+        return null;
+    }
+
+    private static boolean some(ArrayLike target, List<JsValue> args, Invoker invoker) {
+        final var length = target.length();
+        final var callback = callback(args);
+        final var self = thisArg(args);
+        for (var i = 0L; i < length; i++) {
+            if (target.has(i) && JsCoercion
+                    .toBoolean(invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value)))) {
                 return true;
             }
         }
         return false;
     }
 
-    private static boolean every(JsArray receiver, List<JsValue> args, Invoker invoker) {
+    private static boolean every(ArrayLike target, List<JsValue> args, Invoker invoker) {
+        final var length = target.length();
         final var callback = callback(args);
         final var self = thisArg(args);
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (!receiver.isHole(i) && !JsCoercion
-                    .toBoolean(invoker.call(callback, self, List.of(elements.get(i), new JsNumber(i), receiver)))) {
+        for (var i = 0L; i < length; i++) {
+            if (target.has(i) && !JsCoercion
+                    .toBoolean(invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value)))) {
                 return false;
             }
         }
@@ -485,168 +541,542 @@ public final class ArrayBuiltins {
     }
 
     // A hole reads as undefined here, unlike indexOf, so it is not skipped.
-    private static boolean includes(JsArray receiver, List<JsValue> args) {
-        final var target = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
-        final var elements = receiver.getElements();
-        for (var i = clampIndex(intArg(args, 1, 0), elements.size()); i < elements.size(); i++) {
-            final var element = receiver.isHole(i) ? JsUndefined.getInstance() : elements.get(i);
-            if (SameValueZero.equal(element, target)) {
+    private static boolean includes(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        if (length == 0) {
+            return false;
+        }
+        final var search = arg(args, 0);
+        final var from = toIntegerOrInfinity(arg(args, 1), ops);
+        if (from == Double.POSITIVE_INFINITY) {
+            return false;
+        }
+        for (var i = relativeIndex(from, length); i < length; i++) {
+            if (SameValueZero.equal(target.get(i), search)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static int indexOf(JsArray receiver, List<JsValue> args) {
-        if (args.isEmpty()) {
+    private static long indexOf(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        if (length == 0) {
             return -1;
         }
-        final var target = args.getFirst();
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            if (!receiver.isHole(i) && JsOperators.strictEquals(elements.get(i), target)) {
+        final var search = arg(args, 0);
+        final var from = toIntegerOrInfinity(arg(args, 1), ops);
+        if (from == Double.POSITIVE_INFINITY) {
+            return -1;
+        }
+        for (var i = relativeIndex(from, length); i < length; i++) {
+            if (target.has(i) && JsOperators.strictEquals(target.get(i), search)) {
                 return i;
             }
         }
         return -1;
     }
 
-    private static JsValue slice(JsArray receiver, List<JsValue> args) {
-        final var elements = receiver.getElements();
-        final var length = elements.size();
-        final var start = clampIndex(intArg(args, 0, 0), length);
+    private static long lastIndexOf(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        if (length == 0) {
+            return -1;
+        }
+        final var search = arg(args, 0);
+        final var from = args.size() > 1 ? toIntegerOrInfinity(args.get(1), ops) : (double) (length - 1);
+        if (from == Double.NEGATIVE_INFINITY) {
+            return -1;
+        }
+        final var start = from >= 0 ? (long) Math.min(from, (double) (length - 1)) : (long) (length + from);
+        for (var i = start; i >= 0; i--) {
+            if (target.has(i) && JsOperators.strictEquals(target.get(i), search)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static JsValue slice(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        final var start = relativeIndex(toIntegerOrInfinity(arg(args, 0), ops), length);
         final var end = args.size() < 2 || args.get(1) instanceof JsUndefined
                 ? length
-                : clampIndex(intArg(args, 1, length), length);
-        final var result = new JsArray();
+                : relativeIndex(toIntegerOrInfinity(args.get(1), ops), length);
+        final var count = Math.max(end - start, 0);
+        final var result = speciesCreate(target, count, ops);
+        var written = 0L;
         for (var i = start; i < end; i++) {
-            result.push(elements.get(i));
+            if (target.has(i)) {
+                createDataPropertyOrThrow(result, written, target.get(i), ops);
+            }
+            written++;
         }
+        setResultLength(result, written, ops);
         return result;
     }
 
-    private static JsValue splice(JsArray receiver, List<JsValue> args) {
-        final var elements = receiver.getElements();
-        final var length = elements.size();
-        final var start = clampIndex(intArg(args, 0, 0), length);
-        final var deleteCount = args.size() < 2 ? length - start : Math.clamp(intArg(args, 1, 0), 0, length - start);
-        final var removed = new JsArray();
-        for (var i = 0; i < deleteCount; i++) {
-            removed.push(elements.remove(start));
+    private static JsValue splice(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        final var start = relativeIndex(toIntegerOrInfinity(arg(args, 0), ops), length);
+        final var insertCount = Math.max(args.size() - 2, 0);
+        final long deleteCount;
+        if (args.isEmpty()) {
+            deleteCount = 0;
+        } else if (args.size() == 1) {
+            deleteCount = length - start;
+        } else {
+            deleteCount = (long) Math.clamp(toIntegerOrInfinity(args.get(1), ops), 0, (double) (length - start));
         }
-        for (var i = args.size() - 1; i >= 2; i--) {
-            elements.add(start, args.get(i));
+        if (length + insertCount - deleteCount > MAX_SAFE_INTEGER) {
+            throw new TypeErrorException("Invalid array length");
         }
+        final var removed = speciesCreate(target, deleteCount, ops);
+        for (var i = 0L; i < deleteCount; i++) {
+            if (target.has(start + i)) {
+                createDataPropertyOrThrow(removed, i, target.get(start + i), ops);
+            }
+        }
+        setResultLength(removed, deleteCount, ops);
+        shiftForSplice(target, length, start, deleteCount, insertCount);
+        for (var i = 0; i < insertCount; i++) {
+            target.set(start + i, args.get(i + 2));
+        }
+        target.setLength(length - deleteCount + insertCount);
         return removed;
     }
 
-    private static JsValue concat(JsArray receiver, List<JsValue> args, InterpreterOps ops) {
-        final var result = new JsArray(new ArrayList<>(receiver.getElements()));
-        for (final var arg : args) {
-            if (arg instanceof JsArray array) {
-                for (final var element : array.getElements()) {
-                    result.push(element);
-                }
-            } else if (isConcatSpreadable(arg, ops)) {
-                for (final var key : ((JsObject) arg).keys()) {
-                    result.push(ownValue((JsObject) arg, key, ops));
-                }
-            } else {
-                result.push(arg);
+    private static void shiftForSplice(ArrayLike target, long length, long start, long deleteCount, long insertCount) {
+        if (insertCount < deleteCount) {
+            for (var i = start; i < length - deleteCount; i++) {
+                moveOrDelete(target, i + deleteCount, i + insertCount);
+            }
+            for (var i = length; i > length - deleteCount + insertCount; i--) {
+                target.delete(i - 1);
+            }
+        } else if (insertCount > deleteCount) {
+            for (var i = length - deleteCount; i > start; i--) {
+                moveOrDelete(target, i + deleteCount - 1, i + insertCount - 1);
             }
         }
+    }
+
+    private static void moveOrDelete(ArrayLike target, long from, long to) {
+        if (target.has(from)) {
+            target.set(to, target.get(from));
+        } else {
+            target.delete(to);
+        }
+    }
+
+    private static JsValue concat(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var result = speciesCreate(target, 0, ops);
+        var written = 0L;
+        final var items = new ArrayList<JsValue>(args.size() + 1);
+        items.add(target.value);
+        items.addAll(args);
+        for (final var item : items) {
+            if (isConcatSpreadable(item, ops)) {
+                final var source = new ArrayLike(item, ops);
+                final var length = source.length();
+                if (written + length > MAX_SAFE_INTEGER) {
+                    throw new TypeErrorException("Invalid array length");
+                }
+                for (var i = 0L; i < length; i++) {
+                    if (source.has(i)) {
+                        createDataPropertyOrThrow(result, written, source.get(i), ops);
+                    }
+                    written++;
+                }
+            } else {
+                if (written >= MAX_SAFE_INTEGER) {
+                    throw new TypeErrorException("Invalid array length");
+                }
+                createDataPropertyOrThrow(result, written, item, ops);
+                written++;
+            }
+        }
+        setResultLength(result, written, ops);
         return result;
     }
 
     private static boolean isConcatSpreadable(JsValue value, InterpreterOps ops) {
-        return ops != null && value instanceof JsObject
-                && JsCoercion.toBoolean(ops.getMember(value, JsSymbol.IS_CONCAT_SPREADABLE));
+        if (!InterpreterUtils.isObjectLike(value)) {
+            return false;
+        }
+        if (ops != null) {
+            final var flag = ops.getMember(value, JsSymbol.IS_CONCAT_SPREADABLE);
+            if (!(flag instanceof JsUndefined)) {
+                return JsCoercion.toBoolean(flag);
+            }
+        }
+        return value instanceof JsArray;
     }
 
-    private static String join(JsArray receiver, List<JsValue> args) {
+    private static String join(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
         final var separator = args.isEmpty() || args.getFirst() instanceof JsUndefined
                 ? ","
-                : JsCoercion.toStr(args.getFirst());
+                : JsCoercion.toStr(args.getFirst(), ops);
         final var sb = new StringBuilder();
-        final var elements = receiver.getElements();
-        for (var i = 0; i < elements.size(); i++) {
+        for (var i = 0L; i < length; i++) {
             if (i > 0) {
                 sb.append(separator);
             }
-            final var element = elements.get(i);
-            if (!(element instanceof JsUndefined) && !(element instanceof org.techhouse.simplejs.values.JsNull)) {
-                sb.append(JsCoercion.toStr(element));
+            final var element = target.get(i);
+            if (!(element instanceof JsUndefined) && !(element instanceof JsNull)) {
+                sb.append(JsCoercion.toStr(element, ops));
             }
         }
         return sb.toString();
     }
 
-    private static JsValue push(JsArray receiver, List<JsValue> args) {
-        for (final var arg : args) {
-            receiver.push(arg);
+    // Array.prototype.toString is generic: it calls whatever `join` the receiver resolves to, and
+    // falls back to Object.prototype.toString when that is not callable.
+    private static JsValue toStringMethod(ArrayLike target, Invoker invoker, InterpreterOps ops) {
+        final var join = target.getKey(new JsString("join"));
+        if (InterpreterUtils.isCallable(join)) {
+            return invoker.call(join, target.value, List.of());
         }
-        return new JsNumber(receiver.length());
+        return invoker.call(ObjectProtoBuiltins.getMethod(target.value, "toString", ops, null), target.value,
+                List.of());
     }
 
-    private static JsValue pop(JsArray receiver) {
-        final var elements = receiver.getElements();
-        if (elements.isEmpty()) {
+    private static JsValue push(ArrayLike target, List<JsValue> args) {
+        var length = target.length();
+        if (length + args.size() > MAX_SAFE_INTEGER) {
+            throw new TypeErrorException("Invalid array length");
+        }
+        for (final var element : args) {
+            target.set(length, element);
+            length++;
+        }
+        target.setLength(length);
+        return new JsNumber(length);
+    }
+
+    private static JsValue pop(ArrayLike target) {
+        final var length = target.length();
+        if (length == 0) {
+            target.setLength(0);
             return JsUndefined.getInstance();
         }
-        return elements.removeLast();
+        final var element = target.get(length - 1);
+        target.delete(length - 1);
+        target.setLength(length - 1);
+        return element;
     }
 
-    private static JsValue shift(JsArray receiver) {
-        final var elements = receiver.getElements();
-        if (elements.isEmpty()) {
+    private static JsValue shift(ArrayLike target) {
+        final var length = target.length();
+        if (length == 0) {
+            target.setLength(0);
             return JsUndefined.getInstance();
         }
-        return elements.removeFirst();
-    }
-
-    private static JsValue unshift(JsArray receiver, List<JsValue> args) {
-        for (var i = args.size() - 1; i >= 0; i--) {
-            receiver.getElements().addFirst(args.get(i));
+        final var first = target.get(0);
+        for (var i = 1L; i < length; i++) {
+            moveOrDelete(target, i, i - 1);
         }
-        return new JsNumber(receiver.length());
+        target.delete(length - 1);
+        target.setLength(length - 1);
+        return first;
     }
 
-    private static JsValue sort(JsArray receiver, List<JsValue> args, Invoker invoker) {
-        final var comparator = args.isEmpty() ? null : args.getFirst();
-        final var holes = receiver.removeHoles();
-        receiver.getElements().sort((left, right) -> {
-            if (comparator instanceof JsNativeFunction
-                    || comparator instanceof org.techhouse.simplejs.values.JsFunction) {
+    private static JsValue unshift(ArrayLike target, List<JsValue> args) {
+        final var length = target.length();
+        final var count = args.size();
+        if (count > 0) {
+            if (length + count > MAX_SAFE_INTEGER) {
+                throw new TypeErrorException("Invalid array length");
+            }
+            for (var i = length; i > 0; i--) {
+                moveOrDelete(target, i - 1, i + count - 1);
+            }
+            for (var i = 0; i < count; i++) {
+                target.set(i, args.get(i));
+            }
+        }
+        target.setLength(length + count);
+        return new JsNumber(length + count);
+    }
+
+    private static JsValue reverse(ArrayLike target) {
+        final var length = target.length();
+        for (var lower = 0L; lower < length / 2; lower++) {
+            final var upper = length - lower - 1;
+            final var lowerExists = target.has(lower);
+            final var lowerValue = lowerExists ? target.get(lower) : null;
+            final var upperExists = target.has(upper);
+            final var upperValue = upperExists ? target.get(upper) : null;
+            if (upperExists) {
+                target.set(lower, upperValue);
+            } else {
+                target.delete(lower);
+            }
+            if (lowerExists) {
+                target.set(upper, lowerValue);
+            } else {
+                target.delete(upper);
+            }
+        }
+        return target.value;
+    }
+
+    private static JsValue fill(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        final var value = arg(args, 0);
+        final var start = relativeIndex(toIntegerOrInfinity(arg(args, 1), ops), length);
+        final var end = args.size() < 3 || args.get(2) instanceof JsUndefined
+                ? length
+                : relativeIndex(toIntegerOrInfinity(args.get(2), ops), length);
+        for (var i = start; i < end; i++) {
+            target.set(i, value);
+        }
+        return target.value;
+    }
+
+    private static JsValue copyWithin(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        var to = relativeIndex(toIntegerOrInfinity(arg(args, 0), ops), length);
+        var from = relativeIndex(toIntegerOrInfinity(arg(args, 1), ops), length);
+        final var end = args.size() < 3 || args.get(2) instanceof JsUndefined
+                ? length
+                : relativeIndex(toIntegerOrInfinity(args.get(2), ops), length);
+        var count = Math.min(end - from, length - to);
+        var step = 1L;
+        if (from < to && to < from + count) {
+            step = -1;
+            from = from + count - 1;
+            to = to + count - 1;
+        }
+        while (count > 0) {
+            moveOrDelete(target, from, to);
+            from += step;
+            to += step;
+            count--;
+        }
+        return target.value;
+    }
+
+    private static JsValue at(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        final var relative = toIntegerOrInfinity(arg(args, 0), ops);
+        final var index = relative >= 0 ? relative : length + relative;
+        if (index < 0 || index >= length) {
+            return JsUndefined.getInstance();
+        }
+        return target.get((long) index);
+    }
+
+    private static JsValue indexIterator(ArrayLike target, String kind) {
+        return JsIterators.lazy(index -> {
+            if (index >= target.length()) {
+                return null;
+            }
+            return switch (kind) {
+                case "keys" -> new JsNumber(index);
+                case "entries" -> new JsArray(new ArrayList<>(List.of(new JsNumber(index), target.get(index))));
+                default -> target.get(index);
+            };
+        });
+    }
+
+    private static JsValue sort(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var comparator = comparator(args);
+        final var length = target.length();
+        final var items = sortIndexedProperties(target, length, false);
+        final var sorted = sorted(items, sortCompare(comparator, invoker, ops));
+        for (var i = 0; i < sorted.size(); i++) {
+            target.set(i, sorted.get(i));
+        }
+        for (var i = (long) sorted.size(); i < length; i++) {
+            target.delete(i);
+        }
+        return target.value;
+    }
+
+    private static JsValue toSorted(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var comparator = comparator(args);
+        final var length = target.length();
+        final var sorted = sorted(sortIndexedProperties(target, length, true), sortCompare(comparator, invoker, ops));
+        final var result = newArray(length);
+        for (var i = 0; i < sorted.size(); i++) {
+            createDataPropertyOrThrow(result, i, sorted.get(i), ops);
+        }
+        return result;
+    }
+
+    private static JsValue comparator(List<JsValue> args) {
+        final var comparator = arg(args, 0);
+        if (comparator instanceof JsUndefined) {
+            return null;
+        }
+        if (!InterpreterUtils.isCallable(comparator)) {
+            throw new TypeErrorException("The comparison function must be either a function or undefined");
+        }
+        return comparator;
+    }
+
+    private static List<JsValue> sortIndexedProperties(ArrayLike target, long length, boolean readThroughHoles) {
+        if (length > Integer.MAX_VALUE) {
+            throw new RangeErrorException("Invalid array length");
+        }
+        final var items = new ArrayList<JsValue>();
+        for (var i = 0L; i < length; i++) {
+            if (readThroughHoles || target.has(i)) {
+                items.add(target.get(i));
+            }
+        }
+        return items;
+    }
+
+    private static Comparator<JsValue> sortCompare(JsValue comparator, Invoker invoker, InterpreterOps ops) {
+        return (left, right) -> {
+            if (left instanceof JsUndefined || right instanceof JsUndefined) {
+                if (left instanceof JsUndefined && right instanceof JsUndefined) {
+                    return 0;
+                }
+                return left instanceof JsUndefined ? 1 : -1;
+            }
+            if (comparator != null) {
                 final var result = JsCoercion
-                        .toNumber(invoker.call(comparator, JsUndefined.getInstance(), List.of(left, right)));
+                        .toNumber(invoker.call(comparator, JsUndefined.getInstance(), List.of(left, right)), ops);
                 if (Double.isNaN(result) || result == 0) {
                     return 0;
                 }
                 return result < 0 ? -1 : 1;
             }
-            return JsCoercion.toStr(left).compareTo(JsCoercion.toStr(right));
-        });
-        for (var i = 0; i < holes; i++) {
-            receiver.pushHole();
-        }
-        return receiver;
+            return JsCoercion.toStr(left, ops).compareTo(JsCoercion.toStr(right, ops));
+        };
     }
 
-    private static JsValue flat(JsArray receiver, List<JsValue> args) {
-        final var depth = args.isEmpty() ? 1 : intArg(args, 0, 1);
-        final var result = new JsArray();
-        flatInto(receiver, depth, result);
+    // A hand-rolled stable merge sort: a user comparator is free to be inconsistent, which
+    // List.sort answers with an IllegalArgumentException rather than an arbitrary order.
+    private static List<JsValue> sorted(List<JsValue> items, Comparator<JsValue> comparator) {
+        if (items.size() < 2) {
+            return items;
+        }
+        final var middle = items.size() / 2;
+        final var left = sorted(new ArrayList<>(items.subList(0, middle)), comparator);
+        final var right = sorted(new ArrayList<>(items.subList(middle, items.size())), comparator);
+        final var merged = new ArrayList<JsValue>(items.size());
+        var i = 0;
+        var j = 0;
+        while (i < left.size() && j < right.size()) {
+            if (comparator.compare(right.get(j), left.get(i)) < 0) {
+                merged.add(right.get(j++));
+            } else {
+                merged.add(left.get(i++));
+            }
+        }
+        while (i < left.size()) {
+            merged.add(left.get(i++));
+        }
+        while (j < right.size()) {
+            merged.add(right.get(j++));
+        }
+        return merged;
+    }
+
+    private static JsValue flat(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var depth = args.isEmpty() || args.getFirst() instanceof JsUndefined
+                ? 1
+                : toIntegerOrInfinity(args.getFirst(), ops);
+        final var result = speciesCreate(target, 0, ops);
+        flattenInto(result, target, target.length(), 0, depth, null, null, null, ops);
         return result;
     }
 
-    private static void flatInto(JsArray source, int depth, JsArray target) {
-        for (final var element : source.getElements()) {
-            if (depth > 0 && element instanceof JsArray nested) {
-                flatInto(nested, depth - 1, target);
+    private static JsValue flatMap(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var length = target.length();
+        final var callback = callback(args);
+        final var self = thisArg(args);
+        final var result = speciesCreate(target, 0, ops);
+        flattenInto(result, target, length, 0, 1, callback, self, invoker, ops);
+        return result;
+    }
+
+    private static long flattenInto(JsValue result, ArrayLike source, long length, long start, double depth,
+            JsValue mapper, JsValue self, Invoker invoker, InterpreterOps ops) {
+        var written = start;
+        for (var i = 0L; i < length; i++) {
+            if (!source.has(i)) {
+                continue;
+            }
+            var element = source.get(i);
+            if (mapper != null) {
+                element = invoker.call(mapper, self, List.of(element, new JsNumber(i), source.value));
+            }
+            if (depth > 0 && element instanceof JsArray) {
+                final var nested = new ArrayLike(element, ops);
+                written = flattenInto(result, nested, nested.length(), written, depth - 1, null, null, null, ops);
             } else {
-                target.push(element);
+                if (written >= MAX_SAFE_INTEGER) {
+                    throw new TypeErrorException("Invalid array length");
+                }
+                createDataPropertyOrThrow(result, written, element, ops);
+                written++;
             }
         }
+        return written;
+    }
+
+    private static JsValue toReversed(ArrayLike target, InterpreterOps ops) {
+        final var length = target.length();
+        final var result = newArray(length);
+        for (var i = 0L; i < length; i++) {
+            createDataPropertyOrThrow(result, i, target.get(length - i - 1), ops);
+        }
+        return result;
+    }
+
+    private static JsValue toSpliced(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        final var start = relativeIndex(toIntegerOrInfinity(arg(args, 0), ops), length);
+        final var insertCount = Math.max(args.size() - 2, 0);
+        final long skipCount;
+        if (args.isEmpty()) {
+            skipCount = 0;
+        } else if (args.size() == 1) {
+            skipCount = length - start;
+        } else {
+            skipCount = (long) Math.clamp(toIntegerOrInfinity(args.get(1), ops), 0, (double) (length - start));
+        }
+        final var newLength = length + insertCount - skipCount;
+        if (newLength > MAX_SAFE_INTEGER) {
+            throw new TypeErrorException("Invalid array length");
+        }
+        final var result = newArray(newLength);
+        var written = 0L;
+        while (written < start) {
+            createDataPropertyOrThrow(result, written, target.get(written), ops);
+            written++;
+        }
+        for (var i = 0; i < insertCount; i++) {
+            createDataPropertyOrThrow(result, written, args.get(i + 2), ops);
+            written++;
+        }
+        var read = start + skipCount;
+        while (written < newLength) {
+            createDataPropertyOrThrow(result, written, target.get(read), ops);
+            written++;
+            read++;
+        }
+        return result;
+    }
+
+    private static JsValue with(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
+        final var relative = toIntegerOrInfinity(arg(args, 0), ops);
+        final var index = relative >= 0 ? relative : length + relative;
+        if (index < 0 || index >= length) {
+            throw new RangeErrorException("Invalid index : " + relative);
+        }
+        final var replacement = arg(args, 1);
+        final var result = newArray(length);
+        for (var i = 0L; i < length; i++) {
+            createDataPropertyOrThrow(result, i, i == (long) index ? replacement : target.get(i), ops);
+        }
+        return result;
     }
 
     private static JsValue callback(List<JsValue> args) {
@@ -659,20 +1089,5 @@ public final class ArrayBuiltins {
 
     private static JsValue thisArg(List<JsValue> args) {
         return args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
-    }
-
-    private static int clampIndex(int index, int length) {
-        if (index < 0) {
-            return Math.max(length + index, 0);
-        }
-        return Math.min(index, length);
-    }
-
-    private static int intArg(List<JsValue> args, int position, int fallback) {
-        if (position >= args.size() || args.get(position) instanceof JsUndefined) {
-            return fallback;
-        }
-        final var value = JsCoercion.toNumber(args.get(position));
-        return Double.isNaN(value) ? 0 : (int) value;
     }
 }

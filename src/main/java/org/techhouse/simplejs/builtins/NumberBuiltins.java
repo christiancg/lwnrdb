@@ -27,9 +27,19 @@ public final class NumberBuiltins {
     private static final int MAX_FRACTION_DIGITS = 100;
     private static final double TO_FIXED_LIMIT = 1e21;
 
+    // Number(value) is ToNumeric, not ToNumber: a BigInt converts to its numeric value here even
+    // though every other ToNumber path rejects it.
+    private static double numberValueOf(JsValue value) {
+        final var primitive = JsCoercion.toPrimitive(value);
+        if (primitive instanceof JsBigInt big) {
+            return big.getValue().doubleValue();
+        }
+        return JsCoercion.toNumber(primitive);
+    }
+
     public static JsNativeFunction create() {
         final var number = new JsNativeFunction("Number",
-                (_, args) -> new JsNumber(args.isEmpty() ? 0 : JsCoercion.toNumber(args.getFirst())));
+                (_, args) -> new JsNumber(args.isEmpty() ? 0 : numberValueOf(args.getFirst())));
         number.setProperty("isNaN", new JsNativeFunction("isNaN", (_, args) -> JsBoolean.of(isNaN(args))));
         number.setProperty("isInteger", new JsNativeFunction("isInteger", (_, args) -> JsBoolean.of(isInteger(args))));
         number.setProperty("isFinite",
@@ -64,6 +74,10 @@ public final class NumberBuiltins {
     // Spec ToBigInt, used wherever a value is *stored* as a BigInt (a BigInt typed array element,
     // DataView.setBigInt64, ...). Unlike the BigInt() function it rejects a Number outright: only
     // the explicit constructor call applies NumberToBigInt.
+    public static JsBigInt toBigIntValue(JsValue value, InterpreterOps ops) {
+        return toBigIntValue(ops == null ? value : JsCoercion.toPrimitive(value, "number", ops));
+    }
+
     public static JsBigInt toBigIntValue(JsValue value) {
         return switch (value) {
             case JsBigInt bigInt -> bigInt;

@@ -45,8 +45,7 @@ public final class PromiseBuiltins {
         }
     }
 
-    public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker,
-                                          Intrinsics intrinsics) {
+    public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker, Intrinsics intrinsics) {
         final var ctx = new Ctx(eventLoop, invoker, intrinsics);
         final var promise = new JsNativeFunction("Promise", (_, args) -> construct(ctx, args));
         promise.setProperty("resolve",

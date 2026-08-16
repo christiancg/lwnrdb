@@ -50,8 +50,9 @@ public final class BuiltinLengths {
         put("AsyncDisposableStack.prototype", 2, "adopt");
         zeroArg("ArrayBuffer.prototype", "transfer", "transferToFixedLength");
         put("ArrayBuffer.prototype", 2, "slice");
-        zeroArg("TypedArray.prototype", "toString", "reverse", "keys", "values", "entries", "toReversed");
-        put("TypedArray.prototype", 2, "copyWithin", "with");
+        zeroArg("TypedArray.prototype", "toString", "reverse", "keys", "values", "entries", "toReversed",
+                "toLocaleString");
+        put("TypedArray.prototype", 2, "copyWithin", "with", "slice", "subarray");
         zeroArg("Uint8Array.prototype", "toBase64", "toHex");
         installDate();
         installDataView();

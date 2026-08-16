@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 import org.techhouse.ejson.internal.NumberFormatter;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.NumberBuiltins;
 import org.techhouse.simplejs.internal.JsCoercion;
 
@@ -66,8 +67,37 @@ public final class JsTypedArray extends JsValue {
         return buffer;
     }
 
+    /** The observable {@code byteOffset}, which the spec reports as 0 once the view is out of bounds. */
     public int byteOffset() {
+        return isOutOfBounds() ? 0 : byteOffset;
+    }
+
+    /** The view's own offset regardless of bounds, for deriving a new view's geometry from this one. */
+    public int rawByteOffset() {
         return byteOffset;
+    }
+
+    public boolean isLengthTracking() {
+        return lengthTracking;
+    }
+
+    /**
+     * IsTypedArrayOutOfBounds: a view whose window no longer fits inside its buffer. A detached buffer
+     * makes every view out of bounds; a shrunk resizable buffer makes only the views that no longer
+     * fit out of bounds (a length-tracking view just gets shorter, unless its very offset is gone).
+     */
+    public boolean isOutOfBounds() {
+        if (buffer.isDetached()) {
+            return true;
+        }
+        final var bufferLength = buffer.byteLength();
+        if (byteOffset > bufferLength) {
+            return true;
+        }
+        if (lengthTracking) {
+            return false;
+        }
+        return byteOffset + (long) length * kind.bytesPerElement > bufferLength;
     }
 
     public int byteLength() {
@@ -75,6 +105,9 @@ public final class JsTypedArray extends JsValue {
     }
 
     public int length() {
+        if (isOutOfBounds()) {
+            return 0;
+        }
         if (lengthTracking) {
             final var available = buffer.byteLength() - byteOffset;
             return available <= 0 ? 0 : available / kind.bytesPerElement;
@@ -108,21 +141,44 @@ public final class JsTypedArray extends JsValue {
     }
 
     public void setElement(int index, JsValue value) {
-        final var pos = byteOffset + index * kind.bytesPerElement;
-        if (index < 0 || index >= length() || pos + kind.bytesPerElement > buffer.byteLength()) {
+        setElement(index, value, null);
+    }
+
+    // IntegerIndexedElementSet coerces the value *before* checking the index, so a valueOf that
+    // detaches or shrinks the buffer still runs and only then is the write dropped. Without an ops
+    // seam there is no user code to run, so an already-invalid index skips the coercion rather than
+    // raising a TypeError the spec would never reach.
+    public void setElement(int index, JsValue value, InterpreterOps ops) {
+        if (ops == null && !isValidIndex(index)) {
             return;
         }
+        if (kind == Kind.BIGINT64 || kind == Kind.BIGUINT64) {
+            final var big = reduceBig(value, ops);
+            if (isValidIndex(index)) {
+                view().putLong(byteOffset + index * kind.bytesPerElement, big.longValue());
+            }
+            return;
+        }
+        final var number = JsCoercion.toNumber(value, ops);
+        if (!isValidIndex(index)) {
+            return;
+        }
+        final var pos = byteOffset + index * kind.bytesPerElement;
         final var bb = view();
         switch (kind) {
-            case INT8, UINT8 -> bb.put(pos, (byte) reduce(JsCoercion.toNumber(value), 8));
-            case UINT8CLAMPED -> bb.put(pos, (byte) clamp(JsCoercion.toNumber(value)));
-            case INT16, UINT16 -> bb.putShort(pos, (short) reduce(JsCoercion.toNumber(value), 16));
-            case INT32, UINT32 -> bb.putInt(pos, (int) reduce(JsCoercion.toNumber(value), 32));
-            case FLOAT16 -> bb.putShort(pos, Float.floatToFloat16((float) JsCoercion.toNumber(value)));
-            case FLOAT32 -> bb.putFloat(pos, (float) JsCoercion.toNumber(value));
-            case BIGINT64, BIGUINT64 -> bb.putLong(pos, reduceBig(value).longValue());
-            default -> bb.putDouble(pos, JsCoercion.toNumber(value));
+            case INT8, UINT8 -> bb.put(pos, (byte) reduce(number, 8));
+            case UINT8CLAMPED -> bb.put(pos, (byte) clamp(number));
+            case INT16, UINT16 -> bb.putShort(pos, (short) reduce(number, 16));
+            case INT32, UINT32 -> bb.putInt(pos, (int) reduce(number, 32));
+            case FLOAT16 -> bb.putShort(pos, Float.floatToFloat16((float) number));
+            case FLOAT32 -> bb.putFloat(pos, (float) number);
+            default -> bb.putDouble(pos, number);
         }
+    }
+
+    private boolean isValidIndex(int index) {
+        final var pos = byteOffset + (long) index * kind.bytesPerElement;
+        return index >= 0 && index < length() && pos + kind.bytesPerElement <= buffer.byteLength();
     }
 
     private static long reduce(double d, int bits) {
@@ -139,8 +195,8 @@ public final class JsTypedArray extends JsValue {
         return (int) Math.rint(d);
     }
 
-    private static BigInteger reduceBig(JsValue value) {
-        return NumberBuiltins.toBigIntValue(value).getValue().mod(BigInteger.ONE.shiftLeft(64));
+    private static BigInteger reduceBig(JsValue value, InterpreterOps ops) {
+        return NumberBuiltins.toBigIntValue(value, ops).getValue().mod(BigInteger.ONE.shiftLeft(64));
     }
 
     private static BigInteger toUnsignedBig(long raw) {

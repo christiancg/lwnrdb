@@ -17,19 +17,22 @@ import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.PropertyTable;
 import org.techhouse.simplejs.values.SameValueZero;
 
 public final class TypedArrayBuiltins {
     public static final List<String> NAMES = List.of("forEach", "map", "filter", "reduce", "reduceRight", "find",
             "findIndex", "some", "every", "indexOf", "lastIndexOf", "includes", "join", "slice", "subarray", "set",
             "fill", "reverse", "at", "toString", "keys", "values", "entries", "sort", "toSorted", "toReversed", "with",
-            "findLast", "findLastIndex", "copyWithin");
+            "findLast", "findLastIndex", "copyWithin", "toLocaleString");
     public static final List<String> UINT8_NAMES = List.of("toBase64", "toHex", "setFromBase64", "setFromHex");
     public static final List<String> BUFFER_NAMES = List.of("slice", "resize", "transfer", "transferToFixedLength");
     public static final List<String> VIEW_NAMES = viewNames();
@@ -91,8 +94,8 @@ public final class TypedArrayBuiltins {
         return new JsArrayBuffer((int) byteLength);
     }
 
-    public static JsNativeFunction dataView() {
-        return new JsNativeFunction("DataView", (_, args) -> constructDataView(args));
+    public static JsNativeFunction dataView(InterpreterOps ops) {
+        return new JsNativeFunction("DataView", (_, args) -> constructDataView(args, ops));
     }
 
     // The abstract %TypedArray% intrinsic: not directly constructable (mirrors IteratorBuiltins'
@@ -112,7 +115,7 @@ public final class TypedArrayBuiltins {
             InterpreterOps ops) {
         final var ctor = new JsNativeFunction(kind.ctorName(),
                 (_, args) -> constructTyped(kind, args, iterableToList, ops));
-        ctor.setProperty("BYTES_PER_ELEMENT", new JsNumber(kind.bytesPerElement()));
+        defineBytesPerElement(ctor.ownProperties(), kind);
         ctor.setProperty("from",
                 new JsNativeFunction("from", (_, args) -> from(kind, args, invoker, iterableToList, ops)));
         ctor.setProperty("of", new JsNativeFunction("of", (_, args) -> fromItems(kind, args)));
@@ -124,17 +127,33 @@ public final class TypedArrayBuiltins {
         return ctor;
     }
 
-    private static JsValue constructDataView(List<JsValue> args) {
+    // BYTES_PER_ELEMENT lives on both the constructor and its prototype, and is one of the few
+    // builtin properties the spec makes entirely immutable.
+    public static void defineBytesPerElement(PropertyTable table, JsTypedArray.Kind kind) {
+        table.defineValue("BYTES_PER_ELEMENT", new JsNumber(kind.bytesPerElement()));
+        table.setFlags("BYTES_PER_ELEMENT", new JsObject.PropertyFlags(false, false, false));
+    }
+
+    private static JsValue constructDataView(List<JsValue> args, InterpreterOps ops) {
         if (args.isEmpty() || !(args.getFirst() instanceof JsArrayBuffer buffer)) {
             throw new TypeErrorException("First argument to DataView constructor must be an ArrayBuffer");
         }
-        final var byteOffset = (int) intArg(args, 1, 0);
+        final var byteOffset = (int) toIndex(arg(args, 1), "DataView byteOffset", ops);
         final var explicitLength = args.size() > 2 && !(args.get(2) instanceof JsUndefined);
-        final var byteLength = explicitLength ? (int) intArg(args, 2, 0) : buffer.byteLength() - byteOffset;
-        if (byteOffset < 0 || byteLength < 0 || byteOffset + byteLength > buffer.byteLength()) {
+        final var requested = explicitLength ? (int) toIndex(args.get(2), "DataView byteLength", ops) : 0;
+        if (buffer.isDetached()) {
+            throw new TypeErrorException("Cannot construct a DataView over a detached ArrayBuffer");
+        }
+        if (byteOffset > buffer.byteLength()) {
+            throw new RangeErrorException("Start offset is outside the bounds of the buffer");
+        }
+        if (!explicitLength) {
+            return new JsDataView(buffer, byteOffset, buffer.byteLength() - byteOffset, buffer.isResizable());
+        }
+        if (byteOffset + requested > buffer.byteLength()) {
             throw new RangeErrorException("Invalid DataView length");
         }
-        return new JsDataView(buffer, byteOffset, byteLength, !explicitLength && buffer.isResizable());
+        return new JsDataView(buffer, byteOffset, requested);
     }
 
     private static JsValue constructTyped(JsTypedArray.Kind kind, List<JsValue> args, IterableToList iterableToList,
@@ -144,40 +163,45 @@ public final class TypedArrayBuiltins {
         }
         final var first = args.getFirst();
         if (first instanceof JsArrayBuffer buffer) {
-            return viewOverBuffer(kind, buffer, args);
+            return viewOverBuffer(kind, buffer, args, ops);
         }
-        if (first instanceof JsNumber) {
-            return allocate(kind, toIndex(first, kind.ctorName() + " length"));
+        if (!InterpreterUtils.isObjectLike(first)) {
+            return allocate(kind, toIndex(first, kind.ctorName() + " length", ops));
         }
-        return fromItems(kind, sourceItems(first, iterableToList, ops));
+        return fromItems(kind, sourceItems(first, iterableToList, ops), ops);
     }
 
-    private static JsValue viewOverBuffer(JsTypedArray.Kind kind, JsArrayBuffer buffer, List<JsValue> args) {
-        final var byteOffset = (int) intArg(args, 1, 0);
+    // Spec order: both index arguments are coerced first, and only then is the buffer checked for
+    // detachment - a valueOf is allowed to detach it and must be observed doing so.
+    private static JsValue viewOverBuffer(JsTypedArray.Kind kind, JsArrayBuffer buffer, List<JsValue> args,
+            InterpreterOps ops) {
         final var bpe = kind.bytesPerElement();
-        if (byteOffset < 0 || byteOffset % bpe != 0 || byteOffset > buffer.byteLength()) {
-            throw new RangeErrorException("Invalid typed array offset");
+        final var byteOffset = (int) toIndex(arg(args, 1), "typed array offset", ops);
+        if (byteOffset % bpe != 0) {
+            throw new RangeErrorException("Start offset is not a multiple of the element size");
         }
-        final int length;
-        final boolean lengthTracking;
-        if (args.size() > 2 && !(args.get(2) instanceof JsUndefined)) {
-            final var requested = toIndex(args.get(2), "typed array length");
-            if (byteOffset + requested * bpe > buffer.byteLength()) {
-                throw new RangeErrorException("Invalid typed array length");
+        final var explicitLength = args.size() > 2 && !(args.get(2) instanceof JsUndefined);
+        final var requested = explicitLength ? toIndex(args.get(2), "typed array length", ops) : 0;
+        if (buffer.isDetached()) {
+            throw new TypeErrorException("Cannot construct a typed array over a detached ArrayBuffer");
+        }
+        final var bufferLength = buffer.byteLength();
+        if (!explicitLength && buffer.isResizable()) {
+            if (byteOffset > bufferLength) {
+                throw new RangeErrorException("Start offset is outside the bounds of the buffer");
             }
-            length = (int) requested;
-            lengthTracking = false;
-        } else {
-            if ((buffer.byteLength() - byteOffset) % bpe != 0) {
+            return new JsTypedArray(kind, buffer, byteOffset, (bufferLength - byteOffset) / bpe, true);
+        }
+        if (!explicitLength) {
+            if (bufferLength % bpe != 0 || byteOffset > bufferLength) {
                 throw new RangeErrorException("Buffer length is not a multiple of the element size");
             }
-            length = (buffer.byteLength() - byteOffset) / bpe;
-            lengthTracking = buffer.isResizable();
+            return new JsTypedArray(kind, buffer, byteOffset, (bufferLength - byteOffset) / bpe);
         }
-        if (length < 0 || byteOffset + length * bpe > buffer.byteLength()) {
+        if (byteOffset + requested * bpe > bufferLength) {
             throw new RangeErrorException("Invalid typed array length");
         }
-        return new JsTypedArray(kind, buffer, byteOffset, length, lengthTracking);
+        return new JsTypedArray(kind, buffer, byteOffset, (int) requested);
     }
 
     private static JsTypedArray allocate(JsTypedArray.Kind kind, long length) {
@@ -198,9 +222,13 @@ public final class TypedArrayBuiltins {
     }
 
     private static JsTypedArray fromItems(JsTypedArray.Kind kind, List<JsValue> items) {
+        return fromItems(kind, items, null);
+    }
+
+    private static JsTypedArray fromItems(JsTypedArray.Kind kind, List<JsValue> items, InterpreterOps ops) {
         final var result = allocate(kind, items.size());
         for (var i = 0; i < items.size(); i++) {
-            result.setElement(i, items.get(i));
+            result.setElement(i, items.get(i), ops);
         }
         return result;
     }
@@ -341,96 +369,129 @@ public final class TypedArrayBuiltins {
     }
 
     public static JsValue bufferMethod(JsArrayBuffer buffer, String name) {
+        return bufferMethod(buffer, name, null);
+    }
+
+    public static JsValue bufferMethod(JsArrayBuffer buffer, String name, InterpreterOps ops) {
         return switch (name) {
             case "byteLength" -> new JsNumber(buffer.byteLength());
             case "maxByteLength" -> new JsNumber(buffer.maxByteLength());
             case "resizable" -> JsBoolean.of(buffer.isResizable());
             case "detached" -> JsBoolean.of(buffer.isDetached());
-            case "slice" -> new JsNativeFunction("slice",
-                    (_, args) -> buffer.slice((int) intArg(args, 0, 0), (int) intArg(args, 1, buffer.byteLength())));
+            case "slice" -> new JsNativeFunction("slice", (_, args) -> buffer.slice((int) intArg(args, 0, 0, ops),
+                    (int) intArg(args, 1, buffer.byteLength(), ops)));
             case "resize" -> new JsNativeFunction("resize", (_, args) -> {
-                buffer.resize((int) intArg(args, 0, 0));
+                buffer.resize((int) toIndex(arg(args, 0), "ArrayBuffer length", ops));
                 return JsUndefined.getInstance();
             });
             case "transfer" ->
-                new JsNativeFunction("transfer", (_, args) -> buffer.transfer(transferLength(args), false));
-            case "transferToFixedLength" ->
-                new JsNativeFunction("transferToFixedLength", (_, args) -> buffer.transfer(transferLength(args), true));
+                new JsNativeFunction("transfer", (_, args) -> buffer.transfer(transferLength(args, ops), false));
+            case "transferToFixedLength" -> new JsNativeFunction("transferToFixedLength",
+                    (_, args) -> buffer.transfer(transferLength(args, ops), true));
             default -> null;
         };
     }
 
     public static JsValue dataViewMethod(JsDataView view, String name) {
+        return dataViewMethod(view, name, null);
+    }
+
+    public static JsValue dataViewMethod(JsDataView view, String name, InterpreterOps ops) {
         return switch (name) {
             case "buffer" -> view.getBuffer();
             case "byteLength" -> new JsNumber(view.byteLength());
             case "byteOffset" -> new JsNumber(view.byteOffset());
-            default -> dataViewAccessor(view, name);
+            default -> dataViewAccessor(view, name, ops);
         };
     }
 
-    private static JsValue dataViewAccessor(JsDataView view, String name) {
+    private static JsValue dataViewAccessor(JsDataView view, String name, InterpreterOps ops) {
         if (name.startsWith("getBig")) {
-            return new JsNativeFunction(name, (_,
-                    args) -> new JsBigInt(view.getBigInt(name.contains("Uint"), toIndexArg(args), boolArg(args, 1))));
+            return new JsNativeFunction(name, (_, args) -> new JsBigInt(
+                    view.getBigInt(name.contains("Uint"), toIndexArg(args, ops), boolArg(args, 1))));
         }
         if (name.startsWith("setBig")) {
             return new JsNativeFunction(name, (_, args) -> {
-                view.setBigInt(toIndexArg(args), bigArg(args), boolArg(args, 2));
+                view.setBigInt(toIndexArg(args, ops), bigArg(args), boolArg(args, 2));
                 return JsUndefined.getInstance();
             });
         }
         if (name.startsWith("get")) {
             return new JsNativeFunction(name,
-                    (_, args) -> new JsNumber(view.getNumber(name, toIndexArg(args), boolArg(args, 1))));
+                    (_, args) -> new JsNumber(view.getNumber(name, toIndexArg(args, ops), boolArg(args, 1))));
         }
         if (name.startsWith("set")) {
+            // Spec order: the offset is coerced first, then the value, and only then is the range
+            // checked - a valueOf on either argument can legally detach the buffer in between.
             return new JsNativeFunction(name, (_, args) -> {
-                view.setNumber(name, toIndexArg(args), JsCoercion.toNumber(arg(args, 1)), boolArg(args, 2));
+                final var offset = toIndexArg(args, ops);
+                final var value = JsCoercion.toNumber(arg(args, 1), ops);
+                view.setNumber(name, offset, value, boolArg(args, 2));
                 return JsUndefined.getInstance();
             });
         }
         return null;
     }
 
+    /**
+     * ValidateTypedArray: every {@code %TypedArray%.prototype} method but {@code subarray} rejects a
+     * receiver whose buffer has been detached or shrunk out from under its window.
+     */
+    private static JsTypedArray validate(JsTypedArray receiver) {
+        if (receiver.isOutOfBounds()) {
+            throw new TypeErrorException("TypedArray is out of bounds or its buffer has been detached");
+        }
+        return receiver;
+    }
+
     public static JsValue getMethod(JsTypedArray receiver, String name, Invoker invoker, InterpreterOps ops) {
         return switch (name) {
-            case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
-            case "map" -> new JsNativeFunction("map", (_, args) -> map(receiver, args, invoker));
-            case "filter" -> new JsNativeFunction("filter", (_, args) -> filter(receiver, args, invoker));
-            case "reduce" -> new JsNativeFunction("reduce", (_, args) -> reduce(receiver, args, invoker, false));
+            case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(validate(receiver), args, invoker));
+            case "map" -> new JsNativeFunction("map", (_, args) -> map(validate(receiver), args, invoker, ops));
+            case "filter" ->
+                new JsNativeFunction("filter", (_, args) -> filter(validate(receiver), args, invoker, ops));
+            case "reduce" ->
+                new JsNativeFunction("reduce", (_, args) -> reduce(validate(receiver), args, invoker, false));
             case "reduceRight" ->
-                new JsNativeFunction("reduceRight", (_, args) -> reduce(receiver, args, invoker, true));
-            case "find" -> new JsNativeFunction("find", (_, args) -> find(receiver, args, invoker, false));
-            case "findIndex" -> new JsNativeFunction("findIndex", (_, args) -> find(receiver, args, invoker, true));
+                new JsNativeFunction("reduceRight", (_, args) -> reduce(validate(receiver), args, invoker, true));
+            case "find" -> new JsNativeFunction("find", (_, args) -> find(validate(receiver), args, invoker, false));
+            case "findIndex" ->
+                new JsNativeFunction("findIndex", (_, args) -> find(validate(receiver), args, invoker, true));
             case "some" ->
-                new JsNativeFunction("some", (_, args) -> JsBoolean.of(some(receiver, args, invoker, false)));
+                new JsNativeFunction("some", (_, args) -> JsBoolean.of(some(validate(receiver), args, invoker, false)));
             case "every" ->
-                new JsNativeFunction("every", (_, args) -> JsBoolean.of(some(receiver, args, invoker, true)));
-            case "indexOf" ->
-                new JsNativeFunction("indexOf", (_, args) -> new JsNumber(indexOf(receiver, args, false)));
-            case "lastIndexOf" ->
-                new JsNativeFunction("lastIndexOf", (_, args) -> new JsNumber(indexOf(receiver, args, true)));
-            case "includes" -> new JsNativeFunction("includes", (_, args) -> JsBoolean.of(includes(receiver, args)));
-            case "join" -> new JsNativeFunction("join", (_, args) -> new JsString(join(receiver, args)));
-            case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(receiver, args));
-            case "subarray" -> new JsNativeFunction("subarray", (_, args) -> subarray(receiver, args));
+                new JsNativeFunction("every", (_, args) -> JsBoolean.of(some(validate(receiver), args, invoker, true)));
+            case "indexOf" -> new JsNativeFunction("indexOf",
+                    (_, args) -> new JsNumber(indexOf(validate(receiver), args, false, ops)));
+            case "lastIndexOf" -> new JsNativeFunction("lastIndexOf",
+                    (_, args) -> new JsNumber(indexOf(validate(receiver), args, true, ops)));
+            case "toLocaleString" -> new JsNativeFunction("toLocaleString",
+                    (_, _) -> new JsString(toLocaleString(validate(receiver), invoker, ops)));
+            case "includes" ->
+                new JsNativeFunction("includes", (_, args) -> JsBoolean.of(includes(validate(receiver), args, ops)));
+            case "join" -> new JsNativeFunction("join", (_, args) -> new JsString(join(validate(receiver), args, ops)));
+            case "slice" -> new JsNativeFunction("slice", (_, args) -> slice(validate(receiver), args, ops));
+            case "subarray" -> new JsNativeFunction("subarray", (_, args) -> subarray(receiver, args, ops));
             case "set" -> new JsNativeFunction("set", (_, args) -> set(receiver, args, ops));
-            case "fill" -> new JsNativeFunction("fill", (_, args) -> fill(receiver, args));
-            case "reverse" -> new JsNativeFunction("reverse", (_, _) -> reverse(receiver));
-            case "at" -> new JsNativeFunction("at", (_, args) -> at(receiver, args));
-            case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(join(receiver, List.of())));
-            case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(receiver));
-            case "values" -> new JsNativeFunction("values", (_, _) -> JsIterators.of(elements(receiver).iterator()));
-            case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(receiver));
+            case "fill" -> new JsNativeFunction("fill", (_, args) -> fill(validate(receiver), args, ops));
+            case "reverse" -> new JsNativeFunction("reverse", (_, _) -> reverse(validate(receiver)));
+            case "at" -> new JsNativeFunction("at", (_, args) -> at(validate(receiver), args, ops));
+            case "toString" ->
+                new JsNativeFunction("toString", (_, _) -> new JsString(join(validate(receiver), List.of(), ops)));
+            case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(validate(receiver)));
+            case "values" ->
+                new JsNativeFunction("values", (_, _) -> JsIterators.of(elements(validate(receiver)).iterator()));
+            case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(validate(receiver)));
             case "sort" -> new JsNativeFunction("sort", (_, args) -> sort(receiver, args, invoker));
-            case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker));
-            case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(receiver));
-            case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, args));
-            case "findLast" -> new JsNativeFunction("findLast", (_, args) -> findLast(receiver, args, invoker, false));
+            case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker, ops));
+            case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(validate(receiver), ops));
+            case "with" -> new JsNativeFunction("with", (_, args) -> with(validate(receiver), args, ops));
+            case "findLast" ->
+                new JsNativeFunction("findLast", (_, args) -> findLast(validate(receiver), args, invoker, false));
             case "findLastIndex" ->
-                new JsNativeFunction("findLastIndex", (_, args) -> findLast(receiver, args, invoker, true));
-            case "copyWithin" -> new JsNativeFunction("copyWithin", (_, args) -> copyWithin(receiver, args));
+                new JsNativeFunction("findLastIndex", (_, args) -> findLast(validate(receiver), args, invoker, true));
+            case "copyWithin" ->
+                new JsNativeFunction("copyWithin", (_, args) -> copyWithin(validate(receiver), args, ops));
             default -> null;
         };
     }
@@ -443,13 +504,17 @@ public final class TypedArrayBuiltins {
         return receiver;
     }
 
-    private static JsValue toSorted(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
-        return fromItems(receiver.kind(), sortedElements(receiver, args, invoker));
+    private static JsValue toSorted(JsTypedArray receiver, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        return fromItems(receiver.kind(), sortedElements(receiver, args, invoker), ops);
     }
 
     private static List<JsValue> sortedElements(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
-        final var items = new ArrayList<>(elements(receiver));
         final var comparator = args.isEmpty() || args.getFirst() instanceof JsUndefined ? null : args.getFirst();
+        // Spec order: the comparator is rejected before the receiver is validated.
+        if (comparator != null && !InterpreterUtils.isCallable(comparator)) {
+            throw new TypeErrorException("The comparison function must be either a function or undefined");
+        }
+        final var items = new ArrayList<>(elements(validate(receiver)));
         if (comparator == null) {
             items.sort(TypedArrayBuiltins::compareNumeric);
         } else {
@@ -469,85 +534,112 @@ public final class TypedArrayBuiltins {
         return Double.compare(JsCoercion.toNumber(a), JsCoercion.toNumber(b));
     }
 
-    private static JsValue toReversed(JsTypedArray receiver) {
+    private static JsValue toReversed(JsTypedArray receiver, InterpreterOps ops) {
         final var items = new ArrayList<>(elements(receiver));
         java.util.Collections.reverse(items);
-        return fromItems(receiver.kind(), items);
+        return fromItems(receiver.kind(), items, ops);
     }
 
-    private static JsValue with(JsTypedArray receiver, List<JsValue> args) {
-        var index = (int) intArg(args, 0, 0);
-        if (index < 0) {
-            index += receiver.length();
+    // Spec order: the replacement value is coerced before the index is range-checked, so a valueOf
+    // that resizes the buffer is observed by the check rather than skipped by it.
+    private static JsValue with(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        final var length = receiver.length();
+        final var relative = toInteger(intArg(args, 0, 0, ops));
+        final var index = relative < 0 ? length + (int) relative : (int) relative;
+        final var replacement = coerceElement(receiver.kind(), arg(args, 1), ops);
+        if (index < 0 || index >= length) {
+            throw new RangeErrorException("Invalid index : " + relative);
         }
-        if (index < 0 || index >= receiver.length()) {
-            throw new RangeErrorException("Invalid index : " + intArg(args, 0, 0));
-        }
-        final var result = allocate(receiver.kind(), receiver.length());
-        for (var i = 0; i < receiver.length(); i++) {
-            result.setElement(i, i == index ? arg(args, 1) : receiver.getElement(i));
+        final var result = allocate(receiver.kind(), length);
+        for (var i = 0; i < length; i++) {
+            result.setElement(i, i == index ? replacement : receiver.getElement(i));
         }
         return result;
     }
 
+    private static JsValue coerceElement(JsTypedArray.Kind kind, JsValue value, InterpreterOps ops) {
+        if (kind == JsTypedArray.Kind.BIGINT64 || kind == JsTypedArray.Kind.BIGUINT64) {
+            return NumberBuiltins.toBigIntValue(value, ops);
+        }
+        return new JsNumber(JsCoercion.toNumber(value, ops));
+    }
+
     private static JsValue findLast(JsTypedArray receiver, List<JsValue> args, Invoker invoker, boolean wantIndex) {
         final var callback = callback(args);
+        final var thisArg = arg(args, 1);
         for (var i = receiver.length() - 1; i >= 0; i--) {
             final var element = receiver.getElement(i);
-            if (JsCoercion.toBoolean(
-                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
+            if (JsCoercion.toBoolean(invoker.call(callback, thisArg, List.of(element, new JsNumber(i), receiver)))) {
                 return wantIndex ? new JsNumber(i) : element;
             }
         }
         return wantIndex ? new JsNumber(-1) : JsUndefined.getInstance();
     }
 
-    private static JsValue copyWithin(JsTypedArray receiver, List<JsValue> args) {
+    private static JsValue copyWithin(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
         final var length = receiver.length();
-        final var target = resolveIndex(intArg(args, 0, 0), length);
-        final var start = resolveIndex(intArg(args, 1, 0), length);
+        final var target = resolveIndex(intArg(args, 0, 0, ops), length);
+        final var start = resolveIndex(intArg(args, 1, 0, ops), length);
         final var end = resolveIndex(
-                args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0) : length, length);
+                args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0, ops) : length, length);
+        validate(receiver);
         final var slice = new ArrayList<JsValue>();
         for (var i = start; i < end; i++) {
             slice.add(receiver.getElement(i));
         }
-        for (var i = 0; i < slice.size() && target + i < length; i++) {
+        final var live = receiver.length();
+        for (var i = 0; i < slice.size() && target + i < live; i++) {
             receiver.setElement(target + i, slice.get(i));
         }
         return receiver;
     }
 
+    // The iteration length is fixed before the first callback runs: a callback that grows the buffer
+    // must not extend the walk, and one that shrinks it yields undefined for the vanished indices.
     private static JsValue forEach(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
         final var callback = callback(args);
-        for (var i = 0; i < receiver.length(); i++) {
-            invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(receiver.getElement(i), new JsNumber(i), receiver));
+        final var thisArg = arg(args, 1);
+        final var length = receiver.length();
+        for (var i = 0; i < length; i++) {
+            invoker.call(callback, thisArg, List.of(receiver.getElement(i), new JsNumber(i), receiver));
         }
         return JsUndefined.getInstance();
     }
 
-    private static JsValue map(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue map(JsTypedArray receiver, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
         final var callback = callback(args);
-        final var result = allocate(receiver.kind(), receiver.length());
-        for (var i = 0; i < receiver.length(); i++) {
-            result.setElement(i, invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(receiver.getElement(i), new JsNumber(i), receiver)));
+        final var thisArg = arg(args, 1);
+        final var length = receiver.length();
+        final var created = speciesCreate(receiver, List.of(new JsNumber(length)), ops);
+        final var result = asTypedArray(created);
+        for (var i = 0; i < length; i++) {
+            result.setElement(i,
+                    invoker.call(callback, thisArg, List.of(receiver.getElement(i), new JsNumber(i), receiver)), ops);
         }
-        return result;
+        return created;
     }
 
-    private static JsValue filter(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
+    private static JsValue filter(JsTypedArray receiver, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
         final var callback = callback(args);
+        final var thisArg = arg(args, 1);
+        final var length = receiver.length();
         final var kept = new ArrayList<JsValue>();
-        for (var i = 0; i < receiver.length(); i++) {
+        for (var i = 0; i < length; i++) {
             final var element = receiver.getElement(i);
-            if (JsCoercion.toBoolean(
-                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
+            if (JsCoercion.toBoolean(invoker.call(callback, thisArg, List.of(element, new JsNumber(i), receiver)))) {
                 kept.add(element);
             }
         }
-        return fromItems(receiver.kind(), kept);
+        return fillCreated(receiver, kept, ops);
+    }
+
+    private static JsValue fillCreated(JsTypedArray exemplar, List<JsValue> items, InterpreterOps ops) {
+        final var created = speciesCreate(exemplar, List.of(new JsNumber(items.size())), ops);
+        final var storage = asTypedArray(created);
+        for (var i = 0; i < items.size(); i++) {
+            storage.setElement(i, items.get(i), ops);
+        }
+        return created;
     }
 
     private static JsValue reduce(JsTypedArray receiver, List<JsValue> args, Invoker invoker, boolean right) {
@@ -574,10 +666,11 @@ public final class TypedArrayBuiltins {
 
     private static JsValue find(JsTypedArray receiver, List<JsValue> args, Invoker invoker, boolean wantIndex) {
         final var callback = callback(args);
-        for (var i = 0; i < receiver.length(); i++) {
+        final var thisArg = arg(args, 1);
+        final var length = receiver.length();
+        for (var i = 0; i < length; i++) {
             final var element = receiver.getElement(i);
-            if (JsCoercion.toBoolean(
-                    invoker.call(callback, JsUndefined.getInstance(), List.of(element, new JsNumber(i), receiver)))) {
+            if (JsCoercion.toBoolean(invoker.call(callback, thisArg, List.of(element, new JsNumber(i), receiver)))) {
                 return wantIndex ? new JsNumber(i) : element;
             }
         }
@@ -586,9 +679,11 @@ public final class TypedArrayBuiltins {
 
     private static boolean some(JsTypedArray receiver, List<JsValue> args, Invoker invoker, boolean every) {
         final var callback = callback(args);
-        for (var i = 0; i < receiver.length(); i++) {
-            final var matched = JsCoercion.toBoolean(invoker.call(callback, JsUndefined.getInstance(),
-                    List.of(receiver.getElement(i), new JsNumber(i), receiver)));
+        final var thisArg = arg(args, 1);
+        final var length = receiver.length();
+        for (var i = 0; i < length; i++) {
+            final var matched = JsCoercion.toBoolean(
+                    invoker.call(callback, thisArg, List.of(receiver.getElement(i), new JsNumber(i), receiver)));
             if (every && !matched) {
                 return false;
             }
@@ -599,11 +694,14 @@ public final class TypedArrayBuiltins {
         return every;
     }
 
-    private static int indexOf(JsTypedArray receiver, List<JsValue> args, boolean last) {
+    private static int indexOf(JsTypedArray receiver, List<JsValue> args, boolean last, InterpreterOps ops) {
         final var target = arg(args, 0);
         final var length = receiver.length();
-        for (var step = 0; step < length; step++) {
-            final var i = last ? length - 1 - step : step;
+        if (length == 0) {
+            return -1;
+        }
+        final var bounds = searchBounds(args, length, last, ops);
+        for (var i = bounds[0]; last ? i >= bounds[1] : i <= bounds[1]; i += last ? -1 : 1) {
             if (sameNumber(receiver.getElement(i), target)) {
                 return i;
             }
@@ -611,10 +709,39 @@ public final class TypedArrayBuiltins {
         return -1;
     }
 
-    private static boolean includes(JsTypedArray receiver, List<JsValue> args) {
+    // indexOf scans [from, len-1] ascending; lastIndexOf scans [from, 0] descending, and its default
+    // `from` is the last index rather than the first.
+    private static int[] searchBounds(List<JsValue> args, int length, boolean last, InterpreterOps ops) {
+        final var provided = args.size() > 1 && !(args.get(1) instanceof JsUndefined);
+        if (last) {
+            var from = provided ? (int) toInteger(JsCoercion.toNumber(args.get(1), ops)) : length - 1;
+            if (from < 0) {
+                from += length;
+            }
+            return new int[]{Math.min(from, length - 1), 0};
+        }
+        var from = provided ? (int) toInteger(JsCoercion.toNumber(args.get(1), ops)) : 0;
+        if (from < 0) {
+            from = Math.max(length + from, 0);
+        }
+        return new int[]{from, length - 1};
+    }
+
+    private static double toInteger(double value) {
+        if (Double.isNaN(value)) {
+            return 0;
+        }
+        return value < 0 ? Math.ceil(value) : Math.floor(value);
+    }
+
+    private static boolean includes(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
         final var target = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var length = receiver.length();
-        var from = args.size() > 1 ? (int) JsCoercion.toNumber(args.get(1)) : 0;
+        // The length check precedes ToInteger(fromIndex), so a throwing valueOf is never reached.
+        if (length == 0) {
+            return false;
+        }
+        var from = (int) toInteger(intArg(args, 1, 0, ops));
         from = from < 0 ? Math.max(length + from, 0) : Math.min(from, length);
         for (var i = from; i < length; i++) {
             if (SameValueZero.equal(receiver.getElement(i), target)) {
@@ -631,73 +758,229 @@ public final class TypedArrayBuiltins {
         return JsCoercion.toNumber(a) == JsCoercion.toNumber(b);
     }
 
-    private static String join(JsTypedArray receiver, List<JsValue> args) {
+    private static String join(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        // Spec order: the length is read before the separator is coerced, so a toString that
+        // detaches the buffer still leaves the element count it saw.
+        final var length = receiver.length();
         final var separator = args.isEmpty() || args.getFirst() instanceof JsUndefined
                 ? ","
-                : JsCoercion.toStr(args.getFirst());
+                : JsCoercion.toStr(args.getFirst(), ops);
         final var sb = new StringBuilder();
-        for (var i = 0; i < receiver.length(); i++) {
+        for (var i = 0; i < length; i++) {
             if (i > 0) {
                 sb.append(separator);
             }
-            sb.append(JsCoercion.toStr(receiver.getElement(i)));
+            final var element = receiver.getElement(i);
+            if (!(element instanceof JsUndefined)) {
+                sb.append(JsCoercion.toStr(element));
+            }
         }
         return sb.toString();
     }
 
-    private static JsValue slice(JsTypedArray receiver, List<JsValue> args) {
-        final var begin = resolveIndex(intArg(args, 0, 0), receiver.length());
-        final var end = resolveIndex(
-                args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? intArg(args, 1, 0) : receiver.length(),
-                receiver.length());
-        final var items = new ArrayList<JsValue>();
-        for (var i = begin; i < end; i++) {
-            items.add(receiver.getElement(i));
+    // SpeciesConstructor: `constructor` is read exactly once, and only a defined, constructible
+    // @@species displaces the exemplar's own kind. Returns null for "use the default constructor".
+    private static JsValue speciesConstructor(JsTypedArray exemplar, InterpreterOps ops) {
+        if (ops == null) {
+            return null;
         }
-        return fromItems(receiver.kind(), items);
+        final var constructor = ops.getMember(exemplar, new JsString("constructor"));
+        if (constructor instanceof JsUndefined) {
+            return null;
+        }
+        if (!InterpreterUtils.isObjectLike(constructor)) {
+            throw new TypeErrorException("The constructor property is not an object");
+        }
+        final var species = ops.getMember(constructor, JsSymbol.SPECIES);
+        if (species instanceof JsUndefined || species instanceof JsNull) {
+            return null;
+        }
+        if (!InterpreterUtils.isCallable(species)) {
+            throw new TypeErrorException("The species constructor is not a constructor");
+        }
+        return species;
     }
 
-    private static JsValue subarray(JsTypedArray receiver, List<JsValue> args) {
-        final var begin = resolveIndex(intArg(args, 0, 0), receiver.length());
+    private static JsValue speciesCreate(JsTypedArray exemplar, List<JsValue> ctorArgs, InterpreterOps ops) {
+        final var species = speciesConstructor(exemplar, ops);
+        if (species == null) {
+            return defaultConstruct(exemplar.kind(), ctorArgs);
+        }
+        final var created = ops.construct(species, ctorArgs);
+        final var typed = asTypedArray(created);
+        if (typed == null) {
+            throw new TypeErrorException("The species constructor did not return a typed array");
+        }
+        validate(typed);
+        if (isBigIntKind(typed.kind()) != isBigIntKind(exemplar.kind())) {
+            throw new TypeErrorException("Cannot mix BigInt and other types in a typed array");
+        }
+        if (ctorArgs.size() == 1 && typed.length() < JsCoercion.toNumber(ctorArgs.getFirst())) {
+            throw new TypeErrorException("The species constructor returned a typed array that is too small");
+        }
+        return created;
+    }
+
+    private static JsValue defaultConstruct(JsTypedArray.Kind kind, List<JsValue> ctorArgs) {
+        if (ctorArgs.size() == 1) {
+            return allocate(kind, (long) JsCoercion.toNumber(ctorArgs.getFirst()));
+        }
+        final var buffer = (JsArrayBuffer) ctorArgs.getFirst();
+        final var byteOffset = (int) JsCoercion.toNumber(ctorArgs.get(1));
+        if (ctorArgs.size() < 3 || ctorArgs.get(2) instanceof JsUndefined) {
+            final var available = Math.max(buffer.byteLength() - byteOffset, 0);
+            return new JsTypedArray(kind, buffer, byteOffset, available / kind.bytesPerElement(), buffer.isResizable());
+        }
+        return new JsTypedArray(kind, buffer, byteOffset, (int) JsCoercion.toNumber(ctorArgs.get(2)));
+    }
+
+    public static JsTypedArray asTypedArray(JsValue value) {
+        if (value instanceof JsTypedArray typed) {
+            return typed;
+        }
+        if (value instanceof JsObject object && object.getPrimitive() instanceof JsTypedArray wrapped) {
+            return wrapped;
+        }
+        return null;
+    }
+
+    private static String toLocaleString(JsTypedArray receiver, Invoker invoker, InterpreterOps ops) {
+        final var length = receiver.length();
+        final var sb = new StringBuilder();
+        for (var i = 0; i < length; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            final var element = receiver.getElement(i);
+            if (element instanceof JsUndefined) {
+                continue;
+            }
+            final var method = ops == null ? null : ops.getMember(element, new JsString("toLocaleString"));
+            if (InterpreterUtils.isCallable(method)) {
+                sb.append(JsCoercion.toStr(invoker.call(method, element, List.of()), ops));
+            } else {
+                sb.append(JsCoercion.toStr(element, ops));
+            }
+        }
+        return sb.toString();
+    }
+
+    private static JsValue slice(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        final var length = receiver.length();
+        final var begin = resolveIndex(intArg(args, 0, 0, ops), length);
         final var end = resolveIndex(
-                args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? intArg(args, 1, 0) : receiver.length(),
-                receiver.length());
-        final var length = Math.max(end - begin, 0);
-        final var byteOffset = receiver.byteOffset() + begin * receiver.kind().bytesPerElement();
-        return new JsTypedArray(receiver.kind(), receiver.getBuffer(), byteOffset, length);
+                args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? intArg(args, 1, 0, ops) : length, length);
+        final var count = Math.max(end - begin, 0);
+        final var created = speciesCreate(receiver, List.of(new JsNumber(count)), ops);
+        if (count == 0) {
+            return created;
+        }
+        validate(receiver);
+        final var storage = asTypedArray(created);
+        final var live = Math.min(end, receiver.length());
+        for (var i = begin; i < live; i++) {
+            storage.setElement(i - begin, receiver.getElement(i), ops);
+        }
+        return created;
     }
 
+    // subarray deliberately does not ValidateTypedArray: a view over a detached or shrunk buffer can
+    // still be re-sliced, and the resulting view is simply out of bounds too.
+    private static JsValue subarray(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        final var length = receiver.length();
+        final var begin = resolveIndex(intArg(args, 0, 0, ops), length);
+        final var explicitEnd = args.size() > 1 && !(args.get(1) instanceof JsUndefined);
+        final var end = resolveIndex(explicitEnd ? intArg(args, 1, 0, ops) : length, length);
+        final var count = Math.max(end - begin, 0);
+        final var byteOffset = receiver.rawByteOffset() + begin * receiver.kind().bytesPerElement();
+        if (receiver.isLengthTracking() && !explicitEnd) {
+            return new JsTypedArray(receiver.kind(), receiver.getBuffer(), byteOffset, count, true);
+        }
+        return speciesCreate(receiver, List.of(receiver.getBuffer(), new JsNumber(byteOffset), new JsNumber(count)),
+                ops);
+    }
+
+    // The offset is coerced and range-checked before the receiver is validated, so a valueOf that
+    // detaches the buffer is observed by the validation rather than preceding it.
     private static JsValue set(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
         final var source = arg(args, 0);
-        // The offset is coerced and range-checked before the source is even looked at, and a
-        // negative offset is a RangeError rather than an out-of-bounds write.
-        final var offsetValue = args.size() > 1 ? JsCoercion.toNumber(args.get(1)) : 0;
-        if (!Double.isNaN(offsetValue) && offsetValue < 0) {
+        final var offsetValue = toInteger(intArg(args, 1, 0, ops));
+        if (offsetValue < 0) {
             throw new RangeErrorException("Start offset must be non-negative");
         }
-        final var offset = (int) (Double.isNaN(offsetValue) ? 0 : Math.floor(offsetValue));
-        final List<JsValue> items = switch (source) {
-            case JsArray array -> array.getElements();
-            case JsTypedArray typed -> elements(typed);
-            case JsObject object when ops != null -> InterpreterUtils.arrayLikeElements(object, ops, false);
-            default -> List.of();
-        };
-        if (offset + items.size() > receiver.length()) {
+        validate(receiver);
+        final var targetLength = receiver.length();
+        if (source instanceof JsTypedArray typed) {
+            return setFromTypedArray(receiver, typed, offsetValue, targetLength);
+        }
+        return setFromArrayLike(receiver, source, offsetValue, targetLength, ops);
+    }
+
+    private static JsValue setFromTypedArray(JsTypedArray receiver, JsTypedArray source, double offset,
+            int targetLength) {
+        validate(source);
+        if (isBigIntKind(receiver.kind()) != isBigIntKind(source.kind())) {
+            throw new TypeErrorException("Cannot mix BigInt and other types in a typed array set");
+        }
+        final var items = elements(source);
+        if (offset + items.size() > targetLength) {
             throw new RangeErrorException("Source is too large");
         }
         for (var i = 0; i < items.size(); i++) {
-            receiver.setElement(offset + i, items.get(i));
+            receiver.setElement((int) offset + i, items.get(i));
         }
         return JsUndefined.getInstance();
     }
 
-    private static JsValue fill(JsTypedArray receiver, List<JsValue> args) {
-        final var value = arg(args, 0);
-        final var start = resolveIndex(intArg(args, 1, 0), receiver.length());
+    // The source is read element-by-element through [[Get]], so its getters run in index order and
+    // each value is written before the next one is fetched.
+    private static JsValue setFromArrayLike(JsTypedArray receiver, JsValue source, double offset, int targetLength,
+            InterpreterOps ops) {
+        if (source instanceof JsUndefined || source instanceof JsNull) {
+            throw new TypeErrorException("Cannot convert " + JsCoercion.toStr(source) + " to an object");
+        }
+        final var sourceLength = arrayLikeLength(source, ops);
+        if (Double.isInfinite(offset) || sourceLength + offset > targetLength) {
+            throw new RangeErrorException("Source is too large");
+        }
+        for (var i = 0; i < sourceLength; i++) {
+            final var value = ops == null
+                    ? JsUndefined.getInstance()
+                    : ops.getMember(source, new JsString(Integer.toString(i)));
+            receiver.setElement((int) offset + i, value, ops);
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private static int arrayLikeLength(JsValue source, InterpreterOps ops) {
+        if (source instanceof JsArray array) {
+            return array.getElements().size();
+        }
+        if (ops == null) {
+            return 0;
+        }
+        final var raw = JsCoercion.toNumber(ops.getMember(source, new JsString("length")), ops);
+        if (Double.isNaN(raw) || raw <= 0) {
+            return 0;
+        }
+        return (int) Math.min(raw, MAX_SAFE_INTEGER);
+    }
+
+    private static boolean isBigIntKind(JsTypedArray.Kind kind) {
+        return kind == JsTypedArray.Kind.BIGINT64 || kind == JsTypedArray.Kind.BIGUINT64;
+    }
+
+    // Spec order: the fill value is coerced first, then the range arguments, then the (possibly
+    // resized) length is re-read before the write loop.
+    private static JsValue fill(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        final var value = coerceElement(receiver.kind(), arg(args, 0), ops);
+        final var length = receiver.length();
+        final var start = resolveIndex(intArg(args, 1, 0, ops), length);
         final var end = resolveIndex(
-                args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0) : receiver.length(),
-                receiver.length());
-        for (var i = start; i < end; i++) {
+                args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0, ops) : length, length);
+        validate(receiver);
+        final var live = Math.min(end, receiver.length());
+        for (var i = start; i < live; i++) {
             receiver.setElement(i, value);
         }
         return receiver;
@@ -714,8 +997,8 @@ public final class TypedArrayBuiltins {
         return receiver;
     }
 
-    private static JsValue at(JsTypedArray receiver, List<JsValue> args) {
-        var index = (int) intArg(args, 0, 0);
+    private static JsValue at(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        var index = (int) toInteger(intArg(args, 0, 0, ops));
         if (index < 0) {
             index += receiver.length();
         }
@@ -756,15 +1039,15 @@ public final class TypedArrayBuiltins {
         return index < args.size() ? args.get(index) : JsUndefined.getInstance();
     }
 
-    private static long toIndexArg(List<JsValue> args) {
-        return toIndex(arg(args, 0), "DataView offset");
+    private static long toIndexArg(List<JsValue> args, InterpreterOps ops) {
+        return toIndex(arg(args, 0), "DataView offset", ops);
     }
 
-    private static int transferLength(List<JsValue> args) {
+    private static int transferLength(List<JsValue> args, InterpreterOps ops) {
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
             return -1;
         }
-        final var length = toIndex(args.getFirst(), "ArrayBuffer length");
+        final var length = toIndex(args.getFirst(), "ArrayBuffer length", ops);
         JsArrayBuffer.checkAllocation(length);
         return (int) length;
     }
@@ -774,10 +1057,14 @@ public final class TypedArrayBuiltins {
     // RangeError rather than an `(int)` cast that silently saturates at Integer.MAX_VALUE - which
     // used to turn an obviously-impossible allocation into a multi-gigabyte attempt.
     private static long toIndex(JsValue value, String label) {
+        return toIndex(value, label, null);
+    }
+
+    private static long toIndex(JsValue value, String label, InterpreterOps ops) {
         if (value instanceof JsUndefined) {
             return 0;
         }
-        final var number = JsCoercion.toNumber(value);
+        final var number = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(number)) {
             return 0;
         }
@@ -788,11 +1075,11 @@ public final class TypedArrayBuiltins {
         return (long) integer;
     }
 
-    private static double intArg(List<JsValue> args, int index, double fallback) {
+    private static double intArg(List<JsValue> args, int index, double fallback, InterpreterOps ops) {
         if (index >= args.size() || args.get(index) instanceof JsUndefined) {
             return fallback;
         }
-        final var value = JsCoercion.toNumber(args.get(index));
+        final var value = JsCoercion.toNumber(args.get(index), ops);
         return Double.isNaN(value) ? 0 : value;
     }
 

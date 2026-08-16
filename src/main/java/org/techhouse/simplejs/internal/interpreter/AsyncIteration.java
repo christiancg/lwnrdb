@@ -5,7 +5,6 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNul
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 
 import java.util.List;
-
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Coroutine;

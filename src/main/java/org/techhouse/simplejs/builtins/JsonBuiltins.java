@@ -41,8 +41,10 @@ public final class JsonBuiltins {
 
     public static JsObject create(InterpreterOps ops, Invoker invoker) {
         final var json = new JsObject();
-        json.set("parse", new JsNativeFunction("parse", (_, args) -> parse(args, ops, invoker)));
-        json.set("stringify", new JsNativeFunction("stringify", (_, args) -> stringify(args, ops, invoker)));
+        Intrinsics.defineHidden(json, "parse", new JsNativeFunction("parse", (_, args) -> parse(args, ops, invoker)));
+        Intrinsics.defineHidden(json, "stringify",
+                new JsNativeFunction("stringify", (_, args) -> stringify(args, ops, invoker)));
+        Intrinsics.defineNamespaceTag(json, "JSON");
         return json;
     }
 

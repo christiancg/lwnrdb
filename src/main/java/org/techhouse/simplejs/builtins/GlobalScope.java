@@ -44,8 +44,14 @@ public final class GlobalScope {
         // Iterator/AsyncIterator wire their own dedicated [[Prototype]] internally (it's their own
         // map/filter/... helper surface, not the unrelated Generator/AsyncGenerator.prototype
         // intrinsic `constructor(...)` below would otherwise overwrite it with).
-        global.declareBuiltin("Iterator", IteratorBuiltins.create(ops, intrinsics.objectProto()));
-        global.declareBuiltin("AsyncIterator", AsyncIteratorBuiltins.create(ops, eventLoop));
+        final var iteratorCtor = IteratorBuiltins.create(ops, intrinsics.objectProto());
+        final var asyncIteratorCtor = AsyncIteratorBuiltins.create(ops, eventLoop);
+        global.declareBuiltin("Iterator", iteratorCtor);
+        global.declareBuiltin("AsyncIterator", asyncIteratorCtor);
+        // The spec chain is generator -> %GeneratorPrototype% -> %IteratorPrototype% -> Object.prototype
+        // (and the async mirror); Iterator/AsyncIterator own the middle link, so it can only be
+        // stitched once both they and the intrinsics exist.
+        intrinsics.linkIteratorPrototypes(iteratorCtor.getPrototype(), asyncIteratorCtor.getPrototype());
         constructor(global, "Symbol", SymbolBuiltins.create(), intrinsics.symbolProto());
         constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, false), intrinsics.mapProto());
         constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true), intrinsics.weakMapProto());
@@ -62,7 +68,7 @@ public final class GlobalScope {
         proxyCtor.markConstructor();
         define(global, "Proxy", proxyCtor);
         constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(), intrinsics.arrayBufferProto());
-        constructor(global, "DataView", TypedArrayBuiltins.dataView(), intrinsics.dataViewProto());
+        constructor(global, "DataView", TypedArrayBuiltins.dataView(ops), intrinsics.dataViewProto());
         // %TypedArray% is a real spec intrinsic but - unlike Iterator - is never itself exposed as
         // a named global by a conforming host; it's only reachable via Object.getPrototypeOf(Int8Array)
         // (which testTypedArray.js's own `var TypedArray = ...` line relies on), so this wires the

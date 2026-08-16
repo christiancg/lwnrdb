@@ -261,11 +261,13 @@ public class ArrayBuiltinsTest {
         assertEquals("", str("[].toString()"));
     }
 
-    // concat splats an object that opts in via Symbol.isConcatSpreadable
+    // concat splats an object that opts in via Symbol.isConcatSpreadable, over its own length
     @Test
     public void test_is_concat_spreadable() {
-        assertEquals(3, num("const o = {0: 'a', 1: 'b'}; o[Symbol.isConcatSpreadable] = true; [1].concat(o).length"));
-        assertEquals("a", str("const o = {0: 'a'}; o[Symbol.isConcatSpreadable] = true; [1].concat(o)[1]"));
+        assertEquals(3, num(
+                "const o = {0: 'a', 1: 'b', length: 2}; o[Symbol.isConcatSpreadable] = true; [1].concat(o).length"));
+        assertEquals("a", str("const o = {0: 'a', length: 1}; o[Symbol.isConcatSpreadable] = true; [1].concat(o)[1]"));
+        assertEquals(1, num("const o = {0: 'a'}; o[Symbol.isConcatSpreadable] = true; [1].concat(o).length"));
         assertEquals(2, num("[1].concat({a: 1}).length"));
         assertEquals(3, num("[1].concat([2, 3]).length"));
     }
@@ -329,5 +331,172 @@ public class ArrayBuiltinsTest {
         assertEquals(0, num("Array.prototype.map.call(5, x => x).length"));
         assertTrue(bool("Array.prototype.every.call(false, () => false)"));
         assertEquals(1, num("Array.prototype.push.call(true, 'x')"));
+        assertEquals("object", str("Array.prototype.map.call('ab', (v, i, o) => typeof o)[0]"));
+    }
+
+    // the callback's third argument is the receiver itself, not a copy of it
+    @Test
+    public void test_callback_receives_original_receiver_not_snapshot() {
+        assertTrue(bool("const o = {length: 1, 0: 'a'}; let seen; Array.prototype.forEach.call(o, (v, i, r) => "
+                + "{ seen = r; }); seen === o"));
+        assertTrue(bool("const a = [1]; let seen; a.map((v, i, r) => { seen = r; }); seen === a"));
+        assertTrue(bool("const o = {length: 1, 0: 'a'}; let seen; Array.prototype.reduce.call(o, (acc, v, i, r) => "
+                + "{ seen = r; return acc; }, 0); seen === o"));
+    }
+
+    // an exotic (non-JsObject) receiver is read through the member seam rather than rejected
+    @Test
+    public void test_accepts_exotic_array_like_receiver() {
+        assertEquals("a-b", str("function f() {} Object.defineProperty(f, 'length', {value: 2});"
+                + " f[0] = 'a'; f[1] = 'b'; Array.prototype.join.call(f, '-')"));
+        assertEquals("a-b", str("(function() { return Array.prototype.join.call(arguments, '-'); })('a', 'b')"));
+        assertEquals("a-b-c", str("Array.prototype.join.call(new String('abc'), '-')"));
+    }
+
+    // a mutating method writes through to a generic receiver instead of a discarded snapshot
+    @Test
+    public void test_writes_through_to_generic_receiver() {
+        assertEquals("x,1", str("const o = {length: 0}; Array.prototype.push.call(o, 'x'); o[0] + ',' + o.length"));
+        assertEquals("3,2,1", str("const o = {0: 1, 1: 2, 2: 3, length: 3}; Array.prototype.reverse.call(o);"
+                + " o[0] + ',' + o[1] + ',' + o[2]"));
+        assertEquals("b,1,false",
+                str("const o = {0: 'a', 1: 'b', length: 2};" + " const first = Array.prototype.shift.call(o);"
+                        + " o[0] + ',' + o.length + ',' + o.hasOwnProperty('1')"));
+    }
+
+    // a rejected [[Set]] on the receiver is a TypeError, not a silently dropped write
+    @Test
+    public void test_throws_on_frozen_receiver_write() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Array.prototype.push.call(Object.freeze([1]), 2)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.prototype.push.call('ab', 'c')"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const o = {length: 0}; Object.freeze(o); Array.prototype.push.call(o, 1)"));
+    }
+
+    // indexOf honours fromIndex, including the negative and non-finite forms
+    @Test
+    public void test_index_of_honours_from_index() {
+        assertEquals(2, num("[1, 2, 1].indexOf(1, 1)"));
+        assertEquals(-1, num("[1, 2, 1].indexOf(1, 3)"));
+        assertEquals(2, num("[1, 2, 1].indexOf(1, -1)"));
+        assertEquals(0, num("[1, 2, 1].indexOf(1, -9)"));
+        assertEquals(-1, num("[1, 2, 1].indexOf(1, Infinity)"));
+        assertEquals(0, num("[1, 2, 1].indexOf(1, 'one')"));
+    }
+
+    // lastIndexOf honours fromIndex, counting from the end for a negative one
+    @Test
+    public void test_last_index_of_honours_from_index() {
+        assertEquals(1, num("[0, 1, 1].lastIndexOf(1, 1)"));
+        assertEquals(2, num("[0, 1, 1].lastIndexOf(1)"));
+        assertEquals(1, num("[0, 1, 1].lastIndexOf(1, -2)"));
+        assertEquals(-1, num("[0, 1, 1].lastIndexOf(1, -9)"));
+        assertEquals(-1, num("[0, 1, 1].lastIndexOf(1, -Infinity)"));
+        assertEquals(2, num("[0, 1, 1].lastIndexOf(1, Infinity)"));
+    }
+
+    // concat consults Symbol.isConcatSpreadable before falling back to IsArray
+    @Test
+    public void test_concat_honours_is_concat_spreadable() {
+        assertEquals(3, num(
+                "const o = {0: 'a', 1: 'b', length: 2}; o[Symbol.isConcatSpreadable] = true; [1].concat(o).length"));
+        assertEquals(2, num("const o = {0: 'a', length: 1}; [1].concat(o).length"));
+        assertEquals(1,
+                num("const o = {0: 'a', length: 1}; o[Symbol.isConcatSpreadable] = false; [].concat(o).length"));
+    }
+
+    // the default comparator compares the ToString of each element, and undefined sorts last
+    @Test
+    public void test_sort_default_comparator_uses_to_string() {
+        assertEquals("1,10,9", str("[10, 9, 1].sort().join(',')"));
+        assertEquals("1,10,9,", str("[10, 9, undefined, 1].sort().join(',')"));
+        assertEquals("1,2,,3", str("const a = [2, , 1]; a.sort(); a.join(',') + ',' + a.length"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("[1, 2].sort('x')"));
+    }
+
+    // a length past the int range is walked lazily rather than materialised
+    @Test
+    public void test_length_beyond_integer_max_does_not_throw() {
+        assertEquals(9007199254740990D,
+                num("Array.prototype.lastIndexOf.call({length: 9007199254740991, 9007199254740990: 'c'}, 'c')"));
+        assertEquals(9007199254740990D, num("let at = -1; Array.prototype.findLast.call({length: Number.MAX_VALUE},"
+                + " (v, i) => { at = i; return true; }); at"));
+        assertFalse(bool("Array.prototype.includes.call({length: Infinity, 0: 'a'}, 'a', 9007199254740990)"));
+    }
+
+    // splice shifts the tail in both directions and reports the removed elements
+    @Test
+    public void test_splice_grows_and_shrinks() {
+        assertEquals("1,9,10,2,3", str("const a = [1, 2, 3]; a.splice(1, 0, 9, 10); a.join(',')"));
+        assertEquals("1,3", str("const a = [1, 2, 3]; a.splice(1, 1); a.join(',')"));
+        assertEquals("2,3", str("[1, 2, 3].splice(1).join(',')"));
+        assertEquals("", str("[1, 2, 3].splice().join(',')"));
+        assertEquals("1,9,10,3", str("const o = {0: 1, 1: 2, 2: 3, length: 3};"
+                + " Array.prototype.splice.call(o, 1, 1, 9, 10); Array.prototype.join.call(o, ',')"));
+    }
+
+    // toSpliced builds the copy from the head, the insertions and the tail
+    @Test
+    public void test_to_spliced_variants() {
+        assertEquals("1,9,10,2,3", str("[1, 2, 3].toSpliced(1, 0, 9, 10).join(',')"));
+        assertEquals("1", str("[1, 2, 3].toSpliced(1).join(',')"));
+        assertEquals("1,2,3", str("[1, 2, 3].toSpliced().join(',')"));
+    }
+
+    // copyWithin copies backwards when the ranges overlap, and deletes an absent source
+    @Test
+    public void test_copy_within_overlapping_and_holes() {
+        assertEquals("1,1,2,3", str("[1, 2, 3, 4].copyWithin(1, 0).join(',')"));
+        assertEquals("1,2,3", str("[1, 2, 3].copyWithin(0, 5).join(',')"));
+        assertTrue(bool("const a = [, 2]; a.copyWithin(1, 0); !a.hasOwnProperty('1')"));
+    }
+
+    // ArraySpeciesCreate honours a species constructor and rejects a non-constructor one
+    @Test
+    public void test_species_create_uses_the_constructor() {
+        assertTrue(bool("class C { constructor(n) { this.tag = true; } static get [Symbol.species]() { return C; } }"
+                + " const a = [1, 2]; a.constructor = C; const r = a.map(x => x); r.tag === true && r[0] === 1"));
+        assertTrue(bool("function D() { this.tag = true; }"
+                + " const a = [1]; a.constructor = D; Array.isArray(a.map(x => x))"));
+        assertEquals(2, num("class C { static get [Symbol.species]() { return C; } }"
+                + " const a = [1, 2]; a.constructor = C; a.slice().length"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const a = [1]; a.constructor = 5; a.filter(x => true)"));
+        assertEquals("1", str("const o = {0: 1, length: 1}; Array.prototype.slice.call(o).join(',')"));
+    }
+
+    // toString falls back to Object.prototype.toString when `join` is not callable
+    @Test
+    public void test_to_string_falls_back_to_object_to_string() {
+        assertEquals("J", str("const a = [1, 2]; a.join = () => 'J'; a.toString()"));
+        assertEquals("[object Array]", str("const a = [1, 2]; a.join = 1; a.toString()"));
+    }
+
+    // reverse swaps a hole with a value, so the hole moves rather than becoming undefined
+    @Test
+    public void test_reverse_moves_holes() {
+        assertTrue(bool("const a = [, 1]; a.reverse(); a[0] === 1 && !a.hasOwnProperty('1')"));
+        assertEquals("3,2,1", str("const o = {0: 1, 1: 2, 2: 3, length: 3};"
+                + " Array.prototype.reverse.call(o); Array.prototype.join.call(o, ',')"));
+    }
+
+    // an out-of-range array length is a RangeError, from the constructor and from a by-copy method
+    @Test
+    public void test_invalid_array_length_throws() {
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class, () -> Interpreter.run("Array(-1)"));
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class, () -> Interpreter.run("Array(1.5)"));
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("Array.prototype.toReversed.call({length: 4294967295})"));
+        assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
+                () -> Interpreter.run("Array.prototype.sort.call({length: 9007199254740991})"));
+    }
+
+    // the separator and the elements coerce through ToPrimitive, not a bare toString
+    @Test
+    public void test_join_coerces_the_separator() {
+        assertEquals("1foo2", str("[1, 2].join({toString: () => 'foo'})"));
+        assertEquals("1bar2", str("[1, 2].join({toString: undefined, valueOf: () => 'bar'})"));
+        assertEquals("102", str("[1, 2].join(0)"));
     }
 }

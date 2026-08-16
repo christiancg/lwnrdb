@@ -1448,8 +1448,7 @@ public final class Parser {
 
         // MemberExpression : super . PrivateName is not in the grammar - a private name is never
         // reachable through the prototype chain.
-        private MemberExpression memberExpression(Expression object, Expression property,
-                                                  boolean optional) {
+        private MemberExpression memberExpression(Expression object, Expression property, boolean optional) {
             if (object instanceof SuperExpression && property instanceof PrivateIdentifier) {
                 throw new SyntaxErrorException("Private fields can not be accessed on 'super'");
             }

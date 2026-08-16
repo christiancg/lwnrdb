@@ -55,7 +55,7 @@ public final class JsArrayBuffer extends JsValue {
     }
 
     public int maxByteLength() {
-        return maxByteLength;
+        return detached ? 0 : maxByteLength;
     }
 
     public boolean isResizable() {
@@ -67,6 +67,9 @@ public final class JsArrayBuffer extends JsValue {
     }
 
     public JsArrayBuffer slice(int begin, int end) {
+        if (detached) {
+            throw new TypeErrorException("Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer");
+        }
         final var from = clamp(begin);
         final var to = Math.max(clamp(end), from);
         return new JsArrayBuffer(Arrays.copyOfRange(bytes, from, to));

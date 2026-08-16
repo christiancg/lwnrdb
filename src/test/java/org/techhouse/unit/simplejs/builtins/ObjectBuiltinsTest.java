@@ -1303,4 +1303,51 @@ public class ObjectBuiltinsTest {
                 Object.getOwnPropertyDescriptors(o)[s].value === 1
                 """));
     }
+
+    // A non-symbol key runs through ToPropertyKey, so a user toString/valueOf decides the name
+    @Test
+    public void definePropertyCoercesKeyThroughToPropertyKey() {
+        assertEquals(7, num("""
+                const o = {};
+                Object.defineProperty(o, { toString() { return 'k'; } }, { value: 7 });
+                o.k
+                """));
+        assertEquals(3, num("const o = {}; Object.defineProperty(o, 2, { value: 3 }); o['2']"));
+        assertTrue(flag("""
+                const o = { a: 1 };
+                Object.hasOwn(o, { toString() { return 'a'; } })
+                """));
+        assertTrue(flag("""
+                const o = { a: 1 };
+                delete o[{ toString() { return 'a'; } }];
+                !('a' in o)
+                """));
+        assertEquals(1, num("""
+                const o = {};
+                Object.defineProperty(o, 'x', { value: 1 });
+                Object.getOwnPropertyDescriptor(o, { toString() { return 'x'; } }).value
+                """));
+    }
+
+    // ToPropertyDescriptor accepts any object (a function, an array, a Date), not just a literal
+    @Test
+    public void acceptsNonPlainObjectDescriptor() {
+        assertEquals(5, num("""
+                const o = {};
+                const d = function () {};
+                d.value = 5;
+                Object.defineProperty(o, 'x', d);
+                o.x
+                """));
+        assertEquals(4, num("""
+                const o = {};
+                const d = new Proxy({}, { get: (_, k) => 4, has: (_, k) => k === 'value' });
+                Object.defineProperty(o, 'x', d);
+                o.x
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'x', 1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'x', { get: 1 })"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty({}, 'x', { get() {}, value: 1 })"));
+    }
 }

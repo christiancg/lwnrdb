@@ -25,10 +25,10 @@ public final class ConsoleBuiltins {
 
     public static JsObject create(Consumer<String> consoleSink) {
         final var console = new JsObject();
-        console.set("log", new JsNativeFunction("log", (_, args) -> write(consoleSink, args)));
-        console.set("error", new JsNativeFunction("error", (_, args) -> write(consoleSink, args)));
-        console.set("warn", new JsNativeFunction("warn", (_, args) -> write(consoleSink, args)));
-        console.set("info", new JsNativeFunction("info", (_, args) -> write(consoleSink, args)));
+        Intrinsics.defineHidden(console, "log", new JsNativeFunction("log", (_, args) -> write(consoleSink, args)));
+        Intrinsics.defineHidden(console, "error", new JsNativeFunction("error", (_, args) -> write(consoleSink, args)));
+        Intrinsics.defineHidden(console, "warn", new JsNativeFunction("warn", (_, args) -> write(consoleSink, args)));
+        Intrinsics.defineHidden(console, "info", new JsNativeFunction("info", (_, args) -> write(consoleSink, args)));
         return console;
     }
 

@@ -107,6 +107,13 @@ public final class JsCoercion {
         return toStr(value);
     }
 
+    // ToPropertyKey: a symbol stays a symbol, everything else goes through ToPrimitive(string) then
+    // ToString - so an object key invokes the user's toString/valueOf rather than stringifying flatly.
+    public static JsValue toPropertyKey(JsValue value, InterpreterOps ops) {
+        final var primitive = value instanceof JsObject ? toPrimitive(value, "string", ops) : value;
+        return primitive instanceof JsSymbol ? primitive : new JsString(toStr(primitive, ops));
+    }
+
     public static JsValue toPrimitive(JsValue value) {
         if (value instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
             return wrapper.getPrimitive();

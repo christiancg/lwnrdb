@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.BigIntBuiltins;
@@ -94,14 +95,15 @@ public class IntrinsicsTest {
     public void test_names_match_prototype_keys() {
         final var realm = intrinsics();
         assertKeys(realm.arrayProto(), ArrayBuiltins.NAMES);
-        assertKeys(realm.stringProto(), StringBuiltins.NAMES);
+        assertKeys(realm.stringProto(),
+                Stream.concat(StringBuiltins.NAMES.stream(), Stream.of("toString", "valueOf")).toList());
         assertKeys(realm.numberProto(), NumberBuiltins.NAMES);
         assertKeys(realm.bigintProto(), BigIntBuiltins.NAMES);
         assertKeys(realm.symbolProto(), SymbolBuiltins.NAMES, SymbolBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.regexpProto(), RegexBuiltins.NAMES, RegexBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.dateProto(), DateBuiltins.NAMES);
         assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES);
-        assertKeys(realm.functionProto(), FunctionProtoBuiltins.NAMES);
+        assertKeys(realm.functionProto(), FunctionProtoBuiltins.NAMES, List.of("caller", "arguments"));
         assertKeys(realm.promiseProto(), org.techhouse.simplejs.builtins.PromiseBuiltins.PROTO_NAMES);
         assertKeys(realm.iteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
         assertKeys(realm.asyncIteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
@@ -246,12 +248,10 @@ public class IntrinsicsTest {
         assertTrue(error.isErrorData());
     }
 
-    // Array.prototype methods accept array-like receivers by snapshotting them
+    // Array.prototype methods accept a primitive string receiver, reading it through ToObject
     @Test
     public void test_array_prototype_accepts_array_likes() {
-        final var realm = intrinsics();
-        final var join = (JsNativeFunction) realm.arrayProto().get("join");
-        assertEquals("a-b", ((JsString) join.invoke(new JsString("ab"), List.of(new JsString("-")))).getValue());
+        assertEquals("a-b", run("Array.prototype.join.call('ab', '-')"));
     }
 
     // Array.prototype methods accept a plain array-like receiver
@@ -422,5 +422,104 @@ public class IntrinsicsTest {
     @Test
     public void test_typed_array_subclass_unwraps() {
         assertEquals(1, num("class T extends Int8Array { constructor(n) { super(n); } } new T(4).fill(1)[0]"));
+    }
+
+    // Namespace members are installed non-enumerable, so Object.keys sees none of them
+    @Test
+    public void namespaceMembersAreNonEnumerable() {
+        assertEquals(0, num("Object.keys(Math).length"));
+        assertEquals(0, num("Object.keys(JSON).length"));
+        assertEquals(0, num("Object.keys(Reflect).length"));
+        assertEquals(0, num("Object.keys(console).length"));
+        assertEquals(0, num("Object.keys(Iterator.prototype).length"));
+        assertTrue(bool("Object.getOwnPropertyNames(Math).indexOf('PI') >= 0"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(Math, 'PI').writable === false"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(Math, 'floor').configurable === true"));
+    }
+
+    // Every prototype that the spec tags carries a non-enumerable, non-writable @@toStringTag
+    @Test
+    public void prototypesCarrySymbolToStringTag() {
+        assertEquals("Map", run("Map.prototype[Symbol.toStringTag]"));
+        assertEquals("Set", run("Set.prototype[Symbol.toStringTag]"));
+        assertEquals("WeakMap", run("WeakMap.prototype[Symbol.toStringTag]"));
+        assertEquals("ArrayBuffer", run("ArrayBuffer.prototype[Symbol.toStringTag]"));
+        assertEquals("DataView", run("DataView.prototype[Symbol.toStringTag]"));
+        assertEquals("BigInt", run("BigInt.prototype[Symbol.toStringTag]"));
+        assertEquals("Math", run("Math[Symbol.toStringTag]"));
+        assertEquals("JSON", run("JSON[Symbol.toStringTag]"));
+        assertEquals("Reflect", run("Reflect[Symbol.toStringTag]"));
+        assertEquals("Int8Array", run("Object.prototype.toString.call(new Int8Array(1)).slice(8, -1)"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(Map.prototype, Symbol.toStringTag).writable === false"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(Map.prototype, Symbol.toStringTag).configurable === true"));
+        assertTrue(bool("Array.prototype[Symbol.unscopables].values === true"));
+        assertTrue(bool("Object.getPrototypeOf(Array.prototype[Symbol.unscopables]) === null"));
+    }
+
+    // Number/String/Boolean.prototype are themselves wrappers, so their own methods accept them
+    @Test
+    public void numberStringBooleanPrototypesHavePrimitiveSlots() {
+        assertEquals("0", run("Number.prototype.toString()"));
+        assertEquals(0, num("Number.prototype.valueOf()"));
+        assertEquals("", run("String.prototype.toString()"));
+        assertEquals("false", run("Boolean.prototype.toString()"));
+        assertTrue(bool("String.prototype.toString !== Object.prototype.toString"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.toString.call(1)"));
+    }
+
+    // %ThrowTypeError% is one frozen, anonymous function shared by every poison-pill accessor
+    @Test
+    public void throwTypeErrorIsASharedFrozenIntrinsic() {
+        assertTrue(bool("""
+                const callee = Object.getOwnPropertyDescriptor(function () { return arguments; }(), 'callee').get;
+                const caller = Object.getOwnPropertyDescriptor(Function.prototype, 'caller');
+                callee === caller.get && callee === caller.set && Object.isFrozen(callee)
+                    && callee.name === '' && callee.length === 0 && callee.prototype === undefined
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("(function () { return arguments; })().callee"));
+    }
+
+    // Generator/async function objects sit on their own intrinsic prototypes, not Function.prototype
+    @Test
+    public void generatorAndAsyncFunctionIntrinsicsExist() {
+        assertEquals("GeneratorFunction", run("Object.getPrototypeOf(function* () {}).constructor.name"));
+        assertEquals("AsyncFunction", run("Object.getPrototypeOf(async function () {}).constructor.name"));
+        assertEquals("AsyncGeneratorFunction", run("Object.getPrototypeOf(async function* () {}).constructor.name"));
+        assertTrue(bool("function* g() {} Object.getPrototypeOf(Object.getPrototypeOf(g)) === Function.prototype"));
+        assertTrue(bool("""
+                function* g() {}
+                Object.getPrototypeOf(Object.getPrototypeOf(g.prototype)) === Iterator.prototype
+                """));
+        assertTrue(bool("""
+                async function* g() {}
+                Object.getPrototypeOf(Object.getPrototypeOf(g.prototype)) === AsyncIterator.prototype
+                """));
+    }
+
+    // A frozen object rejects a symbol-keyed write exactly like a string-keyed one
+    @Test
+    public void frozenObjectsRejectSymbolKeyedWrites() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const s = Symbol('s');
+                const o = {};
+                o[s] = 1;
+                Object.freeze(o);
+                o[s] = 2;
+                """));
+        assertEquals(5, num("""
+                const s = Symbol('s');
+                const o = {};
+                Object.defineProperty(o, s, { value: 1, writable: false, configurable: true });
+                Object.defineProperty(o, s, { value: 5 });
+                o[s]
+                """));
+    }
+
+    // A regex own property is a real own property, so RegExpExec can see an overridden `exec`
+    @Test
+    public void regExpOwnPropertyAssignmentLands() {
+        assertEquals(1, num("const r = /b/; r.exec = () => 1; r.exec()"));
+        assertEquals("exec", run("const r = /b/; r.exec = () => 1; Object.getOwnPropertyNames(r).join(',')"));
+        assertTrue(bool("const r = /b/; r.exec = () => 1; typeof /c/.exec === 'function'"));
     }
 }

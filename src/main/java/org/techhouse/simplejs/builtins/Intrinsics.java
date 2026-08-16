@@ -4,7 +4,6 @@ import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -27,7 +26,6 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsPromise;
-import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
@@ -45,16 +43,11 @@ public final class Intrinsics {
     }
 
     private static final PropertyFlags HIDDEN = new PropertyFlags(true, false, true);
-    private static final Set<String> MUTATING_ARRAY_METHODS = Set.of("push", "pop", "shift", "unshift", "splice",
-            "copyWithin", "fill", "reverse", "sort");
-    private static final Set<String> REVERSE_ARRAY_METHODS = Set.of("lastIndexOf", "reduceRight", "findLast",
-            "findLastIndex");
-    // Methods that stop early or deliberately skip an index: materialising every index getter up
-    // front would run side effects the spec says never happen.
-    private static final Set<String> SHORT_CIRCUITING_ARRAY_METHODS = Set.of("indexOf", "lastIndexOf", "includes",
-            "with");
     private static final List<String> ERROR_NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError",
             "URIError", "ReferenceError", "EvalError", "SuppressedError", "AggregateError");
+    private static final List<String> UNSCOPABLE_ARRAY_METHODS = List.of("at", "copyWithin", "entries", "fill", "find",
+            "findIndex", "findLast", "findLastIndex", "flat", "flatMap", "includes", "keys", "toReversed", "toSorted",
+            "toSpliced", "values");
 
     private final Invoker invoker;
     private final InterpreterOps ops;
@@ -83,6 +76,11 @@ public final class Intrinsics {
     private final JsObject disposableStackProto;
     private final JsObject asyncDisposableStackProto;
     private final JsObject errorProto = new JsObject();
+    private final JsNativeFunction throwTypeError;
+    private final JsObject regexpStringIteratorProto;
+    private final JsObject generatorFunctionProto;
+    private final JsObject asyncGeneratorFunctionProto;
+    private final JsObject asyncFunctionProto;
     private JsValue defaultHasInstance;
     private JsValue defaultArrayIterator;
     private JsValue defaultStringIterator;
@@ -107,9 +105,15 @@ public final class Intrinsics {
         arrayProto = arrayPrototype();
         stringProto = prototypeOf(StringBuiltins.NAMES, "String.prototype",
                 (receiver, name) -> StringBuiltins.getMethod(requireString(receiver, name), name, invoker, ops));
+        installStringPrimitiveMethods(stringProto);
         numberProto = prototypeOf(NumberBuiltins.NAMES, "Number.prototype",
                 (receiver, name) -> NumberBuiltins.getMethod(requireNumber(receiver, name), name));
         booleanProto = booleanPrototype();
+        // The three wrapper prototypes are themselves ordinary objects carrying the corresponding
+        // primitive slot, so `Number.prototype.toString()` reads 0 rather than rejecting the receiver.
+        stringProto.setPrimitive(new JsString(""));
+        numberProto.setPrimitive(new JsNumber(0));
+        booleanProto.setPrimitive(JsBoolean.FALSE);
         bigintProto = prototypeOf(BigIntBuiltins.NAMES, "BigInt.prototype",
                 (receiver, name) -> BigIntBuiltins.getMethod(requireBigInt(receiver, name), name));
         symbolProto = prototypeOf(SymbolBuiltins.NAMES, "Symbol.prototype",
@@ -131,9 +135,9 @@ public final class Intrinsics {
                 (receiver, name) -> DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
         defineSymbol(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops));
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
-                (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name));
+                (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
-                (receiver, name) -> TypedArrayBuiltins.dataViewMethod(requireView(receiver, name), name));
+                (receiver, name) -> TypedArrayBuiltins.dataViewMethod(requireView(receiver, name), name, ops));
         typedArrayProto = prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype", (receiver,
                 name) -> TypedArrayBuiltins.getMethod(requireTypedArray(receiver, name), name, invoker, ops));
         // Per spec, %TypedArray%.prototype[Symbol.iterator] is the very same function object as
@@ -143,6 +147,7 @@ public final class Intrinsics {
         // for actual JsTypedArray receivers) so `TypedArray.prototype.length` etc, invoked with a
         // non-typed-array `this`, throws per spec instead of silently reading through as undefined.
         installTypedArrayGeometryAccessors(typedArrayProto);
+        installTypedArrayToStringTag(typedArrayProto);
         installGeometryAccessors(arrayBufferProto, TypedArrayBuiltins.bufferAccessorNames(),
                 (thisArg, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(thisArg, name), name));
         installGeometryAccessors(dataViewProto, TypedArrayBuiltins.viewAccessorNames(),
@@ -150,6 +155,7 @@ public final class Intrinsics {
         for (final var kind : JsTypedArray.Kind.values()) {
             final var proto = new JsObject();
             proto.setProto(typedArrayProto);
+            TypedArrayBuiltins.defineBytesPerElement(proto.ownProperties(), kind);
             typedArrayProtos.put(kind, proto);
         }
         for (final var name : TypedArrayBuiltins.UINT8_NAMES) {
@@ -167,6 +173,124 @@ public final class Intrinsics {
         installObjectPrototype();
         installErrorPrototypes();
         installIteratorSymbols();
+        installToStringTags();
+        installArrayUnscopables();
+        throwTypeError = makeThrowTypeError();
+        installPoisonPill(functionProto, "caller");
+        installPoisonPill(functionProto, "arguments");
+        regexpStringIteratorProto = regexpStringIteratorPrototype();
+        generatorFunctionProto = functionKindPrototype("GeneratorFunction", iteratorProto);
+        asyncGeneratorFunctionProto = functionKindPrototype("AsyncGeneratorFunction", asyncIteratorProto);
+        asyncFunctionProto = functionKindPrototype("AsyncFunction", null);
+    }
+
+    // %GeneratorFunction.prototype% and friends: the [[Prototype]] a generator/async function object
+    // gets instead of Function.prototype, carrying the `constructor` a script reaches
+    // %GeneratorFunction% through (calling it throws — there is no runtime code generation).
+    private JsObject functionKindPrototype(String name, JsObject instancePrototype) {
+        final var proto = new JsObject();
+        proto.setProto(functionProto);
+        final var ctor = new JsNativeFunction(name, (_, _) -> {
+            throw new TypeErrorException(name + " is not supported: SimpleJS has no runtime code generation");
+        });
+        ctor.setLength(1);
+        ctor.markConstructor();
+        ctor.setPrototype(proto);
+        ctor.setOwnProto(functionProto);
+        define(proto, "constructor", ctor);
+        proto.setFlags("constructor", new PropertyFlags(false, false, true));
+        if (instancePrototype != null) {
+            define(proto, "prototype", instancePrototype);
+            proto.setFlags("prototype", new PropertyFlags(false, false, true));
+        }
+        defineToStringTag(proto, name);
+        return proto;
+    }
+
+    // %ThrowTypeError%: one anonymous, frozen, non-extensible function per realm, shared by every
+    // poison-pill accessor so `Object.getOwnPropertyDescriptor(args, 'callee').get === ...caller.get`.
+    private static JsNativeFunction makeThrowTypeError() {
+        final var fn = new JsNativeFunction("", (_, _) -> {
+            throw new TypeErrorException(
+                    "'caller', 'callee', and 'arguments' properties may not be accessed on strict mode functions");
+        });
+        fn.setLength(0);
+        final var table = fn.ownProperties();
+        table.defineValue("length", new JsNumber(0));
+        table.setFlags("length", new PropertyFlags(false, false, false));
+        table.defineValue("name", new JsString(""));
+        table.setFlags("name", new PropertyFlags(false, false, false));
+        table.preventExtensions();
+        return fn;
+    }
+
+    private void installPoisonPill(JsObject target, String key) {
+        target.defineAccessor(key, throwTypeError, throwTypeError);
+        target.setFlags(key, new PropertyFlags(false, false, true));
+    }
+
+    public void poison(JsValue target, String key) {
+        final var table = target.ownProperties();
+        if (table != null) {
+            table.defineAccessor(key, throwTypeError, throwTypeError);
+            table.setFlags(key, new PropertyFlags(false, false, true));
+        }
+    }
+
+    // %RegExpStringIteratorPrototype%: the object String.prototype.matchAll's result inherits from.
+    private JsObject regexpStringIteratorPrototype() {
+        final var proto = new JsObject();
+        proto.setProto(objectProto);
+        defineToStringTag(proto, "RegExp String Iterator");
+        return proto;
+    }
+
+    // %IteratorPrototype% / %AsyncIteratorPrototype% belong to the Iterator/AsyncIterator globals, so
+    // GlobalScope hands them back here once both halves of the realm exist.
+    public void linkIteratorPrototypes(JsObject iteratorPrototype, JsObject asyncIteratorPrototype) {
+        if (iteratorPrototype != null) {
+            iteratorPrototype.setProto(objectProto);
+            iteratorProto.setProto(iteratorPrototype);
+            regexpStringIteratorProto.setProto(iteratorPrototype);
+        }
+        if (asyncIteratorPrototype != null) {
+            asyncIteratorPrototype.setProto(objectProto);
+            asyncIteratorProto.setProto(asyncIteratorPrototype);
+        }
+    }
+
+    private void installToStringTags() {
+        defineToStringTag(iteratorProto, "Generator");
+        defineToStringTag(mapProto, "Map");
+        defineToStringTag(weakMapProto, "WeakMap");
+        defineToStringTag(setProto, "Set");
+        defineToStringTag(weakSetProto, "WeakSet");
+        defineToStringTag(bigintProto, "BigInt");
+        defineToStringTag(arrayBufferProto, "ArrayBuffer");
+        defineToStringTag(dataViewProto, "DataView");
+        defineToStringTag(disposableStackProto, "DisposableStack");
+        defineToStringTag(asyncDisposableStackProto, "AsyncDisposableStack");
+        // %TypedArray%.prototype's tag is an accessor returning the *concrete* view's name, so
+        // `Object.prototype.toString.call(new Int8Array())` reports Int8Array rather than a shared tag.
+        final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> typedArrayTag(thisArg));
+        getter.setLength(0);
+        typedArrayProto.defineSymbolAccessor(JsSymbol.TO_STRING_TAG, getter, null);
+        typedArrayProto.setSymbolFlags(JsSymbol.TO_STRING_TAG, new PropertyFlags(false, false, true));
+    }
+
+    private static JsValue typedArrayTag(JsValue receiver) {
+        final var target = receiver instanceof JsTypedArray ? receiver : unwrap(receiver);
+        return target instanceof JsTypedArray typed ? new JsString(typed.kind().ctorName()) : JsUndefined.getInstance();
+    }
+
+    private void installArrayUnscopables() {
+        final var unscopables = new JsObject();
+        unscopables.setProto(null);
+        for (final var name : UNSCOPABLE_ARRAY_METHODS) {
+            unscopables.set(name, JsBoolean.TRUE);
+        }
+        arrayProto.setSymbol(JsSymbol.UNSCOPABLES, unscopables);
+        arrayProto.setSymbolFlags(JsSymbol.UNSCOPABLES, new PropertyFlags(false, false, true));
     }
 
     // Per spec these are the very same function objects as the named methods they alias, so a script
@@ -281,6 +405,26 @@ public final class Intrinsics {
         return message.isEmpty() ? name : name + ": " + message;
     }
 
+    // Unlike every other String.prototype method these two are brand-checked rather than generic:
+    // ToString(this) would happily turn a number receiver into a string instead of throwing.
+    private void installStringPrimitiveMethods(JsObject proto) {
+        for (final var name : List.of("toString", "valueOf")) {
+            final var method = new JsNativeFunction(name, (thisArg, _) -> requireStringData(thisArg, name));
+            method.setLength(0);
+            define(proto, name, method);
+        }
+    }
+
+    private JsString requireStringData(JsValue receiver, String method) {
+        if (receiver instanceof JsString string) {
+            return string;
+        }
+        if (unwrap(receiver) instanceof JsString wrapped) {
+            return wrapped;
+        }
+        throw incompatible("String.prototype." + method, receiver);
+    }
+
     private JsObject booleanPrototype() {
         final var proto = new JsObject();
         define(proto, "toString", new JsNativeFunction("toString",
@@ -290,9 +434,6 @@ public final class Intrinsics {
         return proto;
     }
 
-    // Array.prototype needs its own wrapper rather than the shared one: a generic array-like
-    // receiver is snapshotted into a JsArray to run the method against, so a *mutating* method's
-    // effects have to be copied back onto the real receiver afterwards or they are silently lost.
     private JsObject arrayPrototype() {
         final var proto = new JsObject();
         for (final var name : ArrayBuiltins.NAMES) {
@@ -304,66 +445,30 @@ public final class Intrinsics {
         return proto;
     }
 
+    // Every Array.prototype method is generic: ToObject(this value) is the only receiver check, and
+    // ArrayBuiltins then reads and writes it lazily through the member seam.
     private JsValue callArrayMethod(JsValue thisArg, String name, List<JsValue> args) {
-        final var target = SHORT_CIRCUITING_ARRAY_METHODS.contains(name)
-                ? requireArray(thisArg, name)
-                : materializeAccessors(requireArray(thisArg, name));
-        final var resolved = ArrayBuiltins.getMethod(target, name, invoker, ops);
+        if (thisArg instanceof JsNull || thisArg instanceof JsUndefined) {
+            throw incompatible("Array.prototype." + name, thisArg);
+        }
+        final var receiver = toObject(thisArg);
+        final var resolved = ArrayBuiltins.getMethod(receiver, name, invoker, ops);
         if (resolved == null) {
             throw incompatible("Array.prototype." + name, thisArg);
         }
-        final var snapshot = target != thisArg && unwrap(thisArg) != target;
-        final var before = snapshot ? target.getElements().size() : 0;
-        final var result = invoker.call(resolved, thisArg, args);
-        if (snapshot && MUTATING_ARRAY_METHODS.contains(name)) {
-            writeBackArray(thisArg, target, before);
-        }
-        return result;
+        return invoker.call(resolved, receiver, args);
     }
 
-    // A rejected [[Set]]/[[Delete]] on the receiver is a TypeError, not a silent skip: the whole
-    // point of the writeback is that a mutating method on a frozen/read-only array-like still fails
-    // the way it would on a real array.
-    // ArrayBuiltins reads the backing element list directly, which would skip a getter installed on
-    // an index by defineProperty. Invoking those getters in ascending index order up front matches
-    // the spec's own read order closely enough that a getter which installs a later index's getter
-    // (a shape the corpus tests repeatedly) still observes it.
-    private JsArray materializeAccessors(JsArray target) {
-        if (!target.hasAnyIndexAccessor()) {
-            return target;
+    // ToObject: a primitive receiver is boxed so the callback's third argument is an object and the
+    // wrapper's prototype (which a test may extend) takes part in the index lookups.
+    private JsValue toObject(JsValue value) {
+        if (InterpreterUtils.isObjectLike(value)) {
+            return value;
         }
-        final var length = target.getElements().size();
-        final var materialized = new JsArray();
-        for (var i = 0; i < length; i++) {
-            final var getter = target.getIndexAccessorGetter(i);
-            if (getter != null) {
-                materialized.defineIndexValue(i, invoker.call(getter, target, List.of()));
-            } else if (!target.isHole(i)) {
-                materialized.defineIndexValue(i, target.get(i));
-            }
-        }
-        materialized.setLength(length);
-        return materialized;
-    }
-
-    private void writeBackArray(JsValue receiver, JsArray target, int before) {
-        final var after = target.getElements().size();
-        for (var i = 0; i < after; i++) {
-            writeBackIndex(receiver, String.valueOf(i), target.get(i));
-        }
-        for (var i = after; i < before; i++) {
-            final var key = new JsString(String.valueOf(i));
-            if (!ops.deleteMember(receiver, key)) {
-                throw new TypeErrorException("Cannot delete property '" + i + "' of the receiver");
-            }
-        }
-        writeBackIndex(receiver, "length", new JsNumber(after));
-    }
-
-    private void writeBackIndex(JsValue receiver, String key, JsValue value) {
-        if (!ops.setMember(receiver, new JsString(key), value)) {
-            throw new TypeErrorException("Cannot assign to read only property '" + key + "' of the receiver");
-        }
+        final var wrapper = new JsObject();
+        wrapper.setProto(protoFor(value));
+        wrapper.setPrimitive(value);
+        return wrapper;
     }
 
     private JsObject prototypeOf(List<String> names, String label, MethodResolver resolver) {
@@ -388,8 +493,21 @@ public final class Intrinsics {
     }
 
     private static void define(JsObject target, String key, JsValue value) {
+        defineHidden(target, key, value);
+    }
+
+    static void defineHidden(JsObject target, String key, JsValue value) {
         target.defineValue(key, value);
         target.setFlags(key, HIDDEN);
+    }
+
+    static void defineFrozen(JsObject target, String key, JsValue value) {
+        target.defineValue(key, value);
+        target.setFlags(key, new PropertyFlags(false, false, false));
+    }
+
+    static void defineNamespaceTag(JsObject target, String tag) {
+        defineToStringTag(target, tag);
     }
 
     public JsObject protoFor(JsValue value) {
@@ -410,10 +528,17 @@ public final class Intrinsics {
             case JsArrayBuffer ignored -> arrayBufferProto;
             case JsDataView ignored -> dataViewProto;
             case JsTypedArray typed -> typedArrayProtos.get(typed.kind());
-            case JsFunction ignored -> functionProto;
+            case JsFunction function -> functionKindProtoFor(function);
             case JsNativeFunction ignored -> functionProto;
             default -> objectProto;
         };
+    }
+
+    private JsObject functionKindProtoFor(JsFunction function) {
+        if (function.isGenerator()) {
+            return function.isAsync() ? asyncGeneratorFunctionProto : generatorFunctionProto;
+        }
+        return function.isAsync() ? asyncFunctionProto : functionProto;
     }
 
     public JsObject disposableStackProto() {
@@ -514,37 +639,6 @@ public final class Intrinsics {
 
     public JsObject makeError(String name, String message) {
         return ErrorBuiltins.makeError(name, message, errorProto(name));
-    }
-
-    // Array.prototype.* accepts any array-like receiver by snapshotting it into a JsArray; a
-    // mutating method therefore does not write through to the original (documented limitation), so a
-    // plain object — unlike arguments/typed arrays/strings, which callers already treat as read-only
-    // views — is accepted only for the non-mutating methods rather than silently losing the write.
-    private JsArray requireArray(JsValue receiver, String method) {
-        if (receiver instanceof JsArray array) {
-            return array;
-        }
-        if (unwrap(receiver) instanceof JsArray wrapped) {
-            return wrapped;
-        }
-        if (receiver instanceof JsArguments || receiver instanceof JsTypedArray || receiver instanceof JsString) {
-            return new JsArray(InterpreterUtils.arrayLikeElements(receiver));
-        }
-        // A generic (non-mutating) Array method works on any object per spec, treating a missing
-        // or non-numeric "length" as 0 (LengthOfArrayLike -> ToLength) rather than requiring the
-        // property to already be present - e.g. `every`/`map`/`forEach`.call({}, ...) is valid and
-        // vacuously iterates zero elements, it does not reject the receiver.
-        if ((receiver instanceof JsObject || receiver instanceof JsProxy) && ops != null) {
-            return new JsArray(
-                    InterpreterUtils.arrayLikeElements(receiver, ops, REVERSE_ARRAY_METHODS.contains(method)));
-        }
-        // ToObject on a raw primitive (other than null/undefined, which ToObject rejects) succeeds
-        // and yields a wrapper with no own `length`/indexed properties, i.e. an empty array-like.
-        if (receiver instanceof JsBoolean || receiver instanceof JsNumber || receiver instanceof JsBigInt
-                || receiver instanceof JsSymbol) {
-            return new JsArray();
-        }
-        throw incompatible("Array.prototype." + method, receiver);
     }
 
     // Every String.prototype method is generic per spec: RequireObjectCoercible(this value) then
@@ -732,6 +826,18 @@ public final class Intrinsics {
                     new JsNativeFunction("get " + name, (thisArg, _) -> resolver.resolve(thisArg, name)), null);
             proto.setFlags(name, HIDDEN);
         }
+    }
+
+    // Unlike every other @@toStringTag this one is a getter that answers undefined rather than
+    // throwing for a foreign receiver, so Object.prototype.toString still reports [object Object].
+    private void installTypedArrayToStringTag(JsObject proto) {
+        final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> {
+            final var typed = thisArg instanceof JsTypedArray direct ? direct : null;
+            return typed == null ? JsUndefined.getInstance() : new JsString(typed.kind().ctorName());
+        });
+        getter.setLength(0);
+        proto.defineSymbolAccessor(JsSymbol.TO_STRING_TAG, getter, null);
+        proto.setSymbolFlags(JsSymbol.TO_STRING_TAG, HIDDEN);
     }
 
     private void installTypedArrayGeometryAccessors(JsObject proto) {

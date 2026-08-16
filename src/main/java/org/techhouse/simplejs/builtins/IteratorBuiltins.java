@@ -59,9 +59,12 @@ public final class IteratorBuiltins {
         });
         final var prototype = new JsObject();
         for (final var name : HELPERS) {
-            prototype.set(name, helper(ops, name, objectProto));
+            Intrinsics.defineHidden(prototype, name, helper(ops, name, objectProto));
         }
         prototype.setSymbol(JsSymbol.ITERATOR, new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
+        prototype.setSymbolFlags(JsSymbol.ITERATOR, new JsObject.PropertyFlags(true, false, true));
+        prototype.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("Iterator"));
+        prototype.setSymbolFlags(JsSymbol.TO_STRING_TAG, new JsObject.PropertyFlags(true, false, true));
         prototype.defineValue("constructor", ctor);
         prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         ctor.setProperty("prototype", prototype);

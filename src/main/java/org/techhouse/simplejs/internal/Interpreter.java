@@ -108,6 +108,7 @@ import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -211,18 +212,20 @@ public final class Interpreter {
 
         @Override
         public boolean defineProperty(JsValue target, JsValue key, JsValue descriptor) {
+            final var propertyKey = JsCoercion.toPropertyKey(key, this);
             if (target instanceof JsProxy proxy) {
-                return proxies.defineProperty(proxy, key, descriptor);
+                return proxies.defineProperty(proxy, propertyKey, descriptor);
             }
-            ObjectBuiltins.defineProperty(List.of(target, key, descriptor), this);
+            ObjectBuiltins.defineProperty(List.of(target, propertyKey, descriptor), this);
             return true;
         }
 
         @Override
         public JsValue getOwnPropertyDescriptor(JsValue target, JsValue key) {
+            final var propertyKey = JsCoercion.toPropertyKey(key, this);
             return target instanceof JsProxy proxy
-                    ? proxies.getOwnPropertyDescriptor(proxy, key)
-                    : ObjectBuiltins.getOwnPropertyDescriptor(List.of(target, key));
+                    ? proxies.getOwnPropertyDescriptor(proxy, propertyKey)
+                    : ObjectBuiltins.getOwnPropertyDescriptor(List.of(target, propertyKey));
         }
     };
     private final ProxyDispatch proxies = new ProxyDispatch(ops);
@@ -527,11 +530,55 @@ public final class Interpreter {
             case JsObject object -> hasStringMember(object, JsCoercion.toStr(keyValue));
             case JsClass cls when keyValue instanceof JsSymbol symbol -> hasStaticSymbolMember(cls, symbol);
             case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue));
-            case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue));
+            case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue)) || exoticHasMember(array, keyValue);
+            case JsArguments arguments ->
+                indexInRange(keyValue, arguments.length()) || exoticHasMember(arguments, keyValue);
+            case JsTypedArray typed -> indexInRange(keyValue, typed.length()) || exoticHasMember(typed, keyValue);
             case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue));
-            default -> throw new TypeErrorException(
-                    "Cannot use 'in' operator to search for '" + JsCoercion.toStr(keyValue) + "'");
+            default -> {
+                if (!isObjectLike(container)) {
+                    throw new TypeErrorException(
+                            "Cannot use 'in' operator to search for '" + JsCoercion.toStr(keyValue) + "'");
+                }
+                yield exoticHasMember(container, keyValue);
+            }
         };
+    }
+
+    // An index-addressed exotic stores its elements outside the property table, so presence there is
+    // a range check: an element holding `undefined` is present, unlike an array hole.
+    private static boolean indexInRange(JsValue keyValue, int length) {
+        if (keyValue instanceof JsSymbol) {
+            return false;
+        }
+        final var key = JsCoercion.toStr(keyValue);
+        final var index = arrayIndex(key);
+        return index != null && index < length;
+    }
+
+    // Every exotic value type carries its own property table, so HasProperty on one is its own keys
+    // plus its intrinsic prototype chain rather than an outright rejection.
+    private boolean exoticHasMember(JsValue container, JsValue keyValue) {
+        final var table = container.ownProperties();
+        if (table != null) {
+            if (keyValue instanceof JsSymbol symbol) {
+                return table.hasSymbol(symbol) || table.hasSymbolAccessor(symbol);
+            }
+            final var key = JsCoercion.toStr(keyValue);
+            if (table.has(key) || table.hasAccessor(key)) {
+                return true;
+            }
+        }
+        if (keyValue instanceof JsSymbol) {
+            return false;
+        }
+        final var key = JsCoercion.toStr(keyValue);
+        for (var proto = intrinsics.protoFor(container); proto != null; proto = proto.getProto()) {
+            if (proto.has(key) || proto.hasAccessor(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean callableHasMember(JsCallableProperties callable, String key) {
@@ -737,7 +784,11 @@ public final class Interpreter {
 
     public JsFunction makeFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
             boolean async, boolean generator, Environment closure) {
-        return new JsFunction(name, params, body, arrow, expressionBody, async, generator, closure);
+        final var function = new JsFunction(name, params, body, arrow, expressionBody, async, generator, closure);
+        if (generator) {
+            function.getPrototype().setProto(async ? intrinsics.asyncIteratorProto() : intrinsics.iteratorProto());
+        }
+        return function;
     }
 
     private JsValue evalCall(CallExpression call, Environment env) {
@@ -1027,13 +1078,18 @@ public final class Interpreter {
             }
         }
         if (!mapped) {
-            return new JsArguments(args, null, null);
+            return poisoned(new JsArguments(args, null, null));
         }
         final var names = new ArrayList<String>();
         for (final var param : params) {
             names.add(((Identifier) param).getName());
         }
-        return new JsArguments(args, names, activation);
+        return poisoned(new JsArguments(args, names, activation));
+    }
+
+    private JsArguments poisoned(JsArguments arguments) {
+        intrinsics.poison(arguments, "callee");
+        return arguments;
     }
 
     public void destructureAssignment(JsNode target, JsValue value, Environment env) {
@@ -1192,7 +1248,8 @@ public final class Interpreter {
         return keys;
     }
 
-    private boolean deleteMemberValue(JsValue target, JsValue keyValue) {
+    private boolean deleteMemberValue(JsValue target, JsValue rawKey) {
+        final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
         if (keyValue instanceof JsSymbol symbol && !(target instanceof JsProxy)) {
             final var table = target.ownProperties();
             return table == null || !table.isNotDeleteSymbol(symbol);

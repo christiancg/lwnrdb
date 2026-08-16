@@ -39,7 +39,28 @@ public final class JsDataView extends JsValue {
         return byteOffset;
     }
 
+    /**
+     * IsViewOutOfBounds: a detached buffer, or a resizable buffer shrunk past this view's window.
+     */
+    public boolean isOutOfBounds() {
+        if (buffer.isDetached()) {
+            return true;
+        }
+        final var bufferLength = buffer.byteLength();
+        if (byteOffset > bufferLength) {
+            return true;
+        }
+        return !lengthTracking && byteOffset + (long) byteLength > bufferLength;
+    }
+
+    /**
+     * The spec's {@code get byteLength} throws on an out-of-bounds view rather than reporting a stale
+     * length, so every geometry read has to go through the same check the element accessors do.
+     */
     public int byteLength() {
+        if (isOutOfBounds()) {
+            throw new TypeErrorException("DataView is out of bounds");
+        }
         if (lengthTracking) {
             final var available = buffer.byteLength() - byteOffset;
             return Math.max(available, 0);
@@ -56,6 +77,9 @@ public final class JsDataView extends JsValue {
         // IndexOutOfBoundsException instead of the spec TypeError.
         if (buffer.isDetached()) {
             throw new TypeErrorException("Cannot perform DataView access on a detached ArrayBuffer");
+        }
+        if (isOutOfBounds()) {
+            throw new TypeErrorException("DataView is out of bounds");
         }
         if (offset < 0 || offset + size > byteLength()) {
             throw new RangeErrorException("Offset is outside the bounds of the DataView");
