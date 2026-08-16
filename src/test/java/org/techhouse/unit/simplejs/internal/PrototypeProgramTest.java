@@ -226,6 +226,53 @@ public class PrototypeProgramTest {
                         + " return [1, 2, 3].tail"));
     }
 
+    // An array assigned as a function's `prototype` is a real link: instances resolve its own
+    // elements and, past them, Array.prototype's methods
+    @Test
+    public void test_function_prototype_may_be_an_array() {
+        assertEquals("[\"function\",3,1]",
+                run("function foo() {} foo.prototype = new Array(1, 2, 3); const o = new foo();"
+                        + " return [typeof o.reduce, o.length, o[0]]"));
+        assertEquals("6", run("function foo() {} foo.prototype = new Array(1, 2, 3);"
+                + " return new foo().reduce(function (a, b) { return a + b })"));
+    }
+
+    // instanceof walks a chain whose links are not plain objects
+    @Test
+    public void test_instanceof_through_a_non_object_prototype() {
+        assertEquals("[true,false]", run("function foo() {} foo.prototype = new Array(1, 2, 3);"
+                + " return [new foo() instanceof foo, ({}) instanceof foo]"));
+    }
+
+    // A map/date/regexp link resolves its own intrinsic methods too
+    @Test
+    public void test_other_builtin_values_as_a_prototype() {
+        assertEquals("[\"function\",\"function\"]", run("function F() {} F.prototype = new Map(); const m = new F();"
+                + " return [typeof m.get, typeof Object.create(new Date(0)).getTime]"));
+    }
+
+    // A primitive assigned to `prototype` is not a link, so `new` falls back to Object.prototype
+    @Test
+    public void test_primitive_prototype_assignment_is_ignored() {
+        assertEquals("[\"object\",true]", run("function foo() {} foo.prototype = 5;"
+                + " return [typeof new foo(), Object.getPrototypeOf(new foo()) === foo.prototype]"));
+    }
+
+    // Mutating an intrinsic prototype's own link to a non-object value must not loop forever
+    @Test
+    public void test_intrinsic_prototype_link_to_an_array_terminates() {
+        assertEquals("[\"undefined\",\"undefined\"]", run(
+                "Object.setPrototypeOf(Array.prototype, [1, 2]);" + " return [String(({}).nope), String([3].nope)]"));
+    }
+
+    // A setter inherited through a non-plain-object link still receives the write
+    @Test
+    public void test_inherited_setter_through_a_non_object_link() {
+        assertEquals("[7,0]",
+                run("const seen = []; const link = []; Object.defineProperty(link, 'x', { set(v) { seen.push(v) } });"
+                        + " const o = Object.create(link); o.x = 7; return [seen[0], Object.keys(o).length]"));
+    }
+
     // Symbol, BigInt, Boolean and Number instance members resolve through their prototypes
     @Test
     public void test_primitive_prototypes() {

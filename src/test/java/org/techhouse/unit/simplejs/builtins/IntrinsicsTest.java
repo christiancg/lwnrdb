@@ -3,6 +3,7 @@ package org.techhouse.unit.simplejs.builtins;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -129,8 +130,12 @@ public class IntrinsicsTest {
             assertTrue(proto.getFlags(name).configurable(), () -> name + " must be configurable");
         }
         for (final var key : proto.keys()) {
-            assertTrue("constructor".equals(key) || "name".equals(key) || "message".equals(key) || names.contains(key)
-                    || accessors.contains(key), () -> "prototype has an unlisted key " + key);
+            // String.prototype is itself a String wrapper, so it owns the exotic `length` of its
+            // empty [[StringData]] on top of the family's methods.
+            assertTrue(
+                    "constructor".equals(key) || "name".equals(key) || "message".equals(key) || "length".equals(key)
+                            || names.contains(key) || accessors.contains(key),
+                    () -> "prototype has an unlisted key " + key);
         }
     }
 
@@ -225,7 +230,7 @@ public class IntrinsicsTest {
                 realm.asyncIteratorProto(), realm.arrayBufferProto(), realm.dataViewProto(), realm.functionProto(),
                 realm.errorProto("TypeError"));
         for (final var proto : protos) {
-            var current = proto;
+            var current = (JsValue) proto;
             var depth = 0;
             while (current.getProto() != null && depth < 10) {
                 current = current.getProto();
@@ -513,6 +518,37 @@ public class IntrinsicsTest {
                 Object.defineProperty(o, s, { value: 5 });
                 o[s]
                 """));
+    }
+
+    // ToObject is the single boxing path: it hands back an object-like value untouched, boxes a
+    // primitive onto the matching intrinsic prototype, and rejects null/undefined
+    @Test
+    public void toObjectBoxesPrimitivesOntoTheirPrototype() {
+        final var realm = intrinsics();
+        final var object = new JsObject();
+        assertSame(object, realm.toObject(object));
+        final Map<JsValue, JsObject> expected = Map.of(new JsString("ab"), realm.stringProto(), new JsNumber(1),
+                realm.numberProto(), JsBoolean.TRUE, realm.booleanProto(), new JsBigInt(BigInteger.ONE),
+                realm.bigintProto(), new JsSymbol("s"), realm.symbolProto());
+        for (final var entry : expected.entrySet()) {
+            final var wrapper = (JsObject) realm.toObject(entry.getKey());
+            assertSame(entry.getKey(), wrapper.getPrimitive());
+            assertSame(entry.getValue(), wrapper.getProto());
+        }
+        assertThrows(TypeErrorException.class, () -> realm.toObject(JsUndefined.getInstance()));
+        assertNotSame(realm.toObject(new JsNumber(1)), realm.toObject(new JsNumber(1)));
+    }
+
+    // A String wrapper carries the exotic own properties the spec gives it: one per code unit plus a
+    // non-writable, non-enumerable length
+    @Test
+    public void stringWrapperOwnsItsCodeUnits() {
+        final var wrapper = (JsObject) intrinsics().toObject(new JsString("ab"));
+        assertEquals(List.of("0", "1", "length"), List.copyOf(wrapper.keys()));
+        assertEquals("a", ((JsString) wrapper.get("0")).getValue());
+        assertEquals(new JsObject.PropertyFlags(false, true, false), wrapper.getFlags("0"));
+        assertEquals(2, ((JsNumber) wrapper.get("length")).getValue());
+        assertEquals(new JsObject.PropertyFlags(false, false, false), wrapper.getFlags("length"));
     }
 
     // A regex own property is a real own property, so RegExpExec can see an overridden `exec`

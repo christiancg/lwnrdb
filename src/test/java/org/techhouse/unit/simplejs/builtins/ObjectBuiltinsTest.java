@@ -1026,6 +1026,44 @@ public class ObjectBuiltinsTest {
         assertTrue(flag("const a = {}; const b = {}; Object.setPrototypeOf(a, b); Object.getPrototypeOf(a) === b"));
     }
 
+    // A [[Prototype]] may be any object-like value, not only a plain object
+    @Test
+    public void test_set_prototype_of_accepts_an_array() {
+        assertEquals("function", str("const o = {}; Object.setPrototypeOf(o, [1, 2]); typeof o.join"));
+        assertEquals(2, num("const o = {}; Object.setPrototypeOf(o, [1, 2]); o.length"));
+        assertTrue(flag(
+                "const p = [1, 2]; const o = {}; Object.setPrototypeOf(o, p);" + " Object.getPrototypeOf(o) === p"));
+        assertTrue(flag("const p = new Map(); const o = Object.create(p); Object.getPrototypeOf(o) === p"));
+    }
+
+    // The cycle check still runs over a chain whose links include a non-plain-object prototype
+    @Test
+    public void test_set_prototype_of_cycle_check_across_an_array_link() {
+        assertEquals("TypeError", str("""
+                let caught = 'none';
+                const parent = {};
+                Object.setPrototypeOf(parent, [1, 2]);
+                const child = Object.create(parent);
+                try { Object.setPrototypeOf(parent, child); } catch (e) { caught = e.name; }
+                caught
+                """));
+    }
+
+    // Object.create rejects a primitive prototype but takes any object-like one
+    @Test
+    public void test_create_with_an_array_prototype() {
+        assertEquals("function", str("typeof Object.create([1, 2, 3]).map"));
+        assertEquals(3, num("Object.create([1, 2, 3]).length"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.create(5)"));
+    }
+
+    // isPrototypeOf walks a chain whose links are not plain objects
+    @Test
+    public void test_is_prototype_of_through_an_array_link() {
+        assertTrue(flag("const p = [1, 2]; Object.prototype.isPrototypeOf.call(p, Object.create(p))"));
+        assertFalse(flag("const p = [1, 2]; Object.prototype.isPrototypeOf.call(p, {})"));
+    }
+
     // A descriptor carrying only enumerable/configurable leaves an existing accessor intact
     @Test
     public void test_generic_descriptor_preserves_existing_accessor() {

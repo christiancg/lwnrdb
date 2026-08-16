@@ -8,11 +8,16 @@
 #   dir:     <path prefix relative to test262/test/>   # reason
 #   keep:    <path prefix re-admitted from a dir:>     # reason
 #   feature: <features: value>                         # reason
+#   include: <harness file from the includes: list>    # reason
 #   pattern: <python regex matched against the source> # reason
 #
 # A `keep:` line wins over any `dir:` line, and exists so a broad directory exclusion cannot
 # silently swallow a subtree that is failing for a reason we own. It overrides `dir:` only —
 # `feature:` and `pattern:` still apply.
+#
+# An `include:` line excludes every test pulling in a harness helper the engine cannot run. It exists
+# because `pattern:` scans the test's own source but not the helpers it includes, so a test that
+# never mentions `Function` still dies inside a helper that builds its fixtures with `new Function`.
 #
 # A `pattern:` line is a source scan, not a feature flag, because test262 does not flag `eval` or the
 # Function constructor. It can false-positive on a test that merely mentions the word; the count is
@@ -61,10 +66,21 @@ feature: import-defer                # deliberate: ditto
 feature: source-phase-imports        # deliberate: ditto
 feature: arbitrary-module-namespace-names  # deliberate: ditto
 feature: ShadowRealm                 # deliberate: evaluate(sourceText) is runtime codegen from a string, like eval
+feature: joint-iteration             # deliberate: Iterator.zip/zipKeyed are not in the ES2026 snapshot
+feature: iterator-sequencing         # deliberate: Iterator.concat is not in the ES2026 snapshot
+feature: json-parse-with-source      # deliberate: JSON.rawJSON/isRawJSON are not in the ES2026 snapshot
+feature: await-dictionary            # deliberate: not in the ES2026 snapshot
+feature: decorators                  # deliberate: not in the ES2026 snapshot
+
+include: resizableArrayBufferUtils.js  # its subClass() helper builds every fixture with new Function, so the
+                                       # ctors array is full of holes before an assertion ever runs
 
 pattern: \beval\s*\(                 # eval absent by design (sandbox boundary)
 pattern: \bFunction\s*\(             # Function constructor disabled by design (called or newed)
 pattern: \bnew\s+Function\s*;        # ditto, the bare `new Function;` form. Deliberately not the broader
                                      # `\bnew\s+Function\b`, which also swallowed `new Function.prototype.apply()`
                                      # — those measure [[Construct]], not the constructor we do not provide
+pattern: \b(?:AsyncFunction|GeneratorFunction|AsyncGeneratorFunction)\s*\(  # the same runtime code generation the
+                                     # Function constructor is, reached through the derived constructors. Only the
+                                     # call form is excluded, so the tests that merely inspect the intrinsics run
 pattern: \$262\.(createRealm|evalScript|agent|gc|IsHTMLDDA)  # host APIs the shim does not provide

@@ -16,7 +16,7 @@ public final class JsObject extends JsValue {
     private JsClass klass;
     private Map<String, JsValue> privateFields;
     private Set<JsClass> privateBrands;
-    private JsObject proto;
+    private JsValue proto;
     private JsValue primitive;
 
     @Override
@@ -159,17 +159,30 @@ public final class JsObject extends JsValue {
         return primitive;
     }
 
+    // A String wrapper's code units and its length are exotic own data properties. They are
+    // materialised into the ordinary table here so every own-property path - reads, `in`, keys,
+    // descriptors, freeze - sees them without each one re-deriving the exotic shape.
     public void setPrimitive(JsValue primitive) {
         this.primitive = primitive;
+        if (primitive instanceof JsString string) {
+            final var value = string.getValue();
+            table.defineValue("length", new JsNumber(value.length()));
+            table.setFlags("length", new PropertyFlags(false, false, false));
+            for (var i = 0; i < value.length(); i++) {
+                final var key = Integer.toString(i);
+                table.defineValue(key, new JsString(String.valueOf(value.charAt(i))));
+                table.setFlags(key, new PropertyFlags(false, true, false));
+            }
+        }
     }
 
     @Override
-    public JsObject getProto() {
+    public JsValue getProto() {
         return proto;
     }
 
     @Override
-    public void setProto(JsObject proto) {
+    public void setProto(JsValue proto) {
         this.proto = proto;
     }
 
@@ -183,10 +196,6 @@ public final class JsObject extends JsValue {
 
     public JsValue getAccessorSetter(String key) {
         return table.getAccessorSetter(key);
-    }
-
-    public void clearAccessor(String key) {
-        table.clearAccessor(key);
     }
 
     public void defineSymbolAccessor(JsSymbol key, JsValue getter, JsValue setter) {

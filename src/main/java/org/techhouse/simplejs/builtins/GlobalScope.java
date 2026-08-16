@@ -27,7 +27,8 @@ public final class GlobalScope {
         global.declareNonWritableBuiltin("Infinity", new JsNumber(Double.POSITIVE_INFINITY));
         global.declareNonWritableBuiltin("undefined", JsUndefined.getInstance());
         ErrorBuiltins.install(global, intrinsics);
-        constructor(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker), intrinsics.objectProto());
+        constructor(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker, intrinsics),
+                intrinsics.objectProto());
         constructor(global, "Function", functionConstructor(), intrinsics.functionProto());
         constructor(global, "Array", ArrayBuiltins.create(invoker, iterableToList, eventLoop, ops),
                 intrinsics.arrayProto());

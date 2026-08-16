@@ -372,35 +372,28 @@ public final class InterpreterUtils {
     }
 
     public static boolean deleteArrayElement(JsArray array, String key) {
-        final var index = arrayIndex(key);
-        if (index != null) {
-            if (index >= array.length() || array.isHole(index)) {
-                return true;
-            }
-            if (!array.getIndexFlags(index).configurable()) {
-                return false;
-            }
-            array.clearIndexToHole(index);
-            return true;
-        }
-        if (!array.hasProperty(key) && !array.hasPropAccessor(key)) {
-            return true;
-        }
-        if (!array.getPropFlags(key).configurable()) {
-            return false;
-        }
-        return array.deleteProperty(key);
+        return array.deleteOwnProperty(new JsString(key));
     }
 
-    public static boolean hasInPrototypeChain(JsValue left, JsObject prototype) {
-        if (left instanceof JsObject object) {
-            for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
-                if (proto == prototype) {
-                    return true;
-                }
+    public static boolean hasInPrototypeChain(JsValue left, JsValue prototype) {
+        for (var proto = left.getProto(); proto != null; proto = proto.getProto()) {
+            if (proto == prototype) {
+                return true;
             }
         }
         return false;
+    }
+
+    // HasProperty's per-link test. A [[Prototype]] may be any object-like value, so only a plain
+    // JsObject takes the direct-table fast path; anything else answers through [[GetOwnProperty]].
+    public static boolean protoOwnsKey(JsValue proto, String key) {
+        return proto instanceof JsObject object
+                ? object.has(key) || object.hasAccessor(key)
+                : proto.hasOwnKey(new JsString(key));
+    }
+
+    public static boolean protoOwnsSymbol(JsValue proto, JsSymbol symbol) {
+        return proto instanceof JsObject object ? object.hasSymbol(symbol) : proto.hasOwnKey(symbol);
     }
 
     public static TypeErrorException cannotReadProperties(JsValue target, String key) {

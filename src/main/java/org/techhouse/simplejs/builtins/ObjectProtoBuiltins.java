@@ -139,16 +139,16 @@ public final class ObjectProtoBuiltins {
     // A value's builtin prototype is reached through Intrinsics.protoFor rather than a proto link, and
     // those prototypes terminate at Object.prototype implicitly, so both hops are walked explicitly.
     private static boolean isPrototypeOf(JsValue receiver, List<JsValue> args, Intrinsics intrinsics) {
-        if (args.isEmpty() || !(receiver instanceof JsObject prototype) || !isObjectLike(args.getFirst())) {
+        if (args.isEmpty() || !isObjectLike(receiver) || !isObjectLike(args.getFirst())) {
             return false;
         }
         final var candidate = args.getFirst();
-        var proto = candidate instanceof JsObject object ? object.getProto() : null;
+        var proto = candidate.getProto();
         if (proto == null && intrinsics != null) {
             proto = intrinsics.protoFor(candidate);
         }
         while (proto != null) {
-            if (proto == prototype) {
+            if (proto == receiver) {
                 return true;
             }
             final var next = proto.getProto();

@@ -573,12 +573,7 @@ public final class Interpreter {
             return false;
         }
         final var key = JsCoercion.toStr(keyValue);
-        for (var proto = intrinsics.protoFor(container); proto != null; proto = proto.getProto()) {
-            if (proto.has(key) || proto.hasAccessor(key)) {
-                return true;
-            }
-        }
-        return false;
+        return members.chainHasKey(intrinsics.protoFor(container), key);
     }
 
     private boolean callableHasMember(JsCallableProperties callable, String key) {
@@ -588,12 +583,7 @@ public final class Interpreter {
         if (callable instanceof JsFunction && "prototype".equals(key)) {
             return true;
         }
-        for (var proto = intrinsics.protoFor((JsValue) callable); proto != null; proto = proto.getProto()) {
-            if (proto.has(key) || proto.hasAccessor(key)) {
-                return true;
-            }
-        }
-        return false;
+        return members.chainHasKey(intrinsics.protoFor((JsValue) callable), key);
     }
 
     private boolean hasStaticMember(JsClass cls, String key) {
@@ -626,21 +616,11 @@ public final class Interpreter {
     }
 
     private boolean hasStringMember(JsObject object, String key) {
-        for (var current = object; current != null; current = current.getProto()) {
-            if (current.has(key) || current.hasAccessor(key)) {
-                return true;
-            }
-        }
-        return false;
+        return members.chainHasKey(object, key);
     }
 
     private boolean hasSymbolMember(JsObject object, JsSymbol symbol) {
-        for (var current = object; current != null; current = current.getProto()) {
-            if (current.hasSymbol(symbol)) {
-                return true;
-            }
-        }
-        return false;
+        return members.chainHasSymbol(object, symbol);
     }
 
     private JsValue evalMember(MemberExpression member, Environment env) {
@@ -725,6 +705,10 @@ public final class Interpreter {
 
     public Intrinsics intrinsics() {
         return intrinsics;
+    }
+
+    public MemberEvaluator members() {
+        return members;
     }
 
     public Coroutine currentCoroutine() {
@@ -858,12 +842,12 @@ public final class Interpreter {
         final var proto = nativeFunction.getPrototype();
         if (proto == intrinsics.objectProto()) {
             final var argument = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
-            if (isObjectLike(argument)) {
-                return argument;
+            if (isNullish(argument)) {
+                final var created = new JsObject();
+                created.setProto(protoFromNewTarget(newTarget, proto));
+                return created;
             }
-            final var created = new JsObject();
-            created.setProto(proto);
-            return created;
+            return intrinsics.toObject(argument);
         }
         if (proto == intrinsics.stringProto() || proto == intrinsics.numberProto()
                 || proto == intrinsics.booleanProto()) {
@@ -872,10 +856,8 @@ public final class Interpreter {
             if (proto == intrinsics.stringProto() && !args.isEmpty() && args.getFirst() instanceof JsSymbol) {
                 throw new TypeErrorException("Cannot convert a Symbol value to a string");
             }
-            final var wrapper = new JsObject();
-            wrapper.setProto(protoFromNewTarget(newTarget, proto));
-            wrapper.setPrimitive(nativeFunction.invoke(JsUndefined.getInstance(), args));
-            return wrapper;
+            return intrinsics.wrapPrimitive(nativeFunction.invoke(JsUndefined.getInstance(), args),
+                    protoFromNewTarget(newTarget, proto));
         }
         return nativeFunction.invoke(JsUndefined.getInstance(), args, newTarget);
     }
@@ -883,11 +865,12 @@ public final class Interpreter {
     // OrdinaryCreateFromConstructor: the instance prototype is an ordinary Get(newTarget,
     // "prototype"), so an accessor-valued or throwing `prototype` behaves like any other property
     // read, and a non-object result falls back to the intrinsic default.
-    private JsObject protoFromNewTarget(JsValue newTarget, JsObject fallback) {
+    private JsValue protoFromNewTarget(JsValue newTarget, JsValue fallback) {
         if (newTarget == null || isNullish(newTarget)) {
             return fallback;
         }
-        return getMemberByKey(newTarget, new JsString("prototype")) instanceof JsObject proto ? proto : fallback;
+        final var proto = getMemberByKey(newTarget, new JsString("prototype"));
+        return isObjectLike(proto) ? proto : fallback;
     }
 
     private List<JsValue> boundArgs(JsNativeFunction nativeFunction, List<JsValue> args) {
@@ -1250,22 +1233,7 @@ public final class Interpreter {
 
     private boolean deleteMemberValue(JsValue target, JsValue rawKey) {
         final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
-        if (keyValue instanceof JsSymbol symbol && !(target instanceof JsProxy)) {
-            final var table = target.ownProperties();
-            return table == null || !table.isNotDeleteSymbol(symbol);
-        }
-        return switch (target) {
-            case JsProxy proxy -> proxies.delete(proxy, keyValue);
-            case JsObject object -> object.delete(JsCoercion.toStr(keyValue));
-            case JsClass cls -> cls.getStaticOwner().delete(JsCoercion.toStr(keyValue));
-            case JsArray array -> deleteArrayElement(array, JsCoercion.toStr(keyValue));
-            case JsGlobalObject global -> global.getEnv().deleteGlobal(JsCoercion.toStr(keyValue));
-            case JsCallableProperties callable -> callable.deleteProperty(JsCoercion.toStr(keyValue));
-            default -> {
-                final var table = target.ownProperties();
-                yield table == null || table.delete(JsCoercion.toStr(keyValue));
-            }
-        };
+        return target instanceof JsProxy proxy ? proxies.delete(proxy, keyValue) : target.deleteOwnProperty(keyValue);
     }
 
     private List<JsValue> iterableToList(JsValue iterable) {

@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Objects;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
-import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -19,24 +18,28 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
-import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
-import org.techhouse.simplejs.values.PropertyTable;
+import org.techhouse.simplejs.values.OrdinaryProperties;
+import org.techhouse.simplejs.values.PropertyDescriptor;
 
 public final class ObjectBuiltins {
     private ObjectBuiltins() {
     }
 
-    public static JsNativeFunction create(IterableToList iterableToList, InterpreterOps ops, Invoker invoker) {
-        final var object = new JsNativeFunction("Object", (_, args) -> coerceToObject(args));
-        object.setProperty("keys", new JsNativeFunction("keys", (_, args) -> keys(args, ops)));
-        object.setProperty("values", new JsNativeFunction("values", (_, args) -> values(args, ops)));
-        object.setProperty("entries", new JsNativeFunction("entries", (_, args) -> entries(args, ops)));
+    public static JsNativeFunction create(IterableToList iterableToList, InterpreterOps ops, Invoker invoker,
+            Intrinsics intrinsics) {
+        final var object = new JsNativeFunction("Object", (_, args) -> coerceToObject(args, intrinsics));
+        // GetOwnPropertyKeys and its neighbours start at ToObject(O), so a primitive argument is
+        // boxed here rather than in each helper: a String wrapper then contributes its code units.
+        object.setProperty("keys", new JsNativeFunction("keys", (_, args) -> keys(boxed(args, intrinsics), ops)));
+        object.setProperty("values", new JsNativeFunction("values", (_, args) -> values(boxed(args, intrinsics), ops)));
+        object.setProperty("entries",
+                new JsNativeFunction("entries", (_, args) -> entries(boxed(args, intrinsics), ops)));
         object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args, ops)));
         object.setProperty("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
         object.setProperty("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
@@ -61,39 +64,51 @@ public final class ObjectBuiltins {
         }));
         object.setProperty("defineProperties",
                 new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args, ops)));
-        object.setProperty("getOwnPropertyNames",
-                new JsNativeFunction("getOwnPropertyNames", (_, args) -> getOwnPropertyNames(args, ops)));
+        object.setProperty("getOwnPropertyNames", new JsNativeFunction("getOwnPropertyNames",
+                (_, args) -> getOwnPropertyNames(boxed(args, intrinsics), ops)));
         object.setProperty("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
-                (_, args) -> ops.getOwnPropertyDescriptor(first(args), argAt(args, 1))));
-        object.setProperty("getOwnPropertyDescriptors",
-                new JsNativeFunction("getOwnPropertyDescriptors", (_, args) -> getOwnPropertyDescriptors(args, ops)));
+                (_, args) -> ops.getOwnPropertyDescriptor(intrinsics.toObject(first(args)), argAt(args, 1))));
+        object.setProperty("getOwnPropertyDescriptors", new JsNativeFunction("getOwnPropertyDescriptors",
+                (_, args) -> getOwnPropertyDescriptors(boxed(args, intrinsics), ops)));
         object.setProperty("fromEntries",
                 new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
         object.setProperty("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args, ops)));
         object.setProperty("groupBy",
                 new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
         object.setProperty("is", new JsNativeFunction("is", (_, args) -> is(args)));
-        object.setProperty("getOwnPropertySymbols",
-                new JsNativeFunction("getOwnPropertySymbols", (_, args) -> getOwnPropertySymbols(args)));
+        object.setProperty("getOwnPropertySymbols", new JsNativeFunction("getOwnPropertySymbols",
+                (_, args) -> getOwnPropertySymbols(boxed(args, intrinsics))));
         return object;
     }
 
-    private static JsValue coerceToObject(List<JsValue> args) {
+    private static List<JsValue> boxed(List<JsValue> args, Intrinsics intrinsics) {
+        final var boxed = new ArrayList<>(args);
+        if (boxed.isEmpty()) {
+            boxed.add(JsUndefined.getInstance());
+        }
+        boxed.set(0, intrinsics.toObject(boxed.getFirst()));
+        return boxed;
+    }
+
+    private static JsValue coerceToObject(List<JsValue> args, Intrinsics intrinsics) {
         final var value = first(args);
-        return value instanceof JsObject || value instanceof JsArray || value instanceof JsFunction
-                || value instanceof JsNativeFunction ? value : new JsObject();
+        if (InterpreterUtils.isNullish(value)) {
+            final var created = new JsObject();
+            created.setProto(intrinsics.objectProto());
+            return created;
+        }
+        return intrinsics.toObject(value);
     }
 
     private static JsValue is(List<JsValue> args) {
-        return JsBoolean.of(!isNotSameValue(argAt(args, 0), argAt(args, 1)));
+        return JsBoolean.of(!OrdinaryProperties.isNotSameValue(argAt(args, 0), argAt(args, 1)));
     }
 
     private static JsValue getOwnPropertySymbols(List<JsValue> args) {
         final var result = new JsArray();
-        final var table = first(args).ownProperties();
-        if (table != null) {
-            for (final var symbol : table.symbolKeys()) {
-                result.push(symbol);
+        for (final var key : first(args).ownPropertyKeys()) {
+            if (key instanceof JsSymbol) {
+                result.push(key);
             }
         }
         return result;
@@ -110,43 +125,18 @@ public final class ObjectBuiltins {
         return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(key)));
     }
 
-    private static JsValue toPropertyKey(JsValue value, InterpreterOps ops) {
-        return JsCoercion.toPropertyKey(value, ops);
-    }
-
-    // ToPropertyDescriptor's own validation, run before any [[DefineOwnProperty]] work so an
-    // ill-formed descriptor is rejected without half-applying its fields.
-    private static void checkDescriptorShape(JsValue descriptor, InterpreterOps ops) {
-        final var hasGetter = descHas(descriptor, "get", ops);
-        final var hasSetter = descHas(descriptor, "set", ops);
-        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
-            throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
-                    + "and a value or writable attribute");
-        }
-        requireAccessorField(hasGetter, descriptor, "get", "Getter", ops);
-        requireAccessorField(hasSetter, descriptor, "set", "Setter", ops);
-    }
-
-    private static void requireAccessorField(boolean present, JsValue descriptor, String field, String label,
-            InterpreterOps ops) {
-        if (!present) {
-            return;
-        }
-        final var value = descGet(descriptor, field, ops);
-        if (!isCallable(value) && !(value instanceof JsUndefined)) {
-            throw new TypeErrorException(label + " must be a function");
-        }
-    }
-
+    // Deliberately narrower than JsValue.hasOwnKey: an accessor-only own property and an exotic
+    // type's table are not reported here, which several corpus expectations still rely on.
     static boolean hasOwnKey(JsValue target, String key) {
         return switch (target) {
-            case JsObject object -> object.has(key) || object.hasAccessor(key);
+            case JsObject object -> object.hasOwnKey(new JsString(key)) || object.hasAccessor(key);
             case JsClass cls -> cls.getStaticOwner().has(key) || cls.getStaticOwner().hasAccessor(key);
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
             case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
             case JsGlobalObject global -> global.getEnv().isDeclared(key);
-            case JsCallableProperties callable -> callable.hasProperty(key) || callableMetadataKey(callable, key);
+            case JsCallableProperties callable ->
+                callable.hasProperty(key) || OrdinaryProperties.metadataKey(callable, key);
             default -> false;
         };
     }
@@ -158,22 +148,47 @@ public final class ObjectBuiltins {
         return target instanceof JsObject object && object.hasSymbol(key);
     }
 
-    // name/length/prototype are synthesised at lookup time rather than stored, so the reflective
-    // surface has to report them explicitly.
-    private static boolean callableMetadataKey(JsCallableProperties callable, String key) {
-        if (callable.isMetadataDeleted(key)) {
-            return false;
+    private static boolean arrayHasIndex(JsArray array, String key) {
+        final var index = InterpreterUtils.arrayIndex(key);
+        if (index != null) {
+            return (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
         }
-        return "name".equals(key) || "length".equals(key) || ("prototype".equals(key) && hasPrototype(callable));
+        return array.hasProperty(key) || array.hasPropAccessor(key);
     }
 
-    // Deliberately not InterpreterUtils.isConstructor: a generator function is not a constructor
-    // but does own a `prototype` property (the object its instances are linked to).
-    private static boolean hasPrototype(JsCallableProperties callable) {
-        if (callable instanceof JsFunction function) {
-            return function.isConstructor() || function.isGenerator();
+    private static JsValue toPropertyKey(JsValue value, InterpreterOps ops) {
+        return JsCoercion.toPropertyKey(value, ops);
+    }
+
+    // ToPropertyDescriptor: each field is read through HasProperty+Get (so an inherited accessor on
+    // the descriptor object is honoured) and an ill-formed descriptor is rejected here, before any
+    // [[DefineOwnProperty]] work can half-apply it.
+    private static PropertyDescriptor toPropertyDescriptor(JsValue descriptor, InterpreterOps ops) {
+        final var getter = descHas(descriptor, "get", ops) ? descGet(descriptor, "get", ops) : null;
+        final var setter = descHas(descriptor, "set", ops) ? descGet(descriptor, "set", ops) : null;
+        final var hasValue = descHas(descriptor, "value", ops);
+        final var hasWritable = descHas(descriptor, "writable", ops);
+        if ((getter != null || setter != null) && (hasValue || hasWritable)) {
+            throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
+                    + "and a value or writable attribute");
         }
-        return callable instanceof JsNativeFunction nativeFunction && nativeFunction.getPrototype() != null;
+        requireAccessorField(getter, "Getter");
+        requireAccessorField(setter, "Setter");
+        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
+        final Boolean writable = hasWritable ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops)) : null;
+        final Boolean enumerable = descHas(descriptor, "enumerable", ops)
+                ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
+                : null;
+        final Boolean configurable = descHas(descriptor, "configurable", ops)
+                ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
+                : null;
+        return new PropertyDescriptor(value, getter, setter, writable, enumerable, configurable);
+    }
+
+    private static void requireAccessorField(JsValue value, String label) {
+        if (value != null && !isCallable(value) && !(value instanceof JsUndefined)) {
+            throw new TypeErrorException(label + " must be a function");
+        }
     }
 
     private static boolean stringHasIndex(JsString string, String key) {
@@ -184,14 +199,6 @@ public final class ObjectBuiltins {
     private static boolean typedHasIndex(JsTypedArray typed, String key) {
         final var index = InterpreterUtils.arrayIndex(key);
         return index != null && index < typed.length();
-    }
-
-    private static boolean arrayHasIndex(JsArray array, String key) {
-        final var index = InterpreterUtils.arrayIndex(key);
-        if (index != null) {
-            return (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
-        }
-        return array.hasProperty(key) || array.hasPropAccessor(key);
     }
 
     private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
@@ -445,12 +452,12 @@ public final class ObjectBuiltins {
 
     private static JsValue createObject(List<JsValue> args, InterpreterOps ops) {
         final var proto = first(args);
-        if (!(proto instanceof JsObject) && !(proto instanceof JsNull)) {
+        if (!InterpreterUtils.isObjectLike(proto) && !(proto instanceof JsNull)) {
             throw new TypeErrorException("Object prototype may only be an Object or null: " + JsCoercion.toStr(proto));
         }
         final var object = new JsObject();
-        if (proto instanceof JsObject protoObject) {
-            object.setProto(protoObject);
+        if (InterpreterUtils.isObjectLike(proto)) {
+            object.setProto(proto);
         }
         if (args.size() > 1 && !(args.get(1) instanceof JsUndefined)) {
             if (args.get(1) instanceof JsNull) {
@@ -462,16 +469,14 @@ public final class ObjectBuiltins {
     }
 
     public static JsValue getPrototypeOf(List<JsValue> args) {
-        if (first(args) instanceof JsObject object && object.getProto() != null) {
-            return object.getProto();
-        }
-        return JsNull.getInstance();
+        final var proto = first(args).getProto();
+        return proto == null ? JsNull.getInstance() : proto;
     }
 
     public static JsValue setPrototypeOf(List<JsValue> args) {
         final var target = first(args);
         if (target instanceof JsObject object) {
-            final var proto = args.size() > 1 && args.get(1) instanceof JsObject candidate ? candidate : null;
+            final var proto = args.size() > 1 && InterpreterUtils.isObjectLike(args.get(1)) ? args.get(1) : null;
             // OrdinarySetPrototypeOf step 8: a cycle would make every later chain walk unbounded.
             for (var walk = proto; walk != null; walk = walk.getProto()) {
                 if (walk == object) {
@@ -491,212 +496,11 @@ public final class ObjectBuiltins {
         if (args.size() < 3 || !InterpreterUtils.isObjectLike(args.get(2))) {
             throw new TypeErrorException("Property description must be an object");
         }
-        final var descriptor = args.get(2);
         final var propertyKey = toPropertyKey(args.get(1), ops);
-        checkDescriptorShape(descriptor, ops);
-        if (target instanceof JsArray array && !(propertyKey instanceof JsSymbol)) {
-            applyArrayDescriptor(array, JsCoercion.toStr(propertyKey), descriptor, ops);
-            return target;
-        }
-        if (target instanceof JsGlobalObject global && !(propertyKey instanceof JsSymbol)) {
-            applyGlobalDescriptor(global, JsCoercion.toStr(propertyKey), descriptor, ops);
-            return target;
-        }
-        final var table = target.ownProperties();
-        if (table != null) {
-            if (propertyKey instanceof JsSymbol symbol) {
-                applySymbolDescriptor(target, symbol, descriptor, ops);
-            } else {
-                final var key = JsCoercion.toStr(propertyKey);
-                materialiseCallableMetadata(target, table, key);
-                validateAndApply(stringSlot(table, key), target.isExtensible(), key, descriptor, ops);
-            }
-        }
+        // The boolean answers only whether the target owns a definition at all (a proxy reaches here
+        // through Object.defineProperties); a rejected definition is raised as a TypeError instead.
+        target.defineOwnProperty(propertyKey, toPropertyDescriptor(args.get(2), ops));
         return target;
-    }
-
-    // name/length/prototype are synthesised at lookup time rather than stored, so a redefine has to
-    // see the real existing property (and its real flags) instead of treating the key as absent.
-    private static void materialiseCallableMetadata(JsValue target, PropertyTable table, String key) {
-        if (!(target instanceof JsCallableProperties callable) || table.has(key)
-                || !callableMetadataKey(callable, key)) {
-            return;
-        }
-        if ("prototype".equals(key)) {
-            table.defineValue(key, prototypeOf(callable));
-            final var writable = !(callable instanceof JsNativeFunction nativeFunction)
-                    || !nativeFunction.isConstructor();
-            table.setFlags(key, new PropertyFlags(writable, false, false));
-            return;
-        }
-        table.defineValue(key, FunctionProtoBuiltins.metadata(target, key));
-        table.setFlags(key, new PropertyFlags(false, false, true));
-    }
-
-    // The global object's string keys live in the Environment, not in a table, so a defineProperty
-    // against one writes the binding through rather than shadowing it with a table entry.
-    private static void applyGlobalDescriptor(JsGlobalObject global, String key, JsValue descriptor,
-            InterpreterOps ops) {
-        final var env = global.getEnv();
-        if (!env.isDeclared(key)) {
-            validateAndApply(stringSlot(global.ownProperties(), key), global.isExtensible(), key, descriptor, ops);
-            return;
-        }
-        final var flags = env.globalFlags(key);
-        assert flags != null;
-        if (!flags.configurable()) {
-            throw redefineError(key);
-        }
-        if (descHas(descriptor, "value", ops)) {
-            env.setGlobal(key, descGet(descriptor, "value", ops));
-        }
-    }
-
-    // Only "length" and canonical index keys are exotic on an array; any other key is an ordinary
-    // own property and goes through the shared ValidateAndApplyPropertyDescriptor over its table.
-    private static void applyArrayDescriptor(JsArray array, String key, JsValue descriptor, InterpreterOps ops) {
-        final var hasGetter = descHas(descriptor, "get", ops);
-        final var hasSetter = descHas(descriptor, "set", ops);
-        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
-            throw new TypeErrorException(
-                    "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, "
-                            + key);
-        }
-        if ("length".equals(key)) {
-            if (hasGetter || hasSetter) {
-                throw redefineError(key);
-            }
-            applyArrayLengthDescriptor(array, key, descriptor, ops);
-            return;
-        }
-        final var index = InterpreterUtils.arrayIndex(key);
-        if (index == null) {
-            validateAndApply(stringSlot(array.ownProperties(), key), array.isExtensible(), key, descriptor, ops);
-            return;
-        }
-        if (hasGetter || hasSetter) {
-            applyArrayIndexAccessorDescriptor(array, index, descriptor, ops);
-            return;
-        }
-        applyArrayIndexDescriptor(array, index, key, descriptor, ops);
-    }
-
-    // ArraySetLength: the value is applied before the writable attribute, so a length redefine that
-    // also clears writable still takes effect.
-    private static void applyArrayLengthDescriptor(JsArray array, String key, JsValue descriptor, InterpreterOps ops) {
-        final var currentFlags = array.getLengthFlags();
-        if (!currentFlags.configurable() && descHas(descriptor, "configurable", ops)
-                && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
-            throw redefineError(key);
-        }
-        if (!currentFlags.configurable() && descHas(descriptor, "enumerable", ops)
-                && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != currentFlags.enumerable()) {
-            throw redefineError(key);
-        }
-        final var writable = descHas(descriptor, "writable", ops)
-                ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
-                : currentFlags.writable();
-        if (descHas(descriptor, "value", ops)) {
-            final var newLength = requireArrayLength(descGet(descriptor, "value", ops));
-            if (!currentFlags.writable() && newLength != array.length()) {
-                throw new TypeErrorException("Cannot redefine property: length");
-            }
-            array.defineLength(newLength);
-        } else if (!currentFlags.writable() && writable) {
-            throw redefineError(key);
-        }
-        array.setLengthWritable(writable);
-    }
-
-    private static void applyArrayIndexDescriptor(JsArray array, int index, String key, JsValue descriptor,
-            InterpreterOps ops) {
-        final var hasValue = descHas(descriptor, "value", ops);
-        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
-        final var exists = (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
-        final var currentFlags = exists ? array.getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
-        if (!exists && !array.isExtensible()) {
-            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
-        }
-        if (exists && !currentFlags.configurable()) {
-            if (descHas(descriptor, "configurable", ops)
-                    && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
-                throw redefineError(key);
-            }
-            if (descHas(descriptor, "enumerable", ops)
-                    && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != currentFlags.enumerable()) {
-                throw redefineError(key);
-            }
-            if (!currentFlags.writable()) {
-                if (descHas(descriptor, "writable", ops)
-                        && JsCoercion.toBoolean(descGet(descriptor, "writable", ops))) {
-                    throw redefineError(key);
-                }
-                if (hasValue && isNotSameValue(value, array.get(index))) {
-                    throw redefineError(key);
-                }
-            }
-        }
-        final var flags = new JsObject.PropertyFlags(
-                descHas(descriptor, "writable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
-                        : currentFlags.writable(),
-                descHas(descriptor, "enumerable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
-                        : currentFlags.enumerable(),
-                descHas(descriptor, "configurable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
-                        : currentFlags.configurable());
-        array.clearIndexAccessor(index);
-        array.defineIndexValue(index, hasValue ? value : exists ? array.get(index) : JsUndefined.getInstance());
-        array.setIndexFlags(index, flags);
-    }
-
-    private static void applyArrayIndexAccessorDescriptor(JsArray array, int index, JsValue descriptor,
-            InterpreterOps ops) {
-        final var exists = (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
-        final var currentFlags = exists ? array.getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
-        if (!exists && !array.isExtensible()) {
-            throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
-        }
-        if (exists && !currentFlags.configurable()) {
-            throw redefineError(String.valueOf(index));
-        }
-        final var hasGetter = descHas(descriptor, "get", ops);
-        final var hasSetter = descHas(descriptor, "set", ops);
-        final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
-        final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
-        if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
-            throw new TypeErrorException("Getter must be a function");
-        }
-        if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
-            throw new TypeErrorException("Setter must be a function");
-        }
-        final var flags = new JsObject.PropertyFlags(currentFlags.writable(),
-                descHas(descriptor, "enumerable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
-                        : currentFlags.enumerable(),
-                descHas(descriptor, "configurable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
-                        : currentFlags.configurable());
-        array.defineIndexValue(index, JsUndefined.getInstance());
-        array.clearIndexAccessor(index);
-        array.defineIndexAccessor(index, isCallable(getterValue) ? getterValue : null,
-                isCallable(setterValue) ? setterValue : null);
-        array.setIndexFlags(index, flags);
-    }
-
-    private static int requireArrayLength(JsValue value) {
-        final var number = JsCoercion.toNumber(value);
-        final var length = (int) number;
-        if (length != number || length < 0) {
-            throw new org.techhouse.simplejs.exceptions.RangeErrorException("Invalid array length");
-        }
-        return length;
-    }
-
-    private static void applySymbolDescriptor(JsValue target, JsSymbol symbol, JsValue descriptor, InterpreterOps ops) {
-        validateAndApply(symbolSlot(target.ownProperties(), symbol), target.isExtensible(), symbol.getDescription(),
-                descriptor, ops);
     }
 
     private static JsValue defineProperties(List<JsValue> args, InterpreterOps ops) {
@@ -739,323 +543,6 @@ public final class ObjectBuiltins {
 
     private static JsValue descGet(JsValue descriptor, String key, InterpreterOps ops) {
         return ops.getMember(descriptor, new JsString(key));
-    }
-
-    // ValidateAndApplyPropertyDescriptor, shared by string keys, symbol keys and every value type
-    // that carries a PropertyTable. A Slot is one key's storage; an array's exotic index/length arms
-    // are handled before this is reached.
-    private interface Slot {
-        boolean exists();
-
-        boolean hasAccessor();
-
-        PropertyFlags flags();
-
-        void setFlags(PropertyFlags flags);
-
-        JsValue value();
-
-        boolean hasValue();
-
-        void defineValue(JsValue value);
-
-        void removeValue();
-
-        JsValue getter();
-
-        JsValue setter();
-
-        void defineAccessor(JsValue getter, JsValue setter);
-
-        void clearGetter();
-
-        void clearSetter();
-
-        void clearAccessor();
-    }
-
-    private static Slot stringSlot(PropertyTable table, String key) {
-        return new Slot() {
-            @Override
-            public boolean exists() {
-                return table.has(key) || table.hasAccessor(key);
-            }
-
-            @Override
-            public boolean hasAccessor() {
-                return table.hasAccessor(key);
-            }
-
-            @Override
-            public PropertyFlags flags() {
-                return table.getFlags(key);
-            }
-
-            @Override
-            public void setFlags(PropertyFlags flags) {
-                table.setFlags(key, flags);
-            }
-
-            @Override
-            public JsValue value() {
-                return table.get(key);
-            }
-
-            @Override
-            public boolean hasValue() {
-                return table.has(key);
-            }
-
-            @Override
-            public void defineValue(JsValue value) {
-                table.defineValue(key, value);
-            }
-
-            @Override
-            public void removeValue() {
-                table.getProperties().remove(key);
-            }
-
-            @Override
-            public JsValue getter() {
-                return table.getAccessorGetter(key);
-            }
-
-            @Override
-            public JsValue setter() {
-                return table.getAccessorSetter(key);
-            }
-
-            @Override
-            public void defineAccessor(JsValue getter, JsValue setter) {
-                table.defineAccessor(key, getter, setter);
-            }
-
-            @Override
-            public void clearGetter() {
-                table.clearAccessorGetter(key);
-            }
-
-            @Override
-            public void clearSetter() {
-                table.clearAccessorSetter(key);
-            }
-
-            @Override
-            public void clearAccessor() {
-                table.clearAccessor(key);
-            }
-        };
-    }
-
-    private static Slot symbolSlot(PropertyTable table, JsSymbol key) {
-        return new Slot() {
-            @Override
-            public boolean exists() {
-                return table.hasSymbol(key) || table.hasSymbolAccessor(key);
-            }
-
-            @Override
-            public boolean hasAccessor() {
-                return table.hasSymbolAccessor(key);
-            }
-
-            @Override
-            public PropertyFlags flags() {
-                return table.getSymbolFlags(key);
-            }
-
-            @Override
-            public void setFlags(PropertyFlags flags) {
-                table.setSymbolFlags(key, flags);
-            }
-
-            @Override
-            public JsValue value() {
-                return table.getSymbol(key);
-            }
-
-            @Override
-            public boolean hasValue() {
-                return table.hasSymbol(key);
-            }
-
-            @Override
-            public void defineValue(JsValue value) {
-                table.defineSymbolValue(key, value);
-            }
-
-            @Override
-            public void removeValue() {
-                // A symbol data slot is only ever replaced, never emptied on its own.
-            }
-
-            @Override
-            public JsValue getter() {
-                return table.getSymbolAccessorGetter(key);
-            }
-
-            @Override
-            public JsValue setter() {
-                return table.getSymbolAccessorSetter(key);
-            }
-
-            @Override
-            public void defineAccessor(JsValue getter, JsValue setter) {
-                table.defineSymbolAccessor(key, getter, setter);
-            }
-
-            @Override
-            public void clearGetter() {
-                table.clearSymbolAccessorGetter(key);
-            }
-
-            @Override
-            public void clearSetter() {
-                table.clearSymbolAccessorSetter(key);
-            }
-
-            @Override
-            public void clearAccessor() {
-                table.clearSymbolAccessor(key);
-            }
-        };
-    }
-
-    private static void validateAndApply(Slot slot, boolean extensible, String key, JsValue descriptor,
-            InterpreterOps ops) {
-        final var exists = slot.exists();
-        if (!exists && !extensible) {
-            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
-        }
-        if (exists && !slot.flags().configurable()) {
-            checkNonConfigurableRedefine(slot, key, descriptor, ops);
-        }
-        final var flags = flagsFrom(descriptor, slot, exists, ops);
-        final var hasGetter = descHas(descriptor, "get", ops);
-        final var hasSetter = descHas(descriptor, "set", ops);
-        final var hasValue = descHas(descriptor, "value", ops);
-        if ((hasGetter || hasSetter) && (hasValue || descHas(descriptor, "writable", ops))) {
-            throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
-                    + "and a value or writable attribute, " + key);
-        }
-        if (hasGetter || hasSetter) {
-            applyAccessorFields(slot, descriptor, hasGetter, hasSetter, ops);
-        } else if (hasValue || descHas(descriptor, "writable", ops) || !exists || !slot.hasAccessor()) {
-            // Converting an accessor property into a data property must drop the stale
-            // getter/setter, or a later read would still find the old accessor entry. A generic
-            // descriptor over an existing accessor takes neither arm, so the accessor survives.
-            slot.clearAccessor();
-            slot.defineValue(hasValue
-                    ? descGet(descriptor, "value", ops)
-                    : exists && slot.hasValue() ? slot.value() : JsUndefined.getInstance());
-        }
-        slot.setFlags(flags);
-    }
-
-    private static void applyAccessorFields(Slot slot, JsValue descriptor, boolean hasGetter, boolean hasSetter,
-            InterpreterOps ops) {
-        // A field absent from the new descriptor keeps the property's current getter/setter
-        // (only meaningful if it was already an accessor) rather than defaulting to none, so a
-        // {get: fn2} redefine doesn't silently drop an untouched existing setter.
-        final var wasAccessor = slot.hasAccessor();
-        final var existingGetter = wasAccessor ? slot.getter() : null;
-        final var existingSetter = wasAccessor ? slot.setter() : null;
-        final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
-        final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
-        if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
-            throw new TypeErrorException("Getter must be a function");
-        }
-        if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
-            throw new TypeErrorException("Setter must be a function");
-        }
-        final var getter = hasGetter ? (isCallable(getterValue) ? getterValue : null) : existingGetter;
-        final var setter = hasSetter ? (isCallable(setterValue) ? setterValue : null) : existingSetter;
-        slot.removeValue();
-        // defineAccessor only ever adds a non-null side, so a field the new descriptor names
-        // but resolves to null (e.g. an explicit `get: undefined`) must be cleared separately.
-        if (hasGetter && getter == null) {
-            slot.clearGetter();
-        }
-        if (hasSetter && setter == null) {
-            slot.clearSetter();
-        }
-        if (getter != null || setter != null) {
-            slot.defineAccessor(getter, setter);
-        } else {
-            // 'get'/'set' were both present but neither was callable: still a real accessor
-            // property per spec (reads as undefined, rejects writes), approximated here as an
-            // inert always-undefined value since defineAccessor needs at least one callable
-            // function to register the key at all.
-            slot.defineValue(JsUndefined.getInstance());
-        }
-    }
-
-    private static PropertyFlags flagsFrom(JsValue descriptor, Slot slot, boolean exists, InterpreterOps ops) {
-        final var current = exists ? slot.flags() : new PropertyFlags(false, false, false);
-        final var writable = descHas(descriptor, "writable", ops)
-                ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
-                : current.writable();
-        final var enumerable = descHas(descriptor, "enumerable", ops)
-                ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
-                : current.enumerable();
-        final var configurable = descHas(descriptor, "configurable", ops)
-                ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
-                : current.configurable();
-        return new PropertyFlags(writable, enumerable, configurable);
-    }
-
-    private static void checkNonConfigurableRedefine(Slot slot, String key, JsValue descriptor, InterpreterOps ops) {
-        if (descHas(descriptor, "configurable", ops)
-                && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
-            throw redefineError(key);
-        }
-        if (descHas(descriptor, "enumerable", ops)
-                && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != slot.flags().enumerable()) {
-            throw redefineError(key);
-        }
-        final var currentIsAccessor = slot.hasAccessor();
-        final var descriptorIsAccessor = descHas(descriptor, "get", ops) || descHas(descriptor, "set", ops);
-        final var descriptorIsData = descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops);
-        if ((descriptorIsAccessor && !currentIsAccessor) || (descriptorIsData && currentIsAccessor)) {
-            throw redefineError(key);
-        }
-        if (currentIsAccessor) {
-            if (descHas(descriptor, "get", ops)
-                    && isNotSameValue(descGet(descriptor, "get", ops), orUndefined(slot.getter()))) {
-                throw redefineError(key);
-            }
-            if (descHas(descriptor, "set", ops)
-                    && isNotSameValue(descGet(descriptor, "set", ops), orUndefined(slot.setter()))) {
-                throw redefineError(key);
-            }
-            return;
-        }
-        if (slot.hasValue() && !slot.flags().writable()) {
-            if (descHas(descriptor, "writable", ops) && JsCoercion.toBoolean(descGet(descriptor, "writable", ops))) {
-                throw redefineError(key);
-            }
-            if (descHas(descriptor, "value", ops) && isNotSameValue(slot.value(), descGet(descriptor, "value", ops))) {
-                throw redefineError(key);
-            }
-        }
-    }
-
-    private static JsValue orUndefined(JsValue value) {
-        return value == null ? JsUndefined.getInstance() : value;
-    }
-
-    private static boolean isNotSameValue(JsValue a, JsValue b) {
-        if (a instanceof JsNumber na && b instanceof JsNumber nb) {
-            // Double.compare implements SameValue for numbers: it distinguishes +0/-0 and treats
-            // NaN as equal to NaN.
-            return Double.compare(na.getValue(), nb.getValue()) != 0;
-        }
-        return !JsOperators.strictEquals(a, b);
-    }
-
-    private static TypeErrorException redefineError(String key) {
-        return new TypeErrorException("Cannot redefine property: " + key);
     }
 
     // Re-filters a proxy's ownKeys trap result down to enumerable string keys, so Object.keys/values/
@@ -1107,65 +594,18 @@ public final class ObjectBuiltins {
 
     private static JsValue getOwnPropertyNames(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
-        switch (first(args)) {
-            case JsProxy proxy -> {
-                for (final var key : ops.ownKeys(proxy)) {
-                    result.push(key);
-                }
+        if (first(args) instanceof JsProxy proxy) {
+            for (final var key : ops.ownKeys(proxy)) {
+                result.push(key);
             }
-            case JsObject object -> {
-                for (final var key : object.keys()) {
-                    result.push(new JsString(key));
-                }
-            }
-            case JsClass cls -> {
-                for (final var key : cls.getStaticOwner().keys()) {
-                    result.push(new JsString(key));
-                }
-            }
-            case JsArray array -> {
-                for (var i = 0; i < array.length(); i++) {
-                    if (!array.isHole(i)) {
-                        result.push(new JsString(Integer.toString(i)));
-                    }
-                }
-                for (final var key : array.namedPropertyKeys()) {
-                    result.push(new JsString(key));
-                }
-                result.push(new JsString("length"));
-            }
-            case JsGlobalObject global -> {
-                for (final var name : global.getEnv().allGlobalNames()) {
-                    result.push(new JsString(name));
-                }
-            }
-            case JsCallableProperties callable -> {
-                for (final var key : callableMetadataKeys(callable)) {
-                    result.push(new JsString(key));
-                }
-                for (final var key : callable.propertyKeys()) {
-                    if (!callableMetadataKey(callable, key)) {
-                        result.push(new JsString(key));
-                    }
-                }
-            }
-            default -> {
-                final var table = first(args).ownProperties();
-                if (table != null) {
-                    for (final var key : table.keys()) {
-                        result.push(new JsString(key));
-                    }
-                }
+            return result;
+        }
+        for (final var key : first(args).ownPropertyKeys()) {
+            if (key instanceof JsString) {
+                result.push(key);
             }
         }
         return result;
-    }
-
-    private static List<String> callableMetadataKeys(JsCallableProperties callable) {
-        final var candidates = hasPrototype(callable)
-                ? List.of("length", "name", "prototype")
-                : List.of("length", "name");
-        return candidates.stream().filter(key -> callableMetadataKey(callable, key)).toList();
     }
 
     public static JsValue getOwnPropertyDescriptor(List<JsValue> args) {
@@ -1174,145 +614,22 @@ public final class ObjectBuiltins {
         if (InterpreterUtils.isNullish(target)) {
             throw new TypeErrorException("Cannot convert undefined or null to object");
         }
-        final var keyValue = argAt(args, 1);
-        if (target instanceof JsGlobalObject global) {
-            return globalDescriptor(global, keyValue);
-        }
-        if (target instanceof JsArray array && !(keyValue instanceof JsSymbol)) {
-            return arrayDescriptor(array, keyValue);
-        }
-        final var table = target.ownProperties();
-        if (table == null) {
-            return JsUndefined.getInstance();
-        }
-        final var slot = keyValue instanceof JsSymbol symbol
-                ? symbolSlot(table, symbol)
-                : stringSlot(table, JsCoercion.toStr(keyValue));
-        if (slot.exists()) {
-            return describeSlot(slot);
-        }
-        if (target instanceof JsCallableProperties callable && !(keyValue instanceof JsSymbol)
-                && callableMetadataKey(callable, JsCoercion.toStr(keyValue))) {
-            return metadataDescriptor(target, callable, JsCoercion.toStr(keyValue));
-        }
-        return JsUndefined.getInstance();
+        final var descriptor = target.getOwnProperty(argAt(args, 1));
+        return descriptor == null ? JsUndefined.getInstance() : describe(descriptor);
     }
 
-    private static JsValue describeSlot(Slot slot) {
-        final var flags = slot.flags();
-        final var descriptor = new JsObject();
-        if (slot.hasAccessor()) {
-            descriptor.set("get", orUndefined(slot.getter()));
-            descriptor.set("set", orUndefined(slot.setter()));
+    private static JsValue describe(PropertyDescriptor descriptor) {
+        final var result = new JsObject();
+        if (descriptor.isAccessorDescriptor()) {
+            result.set("get", descriptor.getter());
+            result.set("set", descriptor.setter());
         } else {
-            descriptor.set("value", slot.value());
-            descriptor.set("writable", JsBoolean.of(flags.writable()));
+            result.set("value", descriptor.value());
+            result.set("writable", JsBoolean.of(descriptor.writableOr(false)));
         }
-        descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-        descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-        return descriptor;
-    }
-
-    private static JsValue metadataDescriptor(JsValue target, JsCallableProperties callable, String key) {
-        final var descriptor = new JsObject();
-        if ("prototype".equals(key)) {
-            // A builtin constructor's `prototype` is non-writable; an ordinary function's is
-            // writable. Neither is enumerable or configurable.
-            final var writable = !(callable instanceof JsNativeFunction nativeFunction)
-                    || !nativeFunction.isConstructor();
-            descriptor.set("value", prototypeOf(callable));
-            descriptor.set("writable", JsBoolean.of(writable));
-            descriptor.set("enumerable", JsBoolean.of(false));
-            descriptor.set("configurable", JsBoolean.of(false));
-            return descriptor;
-        }
-        descriptor.set("value", FunctionProtoBuiltins.metadata(target, key));
-        descriptor.set("writable", JsBoolean.of(false));
-        descriptor.set("enumerable", JsBoolean.of(false));
-        descriptor.set("configurable", JsBoolean.of(true));
-        return descriptor;
-    }
-
-    private static JsValue prototypeOf(JsCallableProperties callable) {
-        if (callable instanceof JsFunction function) {
-            return function.getPrototype();
-        }
-        return callable instanceof JsNativeFunction nativeFunction && nativeFunction.getPrototype() != null
-                ? nativeFunction.getPrototype()
-                : JsUndefined.getInstance();
-    }
-
-    private static JsValue globalDescriptor(JsGlobalObject global, JsValue keyValue) {
-        if (keyValue instanceof JsSymbol symbol) {
-            final var slot = symbolSlot(global.ownProperties(), symbol);
-            return slot.exists() ? describeSlot(slot) : JsUndefined.getInstance();
-        }
-        final var key = JsCoercion.toStr(keyValue);
-        final var env = global.getEnv();
-        if (!env.isDeclared(key)) {
-            final var slot = stringSlot(global.ownProperties(), key);
-            return slot.exists() ? describeSlot(slot) : JsUndefined.getInstance();
-        }
-        final var flags = env.globalFlags(key);
-        final var descriptor = new JsObject();
-        descriptor.set("value", InterpreterUtils.orUndefined(env.tryGet(key)));
-        assert flags != null;
-        descriptor.set("writable", JsBoolean.of(flags.writable()));
-        descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-        descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-        return descriptor;
-    }
-
-    private static JsValue arrayDescriptor(JsArray array, JsValue keyValue) {
-        if (keyValue instanceof JsSymbol) {
-            return JsUndefined.getInstance();
-        }
-        final var key = JsCoercion.toStr(keyValue);
-        if ("length".equals(key)) {
-            return dataDescriptor(new JsNumber(array.length()), array.getLengthFlags());
-        }
-        final var index = InterpreterUtils.arrayIndex(key);
-        if (index != null) {
-            if (array.hasIndexAccessor(index)) {
-                final var getter = array.getIndexAccessorGetter(index);
-                final var setter = array.getIndexAccessorSetter(index);
-                final var flags = array.getIndexFlags(index);
-                final var descriptor = new JsObject();
-                descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
-                descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
-                descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-                descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-                return descriptor;
-            }
-            if (index >= array.length() || array.isHole(index)) {
-                return JsUndefined.getInstance();
-            }
-            return dataDescriptor(array.get(index), array.getIndexFlags(index));
-        }
-        if (array.hasPropAccessor(key)) {
-            final var getter = array.getPropAccessorGetter(key);
-            final var setter = array.getPropAccessorSetter(key);
-            final var flags = array.getPropFlags(key);
-            final var descriptor = new JsObject();
-            descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
-            descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
-            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-            return descriptor;
-        }
-        if (!array.hasProperty(key)) {
-            return JsUndefined.getInstance();
-        }
-        return dataDescriptor(array.getProperty(key), array.getPropFlags(key));
-    }
-
-    private static JsValue dataDescriptor(JsValue value, JsObject.PropertyFlags flags) {
-        final var descriptor = new JsObject();
-        descriptor.set("value", value);
-        descriptor.set("writable", JsBoolean.of(flags.writable()));
-        descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-        descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-        return descriptor;
+        result.set("enumerable", JsBoolean.of(descriptor.enumerableOr(false)));
+        result.set("configurable", JsBoolean.of(descriptor.configurableOr(false)));
+        return result;
     }
 
     private static JsValue fromEntries(List<JsValue> args, IterableToList iterableToList) {

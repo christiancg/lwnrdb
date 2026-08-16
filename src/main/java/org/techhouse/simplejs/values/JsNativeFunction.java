@@ -15,7 +15,7 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
     private Set<String> deletedMetadataKeys;
     private JsValue boundTarget;
     private List<JsValue> boundArgs;
-    private JsObject prototype;
+    private JsValue prototype;
     private JsValue ownProto;
     private int explicitLength = -1;
     private boolean constructor;
@@ -154,11 +154,11 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
         return table.keys().stream().filter(table::isEnumerable).toList();
     }
 
-    public JsObject getPrototype() {
+    public JsValue getPrototype() {
         return prototype;
     }
 
-    public void setPrototype(JsObject prototype) {
+    public void setPrototype(JsValue prototype) {
         this.prototype = prototype;
     }
 

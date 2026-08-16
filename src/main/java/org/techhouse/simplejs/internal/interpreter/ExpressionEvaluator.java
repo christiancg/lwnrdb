@@ -194,11 +194,15 @@ public final class ExpressionEvaluator {
             }
             final var name = staticKeyName(property.getKey());
             final var evaluated = markIfMethod(interp.eval(value, scope), concise);
+            // PropertyDefinitionEvaluation skips NamedEvaluation for the proto setter, so an
+            // anonymous function assigned to `__proto__` is not named after the key.
+            if (!accessor && "__proto__".equals(name)) {
+                setLiteralProto(result, evaluated);
+                continue;
+            }
             nameMember(property, value, evaluated, name);
             if (accessor) {
                 storeAccessor(result, name, property.getKind(), evaluated);
-            } else if ("__proto__".equals(name)) {
-                setLiteralProto(result, evaluated);
             } else {
                 result.set(name, evaluated);
             }
@@ -227,8 +231,8 @@ public final class ExpressionEvaluator {
     // A non-computed `__proto__` in an object literal sets the prototype instead of creating a
     // property; per spec any value that is neither an object nor null is ignored.
     private static void setLiteralProto(JsObject target, JsValue value) {
-        if (value instanceof JsObject proto) {
-            target.setProto(proto);
+        if (InterpreterUtils.isObjectLike(value)) {
+            target.setProto(value);
         } else if (value instanceof JsNull) {
             target.setProto(null);
         }

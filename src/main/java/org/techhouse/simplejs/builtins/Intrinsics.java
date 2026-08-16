@@ -247,7 +247,7 @@ public final class Intrinsics {
 
     // %IteratorPrototype% / %AsyncIteratorPrototype% belong to the Iterator/AsyncIterator globals, so
     // GlobalScope hands them back here once both halves of the realm exist.
-    public void linkIteratorPrototypes(JsObject iteratorPrototype, JsObject asyncIteratorPrototype) {
+    public void linkIteratorPrototypes(JsValue iteratorPrototype, JsValue asyncIteratorPrototype) {
         if (iteratorPrototype != null) {
             iteratorPrototype.setProto(objectProto);
             iteratorProto.setProto(iteratorPrototype);
@@ -461,13 +461,22 @@ public final class Intrinsics {
 
     // ToObject: a primitive receiver is boxed so the callback's third argument is an object and the
     // wrapper's prototype (which a test may extend) takes part in the index lookups.
-    private JsValue toObject(JsValue value) {
+    public JsValue toObject(JsValue value) {
         if (InterpreterUtils.isObjectLike(value)) {
             return value;
         }
+        if (value instanceof JsNull || value instanceof JsUndefined) {
+            throw new TypeErrorException("Cannot convert undefined or null to object");
+        }
+        return wrapPrimitive(value, protoFor(value));
+    }
+
+    // The single construction path for a primitive wrapper: Object(x), new String/Number/Boolean and
+    // ToObject all land here, so a wrapper always carries its primitive and an intrinsic prototype.
+    public JsObject wrapPrimitive(JsValue primitive, JsValue proto) {
         final var wrapper = new JsObject();
-        wrapper.setProto(protoFor(value));
-        wrapper.setPrimitive(value);
+        wrapper.setProto(proto);
+        wrapper.setPrimitive(primitive);
         return wrapper;
     }
 

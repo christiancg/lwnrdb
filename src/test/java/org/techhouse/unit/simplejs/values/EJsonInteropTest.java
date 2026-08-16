@@ -107,4 +107,19 @@ public class EJsonInteropTest {
         assertEquals(1, converted.get("a").asJsonNumber().asInteger());
         assertNull(converted.get("x"));
     }
+
+    // A primitive wrapper serializes as its boxed primitive: a String wrapper reaching db.save must
+    // not land in the document as its exotic per-code-unit index properties.
+    @Test
+    public void test_primitive_wrapper_serializes_as_its_primitive() {
+        final var string = new JsObject();
+        string.setPrimitive(new JsString("ab"));
+        assertEquals("ab", EJsonInterop.toEjson(string).asJsonString().getValue());
+        final var number = new JsObject();
+        number.setPrimitive(new JsNumber(3));
+        assertEquals(3, EJsonInterop.toEjson(number).asJsonNumber().asInteger());
+        final var bool = new JsObject();
+        bool.setPrimitive(JsBoolean.TRUE);
+        assertTrue(EJsonInterop.toEjson(bool).asJsonBoolean().getValue());
+    }
 }

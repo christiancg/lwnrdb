@@ -1,5 +1,9 @@
 package org.techhouse.simplejs.values;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
 import org.techhouse.simplejs.internal.Environment;
 
 public final class JsGlobalObject extends JsValue {
@@ -22,5 +26,53 @@ public final class JsGlobalObject extends JsValue {
             table = new PropertyTable();
         }
         return table;
+    }
+
+    @Override
+    public List<JsValue> ownPropertyKeys() {
+        final var keys = new ArrayList<JsValue>();
+        for (final var name : env.allGlobalNames()) {
+            keys.add(new JsString(name));
+        }
+        keys.addAll(ownProperties().symbolKeys());
+        return keys;
+    }
+
+    @Override
+    public PropertyDescriptor getOwnProperty(JsValue key) {
+        if (key instanceof JsSymbol) {
+            return super.getOwnProperty(key);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        if (!env.isDeclared(name)) {
+            return super.getOwnProperty(key);
+        }
+        return PropertyDescriptor.data(OrdinaryProperties.orUndefined(env.tryGet(name)), Objects.requireNonNull(env.globalFlags(name)));
+    }
+
+    // A declared global is written through to its binding rather than shadowed by a table entry.
+    @Override
+    public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
+        if (key instanceof JsSymbol) {
+            return super.defineOwnProperty(key, descriptor);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        if (!env.isDeclared(name)) {
+            return super.defineOwnProperty(key, descriptor);
+        }
+        if (!Objects.requireNonNull(env.globalFlags(name)).configurable()) {
+            throw OrdinaryProperties.redefineError(name);
+        }
+        if (descriptor.value() != null) {
+            env.setGlobal(name, descriptor.value());
+        }
+        return true;
+    }
+
+    @Override
+    public boolean deleteOwnProperty(JsValue key) {
+        return key instanceof JsSymbol
+                ? super.deleteOwnProperty(key)
+                : env.deleteGlobal(OrdinaryProperties.keyName(key));
     }
 }

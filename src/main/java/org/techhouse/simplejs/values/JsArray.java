@@ -5,6 +5,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 
 public final class JsArray extends JsValue {
     private static final JsValue HOLE = JsUndefined.getHole();
@@ -263,10 +266,6 @@ public final class JsArray extends JsValue {
         return true;
     }
 
-    public JsObject.PropertyFlags getLengthFlags() {
-        return lengthFlags;
-    }
-
     public void setLengthWritable(boolean writable) {
         lengthFlags = new JsObject.PropertyFlags(writable, lengthFlags.enumerable(), false);
     }
@@ -302,6 +301,196 @@ public final class JsArray extends JsValue {
     // Named (non-index) own property keys, merging plain data properties with accessor-only ones.
     public java.util.Set<String> namedPropertyKeys() {
         return table.keys();
+    }
+
+    @Override
+    public List<JsValue> ownPropertyKeys() {
+        final var keys = new ArrayList<JsValue>();
+        for (var i = 0; i < elements.size(); i++) {
+            if (!isHole(i)) {
+                keys.add(new JsString(Integer.toString(i)));
+            }
+        }
+        for (final var key : table.keys()) {
+            keys.add(new JsString(key));
+        }
+        keys.add(new JsString("length"));
+        keys.addAll(table.symbolKeys());
+        return keys;
+    }
+
+    // Only "length" and canonical index keys are exotic on an array; any other key is an ordinary
+    // own property and goes through the shared table path.
+    @Override
+    public PropertyDescriptor getOwnProperty(JsValue key) {
+        if (key instanceof JsSymbol) {
+            return super.getOwnProperty(key);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        if ("length".equals(name)) {
+            return PropertyDescriptor.data(new JsNumber(elements.size()), lengthFlags);
+        }
+        final var index = InterpreterUtils.arrayIndex(name);
+        if (index != null) {
+            if (hasIndexAccessor(index)) {
+                return PropertyDescriptor.accessor(getIndexAccessorGetter(index), getIndexAccessorSetter(index),
+                        getIndexFlags(index));
+            }
+            return index >= elements.size() || isHole(index)
+                    ? null
+                    : PropertyDescriptor.data(get(index), getIndexFlags(index));
+        }
+        if (hasPropAccessor(name)) {
+            return PropertyDescriptor.accessor(getPropAccessorGetter(name), getPropAccessorSetter(name),
+                    getPropFlags(name));
+        }
+        return table.has(name) ? PropertyDescriptor.data(table.get(name), getPropFlags(name)) : null;
+    }
+
+    @Override
+    public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
+        if (key instanceof JsSymbol) {
+            return super.defineOwnProperty(key, descriptor);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        if ("length".equals(name)) {
+            if (descriptor.isAccessorDescriptor()) {
+                throw OrdinaryProperties.redefineError(name);
+            }
+            defineLengthFrom(name, descriptor);
+            return true;
+        }
+        final var index = InterpreterUtils.arrayIndex(name);
+        if (index == null) {
+            return super.defineOwnProperty(key, descriptor);
+        }
+        if (descriptor.isAccessorDescriptor()) {
+            defineIndexAccessorFrom(index, descriptor);
+        } else {
+            defineIndexFrom(index, name, descriptor);
+        }
+        return true;
+    }
+
+    // ArraySetLength: the value is applied before the writable attribute, so a length redefine that
+    // also clears writable still takes effect.
+    private void defineLengthFrom(String key, PropertyDescriptor descriptor) {
+        if (!lengthFlags.configurable() && Boolean.TRUE.equals(descriptor.configurable())) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+        if (!lengthFlags.configurable() && descriptor.enumerable() != null
+                && descriptor.enumerable() != lengthFlags.enumerable()) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+        final var writable = descriptor.writableOr(lengthFlags.writable());
+        if (descriptor.value() != null) {
+            final var newLength = requireArrayLength(descriptor.value());
+            if (!lengthFlags.writable() && newLength != elements.size()) {
+                throw new TypeErrorException("Cannot redefine property: length");
+            }
+            defineLength(newLength);
+        } else if (!lengthFlags.writable() && writable) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+        setLengthWritable(writable);
+    }
+
+    private void defineIndexFrom(int index, String key, PropertyDescriptor descriptor) {
+        final var exists = ownsIndex(index);
+        final var currentFlags = exists ? getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
+        if (!exists && !table.isExtensible()) {
+            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
+        }
+        if (exists && !currentFlags.configurable()) {
+            checkIndexRedefine(index, key, descriptor, currentFlags);
+        }
+        final var flags = new JsObject.PropertyFlags(descriptor.writableOr(currentFlags.writable()),
+                descriptor.enumerableOr(currentFlags.enumerable()),
+                descriptor.configurableOr(currentFlags.configurable()));
+        clearIndexAccessor(index);
+        defineIndexValue(index,
+                descriptor.value() != null ? descriptor.value() : exists ? get(index) : JsUndefined.getInstance());
+        setIndexFlags(index, flags);
+    }
+
+    private void checkIndexRedefine(int index, String key, PropertyDescriptor descriptor,
+            JsObject.PropertyFlags currentFlags) {
+        if (Boolean.TRUE.equals(descriptor.configurable())) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+        if (descriptor.enumerable() != null && descriptor.enumerable() != currentFlags.enumerable()) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+        if (currentFlags.writable()) {
+            return;
+        }
+        if (Boolean.TRUE.equals(descriptor.writable())) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+        if (descriptor.value() != null && OrdinaryProperties.isNotSameValue(descriptor.value(), get(index))) {
+            throw OrdinaryProperties.redefineError(key);
+        }
+    }
+
+    private void defineIndexAccessorFrom(int index, PropertyDescriptor descriptor) {
+        final var exists = ownsIndex(index);
+        final var currentFlags = exists ? getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
+        if (!exists && !table.isExtensible()) {
+            throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
+        }
+        if (exists && !currentFlags.configurable()) {
+            throw OrdinaryProperties.redefineError(String.valueOf(index));
+        }
+        final var flags = new JsObject.PropertyFlags(currentFlags.writable(),
+                descriptor.enumerableOr(currentFlags.enumerable()),
+                descriptor.configurableOr(currentFlags.configurable()));
+        defineIndexValue(index, JsUndefined.getInstance());
+        clearIndexAccessor(index);
+        defineIndexAccessor(index, callableOrNull(descriptor.getter()), callableOrNull(descriptor.setter()));
+        setIndexFlags(index, flags);
+    }
+
+    private static JsValue callableOrNull(JsValue value) {
+        return OrdinaryProperties.isCallable(value) ? value : null;
+    }
+
+    private boolean ownsIndex(int index) {
+        return (index < elements.size() && !isHole(index)) || hasIndexAccessor(index);
+    }
+
+    private static int requireArrayLength(JsValue value) {
+        final var number = JsCoercion.toNumber(value);
+        final var length = (int) number;
+        if (length != number || length < 0) {
+            throw new RangeErrorException("Invalid array length");
+        }
+        return length;
+    }
+
+    @Override
+    public boolean deleteOwnProperty(JsValue key) {
+        if (key instanceof JsSymbol) {
+            return super.deleteOwnProperty(key);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        final var index = InterpreterUtils.arrayIndex(name);
+        if (index != null) {
+            if (index >= elements.size() || isHole(index)) {
+                return true;
+            }
+            if (!getIndexFlags(index).configurable()) {
+                return false;
+            }
+            clearIndexToHole(index);
+            return true;
+        }
+        if (!table.has(name) && !table.hasAccessor(name)) {
+            return true;
+        }
+        if (!getPropFlags(name).configurable()) {
+            return false;
+        }
+        return deleteProperty(name);
     }
 
     public List<JsValue> getElements() {

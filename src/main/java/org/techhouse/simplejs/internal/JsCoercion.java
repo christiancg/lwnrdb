@@ -58,6 +58,7 @@ public final class JsCoercion {
             case JsDate d -> d.getTime();
             case JsString s -> stringToNumber(s.getValue());
             case JsBigInt ignored -> throw new TypeErrorException("Cannot convert a BigInt to a number");
+            case JsObject wrapper when wrapper.getPrimitive() != null -> toNumber(wrapper.getPrimitive());
             default -> stringToNumber(toStr(value));
         };
     }
@@ -124,10 +125,10 @@ public final class JsCoercion {
         return value;
     }
 
+    // A wrapper is deliberately not short-circuited to its primitive slot here: OrdinaryToPrimitive
+    // has to run so a script that redefines valueOf/toString on the wrapper (or on the intrinsic
+    // prototype it inherits them from) wins over the boxed value.
     public static JsValue toPrimitive(JsValue value, String hint, InterpreterOps ops) {
-        if (value instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
-            return wrapper.getPrimitive();
-        }
         if (ops == null || !(value instanceof JsObject)) {
             return toPrimitive(value);
         }

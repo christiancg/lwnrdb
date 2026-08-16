@@ -68,8 +68,10 @@ public final class ArrayBuiltins {
         } else {
             items = InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
         }
+        // The iterator path constructs the target with no arguments; only the array-like fallback
+        // passes the length. `new Object(0)` boxes its argument, so the two are not interchangeable.
         final var result = InterpreterUtils.isConstructor(receiver)
-                ? ops.construct(receiver, List.of(new JsNumber(items.size())))
+                ? ops.construct(receiver, usesIterator(source, ops) ? List.of() : List.of(new JsNumber(items.size())))
                 : new JsArray();
         for (var i = 0; i < items.size(); i++) {
             final var element = items.get(i);
@@ -82,6 +84,11 @@ public final class ArrayBuiltins {
             ops.setMember(result, LENGTH, new JsNumber(items.size()));
         }
         return result;
+    }
+
+    private static boolean usesIterator(JsValue source, InterpreterOps ops) {
+        return source instanceof JsArray || source instanceof JsString
+                || (ops != null && InterpreterUtils.isCallable(ops.getMember(source, JsSymbol.ITERATOR)));
     }
 
     private static void createDataPropertyOrThrow(JsValue target, long index, JsValue value, InterpreterOps ops) {

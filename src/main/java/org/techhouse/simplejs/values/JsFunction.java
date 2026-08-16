@@ -18,7 +18,7 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private final Environment closure;
     private final PropertyTable table = new PropertyTable();
     private Set<String> deletedMetadataKeys;
-    private JsObject prototype;
+    private JsValue prototype;
     // Concise methods and accessors are not constructors, so they have no `prototype` property.
     private boolean method;
     private boolean derivedConstructor;
@@ -93,15 +93,16 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         return closure;
     }
 
-    public JsObject getPrototype() {
+    public JsValue getPrototype() {
         if (prototype == null) {
-            prototype = new JsObject();
-            prototype.set("constructor", this);
+            final var created = new JsObject();
+            created.set("constructor", this);
+            prototype = created;
         }
         return prototype;
     }
 
-    public void setPrototype(JsObject prototype) {
+    public void setPrototype(JsValue prototype) {
         this.prototype = prototype;
     }
 

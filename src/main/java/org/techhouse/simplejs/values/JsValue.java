@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.values;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public abstract class JsValue {
     public enum JsValueType {
         NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW
@@ -15,17 +18,100 @@ public abstract class JsValue {
         return null;
     }
 
-    public JsObject getProto() {
+    // [[Prototype]] is any object-like value, not just a plain JsObject: `foo.prototype = [1, 2]`
+    // and Object.setPrototypeOf(o, someArray) both link a chain that has to stay walkable.
+    public JsValue getProto() {
         return null;
     }
 
-    public void setProto(JsObject proto) {
+    public void setProto(JsValue proto) {
         // A value type without a [[Prototype]] slot silently ignores the link.
     }
 
     public boolean isExtensible() {
         final var properties = ownProperties();
         return properties != null && properties.isExtensible();
+    }
+
+    // The five ordinary-object operations. Every default answers from ownProperties(), so a value
+    // type whose keys live elsewhere (an array's indices, the global object's Environment) overrides
+    // the ones it owns instead of the choke points special-casing it. A proxy never reaches these:
+    // ProxyDispatch intercepts in front of them.
+    public List<JsValue> ownPropertyKeys() {
+        final var table = ownProperties();
+        if (table == null) {
+            return List.of();
+        }
+        final var keys = new ArrayList<JsValue>();
+        if (this instanceof JsCallableProperties callable) {
+            for (final var key : OrdinaryProperties.metadataKeys(callable)) {
+                keys.add(new JsString(key));
+            }
+            for (final var key : table.keys()) {
+                if (!OrdinaryProperties.metadataKey(callable, key)) {
+                    keys.add(new JsString(key));
+                }
+            }
+        } else {
+            for (final var key : table.keys()) {
+                keys.add(new JsString(key));
+            }
+        }
+        keys.addAll(table.symbolKeys());
+        return keys;
+    }
+
+    public PropertyDescriptor getOwnProperty(JsValue key) {
+        final var table = ownProperties();
+        if (table == null) {
+            return null;
+        }
+        if (key instanceof JsSymbol symbol) {
+            final var symbolSlot = OrdinaryProperties.symbolSlot(table, symbol);
+            return symbolSlot.exists() ? OrdinaryProperties.describe(symbolSlot) : null;
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        final var slot = OrdinaryProperties.stringSlot(table, name);
+        if (slot.exists()) {
+            return OrdinaryProperties.describe(slot);
+        }
+        return this instanceof JsCallableProperties callable && OrdinaryProperties.metadataKey(callable, name)
+                ? OrdinaryProperties.metadataDescriptor(this, callable, name)
+                : null;
+    }
+
+    // Rejections are raised as a TypeError with the offending key rather than reported through the
+    // return value, which says only whether this value owns the definition at all.
+    public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
+        final var table = ownProperties();
+        if (table == null) {
+            return false;
+        }
+        if (key instanceof JsSymbol symbol) {
+            OrdinaryProperties.validateAndApply(OrdinaryProperties.symbolSlot(table, symbol), isExtensible(),
+                    symbol.getDescription(), descriptor);
+            return true;
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        OrdinaryProperties.materialiseMetadata(this, table, name);
+        OrdinaryProperties.validateAndApply(OrdinaryProperties.stringSlot(table, name), isExtensible(), name,
+                descriptor);
+        return true;
+    }
+
+    // [[Delete]] of a property that isn't there succeeds, which is why a primitive answers true.
+    public boolean deleteOwnProperty(JsValue key) {
+        final var table = ownProperties();
+        if (table == null) {
+            return true;
+        }
+        return key instanceof JsSymbol symbol
+                ? !table.isNotDeleteSymbol(symbol)
+                : table.delete(OrdinaryProperties.keyName(key));
+    }
+
+    public boolean hasOwnKey(JsValue key) {
+        return getOwnProperty(key) != null;
     }
 
     private static JsValueType internalGetType(Object object) {

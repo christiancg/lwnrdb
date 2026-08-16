@@ -48,6 +48,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.PropertyDescriptor;
 
 // Property access dispatch: string- and symbol-keyed member reads/writes across every runtime
 // value type, plus the lazily-built method objects for promises, generators and async generators.
@@ -83,16 +84,138 @@ public final class MemberEvaluator {
     // boolean wrappers, ...): walk the realm's intrinsic prototype chain for a symbol-keyed method,
     // mirroring what intrinsicMember already does for string-keyed lookups.
     private JsValue intrinsicSymbolMember(JsValue target, JsSymbol symbol) {
-        for (var proto = interp.intrinsics().protoFor(target); proto != null; proto = proto.getProto()) {
-            if (proto.hasSymbolAccessor(symbol)) {
-                final var getter = proto.getSymbolAccessorGetter(symbol);
-                return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, target, List.of());
+        return orUndefined(chainSymbolMember(interp.intrinsics().protoFor(target), symbol, target));
+    }
+
+    // A [[Prototype]] chain walker. A link may be any object-like value; one that is not a plain
+    // JsObject has no prototype slot of its own, so the chain continues through the realm's intrinsic
+    // prototype for its type (an array links on to Array.prototype). That synthesis is taken at most
+    // once per walk: intrinsic prototypes are ordinary objects whose own links are authoritative, and
+    // re-entering it on a link reachable from an intrinsic would loop forever.
+    private final class Chain {
+        private JsValue link;
+        private boolean synthesised;
+
+        Chain(JsValue start) {
+            link = start;
+        }
+
+        boolean hasLink() {
+            return link != null;
+        }
+
+        JsValue link() {
+            return link;
+        }
+
+        void advance() {
+            final var next = link.getProto();
+            if (next == null && !synthesised && !(link instanceof JsObject)) {
+                link = interp.intrinsics().protoFor(link);
+                synthesised = true;
+                return;
             }
-            if (proto.hasSymbol(symbol)) {
-                return proto.getSymbol(symbol);
+            link = next;
+        }
+    }
+
+    JsValue chainMember(JsValue start, String key, JsValue receiver) {
+        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            final var found = protoMember(chain.link(), key, receiver);
+            if (found != null) {
+                return found;
             }
         }
-        return JsUndefined.getInstance();
+        return null;
+    }
+
+    private JsValue chainSymbolMember(JsValue start, JsSymbol symbol, JsValue receiver) {
+        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            final var found = protoSymbolMember(chain.link(), symbol, receiver);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    private PropertyDescriptor chainAccessor(JsValue start, String key) {
+        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            final var accessor = protoAccessor(chain.link(), key);
+            if (accessor != null) {
+                return accessor;
+            }
+        }
+        return null;
+    }
+
+    public boolean chainHasKey(JsValue start, String key) {
+        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            if (InterpreterUtils.protoOwnsKey(chain.link(), key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean chainHasSymbol(JsValue start, JsSymbol symbol) {
+        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            if (InterpreterUtils.protoOwnsSymbol(chain.link(), symbol)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // One prototype link's contribution to OrdinaryGet: the value it holds for the key, or null when
+    // it owns nothing and the walk continues. A [[Prototype]] may be any object-like value, so only a
+    // plain JsObject takes the direct-table fast path; anything else is read through the generic
+    // [[GetOwnProperty]] protocol.
+    JsValue protoMember(JsValue proto, String key, JsValue receiver) {
+        if (proto instanceof JsObject object) {
+            final var getter = object.getAccessorGetter(key);
+            if (getter != null) {
+                return interp.callValue(getter, receiver, List.of());
+            }
+            return object.has(key) ? object.get(key) : null;
+        }
+        return fromDescriptor(proto.getOwnProperty(new JsString(key)), receiver);
+    }
+
+    private JsValue protoSymbolMember(JsValue proto, JsSymbol symbol, JsValue receiver) {
+        if (proto instanceof JsObject object) {
+            if (object.hasSymbolAccessor(symbol)) {
+                final var getter = object.getSymbolAccessorGetter(symbol);
+                return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, receiver, List.of());
+            }
+            return object.hasSymbol(symbol) ? object.getSymbol(symbol) : null;
+        }
+        return fromDescriptor(proto.getOwnProperty(symbol), receiver);
+    }
+
+    private JsValue fromDescriptor(PropertyDescriptor descriptor, JsValue receiver) {
+        if (descriptor == null) {
+            return null;
+        }
+        if (!descriptor.isAccessorDescriptor()) {
+            return descriptor.value();
+        }
+        return isCallable(descriptor.getter())
+                ? interp.callValue(descriptor.getter(), receiver, List.of())
+                : JsUndefined.getInstance();
+    }
+
+    // The accessor a prototype link owns for the key, or null when it owns none (a data property
+    // included) and the walk continues.
+    private static PropertyDescriptor protoAccessor(JsValue proto, String key) {
+        if (proto instanceof JsObject object) {
+            return object.hasAccessor(key)
+                    ? PropertyDescriptor.accessor(object.getAccessorGetter(key), object.getAccessorSetter(key),
+                            JsObject.PropertyFlags.DEFAULT)
+                    : null;
+        }
+        final var descriptor = proto.getOwnProperty(new JsString(key));
+        return descriptor != null && descriptor.isAccessorDescriptor() ? descriptor : null;
     }
 
     private JsValue objectSymbolMember(JsObject object, JsSymbol symbol) {
@@ -114,12 +237,8 @@ public final class MemberEvaluator {
                 return method;
             }
         }
-        for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
-            if (proto.hasSymbol(symbol)) {
-                return proto.getSymbol(symbol);
-            }
-        }
-        return object.getSymbol(symbol);
+        final var inherited = chainSymbolMember(object.getProto(), symbol, object);
+        return inherited == null ? object.getSymbol(symbol) : inherited;
     }
 
     private JsValue classSymbolMember(JsClass cls, JsSymbol symbol) {
@@ -190,14 +309,9 @@ public final class MemberEvaluator {
                     : JsUndefined.getInstance();
         }
         if (!object.has(key)) {
-            for (var proto = object.getProto(); proto != null; proto = proto.getProto()) {
-                final var protoGetter = proto.getAccessorGetter(key);
-                if (protoGetter != null) {
-                    return interp.callValue(protoGetter, receiver, List.of());
-                }
-                if (proto.has(key)) {
-                    return proto.get(key);
-                }
+            final var inherited = chainMember(object.getProto(), key, receiver);
+            if (inherited != null) {
+                return inherited;
             }
             final var intrinsic = intrinsicMember(object, key);
             if (!(intrinsic instanceof JsUndefined)) {
@@ -235,16 +349,7 @@ public final class MemberEvaluator {
     // The last dispatch step for every value type: walk the realm's intrinsic prototype chain, so a
     // monkey-patched or user-added member on e.g. Array.prototype is what a receiver resolves to.
     private JsValue intrinsicMember(JsValue target, String key) {
-        for (var proto = interp.intrinsics().protoFor(target); proto != null; proto = proto.getProto()) {
-            final var getter = proto.getAccessorGetter(key);
-            if (getter != null) {
-                return interp.callValue(getter, target, List.of());
-            }
-            if (proto.has(key)) {
-                return proto.get(key);
-            }
-        }
-        return JsUndefined.getInstance();
+        return orUndefined(chainMember(interp.intrinsics().protoFor(target), key, target));
     }
 
     private JsValue functionMember(JsValue function, String key) {
@@ -397,15 +502,13 @@ public final class MemberEvaluator {
 
     private boolean setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
         if (!object.has(key)) {
-            for (var current = object; current != null; current = current.getProto()) {
-                final var accessorSetter = current.getAccessorSetter(key);
-                if (accessorSetter != null) {
-                    interp.callValue(accessorSetter, receiver, List.of(value));
-                    return true;
-                }
-                if (current.hasAccessor(key)) {
+            final var accessor = chainAccessor(object, key);
+            if (accessor != null) {
+                if (!isCallable(accessor.setter())) {
                     return false;
                 }
+                interp.callValue(accessor.setter(), receiver, List.of(value));
+                return true;
             }
         }
         return object.set(key, value);
@@ -467,15 +570,15 @@ public final class MemberEvaluator {
                 if (isNonWritableMetadata(callable, key)) {
                     yield false;
                 }
-                // `new` only consumes an object-valued `.prototype` (falling back to the intrinsic
-                // Object.prototype otherwise), so a non-object assignment is accepted as a no-op
-                // rather than stored, matching the common case without widening the field to `JsValue`.
+                // `new` only consumes an object-like `.prototype` (falling back to the intrinsic
+                // Object.prototype otherwise), so a primitive assignment is accepted as a no-op
+                // rather than stored.
                 if ("prototype".equals(key)) {
-                    if (value instanceof JsObject object) {
+                    if (InterpreterUtils.isObjectLike(value)) {
                         if (callable instanceof JsFunction fn) {
-                            fn.setPrototype(object);
+                            fn.setPrototype(value);
                         } else if (callable instanceof JsNativeFunction nf) {
-                            nf.setPrototype(object);
+                            nf.setPrototype(value);
                         }
                     }
                 } else {
@@ -560,7 +663,11 @@ public final class MemberEvaluator {
             return isCallable(object.get("next"));
         }
         final var proto = object.getProto();
-        return proto != null && proto.has("next") && isCallable(proto.get("next"));
+        if (proto == null) {
+            return false;
+        }
+        final var next = protoMember(proto, "next", object);
+        return isCallable(next);
     }
 
     private boolean isAsyncIteratorLike(JsObject object) {

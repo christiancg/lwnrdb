@@ -230,9 +230,8 @@ public final class ClassEvaluator {
         instance.setKlass(cls);
         // OrdinaryCreateFromConstructor: an ordinary Get(newTarget, "prototype"), so an
         // accessor-valued or throwing `prototype` behaves like any other property read.
-        instance.setProto(interp.getMemberByKey(newTarget, new JsString("prototype")) instanceof JsObject proto
-                ? proto
-                : cls.getPrototype());
+        final var declared = interp.getMemberByKey(newTarget, new JsString("prototype"));
+        instance.setProto(isObjectLike(declared) ? declared : cls.getPrototype());
         callConstructorChain(cls, instance, args, newTarget);
         return instance;
     }
@@ -369,19 +368,11 @@ public final class ClassEvaluator {
     }
 
     private JsValue superProtoRead(Environment env, String key, JsValue thisArg) {
-        for (var proto = superProtoStart(env, key); proto != null; proto = proto.getProto()) {
-            final var getter = proto.getAccessorGetter(key);
-            if (getter != null) {
-                return interp.callValue(getter, thisArg, List.of());
-            }
-            if (proto.has(key)) {
-                return proto.get(key);
-            }
-        }
-        return JsUndefined.getInstance();
+        final var found = interp.members().chainMember(superProtoStart(env, key), key, thisArg);
+        return found == null ? JsUndefined.getInstance() : found;
     }
 
-    private JsObject superProtoStart(Environment env, String key) {
+    private JsValue superProtoStart(Environment env, String key) {
         final var home = env.resolveHomeClass();
         if (home instanceof JsObject object) {
             return object.getProto();
@@ -453,15 +444,15 @@ public final class ClassEvaluator {
 
     // OrdinaryHasInstance reads Get(C, "prototype"), not the internal slot, so an accessor-valued
     // `prototype` runs and a non-object result is a TypeError instead of a silent false.
-    private JsObject declaredPrototype(JsValue constructor) {
+    private JsValue declaredPrototype(JsValue constructor) {
         final var prototype = interp.getMember(constructor, "prototype");
-        if (prototype instanceof JsObject object) {
-            return object;
+        if (isObjectLike(prototype)) {
+            return prototype;
         }
         throw new TypeErrorException("Function has a non-object prototype in an instanceof check");
     }
 
-    private boolean isInstanceOfClass(JsValue left, JsClass cls, JsObject prototype) {
+    private boolean isInstanceOfClass(JsValue left, JsClass cls, JsValue prototype) {
         if (left instanceof JsObject object && object.getKlass() != null && object.getKlass().isSubclassOf(cls)) {
             return true;
         }
@@ -474,7 +465,7 @@ public final class ClassEvaluator {
 
     // A non-JsObject runtime value has no own prototype link, so an object-like one (array, map,
     // function, …) is matched against the realm's intrinsic chain instead; primitives never match.
-    private boolean isInstanceOfNative(JsValue left, JsObject prototype) {
+    private boolean isInstanceOfNative(JsValue left, JsValue prototype) {
         if (prototype == null) {
             return false;
         }
@@ -484,7 +475,7 @@ public final class ClassEvaluator {
         if (left instanceof JsObject || isPrimitiveValue(left)) {
             return false;
         }
-        for (var proto = interp.intrinsics().protoFor(left); proto != null; proto = proto.getProto()) {
+        for (var proto = (JsValue) interp.intrinsics().protoFor(left); proto != null; proto = proto.getProto()) {
             if (proto == prototype) {
                 return true;
             }

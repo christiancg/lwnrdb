@@ -246,7 +246,7 @@ def parse_list(value):
 def load_exclusions():
     if not EXCLUSIONS.is_file():
         raise HarnessError(f"missing {EXCLUSIONS.relative_to(ROOT)}")
-    dirs, keeps, features, patterns = [], [], {}, []
+    dirs, keeps, features, patterns, includes = [], [], {}, [], {}
     for number, raw in enumerate(EXCLUSIONS.read_text(encoding="utf-8").splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -263,11 +263,13 @@ def load_exclusions():
             keeps.append((value, reason))
         elif kind == "feature":
             features[value] = reason
+        elif kind == "include":
+            includes[value] = reason
         elif kind == "pattern":
             patterns.append((re.compile(value), value, reason))
         else:
             raise HarnessError(f"{EXCLUSIONS.name}:{number}: unknown exclusion kind {kind!r}")
-    return {"dirs": dirs, "keeps": keeps, "features": features, "patterns": patterns}
+    return {"dirs": dirs, "keeps": keeps, "features": features, "patterns": patterns, "includes": includes}
 
 
 def classify(test_id, source, meta, exclusions):
@@ -287,6 +289,9 @@ def classify(test_id, source, meta, exclusions):
     for feature in meta["features"]:
         if feature in exclusions["features"]:
             return "EXCLUDED", exclusions["features"][feature]
+    for include in meta["includes"]:
+        if include in exclusions["includes"]:
+            return "EXCLUDED", exclusions["includes"][include]
     for compiled, _, reason in exclusions["patterns"]:
         if compiled.search(source):
             return "EXCLUDED", reason
@@ -820,11 +825,12 @@ def self_test():
 
 def self_test_classify():
     print("self-test — classification")
-    empty_meta = {"flags": [], "features": [], "negative": {}}
+    empty_meta = {"flags": [], "features": [], "includes": [], "negative": {}}
     rules = {
         "dirs": [("area/skipme/", "excluded subtree")],
         "keeps": [("area/skipme/inner/", "measured anyway")],
         "features": {"Temporal": "deliberate"},
+        "includes": {"needsCodegen.js": "helper needs the Function constructor"},
         "patterns": [],
     }
     checks = [
@@ -832,7 +838,11 @@ def self_test_classify():
         ("keep beats dir", "area/skipme/inner/a.js", "", empty_meta, "RUN"),
         ("dir leaves siblings alone", "area/other/a.js", "", empty_meta, "RUN"),
         ("feature still applies under keep", "area/skipme/inner/b.js", "",
-         {"flags": [], "features": ["Temporal"], "negative": {}}, "EXCLUDED"),
+         {"flags": [], "features": ["Temporal"], "includes": [], "negative": {}}, "EXCLUDED"),
+        ("include excludes", "area/other/c.js", "",
+         {"flags": [], "features": [], "includes": ["needsCodegen.js"], "negative": {}}, "EXCLUDED"),
+        ("unlisted include runs", "area/other/d.js", "",
+         {"flags": [], "features": [], "includes": ["assert.js"], "negative": {}}, "RUN"),
     ]
     ok = True
     for label, test_id, source, meta, expected in checks:

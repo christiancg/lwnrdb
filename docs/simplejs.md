@@ -369,7 +369,8 @@ string coercion throws) with the well-known `Symbol.dispose`/`Symbol.asyncDispos
 object properties.
 
 **Object model & callable foundations (engine-completion Phase 1).** `JsObject` carries an
-optional prototype link (`getProto`/`setProto`); member reads fall back through the `proto`
+optional prototype link (`getProto`/`setProto`, typed `JsValue` so any object-like value can be a
+`[[Prototype]]`); member reads fall back through the `proto`
 chain and then a shared `Object.prototype` builtin (`builtins/ObjectProtoBuiltins`:
 `hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toString` → `"[object Object]"`,
 `valueOf`) on an own-property + class-member miss. `Object` gains `create`, `getPrototypeOf`,
@@ -824,7 +825,7 @@ commands above; the limitations below are the ones that need an explanation rath
 |---|---|---|
 | 1 | **`\k<name>` on a duplicated group name resolves to the first alias** | A duplicated name (`/(?<y>a)\|(?<y>b)/`) compiles by renaming the repeats and resolving `groups.y`/`$<y>` to whichever alias participated, but `java.util.regex` cannot express "whichever alias participated" in a *backreference*, so `\k<y>` always refers to the first one. |
 | 2 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
-| 3 | **An array index does not resolve an inherited *setter*, and a `JsArray` cannot be a `[[Prototype]]`** | `Array.prototype` itself is fully generic (see *Intrinsic prototypes*), but two array-shaped holes remain below it: a write to an index with no own property goes straight to the backing list instead of consulting a setter installed on the prototype chain, and `JsObject.setProto` takes a `JsObject`, so `foo.prototype = [1, 2, 3]` (and `Object.create([1, 2, 3])`) does not make the array's indices inherited. |
+| 3 | **An array index does not resolve an inherited *setter*, and only a `JsObject` owns a `[[Prototype]]` slot** | `Array.prototype` itself is fully generic (see *Intrinsic prototypes*), and any object-like value may now *be* a `[[Prototype]]` (`foo.prototype = [1, 2, 3]` and `Object.create([1, 2, 3])` both inherit the array's indices and, past them, `Array.prototype`). Two array-shaped holes remain below that: a write to an index with no own property goes straight to the backing list instead of consulting a setter installed on the prototype chain, and only `JsObject` *stores* a prototype link, so `Object.setPrototypeOf(someArray, p)` is a no-op. |
 | 4 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
 | 5 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. `toString` emits the spec's `NativeFunction` form for user functions too, which is legal precisely because no source is retained (`HostHasSourceTextAvailable` is false), so the output is conformant while the underlying gap remains. |
 | 6 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
@@ -892,6 +893,18 @@ What this reaches and what it does not:
   identical.
 - A wrong-type receiver throws a `TypeError` naming the method
   (`Array.prototype.push called on an incompatible receiver 1`).
+- **Primitive wrappers are real objects.** `Intrinsics.wrapPrimitive` is the one construction path —
+  `Object(x)`, `new Object(x)`, `new String/Number/Boolean` and the `ToObject` behind every generic
+  builtin all land there — producing a `JsObject` that carries the primitive in its `primitive` slot
+  and is proto-linked to the matching intrinsic prototype. So `typeof` is `"object"`, each boxing is a
+  fresh object, and every family's prototype methods unwrap the receiver
+  (`Object(Symbol('x')).description`, `Object(1n).toString()`, `new Number(5).toFixed(2)`). A String
+  wrapper additionally owns one non-writable enumerable data property per **code unit** plus a
+  non-writable non-enumerable `length`, so `Object.keys`, `for-in`, `in`, `getOwnPropertyNames`,
+  descriptors and `freeze`/`seal` all see them. `ToPrimitive` deliberately does **not** short-circuit
+  to the slot: `OrdinaryToPrimitive` runs, so a script that redefines `valueOf`/`toString` on the
+  wrapper or its prototype wins. At the host boundary `EJsonInterop` serialises a wrapper as its
+  primitive, so a `db.save` of `new String('ab')` stores `"ab"`, not `{"0":"a","1":"b"}`.
 - **Builtin subclassing** works via `JsClass.nativeSuperClass`: heritage that resolves to a
   `JsNativeFunction` carrying a prototype is accepted, `super(...)` runs the native constructor, and
   the instance is linked to the native prototype so both `instanceof E` and `instanceof Error` hold.
@@ -916,15 +929,26 @@ The engine targets ES2026 semantics for code that runs inside the database. The 
 standard features are intentionally **not** implemented — each is either a sandbox/security
 boundary or unobservable in a single-threaded, per-request interpreter, so omitting them is a
 design decision, not a bug. This list is the **specification of the conformance filter**:
-`config/test262-exclusions.txt` is its machine-readable form (one `feature:`/`dir:`/`pattern:` line
-per decision, each carrying its reason), so the two must be kept in step — an exclusion with no
-entry here is a number being flattered.
+`config/test262-exclusions.txt` is its machine-readable form (one
+`feature:`/`dir:`/`include:`/`pattern:` line per decision, each carrying its reason), so the two must
+be kept in step — an exclusion with no entry here is a number being flattered.
 
 - **`eval` / the `Function` constructor** — no runtime code generation from strings. Allowing it
   would defeat the instruction-budget/deadline sandbox and open an injection surface. The `Function`
   constructor is filtered by source pattern in both spellings (`Function(…)` and `new Function(…)`);
   the deliberately narrower `\bnew\s+Function\s*;` line exists so that `new Function.prototype.apply()`
   and friends — which test `[[Construct]]`, not the constructor — stay measured.
+- **The derived function constructors** — `GeneratorFunction(…)`, `AsyncFunction(…)` and
+  `AsyncGeneratorFunction(…)` are the `Function` constructor reached through
+  `Object.getPrototypeOf(function*(){}).constructor`, so the call form is filtered by the same kind of
+  source pattern. Only the call is excluded: the tests that merely inspect those intrinsics — their
+  `name`, `length`, prototype chain — stay measured and pass.
+- **Harness helpers that need code generation** — `resizableArrayBufferUtils.js` builds every
+  subclass fixture with `new Function('return class My… extends … {}')()` and swallows the failure,
+  so its `ctors` array is full of `undefined` before an assertion ever runs. The `include:` exclusion
+  kind exists for exactly this: a test that never mentions `Function` itself but cannot survive its
+  own helper. This is a measurement decision (the tests are unrunnable here), not a claim that
+  resizable buffers are unimplemented — they are, including length-tracking views.
 - **Indirect `eval`** — `(0, eval)("…")` and `var e = eval; e("…")` are the same code generation by
   another spelling, so `language/eval-code/indirect/` is excluded as a directory: no source pattern
   can recognise an alias, and the direct form's pattern does not fire on it.
@@ -948,6 +972,10 @@ entry here is a number being flattered.
   by-copy methods always allocate the default type.
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
+- **Proposals outside the ES2026 snapshot** — `joint-iteration` (`Iterator.zip`/`zipKeyed`),
+  `iterator-sequencing` (`Iterator.concat`), `json-parse-with-source` (`JSON.rawJSON`/`isRawJSON`),
+  `await-dictionary` and `decorators`. Same rule as immutable `ArrayBuffer` above: the engine targets
+  the ES2026 snapshot, and a proposal that missed it is not a gap.
 
 One `dir:` exclusion is not a feature decision but a measurement one:
 `built-ins/RegExp/property-escapes/generated/` asserts, code point by code point, the contents of a
