@@ -183,4 +183,64 @@ public class DateBuiltinsTest {
         assertTrue(bool("new Date(0).toLocaleTimeString().length > 0"));
         assertEquals("Invalid Date", str("new Date(Number.NaN).toLocaleString()"));
     }
+
+    @Test
+    public void setHoursReadsAllFourArguments() {
+        final var setup = "let d = new Date(0); d.setUTCHours(1, 2, 3, 4); ";
+        assertEquals(1, num(setup + "d.getUTCHours()"));
+        assertEquals(2, num(setup + "d.getUTCMinutes()"));
+        assertEquals(3, num(setup + "d.getUTCSeconds()"));
+        assertEquals(4, num(setup + "d.getUTCMilliseconds()"));
+        assertEquals(3723004, num(setup + "d.getTime()"));
+    }
+
+    @Test
+    public void argumentCoercionOrderIsLeftToRight() {
+        final var source = "let order = ''; let d = new Date(0);"
+                + " d.setUTCHours({valueOf: () => { order += 'h'; return 1; }},"
+                + " {valueOf: () => { order += 'm'; return 2; }},"
+                + " {valueOf: () => { order += 's'; return 3; }}); order";
+        assertEquals("hms", str(source));
+        // An invalid receiver still coerces every argument before bailing out
+        assertEquals("hms", str(source.replace("new Date(0)", "new Date(Number.NaN)")));
+    }
+
+    @Test
+    public void outOfRangeComponentsRollOverInsteadOfThrowing() {
+        assertEquals(2, num("let d = new Date(0); d.setUTCHours(25); d.getUTCDate()"));
+        assertEquals(1, num("let d = new Date(0); d.setUTCHours(25); d.getUTCHours()"));
+        assertEquals(1, num("let d = new Date(0); d.setUTCMonth(12); d.getUTCFullYear() - 1970"));
+        assertEquals(1970, num("let d = new Date(0); d.setUTCDate(32); d.getUTCFullYear()"));
+        assertEquals(1, num("let d = new Date(0); d.setUTCDate(32); d.getUTCMonth()"));
+    }
+
+    @Test
+    public void nanArgumentPoisonsTheDate() {
+        assertTrue(bool("let d = new Date(0); d.setUTCHours(Number.NaN); isNaN(d.getTime())"));
+        assertTrue(bool("let d = new Date(0); d.setUTCHours(1, undefined); isNaN(d.getTime())"));
+        assertTrue(bool("let d = new Date(0); d.setUTCMinutes(Number.POSITIVE_INFINITY); isNaN(d.getTime())"));
+    }
+
+    @Test
+    public void setTimeAppliesTimeClip() {
+        assertTrue(bool("let d = new Date(0); d.setTime(8.64e15 + 1); isNaN(d.getTime())"));
+        assertEquals(8.64e15, num("let d = new Date(0); d.setTime(8.64e15); d.getTime()"));
+        assertEquals(1, num("let d = new Date(0); d.setTime(1.5); d.getTime()"));
+    }
+
+    @Test
+    public void setFullYearRevivesAnInvalidDate() {
+        assertEquals(2000, num("let d = new Date(Number.NaN); d.setUTCFullYear(2000); d.getUTCFullYear()"));
+    }
+
+    @Test
+    public void symbolToPrimitiveIsPresent() {
+        assertEquals("function", str("typeof Date.prototype[Symbol.toPrimitive]"));
+        assertEquals("string", str("typeof new Date(0)[Symbol.toPrimitive]('default')"));
+        assertEquals("number", str("typeof new Date(0)[Symbol.toPrimitive]('number')"));
+        assertEquals("string", str("typeof new Date(0)[Symbol.toPrimitive]('string')"));
+        assertTrue(bool("let threw = false;"
+                + " try { new Date(0)[Symbol.toPrimitive]('bogus'); } catch (e) { threw = e instanceof TypeError }"
+                + " threw"));
+    }
 }

@@ -5,6 +5,8 @@ import java.util.List;
 import org.techhouse.simplejs.internal.Environment;
 
 public final class JsArguments extends JsValue {
+    private PropertyTable table;
+
     private final List<JsValue> values;
     private final List<String> mappedNames;
     private final Environment env;
@@ -53,5 +55,13 @@ public final class JsArguments extends JsValue {
 
     private boolean isMapped(int index) {
         return env != null && mappedNames != null && index < mappedNames.size() && mappedNames.get(index) != null;
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

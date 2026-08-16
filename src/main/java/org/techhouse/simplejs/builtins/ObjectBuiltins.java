@@ -26,6 +26,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.PropertyTable;
 
 public final class ObjectBuiltins {
     private ObjectBuiltins() {
@@ -89,8 +90,9 @@ public final class ObjectBuiltins {
 
     private static JsValue getOwnPropertySymbols(List<JsValue> args) {
         final var result = new JsArray();
-        if (first(args) instanceof JsObject object) {
-            for (final var symbol : object.symbolKeys()) {
+        final var table = first(args).ownProperties();
+        if (table != null) {
+            for (final var symbol : table.symbolKeys()) {
                 result.push(symbol);
             }
         }
@@ -136,9 +138,11 @@ public final class ObjectBuiltins {
         return "name".equals(key) || "length".equals(key) || ("prototype".equals(key) && hasPrototype(callable));
     }
 
+    // Deliberately not InterpreterUtils.isConstructor: a generator function is not a constructor
+    // but does own a `prototype` property (the object its instances are linked to).
     private static boolean hasPrototype(JsCallableProperties callable) {
         if (callable instanceof JsFunction function) {
-            return !function.isArrow() && !function.isMethod();
+            return function.isConstructor() || function.isGenerator();
         }
         return callable instanceof JsNativeFunction nativeFunction && nativeFunction.getPrototype() != null;
     }
@@ -420,15 +424,10 @@ public final class ObjectBuiltins {
             object.setProto(protoObject);
         }
         if (args.size() > 1 && !(args.get(1) instanceof JsUndefined)) {
-            // ToObject(Properties) throws only for null/undefined; other non-plain-object values
-            // (Date, Array, ...) are accepted by spec but this engine's exotic value types have no
-            // generic own-property bag to enumerate, so there is nothing to apply - not a throw.
             if (args.get(1) instanceof JsNull) {
                 throw new TypeErrorException("Cannot convert undefined or null to object");
             }
-            if (args.get(1) instanceof JsObject props) {
-                applyProperties(object, props, ops);
-            }
+            applyPropertiesFrom(object, args.get(1), ops);
         }
         return object;
     }
@@ -443,7 +442,14 @@ public final class ObjectBuiltins {
     public static JsValue setPrototypeOf(List<JsValue> args) {
         final var target = first(args);
         if (target instanceof JsObject object) {
-            object.setProto(args.size() > 1 && args.get(1) instanceof JsObject proto ? proto : null);
+            final var proto = args.size() > 1 && args.get(1) instanceof JsObject candidate ? candidate : null;
+            // OrdinarySetPrototypeOf step 8: a cycle would make every later chain walk unbounded.
+            for (var walk = proto; walk != null; walk = walk.getProto()) {
+                if (walk == object) {
+                    throw new TypeErrorException("Cyclic __proto__ value");
+                }
+            }
+            object.setProto(proto);
         }
         return target;
     }
@@ -461,24 +467,63 @@ public final class ObjectBuiltins {
                 applyArrayDescriptor(array, JsCoercion.toStr(args.get(1)), descriptor, ops);
                 return target;
             }
-            final var object = target instanceof JsClass cls
-                    ? cls.getStaticOwner()
-                    : target instanceof JsObject obj ? obj : null;
-            if (object != null) {
+            if (target instanceof JsGlobalObject global && !(args.get(1) instanceof JsSymbol)) {
+                applyGlobalDescriptor(global, JsCoercion.toStr(args.get(1)), descriptor, ops);
+                return target;
+            }
+            final var table = target.ownProperties();
+            if (table != null) {
                 if (args.get(1) instanceof JsSymbol symbol) {
-                    applySymbolDescriptor(object, symbol, descriptor, ops);
+                    applySymbolDescriptor(target, symbol, descriptor, ops);
                 } else {
-                    applyDescriptor(object, JsCoercion.toStr(args.get(1)), descriptor, ops);
+                    final var key = JsCoercion.toStr(args.get(1));
+                    materialiseCallableMetadata(target, table, key);
+                    validateAndApply(stringSlot(table, key), target.isExtensible(), key, descriptor, ops);
                 }
             }
         }
         return target;
     }
 
-    // Covers "length"/index/named own-property redefinition (data descriptors) and named-property
-    // accessor descriptors (via JsArray's propGetters/propSetters) - the dominant
-    // built-ins/Object/defineProperty and defineProperties failure cluster against Array targets.
-    // Index accessors are the one gap left (JsArray has no per-index accessor storage).
+    // name/length/prototype are synthesised at lookup time rather than stored, so a redefine has to
+    // see the real existing property (and its real flags) instead of treating the key as absent.
+    private static void materialiseCallableMetadata(JsValue target, PropertyTable table, String key) {
+        if (!(target instanceof JsCallableProperties callable) || table.has(key)
+                || !callableMetadataKey(callable, key)) {
+            return;
+        }
+        if ("prototype".equals(key)) {
+            table.defineValue(key, prototypeOf(callable));
+            final var writable = !(callable instanceof JsNativeFunction nativeFunction)
+                    || !nativeFunction.isConstructor();
+            table.setFlags(key, new PropertyFlags(writable, false, false));
+            return;
+        }
+        table.defineValue(key, FunctionProtoBuiltins.metadata(target, key));
+        table.setFlags(key, new PropertyFlags(false, false, true));
+    }
+
+    // The global object's string keys live in the Environment, not in a table, so a defineProperty
+    // against one writes the binding through rather than shadowing it with a table entry.
+    private static void applyGlobalDescriptor(JsGlobalObject global, String key, JsObject descriptor,
+            InterpreterOps ops) {
+        final var env = global.getEnv();
+        if (!env.isDeclared(key)) {
+            validateAndApply(stringSlot(global.ownProperties(), key), global.isExtensible(), key, descriptor, ops);
+            return;
+        }
+        final var flags = env.globalFlags(key);
+        assert flags != null;
+        if (!flags.configurable()) {
+            throw redefineError(key);
+        }
+        if (descHas(descriptor, "value", ops)) {
+            env.setGlobal(key, descGet(descriptor, "value", ops));
+        }
+    }
+
+    // Only "length" and canonical index keys are exotic on an array; any other key is an ordinary
+    // own property and goes through the shared ValidateAndApplyPropertyDescriptor over its table.
     private static void applyArrayDescriptor(JsArray array, String key, JsObject descriptor, InterpreterOps ops) {
         final var hasGetter = descHas(descriptor, "get", ops);
         final var hasSetter = descHas(descriptor, "set", ops);
@@ -487,52 +532,58 @@ public final class ObjectBuiltins {
                     "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute, "
                             + key);
         }
-        final var accessorIndex = "length".equals(key) ? null : InterpreterUtils.arrayIndex(key);
-        if ((hasGetter || hasSetter) && accessorIndex != null) {
-            applyArrayIndexAccessorDescriptor(array, accessorIndex, descriptor, ops);
-            return;
-        }
-        if ((hasGetter || hasSetter) && !"length".equals(key)) {
-            applyArrayAccessorDescriptor(array, key, descriptor, ops);
-            return;
-        }
-        if (hasGetter || hasSetter) {
-            throw redefineError(key);
-        }
-        final var hasValue = descHas(descriptor, "value", ops);
-        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
         if ("length".equals(key)) {
-            final var currentFlags = array.getLengthFlags();
-            if (!currentFlags.configurable() && descHas(descriptor, "configurable", ops)
-                    && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
+            if (hasGetter || hasSetter) {
                 throw redefineError(key);
             }
-            if (!currentFlags.configurable() && descHas(descriptor, "enumerable", ops)
-                    && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != currentFlags.enumerable()) {
-                throw redefineError(key);
-            }
-            final var writable = descHas(descriptor, "writable", ops)
-                    ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
-                    : currentFlags.writable();
-            if (hasValue) {
-                final var newLength = requireArrayLength(value);
-                if (!currentFlags.writable() && newLength != array.length()) {
-                    throw new TypeErrorException("Cannot redefine property: length");
-                }
-                array.defineLength(newLength);
-            } else if (!currentFlags.writable() && writable) {
-                throw redefineError(key);
-            }
-            array.setLengthWritable(writable);
+            applyArrayLengthDescriptor(array, key, descriptor, ops);
             return;
         }
         final var index = InterpreterUtils.arrayIndex(key);
-        final var exists = index != null
-                ? (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index)
-                : array.hasProperty(key) || array.hasPropAccessor(key);
-        final var currentFlags = exists
-                ? (index != null ? array.getIndexFlags(index) : array.getPropFlags(key))
-                : new JsObject.PropertyFlags(false, false, false);
+        if (index == null) {
+            validateAndApply(stringSlot(array.ownProperties(), key), array.isExtensible(), key, descriptor, ops);
+            return;
+        }
+        if (hasGetter || hasSetter) {
+            applyArrayIndexAccessorDescriptor(array, index, descriptor, ops);
+            return;
+        }
+        applyArrayIndexDescriptor(array, index, key, descriptor, ops);
+    }
+
+    // ArraySetLength: the value is applied before the writable attribute, so a length redefine that
+    // also clears writable still takes effect.
+    private static void applyArrayLengthDescriptor(JsArray array, String key, JsObject descriptor, InterpreterOps ops) {
+        final var currentFlags = array.getLengthFlags();
+        if (!currentFlags.configurable() && descHas(descriptor, "configurable", ops)
+                && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
+            throw redefineError(key);
+        }
+        if (!currentFlags.configurable() && descHas(descriptor, "enumerable", ops)
+                && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != currentFlags.enumerable()) {
+            throw redefineError(key);
+        }
+        final var writable = descHas(descriptor, "writable", ops)
+                ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
+                : currentFlags.writable();
+        if (descHas(descriptor, "value", ops)) {
+            final var newLength = requireArrayLength(descGet(descriptor, "value", ops));
+            if (!currentFlags.writable() && newLength != array.length()) {
+                throw new TypeErrorException("Cannot redefine property: length");
+            }
+            array.defineLength(newLength);
+        } else if (!currentFlags.writable() && writable) {
+            throw redefineError(key);
+        }
+        array.setLengthWritable(writable);
+    }
+
+    private static void applyArrayIndexDescriptor(JsArray array, int index, String key, JsObject descriptor,
+            InterpreterOps ops) {
+        final var hasValue = descHas(descriptor, "value", ops);
+        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
+        final var exists = (index < array.length() && !array.isHole(index)) || array.hasIndexAccessor(index);
+        final var currentFlags = exists ? array.getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
         if (!exists && !array.isExtensible()) {
             throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
         }
@@ -550,7 +601,7 @@ public final class ObjectBuiltins {
                         && JsCoercion.toBoolean(descGet(descriptor, "writable", ops))) {
                     throw redefineError(key);
                 }
-                if (hasValue && isNotSameValue(value, index != null ? array.get(index) : array.getProperty(key))) {
+                if (hasValue && isNotSameValue(value, array.get(index))) {
                     throw redefineError(key);
                 }
             }
@@ -565,51 +616,9 @@ public final class ObjectBuiltins {
                 descHas(descriptor, "configurable", ops)
                         ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
                         : currentFlags.configurable());
-        final var newValue = hasValue
-                ? value
-                : exists ? (index != null ? array.get(index) : array.getProperty(key)) : JsUndefined.getInstance();
-        if (index != null) {
-            array.clearIndexAccessor(index);
-            array.defineIndexValue(index, newValue);
-            array.setIndexFlags(index, flags);
-        } else {
-            array.clearPropAccessor(key);
-            array.defineOwnProperty(key, newValue);
-            array.setPropFlags(key, flags);
-        }
-    }
-
-    private static void applyArrayAccessorDescriptor(JsArray array, String key, JsObject descriptor,
-            InterpreterOps ops) {
-        final var exists = array.hasProperty(key) || array.hasPropAccessor(key);
-        final var currentFlags = exists ? array.getPropFlags(key) : new JsObject.PropertyFlags(false, false, false);
-        if (!exists && !array.isExtensible()) {
-            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
-        }
-        if (exists && !currentFlags.configurable()) {
-            throw redefineError(key);
-        }
-        final var hasGetter = descHas(descriptor, "get", ops);
-        final var hasSetter = descHas(descriptor, "set", ops);
-        final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
-        final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
-        if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
-            throw new TypeErrorException("Getter must be a function");
-        }
-        if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
-            throw new TypeErrorException("Setter must be a function");
-        }
-        final var flags = new JsObject.PropertyFlags(currentFlags.writable(),
-                descHas(descriptor, "enumerable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
-                        : currentFlags.enumerable(),
-                descHas(descriptor, "configurable", ops)
-                        ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
-                        : currentFlags.configurable());
-        array.deleteProperty(key);
-        array.definePropAccessor(key, isCallable(getterValue) ? getterValue : null,
-                isCallable(setterValue) ? setterValue : null);
-        array.setPropFlags(key, flags);
+        array.clearIndexAccessor(index);
+        array.defineIndexValue(index, hasValue ? value : exists ? array.get(index) : JsUndefined.getInstance());
+        array.setIndexFlags(index, flags);
     }
 
     private static void applyArrayIndexAccessorDescriptor(JsArray array, int index, JsObject descriptor,
@@ -655,34 +664,10 @@ public final class ObjectBuiltins {
         return length;
     }
 
-    // Symbol keys have no descriptor-flag storage (JsObject.symbolProperties is a plain map), so
-    // this is a pragmatic subset of applyDescriptor: enough to accept get/set/value without
-    // crashing on JsCoercion.toStr(symbol), which unconditionally throws.
-    private static void applySymbolDescriptor(JsObject object, JsSymbol symbol, JsObject descriptor,
+    private static void applySymbolDescriptor(JsValue target, JsSymbol symbol, JsObject descriptor,
             InterpreterOps ops) {
-        final var hasGetter = descHas(descriptor, "get", ops);
-        final var hasSetter = descHas(descriptor, "set", ops);
-        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
-            throw new TypeErrorException(
-                    "Invalid property descriptor. Cannot both specify accessors and a value or writable attribute");
-        }
-        if (hasGetter || hasSetter) {
-            final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
-            final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
-            if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
-                throw new TypeErrorException("Getter must be a function");
-            }
-            if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
-                throw new TypeErrorException("Setter must be a function");
-            }
-            object.defineSymbolAccessor(symbol, isCallable(getterValue) ? getterValue : null,
-                    isCallable(setterValue) ? setterValue : null);
-        } else {
-            final var value = descHas(descriptor, "value", ops)
-                    ? descGet(descriptor, "value", ops)
-                    : JsUndefined.getInstance();
-            object.setSymbol(symbol, value);
-        }
+        validateAndApply(symbolSlot(target.ownProperties(), symbol), target.isExtensible(), symbol.getDescription(),
+                descriptor, ops);
     }
 
     private static JsValue defineProperties(List<JsValue> args, InterpreterOps ops) {
@@ -690,24 +675,24 @@ public final class ObjectBuiltins {
         if (!InterpreterUtils.isObjectLike(target)) {
             throw new TypeErrorException("Object.defineProperties called on non-object");
         }
-        if (args.size() > 1 && args.get(1) instanceof JsObject props) {
-            if (target instanceof JsArray array) {
-                for (final var key : props.keys()) {
-                    if (ownValue(props, key, ops) instanceof JsObject descriptor) {
-                        applyArrayDescriptor(array, key, descriptor, ops);
-                    }
-                }
-            } else if (target instanceof JsObject object) {
-                applyProperties(object, props, ops);
-            }
+        // ToObject(Properties): only null/undefined throw; another primitive simply has no keys.
+        if (args.size() < 2 || InterpreterUtils.isNullish(args.get(1))) {
+            throw new TypeErrorException("Cannot convert undefined or null to object");
         }
+        applyPropertiesFrom(target, args.get(1), ops);
         return target;
     }
 
-    private static void applyProperties(JsObject object, JsObject props, InterpreterOps ops) {
-        for (final var key : props.keys()) {
-            if (ownValue(props, key, ops) instanceof JsObject descriptor) {
-                applyDescriptor(object, key, descriptor, ops);
+    // ToObject(Properties) accepts any object, so the descriptor bag is read through the member
+    // seam rather than requiring a literal JsObject.
+    private static void applyPropertiesFrom(JsValue target, JsValue props, InterpreterOps ops) {
+        for (final var key : ops.ownKeys(props)) {
+            if (!(key instanceof JsString name)) {
+                continue;
+            }
+            final var descriptorValue = ops.getMember(props, key);
+            if (descriptorValue instanceof JsObject descriptor) {
+                defineProperty(List.of(target, name, descriptor), ops);
             }
         }
     }
@@ -723,71 +708,258 @@ public final class ObjectBuiltins {
         return ops.getMember(descriptor, new JsString(key));
     }
 
-    private static void applyDescriptor(JsObject object, String key, JsObject descriptor, InterpreterOps ops) {
-        final var exists = object.has(key) || object.hasAccessor(key);
-        if (!exists && !object.isExtensible()) {
+    // ValidateAndApplyPropertyDescriptor, shared by string keys, symbol keys and every value type
+    // that carries a PropertyTable. A Slot is one key's storage; an array's exotic index/length arms
+    // are handled before this is reached.
+    private interface Slot {
+        boolean exists();
+
+        boolean hasAccessor();
+
+        PropertyFlags flags();
+
+        void setFlags(PropertyFlags flags);
+
+        JsValue value();
+
+        boolean hasValue();
+
+        void defineValue(JsValue value);
+
+        void removeValue();
+
+        JsValue getter();
+
+        JsValue setter();
+
+        void defineAccessor(JsValue getter, JsValue setter);
+
+        void clearGetter();
+
+        void clearSetter();
+
+        void clearAccessor();
+    }
+
+    private static Slot stringSlot(PropertyTable table, String key) {
+        return new Slot() {
+            @Override
+            public boolean exists() {
+                return table.has(key) || table.hasAccessor(key);
+            }
+
+            @Override
+            public boolean hasAccessor() {
+                return table.hasAccessor(key);
+            }
+
+            @Override
+            public PropertyFlags flags() {
+                return table.getFlags(key);
+            }
+
+            @Override
+            public void setFlags(PropertyFlags flags) {
+                table.setFlags(key, flags);
+            }
+
+            @Override
+            public JsValue value() {
+                return table.get(key);
+            }
+
+            @Override
+            public boolean hasValue() {
+                return table.has(key);
+            }
+
+            @Override
+            public void defineValue(JsValue value) {
+                table.defineValue(key, value);
+            }
+
+            @Override
+            public void removeValue() {
+                table.getProperties().remove(key);
+            }
+
+            @Override
+            public JsValue getter() {
+                return table.getAccessorGetter(key);
+            }
+
+            @Override
+            public JsValue setter() {
+                return table.getAccessorSetter(key);
+            }
+
+            @Override
+            public void defineAccessor(JsValue getter, JsValue setter) {
+                table.defineAccessor(key, getter, setter);
+            }
+
+            @Override
+            public void clearGetter() {
+                table.clearAccessorGetter(key);
+            }
+
+            @Override
+            public void clearSetter() {
+                table.clearAccessorSetter(key);
+            }
+
+            @Override
+            public void clearAccessor() {
+                table.clearAccessor(key);
+            }
+        };
+    }
+
+    private static Slot symbolSlot(PropertyTable table, JsSymbol key) {
+        return new Slot() {
+            @Override
+            public boolean exists() {
+                return table.hasSymbol(key) || table.hasSymbolAccessor(key);
+            }
+
+            @Override
+            public boolean hasAccessor() {
+                return table.hasSymbolAccessor(key);
+            }
+
+            @Override
+            public PropertyFlags flags() {
+                return table.getSymbolFlags(key);
+            }
+
+            @Override
+            public void setFlags(PropertyFlags flags) {
+                table.setSymbolFlags(key, flags);
+            }
+
+            @Override
+            public JsValue value() {
+                return table.getSymbol(key);
+            }
+
+            @Override
+            public boolean hasValue() {
+                return table.hasSymbol(key);
+            }
+
+            @Override
+            public void defineValue(JsValue value) {
+                table.setSymbol(key, value);
+            }
+
+            @Override
+            public void removeValue() {
+                // A symbol data slot is only ever replaced, never emptied on its own.
+            }
+
+            @Override
+            public JsValue getter() {
+                return table.getSymbolAccessorGetter(key);
+            }
+
+            @Override
+            public JsValue setter() {
+                return table.getSymbolAccessorSetter(key);
+            }
+
+            @Override
+            public void defineAccessor(JsValue getter, JsValue setter) {
+                table.defineSymbolAccessor(key, getter, setter);
+            }
+
+            @Override
+            public void clearGetter() {
+                table.clearSymbolAccessorGetter(key);
+            }
+
+            @Override
+            public void clearSetter() {
+                table.clearSymbolAccessorSetter(key);
+            }
+
+            @Override
+            public void clearAccessor() {
+                table.clearSymbolAccessor(key);
+            }
+        };
+    }
+
+    private static void validateAndApply(Slot slot, boolean extensible, String key, JsObject descriptor,
+            InterpreterOps ops) {
+        final var exists = slot.exists();
+        if (!exists && !extensible) {
             throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
         }
-        if (exists && object.isNotConfigurable(key)) {
-            checkNonConfigurableRedefine(object, key, descriptor, ops);
+        if (exists && !slot.flags().configurable()) {
+            checkNonConfigurableRedefine(slot, key, descriptor, ops);
         }
-        final var flags = flagsFrom(descriptor, object, key, exists, ops);
+        final var flags = flagsFrom(descriptor, slot, exists, ops);
         final var hasGetter = descHas(descriptor, "get", ops);
         final var hasSetter = descHas(descriptor, "set", ops);
-        if ((hasGetter || hasSetter) && (descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops))) {
+        final var hasValue = descHas(descriptor, "value", ops);
+        if ((hasGetter || hasSetter) && (hasValue || descHas(descriptor, "writable", ops))) {
             throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
                     + "and a value or writable attribute, " + key);
         }
         if (hasGetter || hasSetter) {
-            // A field absent from the new descriptor keeps the property's current getter/setter
-            // (only meaningful if it was already an accessor) rather than defaulting to none, so a
-            // {get: fn2} redefine doesn't silently drop an untouched existing setter.
-            final var wasAccessor = object.hasAccessor(key);
-            final var existingGetter = wasAccessor ? object.getAccessorGetter(key) : null;
-            final var existingSetter = wasAccessor ? object.getAccessorSetter(key) : null;
-            final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
-            final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
-            if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
-                throw new TypeErrorException("Getter must be a function");
-            }
-            if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
-                throw new TypeErrorException("Setter must be a function");
-            }
-            final var getter = hasGetter ? (isCallable(getterValue) ? getterValue : null) : existingGetter;
-            final var setter = hasSetter ? (isCallable(setterValue) ? setterValue : null) : existingSetter;
-            object.getProperties().remove(key);
-            // defineAccessor only ever adds a non-null side, so a field the new descriptor names
-            // but resolves to null (e.g. an explicit `get: undefined`) must be cleared separately.
-            if (hasGetter && getter == null) {
-                object.clearAccessorGetter(key);
-            }
-            if (hasSetter && setter == null) {
-                object.clearAccessorSetter(key);
-            }
-            if (getter != null || setter != null) {
-                object.defineAccessor(key, getter, setter);
-            } else {
-                // 'get'/'set' were both present but neither was callable: still a real accessor
-                // property per spec (reads as undefined, rejects writes), approximated here as an
-                // inert always-undefined value since defineAccessor needs at least one callable
-                // function to register the key at all.
-                object.defineValue(key, JsUndefined.getInstance());
-            }
-        } else {
+            applyAccessorFields(slot, descriptor, hasGetter, hasSetter, ops);
+        } else if (hasValue || descHas(descriptor, "writable", ops) || !exists || !slot.hasAccessor()) {
             // Converting an accessor property into a data property must drop the stale
-            // getter/setter, or a later read would still find the old accessor entry.
-            object.clearAccessor(key);
-            object.defineValue(key,
-                    descHas(descriptor, "value", ops)
-                            ? descGet(descriptor, "value", ops)
-                            : exists && object.has(key) ? object.get(key) : JsUndefined.getInstance());
+            // getter/setter, or a later read would still find the old accessor entry. A generic
+            // descriptor over an existing accessor takes neither arm, so the accessor survives.
+            slot.clearAccessor();
+            slot.defineValue(hasValue
+                    ? descGet(descriptor, "value", ops)
+                    : exists && slot.hasValue() ? slot.value() : JsUndefined.getInstance());
         }
-        object.setFlags(key, flags);
+        slot.setFlags(flags);
     }
 
-    private static PropertyFlags flagsFrom(JsObject descriptor, JsObject object, String key, boolean exists,
+    private static void applyAccessorFields(Slot slot, JsObject descriptor, boolean hasGetter, boolean hasSetter,
             InterpreterOps ops) {
-        final var current = exists ? object.getFlags(key) : new PropertyFlags(false, false, false);
+        // A field absent from the new descriptor keeps the property's current getter/setter
+        // (only meaningful if it was already an accessor) rather than defaulting to none, so a
+        // {get: fn2} redefine doesn't silently drop an untouched existing setter.
+        final var wasAccessor = slot.hasAccessor();
+        final var existingGetter = wasAccessor ? slot.getter() : null;
+        final var existingSetter = wasAccessor ? slot.setter() : null;
+        final var getterValue = hasGetter ? descGet(descriptor, "get", ops) : null;
+        final var setterValue = hasSetter ? descGet(descriptor, "set", ops) : null;
+        if (hasGetter && !isCallable(getterValue) && !(getterValue instanceof JsUndefined)) {
+            throw new TypeErrorException("Getter must be a function");
+        }
+        if (hasSetter && !isCallable(setterValue) && !(setterValue instanceof JsUndefined)) {
+            throw new TypeErrorException("Setter must be a function");
+        }
+        final var getter = hasGetter ? (isCallable(getterValue) ? getterValue : null) : existingGetter;
+        final var setter = hasSetter ? (isCallable(setterValue) ? setterValue : null) : existingSetter;
+        slot.removeValue();
+        // defineAccessor only ever adds a non-null side, so a field the new descriptor names
+        // but resolves to null (e.g. an explicit `get: undefined`) must be cleared separately.
+        if (hasGetter && getter == null) {
+            slot.clearGetter();
+        }
+        if (hasSetter && setter == null) {
+            slot.clearSetter();
+        }
+        if (getter != null || setter != null) {
+            slot.defineAccessor(getter, setter);
+        } else {
+            // 'get'/'set' were both present but neither was callable: still a real accessor
+            // property per spec (reads as undefined, rejects writes), approximated here as an
+            // inert always-undefined value since defineAccessor needs at least one callable
+            // function to register the key at all.
+            slot.defineValue(JsUndefined.getInstance());
+        }
+    }
+
+    private static PropertyFlags flagsFrom(JsObject descriptor, Slot slot, boolean exists, InterpreterOps ops) {
+        final var current = exists ? slot.flags() : new PropertyFlags(false, false, false);
         final var writable = descHas(descriptor, "writable", ops)
                 ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops))
                 : current.writable();
@@ -800,17 +972,16 @@ public final class ObjectBuiltins {
         return new PropertyFlags(writable, enumerable, configurable);
     }
 
-    private static void checkNonConfigurableRedefine(JsObject object, String key, JsObject descriptor,
-            InterpreterOps ops) {
+    private static void checkNonConfigurableRedefine(Slot slot, String key, JsObject descriptor, InterpreterOps ops) {
         if (descHas(descriptor, "configurable", ops)
                 && JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))) {
             throw redefineError(key);
         }
         if (descHas(descriptor, "enumerable", ops)
-                && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != object.isEnumerable(key)) {
+                && JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops)) != slot.flags().enumerable()) {
             throw redefineError(key);
         }
-        final var currentIsAccessor = object.hasAccessor(key);
+        final var currentIsAccessor = slot.hasAccessor();
         final var descriptorIsAccessor = descHas(descriptor, "get", ops) || descHas(descriptor, "set", ops);
         final var descriptorIsData = descHas(descriptor, "value", ops) || descHas(descriptor, "writable", ops);
         if ((descriptorIsAccessor && !currentIsAccessor) || (descriptorIsData && currentIsAccessor)) {
@@ -818,21 +989,20 @@ public final class ObjectBuiltins {
         }
         if (currentIsAccessor) {
             if (descHas(descriptor, "get", ops)
-                    && isNotSameValue(descGet(descriptor, "get", ops), orUndefined(object.getAccessorGetter(key)))) {
+                    && isNotSameValue(descGet(descriptor, "get", ops), orUndefined(slot.getter()))) {
                 throw redefineError(key);
             }
             if (descHas(descriptor, "set", ops)
-                    && isNotSameValue(descGet(descriptor, "set", ops), orUndefined(object.getAccessorSetter(key)))) {
+                    && isNotSameValue(descGet(descriptor, "set", ops), orUndefined(slot.setter()))) {
                 throw redefineError(key);
             }
             return;
         }
-        if (object.has(key) && !object.isWritable(key)) {
+        if (slot.hasValue() && !slot.flags().writable()) {
             if (descHas(descriptor, "writable", ops) && JsCoercion.toBoolean(descGet(descriptor, "writable", ops))) {
                 throw redefineError(key);
             }
-            if (descHas(descriptor, "value", ops)
-                    && isNotSameValue(object.get(key), descGet(descriptor, "value", ops))) {
+            if (descHas(descriptor, "value", ops) && isNotSameValue(slot.value(), descGet(descriptor, "value", ops))) {
                 throw redefineError(key);
             }
         }
@@ -877,15 +1047,27 @@ public final class ObjectBuiltins {
     }
 
     private static JsValue getOwnPropertyDescriptors(List<JsValue> args, InterpreterOps ops) {
-        if (!(first(args) instanceof JsObject target)) {
-            throw new TypeErrorException("Object.getOwnPropertyDescriptors called on non-object");
+        final var target = first(args);
+        if (InterpreterUtils.isNullish(target)) {
+            throw new TypeErrorException("Cannot convert undefined or null to object");
         }
         final var result = new JsObject();
-        for (final var key : target.keys()) {
-            result.set(key, ops.getOwnPropertyDescriptor(target, new JsString(key)));
+        for (final var key : ops.ownKeys(target)) {
+            final var descriptor = ops.getOwnPropertyDescriptor(target, key);
+            if (descriptor instanceof JsUndefined) {
+                continue;
+            }
+            if (key instanceof JsSymbol symbol) {
+                result.setSymbol(symbol, descriptor);
+            } else {
+                result.set(JsCoercion.toStr(key), descriptor);
+            }
         }
-        for (final var symbol : target.symbolKeys()) {
-            result.setSymbol(symbol, ops.getOwnPropertyDescriptor(target, symbol));
+        final var table = target.ownProperties();
+        if (table != null) {
+            for (final var symbol : table.symbolKeys()) {
+                result.setSymbol(symbol, ops.getOwnPropertyDescriptor(target, symbol));
+            }
         }
         return result;
     }
@@ -935,6 +1117,12 @@ public final class ObjectBuiltins {
                 }
             }
             default -> {
+                final var table = first(args).ownProperties();
+                if (table != null) {
+                    for (final var key : table.keys()) {
+                        result.push(new JsString(key));
+                    }
+                }
             }
         }
         return result;
@@ -948,71 +1136,59 @@ public final class ObjectBuiltins {
     }
 
     public static JsValue getOwnPropertyDescriptor(List<JsValue> args) {
-        if (args.size() > 1 && first(args) instanceof JsCallableProperties callable) {
-            return callableDescriptor(first(args), callable, args.get(1));
+        final var target = first(args);
+        // ToObject(O): only null/undefined throw; any other primitive simply has no own property.
+        if (InterpreterUtils.isNullish(target)) {
+            throw new TypeErrorException("Cannot convert undefined or null to object");
         }
-        if (args.size() > 1 && first(args) instanceof JsGlobalObject global) {
-            return globalDescriptor(global, args.get(1));
+        final var keyValue = argAt(args, 1);
+        if (target instanceof JsGlobalObject global) {
+            return globalDescriptor(global, keyValue);
         }
-        if (args.size() > 1 && first(args) instanceof JsArray array) {
-            return arrayDescriptor(array, args.get(1));
+        if (target instanceof JsArray array && !(keyValue instanceof JsSymbol)) {
+            return arrayDescriptor(array, keyValue);
         }
-        final var target = first(args) instanceof JsClass cls ? cls.getStaticOwner() : first(args);
-        if (!(target instanceof JsObject object) || args.size() < 2) {
+        final var table = target.ownProperties();
+        if (table == null) {
             return JsUndefined.getInstance();
         }
-        if (args.get(1) instanceof JsSymbol symbol) {
-            return symbolDescriptor(object, symbol);
+        final var slot = keyValue instanceof JsSymbol symbol
+                ? symbolSlot(table, symbol)
+                : stringSlot(table, JsCoercion.toStr(keyValue));
+        if (slot.exists()) {
+            return describeSlot(slot);
         }
-        final var key = JsCoercion.toStr(args.get(1));
-        final var flags = object.getFlags(key);
-        final var getter = object.getAccessorGetter(key);
-        final var setter = object.getAccessorSetter(key);
-        if (getter != null || setter != null) {
-            final var descriptor = new JsObject();
-            descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
-            descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
-            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-            return descriptor;
-        }
-        if (object.has(key)) {
-            final var descriptor = new JsObject();
-            descriptor.set("value", object.get(key));
-            descriptor.set("writable", JsBoolean.of(flags.writable()));
-            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-            return descriptor;
+        if (target instanceof JsCallableProperties callable && !(keyValue instanceof JsSymbol)
+                && callableMetadataKey(callable, JsCoercion.toStr(keyValue))) {
+            return metadataDescriptor(target, callable, JsCoercion.toStr(keyValue));
         }
         return JsUndefined.getInstance();
     }
 
-    // Data properties only: accessors and descriptor flags on a callable are out of scope, so a
-    // script-assigned property reports the JsObject default and a builtin static reports
-    // non-enumerable.
-    private static JsValue callableDescriptor(JsValue target, JsCallableProperties callable, JsValue keyValue) {
-        if (keyValue instanceof JsSymbol) {
-            return JsUndefined.getInstance();
-        }
-        final var key = JsCoercion.toStr(keyValue);
-        if (!callable.hasProperty(key)) {
-            return callableMetadataKey(callable, key)
-                    ? metadataDescriptor(target, callable, key)
-                    : JsUndefined.getInstance();
-        }
+    private static JsValue describeSlot(Slot slot) {
+        final var flags = slot.flags();
         final var descriptor = new JsObject();
-        descriptor.set("value", callable.getProperty(key));
-        descriptor.set("writable", JsBoolean.of(true));
-        descriptor.set("enumerable", JsBoolean.of(callable.enumerablePropertyKeys().contains(key)));
-        descriptor.set("configurable", JsBoolean.of(true));
+        if (slot.hasAccessor()) {
+            descriptor.set("get", orUndefined(slot.getter()));
+            descriptor.set("set", orUndefined(slot.setter()));
+        } else {
+            descriptor.set("value", slot.value());
+            descriptor.set("writable", JsBoolean.of(flags.writable()));
+        }
+        descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
+        descriptor.set("configurable", JsBoolean.of(flags.configurable()));
         return descriptor;
     }
 
     private static JsValue metadataDescriptor(JsValue target, JsCallableProperties callable, String key) {
         final var descriptor = new JsObject();
         if ("prototype".equals(key)) {
+            // A builtin constructor's `prototype` is non-writable; an ordinary function's is
+            // writable. Neither is enumerable or configurable.
+            final var writable = !(callable instanceof JsNativeFunction nativeFunction)
+                    || !nativeFunction.isConstructor();
             descriptor.set("value", prototypeOf(callable));
-            descriptor.set("writable", JsBoolean.of(true));
+            descriptor.set("writable", JsBoolean.of(writable));
             descriptor.set("enumerable", JsBoolean.of(false));
             descriptor.set("configurable", JsBoolean.of(false));
             return descriptor;
@@ -1034,39 +1210,20 @@ public final class ObjectBuiltins {
     }
 
     private static JsValue globalDescriptor(JsGlobalObject global, JsValue keyValue) {
-        if (keyValue instanceof JsSymbol) {
-            return JsUndefined.getInstance();
+        if (keyValue instanceof JsSymbol symbol) {
+            final var slot = symbolSlot(global.ownProperties(), symbol);
+            return slot.exists() ? describeSlot(slot) : JsUndefined.getInstance();
         }
         final var key = JsCoercion.toStr(keyValue);
         final var env = global.getEnv();
         if (!env.isDeclared(key)) {
-            return JsUndefined.getInstance();
+            final var slot = stringSlot(global.ownProperties(), key);
+            return slot.exists() ? describeSlot(slot) : JsUndefined.getInstance();
         }
+        final var flags = env.globalFlags(key);
         final var descriptor = new JsObject();
         descriptor.set("value", InterpreterUtils.orUndefined(env.tryGet(key)));
-        descriptor.set("writable", JsBoolean.of(true));
-        descriptor.set("enumerable", JsBoolean.of(env.enumerableGlobalNames().contains(key)));
-        descriptor.set("configurable", JsBoolean.of(true));
-        return descriptor;
-    }
-
-    private static JsValue symbolDescriptor(JsObject object, JsSymbol symbol) {
-        final var flags = object.getSymbolFlags(symbol);
-        if (object.hasSymbolAccessor(symbol)) {
-            final var getter = object.getSymbolAccessorGetter(symbol);
-            final var setter = object.getSymbolAccessorSetter(symbol);
-            final var descriptor = new JsObject();
-            descriptor.set("get", getter == null ? JsUndefined.getInstance() : getter);
-            descriptor.set("set", setter == null ? JsUndefined.getInstance() : setter);
-            descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
-            descriptor.set("configurable", JsBoolean.of(flags.configurable()));
-            return descriptor;
-        }
-        if (!object.hasSymbol(symbol)) {
-            return JsUndefined.getInstance();
-        }
-        final var descriptor = new JsObject();
-        descriptor.set("value", object.getSymbol(symbol));
+        assert flags != null;
         descriptor.set("writable", JsBoolean.of(flags.writable()));
         descriptor.set("enumerable", JsBoolean.of(flags.enumerable()));
         descriptor.set("configurable", JsBoolean.of(flags.configurable()));

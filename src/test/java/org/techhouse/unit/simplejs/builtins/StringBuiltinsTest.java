@@ -154,10 +154,11 @@ public class StringBuiltinsTest {
         assertEquals("aX1bX3", str("'a1b1'.replaceAll('1', (m, i) => 'X' + i)"));
     }
 
-    // replaceAll with an empty search returns the string unchanged
     @Test
-    public void test_replace_all_empty_search() {
-        assertEquals("abc", str("'abc'.replaceAll('', 'x')"));
+    public void replaceAllHandlesEmptySearchString() {
+        assertEquals("xaxbxcx", str("'abc'.replaceAll('', 'x')"));
+        assertEquals("-a-a-a-", str("'aaa'.replaceAll('', '-')"));
+        assertEquals("x", str("''.replaceAll('', 'x')"));
     }
 
     // a zero-width global regex replace inserts around every position
@@ -184,7 +185,7 @@ public class StringBuiltinsTest {
     // an unterminated $< token is left literal, and a two-digit group index resolves
     @Test
     public void test_replace_token_edges() {
-        assertEquals("$<b", str("'ab'.replace(/a/, '$<x')"));
+        assertEquals("$<xb", str("'ab'.replace(/a/, '$<x')"));
         assertEquals("j", str("'abcdefghij'.replace(/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/, '$10')"));
     }
 
@@ -487,5 +488,64 @@ public class StringBuiltinsTest {
     public void test_replace_all_non_global_regexp_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("'abc'.replaceAll(/a/, 'x')"));
         assertEquals("xbc", str("'abc'.replaceAll(/a/g, 'x')"));
+    }
+
+    @Test
+    public void startsWithHonoursPosition() {
+        assertTrue(bool("'word'.startsWith('o', 1)"));
+        assertFalse(bool("'word'.startsWith('o', 0)"));
+        assertTrue(bool("'word'.startsWith('', 99)"));
+    }
+
+    @Test
+    public void endsWithHonoursEndPosition() {
+        assertTrue(bool("'word'.endsWith('or', 3)"));
+        assertFalse(bool("'word'.endsWith('or', 4)"));
+        assertTrue(bool("'word'.endsWith('word', undefined)"));
+    }
+
+    @Test
+    public void includesHonoursPosition() {
+        assertTrue(bool("'word'.includes('o', 1)"));
+        assertFalse(bool("'word'.includes('w', 1)"));
+    }
+
+    @Test
+    public void positionArgumentIsCoerced() {
+        assertTrue(bool("'word'.startsWith('o', { valueOf: () => 1 })"));
+        assertThrows(JsThrowException.class,
+                () -> Interpreter.run("'word'.startsWith('o', { valueOf() { throw new Error('x'); } })"));
+    }
+
+    @Test
+    public void trimUsesJsWhitespaceSet() {
+        assertEquals("a", str("'\\u00a0\\ufeff\\u1680\\u2000\\u202f\\u205f\\u3000 a '.trim()"));
+        assertEquals("a ", str("'\\u00a0a '.trimStart()"));
+        assertEquals("\u00a0a", str("'\\u00a0a\\u00a0'.trimEnd()"));
+        // U+001C-001F are Java whitespace but not JS whitespace, so they survive a trim
+        assertEquals(3, num("'\\u001ca\\u001c'.trim().length"));
+    }
+
+    @Test
+    public void matchDispatchesToSymbolMatch() {
+        assertEquals("hit", str("'abc'.match({ [Symbol.match]: () => 'hit' })"));
+        assertEquals("hit", str("'abc'.matchAll({ [Symbol.matchAll]: () => 'hit' })"));
+        assertEquals(7, num("'abc'.search({ [Symbol.search]: () => 7 })"));
+        assertEquals("hit", str("'abc'.replace({ [Symbol.replace]: () => 'hit' }, 'x')"));
+        assertEquals("hit", str("'abc'.replaceAll({ [Symbol.replace]: () => 'hit' }, 'x')"));
+        assertEquals("hit", str("'abc'.split({ [Symbol.split]: () => 'hit' })"));
+    }
+
+    @Test
+    public void getSubstitutionLeavesUnresolvableTokensLiteral() {
+        assertEquals("$<x>c", str("'abc'.replace(/ab/, '$<x>')"));
+        assertEquals("$9c", str("'abc'.replace(/(a)b/, '$9')"));
+        assertEquals("c", str("'abc'.replace(/(?<n>a)b/, '$<missing>')"));
+    }
+
+    @Test
+    public void padHonoursExplicitUndefinedFill() {
+        assertEquals("  a", str("'a'.padStart(3, undefined)"));
+        assertEquals("a  ", str("'a'.padEnd(3, undefined)"));
     }
 }

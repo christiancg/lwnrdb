@@ -15,6 +15,7 @@ public final class JsSymbol extends JsValue {
     public static final JsSymbol MATCH_ALL = new JsSymbol("Symbol.matchAll");
     public static final JsSymbol IS_CONCAT_SPREADABLE = new JsSymbol("Symbol.isConcatSpreadable");
     public static final JsSymbol UNSCOPABLES = new JsSymbol("Symbol.unscopables");
+    public static final JsSymbol SPECIES = new JsSymbol("Symbol.species");
 
     private final String description;
 

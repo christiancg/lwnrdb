@@ -23,7 +23,6 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.SimpleHostBindings;
-import org.techhouse.simplejs.internal.interpreter.AsyncIteration;
 import org.techhouse.simplejs.internal.interpreter.BindingEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ClassEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ExpressionEvaluator;
@@ -33,6 +32,7 @@ import org.techhouse.simplejs.internal.interpreter.ModuleEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ProxyDispatch;
 import org.techhouse.simplejs.internal.interpreter.StatementEvaluator;
 import org.techhouse.simplejs.internal.interpreter.VarHoisting;
+import org.techhouse.simplejs.internal.interpreter.YieldDelegation;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
@@ -166,8 +166,8 @@ public final class Interpreter {
         }
 
         @Override
-        public JsValue construct(JsValue fn, List<JsValue> args) {
-            return constructValue(fn, args);
+        public JsValue construct(JsValue fn, List<JsValue> args, JsValue newTarget) {
+            return constructValue(fn, args, newTarget);
         }
 
         @Override
@@ -784,18 +784,26 @@ public final class Interpreter {
     }
 
     private JsValue constructValue(JsValue callee, List<JsValue> args) {
+        return constructValue(callee, args, callee);
+    }
+
+    private JsValue constructValue(JsValue callee, List<JsValue> args, JsValue newTarget) {
+        if (!isConstructor(callee)) {
+            throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
+        }
         return switch (callee) {
-            case JsProxy proxy -> proxies.construct(proxy, args);
-            case JsClass cls -> classes.construct(cls, args);
+            case JsProxy proxy -> proxies.construct(proxy, args, newTarget);
+            case JsClass cls -> classes.construct(cls, args, newTarget);
             case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
-                constructValue(nativeFunction.getBoundTarget(), boundArgs(nativeFunction, args));
-            case JsNativeFunction nativeFunction -> constructNative(nativeFunction, args);
-            case JsFunction function when !function.isArrow() -> constructFunction(function, args);
+                constructValue(nativeFunction.getBoundTarget(), boundArgs(nativeFunction, args),
+                        newTarget == callee ? nativeFunction.getBoundTarget() : newTarget);
+            case JsNativeFunction nativeFunction -> constructNative(nativeFunction, args, newTarget);
+            case JsFunction function -> constructFunction(function, args, newTarget);
             default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a constructor");
         };
     }
 
-    private JsValue constructNative(JsNativeFunction nativeFunction, List<JsValue> args) {
+    private JsValue constructNative(JsNativeFunction nativeFunction, List<JsValue> args, JsValue newTarget) {
         final var proto = nativeFunction.getPrototype();
         if (proto == intrinsics.objectProto()) {
             final var argument = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
@@ -814,11 +822,21 @@ public final class Interpreter {
                 throw new TypeErrorException("Cannot convert a Symbol value to a string");
             }
             final var wrapper = new JsObject();
-            wrapper.setProto(proto);
+            wrapper.setProto(protoFromNewTarget(newTarget, proto));
             wrapper.setPrimitive(nativeFunction.invoke(JsUndefined.getInstance(), args));
             return wrapper;
         }
-        return nativeFunction.invoke(JsUndefined.getInstance(), args);
+        return nativeFunction.invoke(JsUndefined.getInstance(), args, newTarget);
+    }
+
+    // OrdinaryCreateFromConstructor: the instance prototype is an ordinary Get(newTarget,
+    // "prototype"), so an accessor-valued or throwing `prototype` behaves like any other property
+    // read, and a non-object result falls back to the intrinsic default.
+    private JsObject protoFromNewTarget(JsValue newTarget, JsObject fallback) {
+        if (newTarget == null || isNullish(newTarget)) {
+            return fallback;
+        }
+        return getMemberByKey(newTarget, new JsString("prototype")) instanceof JsObject proto ? proto : fallback;
     }
 
     private List<JsValue> boundArgs(JsNativeFunction nativeFunction, List<JsValue> args) {
@@ -827,10 +845,10 @@ public final class Interpreter {
         return combined;
     }
 
-    private JsValue constructFunction(JsFunction function, List<JsValue> args) {
+    private JsValue constructFunction(JsFunction function, List<JsValue> args, JsValue newTarget) {
         final var instance = new JsObject();
-        instance.setProto(function.getPrototype());
-        final var result = callFunction(function, instance, args, function);
+        instance.setProto(protoFromNewTarget(newTarget, intrinsics.objectProto()));
+        final var result = callFunction(function, instance, args, newTarget);
         return isObjectLike(result) ? result : instance;
     }
 
@@ -977,60 +995,10 @@ public final class Interpreter {
             throw new SyntaxErrorException("yield is only valid inside a generator");
         }
         if (yield.isDelegate()) {
-            return yieldDelegate(coroutine, eval(yield.getArgument(), env));
+            return YieldDelegation.run(this, coroutine, eval(yield.getArgument(), env));
         }
         final var value = yield.getArgument() == null ? JsUndefined.getInstance() : eval(yield.getArgument(), env);
         return coroutine.yieldOut(value);
-    }
-
-    private JsValue yieldDelegate(Coroutine coroutine, JsValue iterable) {
-        if (iterable instanceof JsAsyncGenerator generator && coroutine.isAsync()) {
-            return yieldDelegateAsync(coroutine, generator);
-        }
-        if (coroutine.isAsync()) {
-            return yieldDelegateAsyncIterable(coroutine, iterable);
-        }
-        if (iterable instanceof JsGenerator generator) {
-            final var inner = generator.getCoroutine();
-            var sent = (JsValue) JsUndefined.getInstance();
-            while (true) {
-                final var step = inner.resumeNext(sent);
-                if (step.done()) {
-                    return step.value();
-                }
-                sent = coroutine.yieldOut(step.value());
-            }
-        }
-        final var iteration = new Iteration(this, iterable);
-        var value = iteration.next();
-        while (value != null) {
-            coroutine.yieldOut(value);
-            value = iteration.next();
-        }
-        return JsUndefined.getInstance();
-    }
-
-    private JsValue yieldDelegateAsyncIterable(Coroutine coroutine, JsValue iterable) {
-        final var iteration = AsyncIteration.open(this, iterable);
-        var sent = (JsValue) JsUndefined.getInstance();
-        while (true) {
-            final var step = iteration.step(coroutine, sent);
-            if (step.done()) {
-                return step.value();
-            }
-            sent = coroutine.yieldOut(step.value());
-        }
-    }
-
-    private JsValue yieldDelegateAsync(Coroutine coroutine, JsAsyncGenerator generator) {
-        while (true) {
-            final var step = coroutine.await(toPromise(
-                    members.driveAsyncGenerator(generator, MemberEvaluator.AsyncStep.NEXT, JsUndefined.getInstance())));
-            if (JsCoercion.toBoolean(members.getMember(step, "done"))) {
-                return members.getMember(step, "value");
-            }
-            coroutine.yieldOut(members.getMember(step, "value"));
-        }
     }
 
     private JsValue evalAwait(AwaitExpression await, Environment env) {
@@ -1225,13 +1193,21 @@ public final class Interpreter {
     }
 
     private boolean deleteMemberValue(JsValue target, JsValue keyValue) {
+        if (keyValue instanceof JsSymbol symbol && !(target instanceof JsProxy)) {
+            final var table = target.ownProperties();
+            return table == null || !table.isNotDeleteSymbol(symbol);
+        }
         return switch (target) {
             case JsProxy proxy -> proxies.delete(proxy, keyValue);
             case JsObject object -> object.delete(JsCoercion.toStr(keyValue));
             case JsClass cls -> cls.getStaticOwner().delete(JsCoercion.toStr(keyValue));
             case JsArray array -> deleteArrayElement(array, JsCoercion.toStr(keyValue));
+            case JsGlobalObject global -> global.getEnv().deleteGlobal(JsCoercion.toStr(keyValue));
             case JsCallableProperties callable -> callable.deleteProperty(JsCoercion.toStr(keyValue));
-            default -> true;
+            default -> {
+                final var table = target.ownProperties();
+                yield table == null || table.delete(JsCoercion.toStr(keyValue));
+            }
         };
     }
 

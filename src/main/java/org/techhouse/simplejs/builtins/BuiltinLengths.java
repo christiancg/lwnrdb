@@ -36,11 +36,12 @@ public final class BuiltinLengths {
         zeroArg("Symbol.prototype", "toString", "valueOf");
         zeroArg("RegExp.prototype", "toString");
         zeroArg("Map.prototype", "clear", "keys", "values", "entries");
-        put("Map.prototype", 2, "set");
+        put("Map.prototype", 2, "set", "getOrInsert", "getOrInsertComputed");
+        put("WeakMap.prototype", 2, "set", "getOrInsert", "getOrInsertComputed");
         zeroArg("Set.prototype", "clear", "keys", "values", "entries");
         zeroArg("Object.prototype", "toString", "valueOf", "toLocaleString");
-        zeroArg("Promise.prototype", "catch", "finally");
         put("Promise.prototype", 2, "then");
+        put("Promise.prototype", 1, "catch", "finally");
         zeroArg("Function.prototype", "toString");
         put("Function.prototype", 2, "apply");
         zeroArg("DisposableStack.prototype", "dispose", "move");

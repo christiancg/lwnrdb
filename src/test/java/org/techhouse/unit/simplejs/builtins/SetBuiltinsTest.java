@@ -163,4 +163,56 @@ public class SetBuiltinsTest {
     public void test_non_set_argument_throws() {
         Assertions.assertThrows(TypeErrorException.class, () -> Interpreter.run("new Set([1]).union([2])"));
     }
+
+    private static final String SET_LIKE = "let setLike = { size: 2, has: v => v === 2 || v === 3, "
+            + "keys: () => [2, 3][Symbol.iterator]() }; ";
+
+    @Test
+    public void acceptsSetLikeArgument() {
+        assertEquals("1,2,3", str(SET_LIKE + "[...new Set([1, 2]).union(setLike)].join(',')"));
+        assertEquals("2", str(SET_LIKE + "[...new Set([1, 2]).intersection(setLike)].join(',')"));
+        assertEquals("1", str(SET_LIKE + "[...new Set([1, 2]).difference(setLike)].join(',')"));
+        assertEquals("1,3", str(SET_LIKE + "[...new Set([1, 2]).symmetricDifference(setLike)].join(',')"));
+        assertTrue(bool(SET_LIKE + "new Set([2]).isSubsetOf(setLike)"));
+        assertTrue(bool(SET_LIKE + "new Set([1, 2, 3]).isSupersetOf(setLike)"));
+        assertTrue(bool(SET_LIKE + "new Set([1]).isDisjointFrom(setLike)"));
+    }
+
+    @Test
+    public void coercesSizeThroughToNumber() {
+        final var source = "let setLike = { size: { valueOf: () => 1 }, has: () => true, "
+                + "keys: () => [7][Symbol.iterator]() }; [...new Set([7]).intersection(setLike)].join(',')";
+        assertEquals("7", str(source));
+    }
+
+    @Test
+    public void throwsOnNaNSize() {
+        Assertions.assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Set([1]).union({ has: () => true, keys: () => [][Symbol.iterator]() })"));
+        Assertions.assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Set([1]).union({ size: 1, keys: () => [][Symbol.iterator]() })"));
+        Assertions.assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Set([1]).union({ size: 1, has: () => true })"));
+    }
+
+    @Test
+    public void resultIsPlainSetNotSubclass() {
+        final var source = "class S extends Set {}; "
+                + "String(Object.getPrototypeOf(new S([1]).union(new Set([2]))) === Set.prototype)";
+        assertEquals("true", str(source));
+    }
+
+    @Test
+    public void intersectionPreservesSpecOrdering() {
+        assertEquals("2,3", str("[...new Set([3, 2, 1]).intersection(new Set([2, 3]))].join(',')"));
+        assertEquals("3,2", str("[...new Set([3, 2]).intersection(new Set([1, 2, 3]))].join(',')"));
+    }
+
+    @Test
+    public void weakSetPrototypeHasOnlyWeakMethods() {
+        assertEquals("undefined", str("typeof WeakSet.prototype.union"));
+        assertEquals("undefined", str("typeof WeakSet.prototype.forEach"));
+        Assertions.assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Set.prototype.add.call(new WeakSet(), {})"));
+    }
 }

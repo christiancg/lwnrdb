@@ -272,4 +272,98 @@ public class InterpreterAsyncGeneratorTest {
                 """;
         assertEquals("TypeError", joined(source));
     }
+
+    // three next() calls made before any settles queue up and resolve in request order
+    @Test
+    public void test_request_queue_preserves_order() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 'first'; yield 'second'; }
+                const it = g();
+                const a = it.next();
+                const b = it.next();
+                const c = it.next();
+                c.then(s => out.push('c:' + s.value + ':' + s.done));
+                b.then(s => out.push('b:' + s.value));
+                a.then(s => out.push('a:' + s.value));
+                out
+                """;
+        assertEquals("a:first,b:second,c:undefined:true", joined(source));
+    }
+
+    // a next() issued from the generator's own body queues instead of deadlocking on itself
+    @Test
+    public void test_reentrant_next_queues_instead_of_deadlocking() {
+        final var source = """
+                let out = [];
+                let it;
+                async function* g() {
+                    it.next().then(s => out.push('inner:' + s.value));
+                    yield 1;
+                    yield 2;
+                }
+                it = g();
+                it.next().then(s => out.push('outer:' + s.value));
+                out
+                """;
+        assertEquals("outer:1,inner:2", joined(source));
+    }
+
+    // AsyncGeneratorYield awaits its operand, so a yielded promise reaches the consumer unwrapped
+    @Test
+    public void test_yielded_promise_is_awaited() {
+        final var source = """
+                let out = [];
+                async function* g() { yield Promise.resolve('unwrapped'); }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("unwrapped", joined(source));
+    }
+
+    // a yielded promise that rejects re-enters the body at the yield expression
+    @Test
+    public void test_rejected_yield_operand_throws_at_the_yield() {
+        final var source = """
+                let out = [];
+                async function* g() {
+                    try { yield Promise.reject('bad'); }
+                    catch (e) { out.push('caught:' + e); }
+                }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("caught:bad", joined(source));
+    }
+
+    // return() before the body starts awaits its argument (AsyncGeneratorAwaitReturn)
+    @Test
+    public void test_return_at_suspended_start_awaits_its_value() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 1; }
+                g().return(Promise.resolve('done')).then(s => out.push(s.value + ':' + s.done));
+                out
+                """;
+        assertEquals("done:true", joined(source));
+    }
+
+    // yield* hands a delegated value through untouched rather than awaiting it a second time
+    @Test
+    public void test_delegated_values_are_not_unwrapped() {
+        final var source = """
+                let out = [];
+                const inner = Promise.resolve('inner');
+                const source_ = {
+                    [Symbol.asyncIterator]() { return this; },
+                    next() { return { value: inner, done: false }; }
+                };
+                async function* g() { yield* source_; }
+                g().next().then(s => out.push(String(s.value === inner)));
+                out
+                """;
+        assertEquals("true", joined(source));
+    }
 }

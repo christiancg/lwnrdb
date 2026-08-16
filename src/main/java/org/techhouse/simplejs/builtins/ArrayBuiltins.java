@@ -41,8 +41,10 @@ public final class ArrayBuiltins {
         array.setProperty("from",
                 new JsNativeFunction("from", (receiver, args) -> from(receiver, args, invoker, iterableToList, ops)));
         array.setProperty("of", new JsNativeFunction("of", (_, args) -> new JsArray(new ArrayList<>(args))));
-        array.setProperty("fromAsync", new JsNativeFunction("fromAsync", (_, args) -> AsyncIteratorBuiltins
-                .drainToArray(ops, eventLoop, args.isEmpty() ? JsUndefined.getInstance() : args.getFirst())));
+        final var fromAsync = new JsNativeFunction("fromAsync",
+                (receiver, args) -> AsyncIteratorBuiltins.fromAsync(ops, eventLoop, receiver, args));
+        fromAsync.setLength(1);
+        array.setProperty("fromAsync", fromAsync);
         return array;
     }
 

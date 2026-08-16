@@ -243,7 +243,7 @@ public class InterpreterObjectTest {
     public void test_object_literal_computed_proto_key() {
         assertEquals("object", str("const p = {}; typeof ({ ['__proto__']: p }).__proto__"));
         assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter
-                .run("const p = {}; Object.getPrototypeOf({ ['__proto__']: p }) === null")).getValue());
+                .run("const p = {}; Object.getPrototypeOf({ ['__proto__']: p }) === Object.prototype")).getValue());
     }
 
     // A __proto__ value that is neither object nor null is ignored

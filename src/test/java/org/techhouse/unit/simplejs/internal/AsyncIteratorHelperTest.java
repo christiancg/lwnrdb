@@ -134,6 +134,97 @@ public class AsyncIteratorHelperTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new AsyncIterator()"));
     }
 
+    // Array.fromAsync drains an async iterable in order
+    @Test
+    public void test_from_async_async_iterable() {
+        assertEquals("1,2,3", await("out.push(...await Array.fromAsync(g()));"));
+    }
+
+    // Array.fromAsync awaits each value of a sync iterable
+    @Test
+    public void test_from_async_awaits_sync_iterable_values() {
+        final var source = """
+                let out = [];
+                async function main() {
+                    out.push(...await Array.fromAsync([Promise.resolve('a'), 'b']));
+                }
+                main();
+                out
+                """;
+        assertEquals("a,b", joined(source));
+    }
+
+    // Array.fromAsync applies mapfn with the element index and honours thisArg
+    @Test
+    public void test_from_async_mapfn_and_this_arg() {
+        final var source = """
+                let out = [];
+                async function main() {
+                    const scale = { factor: 10 };
+                    out.push(...await Array.fromAsync([1, 2], function (v, i) {
+                        return v * this.factor + i;
+                    }, scale));
+                }
+                main();
+                out
+                """;
+        assertEquals("10,21", joined(source));
+    }
+
+    // an input that is neither async- nor sync-iterable falls back to the array-like path
+    @Test
+    public void test_from_async_array_like_fallback() {
+        final var source = """
+                let out = [];
+                async function main() {
+                    out.push(...await Array.fromAsync({ length: 2, 0: Promise.resolve('x'), 1: 'y' }));
+                }
+                main();
+                out
+                """;
+        assertEquals("x,y", joined(source));
+    }
+
+    // a rejecting mapfn rejects the returned promise and closes the source iterator
+    @Test
+    public void test_from_async_mapfn_rejection_closes_iterator() {
+        final var source = """
+                let out = [];
+                const items = {
+                    [Symbol.iterator]() {
+                        return {
+                            next: () => ({ value: 1, done: false }),
+                            return() { out.push('closed'); return {}; }
+                        };
+                    }
+                };
+                async function main() {
+                    try { await Array.fromAsync(items, () => { throw 'boom'; }); }
+                    catch (e) { out.push(e); }
+                }
+                main();
+                out
+                """;
+        assertEquals("closed,boom", joined(source));
+    }
+
+    // Array.fromAsync builds its result through the receiver when the receiver is a constructor
+    @Test
+    public void test_from_async_uses_this_constructor() {
+        final var source = """
+                let out = [];
+                let built = 0;
+                function Bag(n) { built++; this.length = 0; }
+                async function main() {
+                    const bag = await Array.fromAsync.call(Bag, [7, 8]);
+                    out.push(built + ':' + bag.length + ':' + bag[0] + ',' + bag[1]);
+                }
+                main();
+                out
+                """;
+        assertEquals("1:2:7,8", joined(source));
+    }
+
     // helpers are lazy: take stops pulling once its budget is spent
     @Test
     public void test_take_is_lazy() {

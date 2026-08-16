@@ -5,6 +5,8 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNul
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 
 import java.util.List;
+
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -14,22 +16,22 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 // GetIterator(obj, async) plus the step loop it feeds, shared by `for await` and async `yield*`.
-// The two differ only in where the await happens: a real async iterator returns a promise *of* the
-// step object, while a sync iterator opened through CreateAsyncFromSyncIterator returns the step
-// object directly and only its `value` is awaited.
+// A real async iterator returns a promise *of* the step object; a sync iterator is wrapped in the
+// spec's %AsyncFromSyncIteratorPrototype% behaviour, where the step object is produced synchronously
+// and AsyncFromSyncIteratorContinuation awaits only its `value` (closing the sync iterator when that
+// await rejects on a not-done step).
 public final class AsyncIteration {
     private final Interpreter interp;
     private final JsValue iterator;
+    private final JsValue nextMethod;
     private final boolean fromSync;
-    // Generators and the array-likes have no reachable `next` property to drive, so they fall back
-    // to the shared synchronous Iteration and only their values are awaited.
-    private final Iteration syncIteration;
+    private boolean done;
 
-    private AsyncIteration(Interpreter interp, JsValue iterator, boolean fromSync, Iteration syncIteration) {
+    private AsyncIteration(Interpreter interp, JsValue iterator, JsValue nextMethod, boolean fromSync) {
         this.interp = interp;
         this.iterator = iterator;
+        this.nextMethod = nextMethod;
         this.fromSync = fromSync;
-        this.syncIteration = syncIteration;
     }
 
     // GetMethod is not the same as a plain member read: a present-but-non-callable @@asyncIterator
@@ -37,26 +39,24 @@ public final class AsyncIteration {
     public static AsyncIteration open(Interpreter interp, JsValue source) {
         final var asyncMethod = interp.getMemberByKey(source, JsSymbol.ASYNC_ITERATOR);
         if (!isNullish(asyncMethod)) {
-            final var opened = openWith(interp, source, asyncMethod);
-            return new AsyncIteration(interp, opened, false, null);
+            final var opened = openWith(interp, source, asyncMethod, "Symbol.asyncIterator");
+            return new AsyncIteration(interp, opened, interp.getMember(opened, "next"), false);
         }
         final var syncMethod = interp.getMemberByKey(source, JsSymbol.ITERATOR);
         if (isNullish(syncMethod)) {
             throw new TypeErrorException(JsCoercion.toStr(source) + " is not async iterable");
         }
-        if (!isCallable(syncMethod)) {
-            throw new TypeErrorException("Symbol.iterator is not a function");
-        }
-        return new AsyncIteration(interp, null, true, new Iteration(interp, source));
+        final var opened = openWith(interp, source, syncMethod, "Symbol.iterator");
+        return new AsyncIteration(interp, opened, interp.getMember(opened, "next"), true);
     }
 
-    private static JsValue openWith(Interpreter interp, JsValue source, JsValue method) {
+    private static JsValue openWith(Interpreter interp, JsValue source, JsValue method, String label) {
         if (!isCallable(method)) {
-            throw new TypeErrorException("Symbol.asyncIterator" + " is not a function");
+            throw new TypeErrorException(label + " is not a function");
         }
         final var opened = interp.callValue(method, source, List.of());
         if (!isObjectLike(opened)) {
-            throw new TypeErrorException("Result of " + "Symbol.asyncIterator" + " method is not an object");
+            throw new TypeErrorException("Result of " + label + " method is not an object");
         }
         return opened;
     }
@@ -68,35 +68,85 @@ public final class AsyncIteration {
     public record Step(boolean done, JsValue value) {
     }
 
+    // `for await` runs AsyncIteratorStepValue, which calls `next` with no argument at all — a `next`
+    // counting its arguments can observe the difference from the delegating form below.
     public Step step(Coroutine coroutine, JsValue sent) {
-        if (fromSync) {
-            final var value = syncIteration.next();
-            return value == null
-                    ? new Step(true, JsUndefined.getInstance())
-                    : new Step(false, coroutine.await(interp.toPromise(value)));
+        return step(coroutine, sent instanceof JsUndefined ? List.of() : List.of(sent));
+    }
+
+    private Step step(Coroutine coroutine, List<JsValue> args) {
+        if (done) {
+            return new Step(true, JsUndefined.getInstance());
         }
-        final var nextFn = interp.getMember(iterator, "next");
-        if (!isCallable(nextFn)) {
+        if (!isCallable(nextMethod)) {
             throw new TypeErrorException("iterator.next is not a function");
         }
-        // The spec passes no argument at all when there is no sent value, which a `next` counting
-        // its arguments can observe.
-        final var raw = interp.callValue(nextFn, iterator, sent instanceof JsUndefined ? List.of() : List.of(sent));
+        final var raw = interp.callValue(nextMethod, iterator, args);
+        final var step = fromSync ? continuation(coroutine, raw) : awaitStep(coroutine, raw);
+        if (!step.done()) {
+            coroutine.markDelegatedYield();
+        }
+        return step;
+    }
+
+    private Step awaitStep(Coroutine coroutine, JsValue raw) {
         final var settled = coroutine.await(interp.toPromise(raw));
         if (!isObjectLike(settled)) {
             throw new TypeErrorException("Iterator result is not an object");
         }
-        return new Step(JsCoercion.toBoolean(interp.getMember(settled, "done")), interp.getMember(settled, "value"));
+        final var complete = JsCoercion.toBoolean(interp.getMember(settled, "done"));
+        done = done || complete;
+        return new Step(complete, interp.getMember(settled, "value"));
+    }
+
+    // AsyncFromSyncIteratorContinuation: read `done` and `value` off the *synchronous* result, then
+    // await only the value; a rejection on a not-done step closes the sync iterator before it
+    // propagates.
+    private Step continuation(Coroutine coroutine, JsValue raw) {
+        if (!isObjectLike(raw)) {
+            done = true;
+            throw new TypeErrorException("Iterator result is not an object");
+        }
+        final boolean complete;
+        final JsValue value;
+        try {
+            complete = JsCoercion.toBoolean(interp.getMember(raw, "done"));
+            value = interp.getMember(raw, "value");
+        } catch (SimpleJsRuntimeException error) {
+            done = true;
+            throw error;
+        }
+        done = done || complete;
+        try {
+            return new Step(complete, coroutine.await(interp.toPromise(value)));
+        } catch (SimpleJsRuntimeException error) {
+            if (!complete) {
+                closeSyncQuietly();
+                done = true;
+            }
+            throw error;
+        }
     }
 
     public void close() {
-        if (fromSync) {
-            syncIteration.close();
+        if (done) {
             return;
         }
+        done = true;
         final var returnFn = interp.getMember(iterator, "return");
         if (isCallable(returnFn)) {
-            interp.callValue(returnFn, iterator, List.of(JsUndefined.getInstance()));
+            interp.callValue(returnFn, iterator, List.of());
+        }
+    }
+
+    private void closeSyncQuietly() {
+        try {
+            final var returnFn = interp.getMember(iterator, "return");
+            if (isCallable(returnFn)) {
+                interp.callValue(returnFn, iterator, List.of());
+            }
+        } catch (SimpleJsRuntimeException ignored) {
+            // the original completion wins over anything the iterator's `return` throws
         }
     }
 }

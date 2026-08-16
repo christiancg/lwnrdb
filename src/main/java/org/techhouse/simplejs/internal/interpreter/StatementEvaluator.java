@@ -248,9 +248,7 @@ public final class StatementEvaluator {
         var value = iteration.next();
         while (value != null) {
             interp.tick();
-            final var iterationEnv = env.child();
-            interp.bindForTarget(statement.getLeft(), value, iterationEnv);
-            final var completion = evalIterationBody(statement.getBody(), iterationEnv);
+            final var completion = runForOfIteration(statement, env, iteration, value);
             final var action = classify(completion, label);
             if (action == LoopAction.PROPAGATE) {
                 iteration.close();
@@ -263,6 +261,25 @@ public final class StatementEvaluator {
             value = iteration.next();
         }
         return Completion.empty();
+    }
+
+    // Binding the target or running the body abruptly is a throw completion for the loop's iterator,
+    // which is closed with that completion before the error propagates.
+    private Completion runForOfIteration(ForOfStatement statement, Environment env, Iteration iteration,
+            JsValue value) {
+        try {
+            final var iterationEnv = env.child();
+            interp.bindForTarget(statement.getLeft(), value, iterationEnv);
+            return evalIterationBody(statement.getBody(), iterationEnv);
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (Coroutine.ReturnSignal signal) {
+            iteration.close();
+            throw signal;
+        } catch (RuntimeException error) {
+            iteration.closeAfterThrow();
+            throw error;
+        }
     }
 
     private Completion evalForAwaitOf(ForOfStatement statement, Environment env, String label) {

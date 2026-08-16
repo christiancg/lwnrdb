@@ -336,4 +336,158 @@ public class PromiseBuiltinsTest {
                 """;
         assertEquals(0, arr(source).length());
     }
+
+    // `new` on a Promise subclass runs the subclass constructor with the base executor
+    @Test
+    public void test_subclass_constructor_is_honoured() {
+        final var source = """
+                let out = [];
+                let seen = 0;
+                class Sub extends Promise {
+                    constructor(executor) { super(executor); seen++; }
+                }
+                new Sub(res => res(7)).then(v => out.push(seen + ':' + v));
+                out
+                """;
+        assertEquals("1:7", string(arr(source)));
+    }
+
+    // then() builds its result through SpeciesConstructor, so a subclass receiver yields a subclass
+    @Test
+    public void test_then_uses_species_constructor() {
+        final var source = """
+                let out = [];
+                class Sub extends Promise {
+                    static get [Symbol.species]() { return Sub; }
+                }
+                let derived = new Sub(res => res(1)).then(v => v + 1);
+                derived.then(v => out.push((derived instanceof Sub) + ':' + v));
+                out
+                """;
+        assertEquals("true:2", string(arr(source)));
+    }
+
+    // Promise.all opens its argument through GetIterator rather than reading array storage directly
+    @Test
+    public void test_all_invokes_get_iterator_not_array_fast_path() {
+        final var source = """
+                let out = [];
+                let calls = 0;
+                let items = {
+                    [Symbol.iterator]() {
+                        calls++;
+                        let i = 0;
+                        return { next: () => i < 2 ? { value: i++, done: false } : { done: true } };
+                    }
+                };
+                Promise.all(items).then(a => out.push(calls + ':' + a.join(',')));
+                out
+                """;
+        assertEquals("1:0,1", string(arr(source)));
+    }
+
+    // PerformPromiseAll reads `resolve` off the constructor once and calls it for every element
+    @Test
+    public void test_all_looks_up_resolve_per_iteration() {
+        final var source = """
+                let out = [];
+                let calls = 0;
+                function Ctor(executor) { executor(v => out.push('resolved:' + calls), () => {}); }
+                Ctor.resolve = v => { calls++; return Promise.resolve(v); };
+                Promise.all.call(Ctor, [1, 2, 3]);
+                out
+                """;
+        assertEquals("resolved:3", string(arr(source)));
+    }
+
+    // a combinator called on a foreign constructor settles through that constructor's own executor
+    @Test
+    public void test_combinators_use_receiver_capability() {
+        final var source = """
+                let out = [];
+                let executors = 0;
+                function Ctor(executor) { executors++; executor(v => out.push('r:' + executors), () => {}); }
+                Ctor.resolve = v => Promise.resolve(v);
+                Promise.all.call(Ctor, []);
+                out
+                """;
+        assertEquals("r:1", string(arr(source)));
+    }
+
+    // finally resolves the thenable its callback returns before passing the original value along
+    @Test
+    public void test_finally_awaits_thenable_returned_by_callback() {
+        final var source = """
+                let out = [];
+                Promise.resolve('v')
+                    .finally(() => ({ then(res) { out.push('late'); res(); } }))
+                    .then(v => out.push(v));
+                out
+                """;
+        final var out = arr(source);
+        assertEquals("late", string(out));
+        assertEquals("v", ((JsString) out.get(1)).getValue());
+    }
+
+    // a throwing finally callback rejects the derived promise instead of being swallowed
+    @Test
+    public void test_finally_callback_throw_rejects() {
+        final var source = """
+                let out = [];
+                Promise.resolve(1).finally(() => { throw 'boom'; }).catch(e => out.push(e));
+                out
+                """;
+        assertEquals("boom", string(arr(source)));
+    }
+
+    // Promise.allKeyed resolves with a null-prototype object keyed by the input's enumerable keys
+    @Test
+    public void test_all_keyed_resolves_to_keyed_object() {
+        final var source = """
+                let out = [];
+                Promise.allKeyed({ a: Promise.resolve(1), b: 2 }).then(r =>
+                    out.push(Object.keys(r).join(',') + '|' + r.a + ',' + r.b
+                        + '|' + (Object.getPrototypeOf(r) === null)));
+                out
+                """;
+        assertEquals("a,b|1,2|true", string(arr(source)));
+    }
+
+    // Promise.allSettledKeyed reports a per-key status object
+    @Test
+    public void test_all_settled_keyed_reports_status() {
+        final var source = """
+                let out = [];
+                Promise.allSettledKeyed({ a: Promise.resolve(1), b: Promise.reject('e') }).then(r =>
+                    out.push(r.a.status + ',' + r.a.value + '|' + r.b.status + ',' + r.b.reason));
+                out
+                """;
+        assertEquals("fulfilled,1|rejected,e", string(arr(source)));
+    }
+
+    // resolving a promise with itself rejects it with a TypeError instead of hanging
+    @Test
+    public void test_self_resolution_rejects() {
+        final var source = """
+                let out = [];
+                let resolve;
+                let p = new Promise(r => { resolve = r; });
+                p.catch(e => out.push(e.name));
+                resolve(p);
+                out
+                """;
+        assertEquals("TypeError", string(arr(source)));
+    }
+
+    // resolving with a promise queues the spec's thenable job, so the value arrives two ticks later
+    @Test
+    public void test_resolving_with_a_promise_queues_a_thenable_job() {
+        final var source = """
+                let out = [];
+                new Promise(res => res(Promise.resolve('inner'))).then(v => out.push(v));
+                Promise.resolve().then(() => out.push('b')).then(() => out.push('c'));
+                out
+                """;
+        assertEquals("b", string(arr(source)));
+    }
 }

@@ -1,11 +1,14 @@
 package org.techhouse.simplejs.internal;
 
 import java.math.BigInteger;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.simplejs.elements.JsBaseElement;
+import org.techhouse.simplejs.elements.JsBaseElement.JsType;
 import org.techhouse.simplejs.elements.JsBigInt;
 import org.techhouse.simplejs.elements.JsBoolean;
 import org.techhouse.simplejs.elements.JsEOF;
@@ -87,6 +90,7 @@ public final class Lexer {
         final var n = sourceCode.length();
         var pos = skipHashbang(sourceCode, n);
         var sawNewline = false;
+        final var braces = new BraceContext();
         JsBaseElement last = null;
         while (pos < n) {
             final var c = sourceCode.charAt(pos);
@@ -117,7 +121,7 @@ public final class Lexer {
                 lexed = lexWord(sourceCode, pos);
             } else if (c == '#' && pos + 1 < n && isIdentifierStart(sourceCode, pos + 1)) {
                 lexed = lexPrivateIdentifier(sourceCode, pos);
-            } else if (c == '/' && startsRegex(last)) {
+            } else if (c == '/' && startsRegex(last, braces)) {
                 lexed = lexRegex(sourceCode, pos);
             } else {
                 final var op = lexOperator(sourceCode, pos);
@@ -129,6 +133,7 @@ public final class Lexer {
                     throw new UnexpectedCharacterException(c, pos);
                 }
             }
+            braces.observe(lexed.token(), last);
             tokens.add(lexed.token());
             positions.add(positionOf(pos, lexed.next() - pos, lineStarts));
             newlineBefore.add(sawNewline);
@@ -188,8 +193,12 @@ public final class Lexer {
         if (!src.startsWith("#!")) {
             return 0;
         }
-        var i = 2;
-        while (i < n && src.charAt(i) != '\n') {
+        return skipToLineTerminator(src, 2, n);
+    }
+
+    private static int skipToLineTerminator(String src, int start, int n) {
+        var i = start;
+        while (i < n && !isLineTerminator(src.charAt(i))) {
             i++;
         }
         return i;
@@ -198,11 +207,7 @@ public final class Lexer {
     private static int skipComment(String src, int start) {
         final var n = src.length();
         if (src.charAt(start + 1) == '/') {
-            var i = start + 2;
-            while (i < n && src.charAt(i) != '\n') {
-                i++;
-            }
-            return i;
+            return skipToLineTerminator(src, start + 2, n);
         }
         var i = start + 2;
         while (i + 1 < n) {
@@ -228,6 +233,10 @@ public final class Lexer {
                 i = appendEscape(src, i + 1, builder);
             } else if (c == quote) {
                 return new Lexed(new JsString(builder.toString()), i + 1);
+            } else if (c == '\n' || c == '\r') {
+                // LineSeparator and ParagraphSeparator are legal in a string literal; LF and CR
+                // are not - the literal has to be closed on the line it opened on.
+                break;
             } else {
                 builder.append(c);
                 i++;
@@ -238,6 +247,9 @@ public final class Lexer {
 
     private static int appendEscape(String src, int i, StringBuilder builder) {
         final var e = src.charAt(i);
+        if (isLineTerminator(e)) {
+            return e == '\r' && i + 1 < src.length() && src.charAt(i + 1) == '\n' ? i + 2 : i + 1;
+        }
         switch (e) {
             case 'n' -> builder.append('\n');
             case 't' -> builder.append('\t');
@@ -253,18 +265,9 @@ public final class Lexer {
             }
             case '1', '2', '3', '4', '5', '6', '7', '8', '9' ->
                 throw new SyntaxErrorException("Octal escape sequences are not allowed in strict mode");
-            case '\n' -> {
-                return i + 1;
-            }
-            case '\r' -> {
-                return i + 1 < src.length() && src.charAt(i + 1) == '\n' ? i + 2 : i + 1;
-            }
             case 'x' -> {
-                if (i + 2 < src.length()) {
-                    builder.append((char) Integer.parseInt(src.substring(i + 1, i + 3), 16));
-                    return i + 3;
-                }
-                builder.append(e);
+                builder.append((char) readHex(src, i + 1, 2));
+                return i + 3;
             }
             case 'u' -> {
                 return appendUnicodeEscape(src, i, builder);
@@ -278,16 +281,38 @@ public final class Lexer {
         final var n = src.length();
         if (i + 1 < n && src.charAt(i + 1) == '{') {
             final var end = src.indexOf('}', i + 2);
-            if (end > 0) {
-                builder.appendCodePoint(Integer.parseInt(src.substring(i + 2, end), 16));
-                return end + 1;
+            if (end < 0) {
+                throw new SyntaxErrorException("Invalid Unicode escape sequence");
             }
-        } else if (i + 4 < n) {
-            builder.append((char) Integer.parseInt(src.substring(i + 1, i + 5), 16));
-            return i + 5;
+            final var point = readHex(src, i + 2, end - i - 2);
+            if (point > Character.MAX_CODE_POINT) {
+                throw new SyntaxErrorException("Undefined Unicode code-point");
+            }
+            builder.appendCodePoint(point);
+            return end + 1;
         }
-        builder.append('u');
-        return i + 1;
+        builder.append((char) readHex(src, i + 1, 4));
+        return i + 5;
+    }
+
+    // Reads exactly `count` hexadecimal digits: anything shorter, or a non-hex character anywhere
+    // in the run (a numeric separator included), makes the escape sequence a Syntax Error.
+    private static int readHex(String src, int from, int count) {
+        if (count <= 0 || from + count > src.length()) {
+            throw new SyntaxErrorException("Invalid hexadecimal escape sequence");
+        }
+        var value = 0;
+        for (var i = from; i < from + count; i++) {
+            final var digit = Character.digit(src.charAt(i), 16);
+            if (digit < 0) {
+                throw new SyntaxErrorException("Invalid hexadecimal escape sequence");
+            }
+            value = value * 16 + digit;
+            if (value > Character.MAX_CODE_POINT) {
+                throw new SyntaxErrorException("Undefined Unicode code-point");
+            }
+        }
+        return value;
     }
 
     private static Lexed lexNumber(String src, int start) {
@@ -302,19 +327,25 @@ public final class Lexer {
             if (radix != 0) {
                 final var end = scanDigits(src, start + 2, n, radix);
                 final var digits = src.substring(start + 2, end).replace("_", "");
-                if (end < n && src.charAt(end) == 'n') {
-                    return new Lexed(new JsBigInt(new BigInteger(digits, radix)), end + 1);
+                if (digits.isEmpty()) {
+                    throw new SyntaxErrorException("Missing digits after the numeric literal prefix");
                 }
-                return new Lexed(new JsNumber((double) Long.parseLong(digits, radix)), end);
+                if (end < n && src.charAt(end) == 'n') {
+                    return endOfNumber(new JsBigInt(new BigInteger(digits, radix)), src, end + 1);
+                }
+                return endOfNumber(new JsNumber((double) Long.parseLong(digits, radix)), src, end);
             }
             if (Character.isDigit(src.charAt(start + 1))) {
                 throw new SyntaxErrorException("Octal literals are not allowed in strict mode; use the 0o prefix");
+            }
+            if (src.charAt(start + 1) == '_') {
+                throw new SyntaxErrorException("Numeric separators are not allowed after a leading zero");
             }
         }
         var j = scanDigits(src, start, n, 10);
         final var fractional = j < n && (src.charAt(j) == '.' || src.charAt(j) == 'e' || src.charAt(j) == 'E');
         if (!fractional && j < n && src.charAt(j) == 'n') {
-            return new Lexed(new JsBigInt(new BigInteger(src.substring(start, j).replace("_", ""))), j + 1);
+            return endOfNumber(new JsBigInt(new BigInteger(src.substring(start, j).replace("_", ""))), src, j + 1);
         }
         if (j < n && src.charAt(j) == '.') {
             j = scanDigits(src, j + 1, n, 10);
@@ -328,7 +359,16 @@ public final class Lexer {
                 j = scanDigits(src, k, n, 10);
             }
         }
-        return new Lexed(new JsNumber(Double.parseDouble(src.substring(start, j).replace("_", ""))), j);
+        return endOfNumber(new JsNumber(Double.parseDouble(src.substring(start, j).replace("_", ""))), src, j);
+    }
+
+    // A numeric literal must not be followed immediately by an identifier or another digit, so
+    // `3in[]` and `0b2` are Syntax Errors rather than a literal plus a token.
+    private static Lexed endOfNumber(JsBaseElement token, String src, int end) {
+        if (end < src.length() && (Character.isDigit(src.charAt(end)) || isIdentifierStart(src, end))) {
+            throw new SyntaxErrorException("Identifier or digit directly after a numeric literal");
+        }
+        return new Lexed(token, end);
     }
 
     // Consumes a run of radix digits, allowing a single '_' separator only between two digits.
@@ -467,7 +507,7 @@ public final class Lexer {
     // A slash begins a regex only when the previous significant token cannot end an
     // expression; otherwise it is the division operator. This is the standard JS lexer
     // heuristic for the regex/division ambiguity.
-    private static boolean startsRegex(JsBaseElement last) {
+    private static boolean startsRegex(JsBaseElement last, BraceContext braces) {
         if (last == null) {
             return true;
         }
@@ -476,10 +516,86 @@ public final class Lexer {
             case KEYWORD -> !EXPRESSION_END_KEYWORDS.contains(((JsKeyword) last).getValue());
             case SEPARATOR -> {
                 final var c = ((JsSeparator) last).getValue();
-                yield c != ')' && c != ']' && c != '}';
+                yield c == '}' ? braces.closedBlock() : c != ')' && c != ']';
             }
             default -> false;
         };
+    }
+
+    // Tracks what each open brace encloses so a `/` after `}` can be told apart: a block, a
+    // function-declaration body or a class body ends a statement, and the next `/` therefore starts
+    // a regular expression, while an object literal or a function-expression body ends a value, and
+    // the next `/` is division.
+    private static final class BraceContext {
+        private static final Set<String> BLOCK_KEYWORDS = Set.of("else", "do", "try", "finally");
+
+        private static final Set<String> HEADER_KEYWORDS = Set.of("if", "for", "while", "switch", "catch");
+
+        private final Deque<Boolean> open = new ArrayDeque<>();
+        private int bodyNesting = -1;
+        private boolean bodyIsStatement;
+        private boolean closedBlock;
+        private boolean closedHeader;
+
+        private void observe(JsBaseElement token, JsBaseElement previous) {
+            if (token.getType() == JsType.KEYWORD) {
+                observeKeyword(((JsKeyword) token).getValue(), previous);
+                return;
+            }
+            if (token.getType() != JsType.SEPARATOR) {
+                return;
+            }
+            switch (((JsSeparator) token).getValue()) {
+                case '(' -> open.push(isHeader(previous));
+                case '[' -> open.push(Boolean.FALSE);
+                case ')' -> closedHeader = pop();
+                case ']' -> pop();
+                case '{' -> {
+                    open.push(bodyNesting == open.size() ? bodyIsStatement : startsStatement(previous));
+                    bodyNesting = -1;
+                }
+                case '}' -> closedBlock = pop();
+                default -> {
+                }
+            }
+        }
+
+        // A `function` or `class` in statement position has a body that ends a statement; the same
+        // keyword in expression position has one that ends a value. The decision is taken at the
+        // keyword and applied to the brace that opens the body, whatever comes between.
+        private void observeKeyword(String keyword, JsBaseElement previous) {
+            if ("function".equals(keyword) || "class".equals(keyword)) {
+                bodyNesting = open.size();
+                bodyIsStatement = startsStatement(previous);
+            }
+        }
+
+        private boolean isHeader(JsBaseElement previous) {
+            return previous != null && previous.getType() == JsType.KEYWORD
+                    && HEADER_KEYWORDS.contains(((JsKeyword) previous).getValue());
+        }
+
+        private boolean pop() {
+            return !open.isEmpty() && Boolean.TRUE.equals(open.pop());
+        }
+
+        private boolean closedBlock() {
+            return closedBlock;
+        }
+
+        private boolean startsStatement(JsBaseElement previous) {
+            if (previous == null) {
+                return true;
+            }
+            if (previous.getType() == JsType.KEYWORD) {
+                return BLOCK_KEYWORDS.contains(((JsKeyword) previous).getValue());
+            }
+            if (previous.getType() != JsType.SEPARATOR) {
+                return false;
+            }
+            final var c = ((JsSeparator) previous).getValue();
+            return c == ';' || c == '{' || (c == ')' && closedHeader) || (c == '}' && closedBlock);
+        }
     }
 
     private static Lexed lexRegex(String src, int start) {
@@ -490,12 +606,12 @@ public final class Lexer {
         while (i < n) {
             final var c = src.charAt(i);
             if (c == '\\') {
-                if (i + 1 >= n) {
+                if (i + 1 >= n || isLineTerminator(src.charAt(i + 1))) {
                     break;
                 }
                 pattern.append(c).append(src.charAt(i + 1));
                 i += 2;
-            } else if (c == '\n') {
+            } else if (isLineTerminator(c)) {
                 break;
             } else if (c == '[') {
                 inClass = true;
@@ -538,22 +654,33 @@ public final class Lexer {
                 i = appendEscape(src, i + 1, builder);
             } else if (c == '`') {
                 quasis.add(builder.toString());
-                rawQuasis.add(src.substring(rawStart, i));
+                rawQuasis.add(normalizeLineTerminators(src.substring(rawStart, i)));
                 return new Lexed(new JsTemplateString(quasis, rawQuasis, expressions), i + 1);
             } else if (c == '$' && i + 1 < n && src.charAt(i + 1) == '{') {
                 quasis.add(builder.toString());
-                rawQuasis.add(src.substring(rawStart, i));
+                rawQuasis.add(normalizeLineTerminators(src.substring(rawStart, i)));
                 builder.setLength(0);
                 final var close = scanBalancedBraces(src, i + 2, start);
                 expressions.add(lex(src.substring(i + 2, close)));
                 i = close + 1;
                 rawStart = i;
+            } else if (c == '\r') {
+                builder.append('\n');
+                i += i + 1 < n && src.charAt(i + 1) == '\n' ? 2 : 1;
             } else {
                 builder.append(c);
                 i++;
             }
         }
         throw new UnterminatedTemplateException(start);
+    }
+
+    // A template's TV and TRV normalise every <CR> and <CR><LF> sequence to a single <LF>.
+    private static String normalizeLineTerminators(String raw) {
+        if (raw.indexOf('\r') < 0) {
+            return raw;
+        }
+        return raw.replace("\r\n", "\n").replace('\r', '\n');
     }
 
     // Finds the closing brace of a `${ ... }` interpolation, skipping over string and
@@ -619,7 +746,14 @@ public final class Lexer {
 
     private static Lexed lexOperator(String src, int start) {
         for (final var op : OPERATORS) {
-            if (src.regionMatches(start, op, 0, op.length())) {
+            if (!src.regionMatches(start, op, 0, op.length())) {
+                continue;
+            }
+            // `?.` is not the optional-chaining punctuator when a decimal digit follows, so
+            // `a ?.3 : b` stays a conditional expression with a fractional literal.
+            final var isOptionalChainBeforeDigit = "?.".equals(op) && start + 2 < src.length()
+                    && Character.isDigit(src.charAt(start + 2));
+            if (!isOptionalChainBeforeDigit) {
                 return new Lexed(new JsOperator(op), start + op.length());
             }
         }

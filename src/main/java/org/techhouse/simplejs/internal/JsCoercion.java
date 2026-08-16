@@ -3,6 +3,7 @@ package org.techhouse.simplejs.internal;
 import java.math.BigInteger;
 import java.util.List;
 import org.techhouse.ejson.internal.NumberFormatter;
+import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArguments;
@@ -72,9 +73,9 @@ public final class JsCoercion {
             case JsArray a -> arrayToString(a);
             case JsObject wrapper when wrapper.getPrimitive() != null -> toStr(wrapper.getPrimitive());
             case JsObject ignored -> "[object Object]";
-            case JsFunction f -> functionToString(f.getName());
-            case JsNativeFunction f -> functionToString(f.getName());
-            case JsClass c -> "class " + (c.getName() == null ? "" : c.getName());
+            case JsFunction f -> FunctionProtoBuiltins.sourceText(f);
+            case JsNativeFunction f -> FunctionProtoBuiltins.sourceText(f);
+            case JsClass c -> FunctionProtoBuiltins.sourceText(c);
             case JsPromise ignored -> "[object Promise]";
             case JsGenerator ignored -> "[object Generator]";
             case JsAsyncGenerator ignored -> "[object AsyncGenerator]";
@@ -170,10 +171,6 @@ public final class JsCoercion {
             case JsProxy proxy -> typeOf(proxy.getTarget());
             default -> "object";
         };
-    }
-
-    private static String functionToString(String name) {
-        return "function " + (name == null ? "" : name) + "() { }";
     }
 
     private static String typedArrayToString(JsTypedArray typed) {

@@ -1,10 +1,12 @@
 package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.iterableElements;
 
 import java.util.List;
+import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -26,6 +28,9 @@ public final class Iteration {
     private final JsGenerator generator;
     private final List<JsValue> buffer;
     private final JsValue iterator;
+    // GetIterator reads `next` once and every step calls that same function, so a script replacing
+    // the property mid-iteration is not observed.
+    private final JsValue nextMethod;
     private int index;
 
     public Iteration(Interpreter interp, JsValue iterable) {
@@ -43,33 +48,61 @@ public final class Iteration {
             this.buffer = null;
             this.iterator = openIterator(iterable);
         }
+        this.nextMethod = iterator == null ? null : interp.getMember(iterator, "next");
     }
 
     public JsValue next() {
         if (generator != null) {
             final var step = generator.getCoroutine().resumeNext(JsUndefined.getInstance());
-            return step.done() ? null : step.value();
+            return step.done() ? null : YieldDelegation.unwrapYielded(interp, step.value());
         }
         if (iterator != null) {
-            final var nextFn = interp.getMember(iterator, "next");
-            if (!isCallable(nextFn)) {
+            if (!isCallable(nextMethod)) {
                 throw new TypeErrorException("iterator.next is not a function");
             }
-            final var step = interp.callValue(nextFn, iterator, List.of());
+            final var step = interp.callValue(nextMethod, iterator, List.of());
+            if (!isObjectLike(step)) {
+                throw new TypeErrorException("Iterator result is not an object");
+            }
             return JsCoercion.toBoolean(interp.getMember(step, "done")) ? null : interp.getMember(step, "value");
         }
         return index < buffer.size() ? buffer.get(index++) : null;
     }
 
+    // IteratorClose under a normal completion: a `return` that is present but not callable, or that
+    // answers a non-object, is a TypeError the caller sees.
     public void close() {
-        if (generator != null && !generator.getCoroutine().isDone()) {
-            generator.getCoroutine().resumeReturn(JsUndefined.getInstance());
-        }
-        if (iterator != null) {
-            final var returnFn = interp.getMember(iterator, "return");
-            if (isCallable(returnFn)) {
-                interp.callValue(returnFn, iterator, List.of());
+        if (generator != null) {
+            if (!generator.getCoroutine().isDone()) {
+                generator.getCoroutine().resumeReturn(JsUndefined.getInstance());
             }
+            return;
+        }
+        if (iterator == null) {
+            return;
+        }
+        final var returnFn = interp.getMember(iterator, "return");
+        if (isNullish(returnFn)) {
+            return;
+        }
+        if (!isCallable(returnFn)) {
+            throw new TypeErrorException("iterator.return is not a function");
+        }
+        final var result = interp.callValue(returnFn, iterator, List.of());
+        if (!isObjectLike(result)) {
+            throw new TypeErrorException("Iterator result is not an object");
+        }
+    }
+
+    // IteratorClose under a throw completion: the pending error is the one that propagates, so
+    // everything the close itself raises is discarded.
+    public void closeAfterThrow() {
+        try {
+            close();
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException ignored) {
+            // discarded on purpose: the original throw completion wins
         }
     }
 

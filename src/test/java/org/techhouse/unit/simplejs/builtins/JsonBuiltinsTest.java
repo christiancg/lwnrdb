@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
@@ -58,7 +59,63 @@ public class JsonBuiltinsTest {
     // parsing invalid JSON throws a SyntaxError
     @Test
     public void test_parse_invalid_throws() {
-        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse(42)"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse('{bad}')"));
+    }
+
+    @Test
+    public void parseCoercesTextThroughToString() {
+        assertEquals(42, num("JSON.parse(42)"));
+        assertEquals(1, num("JSON.parse({ toString: () => '[1]' })[0]"));
+    }
+
+    @Test
+    public void parseRejectsIllegalJsonText() {
+        for (final var text : List.of("'01'", "'{\"a\":1,}'", "'[1,]'", "'\\'a\\''", "'undefined'", "'1 2'", "'.5'",
+                "'+1'", "'NaN'", "'[1] junk'")) {
+            assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse(" + text + ")"), text);
+        }
+    }
+
+    @Test
+    public void parsePreservesNegativeZero() {
+        assertEquals(Double.NEGATIVE_INFINITY, num("1 / JSON.parse('-0')"));
+        assertEquals(Double.POSITIVE_INFINITY, num("1 / JSON.parse('0')"));
+    }
+
+    @Test
+    public void parseDoesNotHonourProtoKey() {
+        final var parsed = "JSON.parse('{\"__proto__\": {\"x\": 1}}')";
+        assertEquals("true", str("String(Object.prototype.hasOwnProperty.call(" + parsed + ", '__proto__'))"));
+        assertEquals(1, num(parsed + ".__proto__.x"));
+        assertEquals("undefined", str("typeof " + parsed + ".x"));
+    }
+
+    @Test
+    public void reviverWalksViaOwnPropertyKeys() {
+        assertEquals("a,b",
+                str("let seen = [];"
+                        + " JSON.parse('{\"a\":1,\"b\":2}', function (k, v) { if (k) seen.push(k); return v; });"
+                        + " seen.join(',')"));
+        assertEquals("undefined", str("typeof JSON.parse('{\"a\":1}', (k, v) => k === 'a' ? undefined : v).a"));
+    }
+
+    @Test
+    public void stringifyHandlesProxyAndBoxedPrimitives() {
+        assertEquals("{\"a\":1}", str("JSON.stringify(new Proxy({a: 1}, {}))"));
+        assertEquals("[1,2]", str("JSON.stringify(new Proxy([1, 2], {}))"));
+        assertEquals("1", str("JSON.stringify(new Number(1))"));
+        assertEquals("\"x\"", str("JSON.stringify(new String('x'))"));
+        assertEquals("true", str("JSON.stringify(new Boolean(true))"));
+    }
+
+    // the EJson extended types the DB persists survive a stringify/parse round trip as strings
+    @Test
+    public void ejsonCustomTypesRoundTripAsStrings() {
+        final var source = "let doc = { g: '#geo(1.5,2.5)', v: '#vector(1,2,3)', d: '2020-01-02T03:04:05.000Z' };"
+                + " let back = JSON.parse(JSON.stringify(doc)); ";
+        assertEquals("#geo(1.5,2.5)", str(source + "back.g"));
+        assertEquals("#vector(1,2,3)", str(source + "back.v"));
+        assertEquals("2020-01-02T03:04:05.000Z", str(source + "back.d"));
     }
 
     // stringify accepts a null argument
@@ -128,5 +185,118 @@ public class JsonBuiltinsTest {
     @Test
     public void test_parse_non_callable_reviver_ignored() {
         assertEquals(1, num("JSON.parse('{\"a\":1}', null).a"));
+    }
+
+    @Test
+    public void parseReadsTheThreeKeywordLiterals() {
+        assertEquals("true", str("String(JSON.parse('true'))"));
+        assertEquals("false", str("String(JSON.parse('false'))"));
+        assertEquals("object", str("typeof JSON.parse('null')"));
+        assertEquals("true", str("String(JSON.parse(' \\t\\r\\n true \\n '))"));
+    }
+
+    @Test
+    public void parseRejectsTruncatedKeywordLiterals() {
+        for (final var text : List.of("'tru'", "'fals'", "'nul'", "'t'", "'n'", "'f'")) {
+            assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse(" + text + ")"), text);
+        }
+    }
+
+    @Test
+    public void parseReadsEmptyContainers() {
+        assertEquals(0, num("Object.keys(JSON.parse('{}')).length"));
+        assertEquals(0, num("JSON.parse('[]').length"));
+        assertEquals(0, num("JSON.parse('{ }').length || 0"));
+        assertEquals(0, num("JSON.parse('[ ]').length"));
+    }
+
+    @Test
+    public void parseRejectsEmptyAndBlankText() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse('')"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse('   ')"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse('[')"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse('{')"));
+    }
+
+    @Test
+    public void parseReadsEveryStringEscape() {
+        assertEquals(8, num("JSON.parse('\"\\\\b\"').charCodeAt(0)"));
+        assertEquals(12, num("JSON.parse('\"\\\\f\"').charCodeAt(0)"));
+        assertEquals(10, num("JSON.parse('\"\\\\n\"').charCodeAt(0)"));
+        assertEquals(13, num("JSON.parse('\"\\\\r\"').charCodeAt(0)"));
+        assertEquals(9, num("JSON.parse('\"\\\\t\"').charCodeAt(0)"));
+        assertEquals("/", str("JSON.parse('\"\\\\/\"')"));
+        assertEquals("\\", str("JSON.parse('\"\\\\\\\\\"')"));
+        assertEquals("\"", str("JSON.parse('\"\\\\\\\"\"')"));
+        assertEquals("A", str("JSON.parse('\"\\\\u0041\"')"));
+    }
+
+    // a lone surrogate survives parsing: JSON text is scanned as code units, not code points
+    @Test
+    public void parseKeepsALoneSurrogate() {
+        assertEquals(0xD834, num("JSON.parse('\"\\\\ud834\"').charCodeAt(0)"));
+        assertEquals(1, num("JSON.parse('\"\\\\ud834\"').length"));
+    }
+
+    @Test
+    public void parseRejectsBadStringContent() {
+        for (final var text : List.of("'\"abc'", "'\"\\\\'", "'\"\\\\q\"'", "'\"\\\\u00\"'", "'\"\\\\uZZZZ\"'",
+                "'\"\\\\u12g4\"'", "'\"a\\u0001b\"'")) {
+            assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse(" + text + ")"), text);
+        }
+    }
+
+    @Test
+    public void parseReadsFractionsAndExponents() {
+        assertEquals(1.5, num("JSON.parse('1.5')"));
+        assertEquals(-1.5, num("JSON.parse('-1.5')"));
+        assertEquals(1500, num("JSON.parse('1.5e3')"));
+        assertEquals(1500, num("JSON.parse('1.5E+3')"));
+        assertEquals(0.0015, num("JSON.parse('1.5e-3')"));
+        assertEquals(-0.5, num("JSON.parse('-0.5')"));
+    }
+
+    @Test
+    public void parseRejectsMalformedNumbers() {
+        for (final var text : List.of("'1.'", "'1e'", "'1e+'", "'-'", "'1.2.3'", "'--1'")) {
+            assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse(" + text + ")"), text);
+        }
+    }
+
+    @Test
+    public void parseRejectsMalformedStructure() {
+        for (final var text : List.of("'{\"a\" 1}'", "'{\"a\":1 \"b\":2}'", "'[1 2]'", "'{a:1}'", "'{1:2}'", "'[1,2'",
+                "'{\"a\":1'")) {
+            assertThrows(SyntaxErrorException.class, () -> Interpreter.run("JSON.parse(" + text + ")"), text);
+        }
+    }
+
+    @Test
+    public void parseReadsDeeplyNestedText() {
+        assertEquals(1, num("JSON.parse('[[[[[[[[[[1]]]]]]]]]]')[0][0][0][0][0][0][0][0][0][0]"));
+        assertEquals(1, num("JSON.parse('{\"a\":{\"a\":{\"a\":{\"a\":1}}}}').a.a.a.a"));
+    }
+
+    @Test
+    public void stringifyWithoutArgumentsIsUndefined() {
+        assertEquals("undefined", str("typeof JSON.stringify()"));
+    }
+
+    @Test
+    public void stringifyReadsBoxedPropertyListEntriesAndSkipsOthers() {
+        assertEquals("{\"a\":1}", str("JSON.stringify({a: 1, b: 2}, [new String('a')])"));
+        assertEquals("{\"1\":2}", str("JSON.stringify({1: 2, b: 3}, [new Number(1)])"));
+        assertEquals("{}", str("JSON.stringify({a: 1}, [true, null, {}])"));
+    }
+
+    @Test
+    public void stringifyUnwrapsABoxedSpaceArgument() {
+        assertEquals("{\n  \"a\": 1\n}", str("JSON.stringify({a: 1}, null, new Number(2))"));
+        assertEquals("{\n--\"a\": 1\n}", str("JSON.stringify({a: 1}, null, new String('--'))"));
+    }
+
+    @Test
+    public void stringifyFiltersProxyKeysThroughThePropertyList() {
+        assertEquals("{\"a\":1}", str("JSON.stringify(new Proxy({a: 1, b: 2}, {}), ['a'])"));
     }
 }

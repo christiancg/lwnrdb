@@ -20,7 +20,11 @@ public interface InterpreterOps {
 
     JsValue call(JsValue fn, JsValue thisArg, List<JsValue> args);
 
-    JsValue construct(JsValue fn, List<JsValue> args);
+    JsValue construct(JsValue fn, List<JsValue> args, JsValue newTarget);
+
+    default JsValue construct(JsValue fn, List<JsValue> args) {
+        return construct(fn, args, fn);
+    }
 
     JsValue getPrototypeOf(JsValue target);
 

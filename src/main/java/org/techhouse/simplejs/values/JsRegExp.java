@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 public final class JsRegExp extends JsValue {
+    private PropertyTable table;
+
     private final String source;
     private final String flags;
     private final Pattern pattern;
@@ -78,5 +80,13 @@ public final class JsRegExp extends JsValue {
 
     public boolean isUnicodeSets() {
         return flags.indexOf('v') >= 0;
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

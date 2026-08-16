@@ -93,6 +93,15 @@ public class ParserTest {
         return ((ExpressionStatement) firstStatement(source)).getExpression();
     }
 
+    // The expression in the body of a class declaration's last method: a private name only parses
+    // inside the class that declares it.
+    private static Expression privateBodyExpression(String source) {
+        final var klass = (ClassDeclaration) firstStatement(source);
+        final var method = (MethodDefinition) klass.getBody().getMembers().getLast();
+        final var body = method.getValue().getBody();
+        return ((ExpressionStatement) body.getBody().getFirst()).getExpression();
+    }
+
     // An empty program has an empty body
     @Test
     public void test_empty_program() {
@@ -933,7 +942,8 @@ public class ParserTest {
     // Private member access via this.#x resolves the property to a PrivateIdentifier
     @Test
     public void test_private_member_access() {
-        final var member = assertInstanceOf(MemberExpression.class, firstExpression("this.#x"));
+        final var member = assertInstanceOf(MemberExpression.class,
+                privateBodyExpression("class C { #x; m() { this.#x } }"));
         assertInstanceOf(ThisExpression.class, member.getObject());
         assertEquals("x", ((PrivateIdentifier) member.getProperty()).getName());
     }
@@ -941,7 +951,8 @@ public class ParserTest {
     // A #x in obj brand check parses to a BinaryExpression with a PrivateIdentifier left side
     @Test
     public void test_private_in_expression() {
-        final var binary = assertInstanceOf(BinaryExpression.class, firstExpression("#x in obj"));
+        final var binary = assertInstanceOf(BinaryExpression.class,
+                privateBodyExpression("class C { #x; m() { #x in obj } }"));
         assertEquals("in", binary.getOperator());
         assertEquals("x", ((PrivateIdentifier) binary.getLeft()).getName());
     }

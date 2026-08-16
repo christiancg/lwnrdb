@@ -3,6 +3,7 @@ package org.techhouse.simplejs.builtins;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsMap;
@@ -15,7 +16,9 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class MapBuiltins {
     public static final List<String> NAMES = List.of("get", "set", "has", "delete", "clear", "forEach", "keys",
-            "values", "entries");
+            "values", "entries", "getOrInsert", "getOrInsertComputed");
+    public static final List<String> WEAK_NAMES = List.of("get", "set", "has", "delete", "getOrInsert",
+            "getOrInsertComputed");
 
     private MapBuiltins() {
     }
@@ -75,6 +78,10 @@ public final class MapBuiltins {
                 receiver.clear();
                 return JsUndefined.getInstance();
             });
+            case "getOrInsert" ->
+                new JsNativeFunction("getOrInsert", (_, args) -> getOrInsert(receiver, arg(args, 0), arg(args, 1)));
+            case "getOrInsertComputed" -> new JsNativeFunction("getOrInsertComputed",
+                    (_, args) -> getOrInsertComputed(receiver, arg(args, 0), arg(args, 1), invoker));
             case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
             case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(receiver));
             case "values" -> new JsNativeFunction("values", (_, _) -> valuesIterator(receiver));
@@ -83,8 +90,42 @@ public final class MapBuiltins {
         };
     }
 
+    private static JsValue getOrInsert(JsMap map, JsValue key, JsValue value) {
+        final var canonical = canonicalize(key);
+        requireValidKey(map, canonical);
+        if (map.has(canonical)) {
+            return map.get(canonical);
+        }
+        map.set(canonical, value);
+        return value;
+    }
+
+    private static JsValue getOrInsertComputed(JsMap map, JsValue key, JsValue callback, Invoker invoker) {
+        final var canonical = canonicalize(key);
+        requireValidKey(map, canonical);
+        if (!InterpreterUtils.isCallable(callback)) {
+            throw new TypeErrorException("getOrInsertComputed callbackfn is not a function");
+        }
+        if (map.has(canonical)) {
+            return map.get(canonical);
+        }
+        final var value = invoker.call(callback, JsUndefined.getInstance(), List.of(canonical));
+        map.set(canonical, value);
+        return value;
+    }
+
+    private static void requireValidKey(JsMap map, JsValue key) {
+        if (map.isWeak() && isNotObjectKey(key)) {
+            throw new TypeErrorException("Invalid value used as weak map key");
+        }
+    }
+
+    private static JsValue canonicalize(JsValue key) {
+        return key instanceof JsNumber number && number.getValue() == 0 ? new JsNumber(0) : key;
+    }
+
     public static void set(JsMap map, JsValue key, JsValue value) {
-        if (map.isWeak() && !isObjectKey(key)) {
+        if (map.isWeak() && isNotObjectKey(key)) {
             throw new TypeErrorException("Invalid value used as weak map key");
         }
         map.set(key, value);
@@ -123,8 +164,8 @@ public final class MapBuiltins {
         return JsUndefined.getInstance();
     }
 
-    private static boolean isObjectKey(JsValue value) {
-        return switch (value) {
+    private static boolean isNotObjectKey(JsValue value) {
+        return !switch (value) {
             case JsNumber ignored -> false;
             case org.techhouse.simplejs.values.JsString ignored -> false;
             case JsBoolean ignored -> false;

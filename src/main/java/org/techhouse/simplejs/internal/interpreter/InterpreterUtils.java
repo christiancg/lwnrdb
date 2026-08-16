@@ -96,16 +96,14 @@ public final class InterpreterUtils {
         }
     }
 
-    // Mirrors Interpreter.constructValue's own type switch: everything reachable via `new` there
-    // must answer true here, so Array.from can decide whether to build via its receiver or a plain
-    // array without actually attempting (and possibly failing) a construction.
+    // The single source of truth for [[Construct]]: Interpreter.constructValue guards on it, so a
+    // value that answers false here is never reachable via `new`.
     public static boolean isConstructor(JsValue value) {
         return switch (value) {
-            case JsProxy ignored -> true;
+            case JsProxy proxy -> proxy.isConstructor();
             case JsClass ignored -> true;
-            case JsNativeFunction nativeFunction ->
-                !nativeFunction.isBound() || isConstructor(nativeFunction.getBoundTarget());
-            case JsFunction function -> !function.isArrow();
+            case JsNativeFunction nativeFunction -> nativeFunction.isConstructor();
+            case JsFunction function -> function.isConstructor();
             default -> false;
         };
     }
@@ -411,6 +409,9 @@ public final class InterpreterUtils {
     }
 
     public static JsValue stepResult(Coroutine.StepResult step) {
+        if (step.value() instanceof YieldDelegation.PassThrough passThrough) {
+            return passThrough.result();
+        }
         return stepResult(step.value(), step.done());
     }
 

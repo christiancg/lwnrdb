@@ -99,4 +99,36 @@ public class ErrorBuiltinsTest {
     public void test_thrown_reference_error_is_catchable_as_its_type() {
         assertTrue(bool("let ok = false; try { missingBinding } catch (e) { ok = e instanceof ReferenceError } ok"));
     }
+
+    // an engine-thrown URIError carries the realm's URIError.prototype, not a bare object
+    @Test
+    public void test_engine_thrown_uri_error_has_real_prototype() {
+        assertTrue(bool("let ok = false; try { decodeURI('%'); } catch (e) { ok = e instanceof URIError } ok"));
+        assertTrue(bool(
+                "let ok = false; try { decodeURIComponent('%E0%A4%A'); } catch (e) { ok = e instanceof Error } ok"));
+        assertTrue(bool("let ok = false; try { encodeURI('\\uD800'); } catch (e) { ok = e.name === 'URIError' } ok"));
+    }
+
+    @Test
+    public void stackIsAnAccessorPairOnThePrototype() {
+        final var descriptor = "let d = Object.getOwnPropertyDescriptor(Error.prototype, 'stack'); ";
+        assertTrue(bool(descriptor + "typeof d.get === 'function' && typeof d.set === 'function'"));
+        assertTrue(bool(descriptor + "d.enumerable === false && d.configurable === true"));
+        assertTrue(bool(descriptor + "d.get.name === 'get stack' && d.set.name === 'set stack'"));
+        assertTrue(bool("!Object.prototype.hasOwnProperty.call(new Error('x'), 'stack')"));
+        assertTrue(bool("typeof new TypeError('x').stack === 'string'"));
+    }
+
+    @Test
+    public void stackGetterIsBrandCheckedAndSetterCreatesAnOwnProperty() {
+        assertTrue(bool("Object.getOwnPropertyDescriptor(Error.prototype, 'stack').get.call({}) === undefined"));
+        assertTrue(bool("let threw = false; try { Object.getOwnPropertyDescriptor(Error.prototype, 'stack')"
+                + ".get.call(1); } catch (e) { threw = e instanceof TypeError } threw"));
+        final var setter = "let s = Object.getOwnPropertyDescriptor(Error.prototype, 'stack').set; let o = {}; "
+                + "s.call(o, 'trace'); ";
+        assertTrue(bool(setter + "o.stack === 'trace'"));
+        assertTrue(bool(setter + "Object.getOwnPropertyDescriptor(o, 'stack').enumerable"));
+        assertTrue(bool("let threw = false; try { Object.getOwnPropertyDescriptor(Error.prototype, 'stack')"
+                + ".set.call({}, 1); } catch (e) { threw = e instanceof TypeError } threw"));
+    }
 }

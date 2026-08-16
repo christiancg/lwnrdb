@@ -64,7 +64,6 @@ Reflect.set
 Reflect.setPrototypeOf
 RegExp.escape
 Set
-ShadowRealm
 String.fromCodePoint
 String.prototype.at
 String.prototype.endsWith

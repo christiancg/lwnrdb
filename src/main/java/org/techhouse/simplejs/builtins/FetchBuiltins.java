@@ -29,31 +29,33 @@ public final class FetchBuiltins {
     private FetchBuiltins() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits) {
-        final var fetch = new JsNativeFunction("fetch", (_, args) -> fetch(eventLoop, network, limits, args));
+    public static void install(Environment global, EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,
+            Intrinsics intrinsics) {
+        final var fetch = new JsNativeFunction("fetch",
+                (_, args) -> fetch(eventLoop, network, limits, args, intrinsics));
         global.declareBuiltin("fetch", fetch);
     }
 
-    private static JsValue fetch(EventLoop eventLoop, NetworkAccess network, ResourceLimits limits,
-            List<JsValue> args) {
+    private static JsValue fetch(EventLoop eventLoop, NetworkAccess network, ResourceLimits limits, List<JsValue> args,
+            Intrinsics intrinsics) {
         final var promise = new JsPromise(eventLoop);
         if (network == null || !limits.fetchEnabled()) {
-            promise.reject(error("fetch is not available"));
+            promise.reject(error("fetch is not available", intrinsics));
             return promise;
         }
         final var url = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst());
         if (!allowed(url, limits.fetchHostAllowlist())) {
-            promise.reject(error("fetch: host not allowed"));
+            promise.reject(error("fetch: host not allowed", intrinsics));
             return promise;
         }
         final var init = args.size() > 1 && args.get(1) instanceof JsObject object ? object : null;
         final var request = new FetchRequest(method(init), url, headers(init), body(init), limits.fetchTimeoutMillis());
-        runAsync(eventLoop, promise, network, request, limits.maxResponseBytes());
+        runAsync(eventLoop, promise, network, request, limits.maxResponseBytes(), intrinsics);
         return promise;
     }
 
     private static void runAsync(EventLoop eventLoop, JsPromise promise, NetworkAccess network, FetchRequest request,
-            long maxResponseBytes) {
+            long maxResponseBytes, Intrinsics intrinsics) {
         eventLoop.beginAsyncJob();
         Thread.ofVirtual().start(() -> {
             final var outcome = new FetchOutcome();
@@ -72,7 +74,7 @@ public final class FetchBuiltins {
             } else {
                 invoke(network, request, outcome);
             }
-            eventLoop.completeAsyncJob(() -> settle(promise, outcome, maxResponseBytes, eventLoop));
+            eventLoop.completeAsyncJob(() -> settle(promise, outcome, maxResponseBytes, eventLoop, intrinsics));
         });
     }
 
@@ -84,28 +86,30 @@ public final class FetchBuiltins {
         }
     }
 
-    private static void settle(JsPromise promise, FetchOutcome outcome, long maxResponseBytes, EventLoop eventLoop) {
+    private static void settle(JsPromise promise, FetchOutcome outcome, long maxResponseBytes, EventLoop eventLoop,
+            Intrinsics intrinsics) {
         if (outcome.timedOut) {
-            promise.reject(error("fetch timed out"));
+            promise.reject(error("fetch timed out", intrinsics));
             return;
         }
         if (outcome.error != null) {
-            promise.reject(error("fetch failed: " + message(outcome.error)));
+            promise.reject(error("fetch failed: " + message(outcome.error), intrinsics));
             return;
         }
         if (outcome.response == null) {
-            promise.reject(error("fetch failed"));
+            promise.reject(error("fetch failed", intrinsics));
             return;
         }
         final var body = outcome.response.bodyText() == null ? "" : outcome.response.bodyText();
         if (maxResponseBytes >= 0 && body.length() > maxResponseBytes) {
-            promise.reject(error("fetch response exceeds maximum size"));
+            promise.reject(error("fetch response exceeds maximum size", intrinsics));
             return;
         }
-        promise.resolve(makeResponse(outcome.response, body, eventLoop));
+        promise.resolve(makeResponse(outcome.response, body, eventLoop, intrinsics));
     }
 
-    private static JsObject makeResponse(FetchResponse response, String body, EventLoop eventLoop) {
+    private static JsObject makeResponse(FetchResponse response, String body, EventLoop eventLoop,
+            Intrinsics intrinsics) {
         final var result = new JsObject();
         final var status = response.status();
         result.set("ok", JsBoolean.of(status >= 200 && status < 300));
@@ -113,7 +117,7 @@ public final class FetchBuiltins {
         result.set("statusText", new JsString(response.statusText() == null ? "" : response.statusText()));
         result.set("headers", headerObject(response.headers()));
         result.set("text", new JsNativeFunction("text", (_, _) -> resolvedText(eventLoop, body)));
-        result.set("json", new JsNativeFunction("json", (_, _) -> resolvedJson(eventLoop, body)));
+        result.set("json", new JsNativeFunction("json", (_, _) -> resolvedJson(eventLoop, body, intrinsics)));
         return result;
     }
 
@@ -123,13 +127,13 @@ public final class FetchBuiltins {
         return promise;
     }
 
-    private static JsValue resolvedJson(EventLoop eventLoop, String body) {
+    private static JsValue resolvedJson(EventLoop eventLoop, String body, Intrinsics intrinsics) {
         final var promise = new JsPromise(eventLoop);
         try {
             final var element = EJSON.fromJson("{\"v\":" + body + "}", JsonObject.class).get("v");
             promise.resolve(EJsonInterop.fromEjson(element));
         } catch (RuntimeException error) {
-            promise.reject(error("invalid json response body"));
+            promise.reject(error("invalid json response body", intrinsics));
         }
         return promise;
     }
@@ -202,8 +206,8 @@ public final class FetchBuiltins {
         return error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
     }
 
-    private static JsValue error(String message) {
-        return ErrorBuiltins.makeError("TypeError", message);
+    private static JsValue error(String message, Intrinsics intrinsics) {
+        return intrinsics.makeError("TypeError", message);
     }
 
     private static final class FetchOutcome {

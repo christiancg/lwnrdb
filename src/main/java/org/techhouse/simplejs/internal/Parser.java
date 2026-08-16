@@ -25,6 +25,7 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.parser.DeclarationScope;
 import org.techhouse.simplejs.internal.parser.ParserTables;
 import org.techhouse.simplejs.internal.parser.PatternConverter;
+import org.techhouse.simplejs.internal.parser.PrivateScope;
 import org.techhouse.simplejs.internal.parser.TokenStream;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrayPattern;
@@ -126,6 +127,10 @@ public final class Parser {
     private static final class State extends TokenStream {
         private final PatternConverter patterns = new PatternConverter(this);
         private DeclarationScope scope = new DeclarationScope(null, true);
+        private PrivateScope privateScope;
+        private final Map<String, Boolean> labels = new HashMap<>();
+        private int iterationDepth;
+        private int switchDepth;
         private boolean inStaticBlock;
         private boolean inGenerator;
         private boolean inAsync = true;
@@ -175,7 +180,7 @@ public final class Parser {
             try {
                 final var params = outsideGenerator(this::parseParams);
                 setFunctionKind(generator, async);
-                final var body = inFunctionScope(params, this::parseBlockBody);
+                final var body = inBreakableBoundary(() -> inFunctionScope(params, this::parseBlockBody));
                 checkUseStrictWithSimpleParams(params, body);
                 return new FunctionParts(params, body);
             } finally {
@@ -399,7 +404,58 @@ public final class Parser {
             rejectEscapedReserved();
             final var label = parseIdentifier();
             expectOperator(":");
-            return new LabeledStatement(label, parseNestedStatement());
+            if (labels.containsKey(label.getName())) {
+                throw new SyntaxErrorException("Label '" + label.getName() + "' has already been declared");
+            }
+            labels.put(label.getName(), labelsIterationStatement());
+            try {
+                return new LabeledStatement(label, parseNestedStatement());
+            } finally {
+                labels.remove(label.getName());
+            }
+        }
+
+        // `continue label` only reaches a label that ultimately labels an iteration statement, so a
+        // chain of labels is resolved down to the statement it finally introduces.
+        private boolean labelsIterationStatement() {
+            var offset = 0;
+            while (peekAt(offset).getType() == JsType.IDENTIFIER && peekAt(offset + 1).getType() == JsType.OPERATOR
+                    && ":".equals(((JsOperator) peekAt(offset + 1)).getValue())) {
+                offset += 2;
+            }
+            final var statement = peekAt(offset);
+            return statement.getType() == JsType.KEYWORD
+                    && ParserTables.ITERATION_KEYWORDS.contains(((JsKeyword) statement).getValue());
+        }
+
+        // break and continue never cross a function boundary, so a nested function body starts with
+        // an empty label set and no enclosing iteration or switch statement.
+        // the depth resets are read by the production lambda, which PMD's dataflow cannot see
+        @SuppressWarnings("PMD.UnusedAssignment")
+        private <T> T inBreakableBoundary(Supplier<T> production) {
+            final var enclosingLabels = new HashMap<>(labels);
+            final var enclosingIterations = iterationDepth;
+            final var enclosingSwitches = switchDepth;
+            labels.clear();
+            iterationDepth = 0;
+            switchDepth = 0;
+            try {
+                return production.get();
+            } finally {
+                labels.clear();
+                labels.putAll(enclosingLabels);
+                iterationDepth = enclosingIterations;
+                switchDepth = enclosingSwitches;
+            }
+        }
+
+        private Statement parseLoopBody() {
+            iterationDepth++;
+            try {
+                return parseNestedStatement();
+            } finally {
+                iterationDepth--;
+            }
         }
 
         // The body of if/else, a loop or a label is a Statement, never a Declaration: `if (x) let y;`
@@ -474,13 +530,13 @@ public final class Parser {
             expectSeparator('(');
             final var test = parseExpression();
             expectSeparator(')');
-            final var body = parseNestedStatement();
+            final var body = parseLoopBody();
             return new WhileStatement(test, body);
         }
 
         private DoWhileStatement parseDoWhile() {
             expectKeyword("do");
-            final var body = parseNestedStatement();
+            final var body = parseLoopBody();
             expectKeyword("while");
             expectSeparator('(');
             final var test = parseExpression();
@@ -581,7 +637,7 @@ public final class Parser {
             advance();
             final var right = isOf ? parseAssignment() : parseExpression();
             expectSeparator(')');
-            final var body = parseNestedStatement();
+            final var body = parseLoopBody();
             return isOf ? new ForOfStatement(target, right, body, isAwait) : new ForInStatement(target, right, body);
         }
 
@@ -604,7 +660,7 @@ public final class Parser {
                 update = parseExpression();
             }
             expectSeparator(')');
-            final var body = parseNestedStatement();
+            final var body = parseLoopBody();
             return new ForStatement(init, test, update, body);
         }
 
@@ -653,13 +709,27 @@ public final class Parser {
             expectSeparator(')');
             expectSeparator('{');
             // Every case clause shares one lexical scope, so `case 0: let x; default: let x` clashes.
-            final var cases = inScope(() -> {
-                final var parsed = new ArrayList<SwitchCase>();
-                while (!isSeparator('}') && !atEnd()) {
-                    parsed.add(parseSwitchCase());
-                }
-                return parsed;
-            });
+            switchDepth++;
+            final List<SwitchCase> cases;
+            try {
+                cases = inScope(() -> {
+                    final var parsed = new ArrayList<SwitchCase>();
+                    var seenDefault = false;
+                    while (!isSeparator('}') && !atEnd()) {
+                        final var clause = parseSwitchCase();
+                        if (clause.getTest() == null) {
+                            if (seenDefault) {
+                                throw new SyntaxErrorException("More than one default clause in switch statement");
+                            }
+                            seenDefault = true;
+                        }
+                        parsed.add(clause);
+                    }
+                    return parsed;
+                });
+            } finally {
+                switchDepth--;
+            }
             expectSeparator('}');
             return new SwitchStatement(discriminant, cases);
         }
@@ -697,6 +767,13 @@ public final class Parser {
             final var label = current().getType() == JsType.IDENTIFIER && !newlineBeforeCurrent()
                     ? parseIdentifier()
                     : null;
+            if (label == null) {
+                if (iterationDepth == 0 && switchDepth == 0) {
+                    throw new SyntaxErrorException("Illegal break statement");
+                }
+            } else if (!labels.containsKey(label.getName())) {
+                throw undefinedLabel(label);
+            }
             consumeSemicolon();
             return new BreakStatement(label);
         }
@@ -706,8 +783,19 @@ public final class Parser {
             final var label = current().getType() == JsType.IDENTIFIER && !newlineBeforeCurrent()
                     ? parseIdentifier()
                     : null;
+            if (label == null) {
+                if (iterationDepth == 0) {
+                    throw new SyntaxErrorException("Illegal continue statement");
+                }
+            } else if (!Boolean.TRUE.equals(labels.get(label.getName()))) {
+                throw undefinedLabel(label);
+            }
             consumeSemicolon();
             return new ContinueStatement(label);
+        }
+
+        private static SyntaxErrorException undefinedLabel(Identifier label) {
+            return new SyntaxErrorException("Undefined label '" + label.getName() + "'");
         }
 
         private FunctionDeclaration parseFunctionDeclaration(boolean async) {
@@ -1053,11 +1141,9 @@ public final class Parser {
             }
             final var t = current();
             final Expression key = switch (t.getType()) {
-                case IDENTIFIER -> new Identifier(((JsIdentifier) t).getValue());
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
-                case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
-                default -> throw error();
+                default -> literalPropertyKey(t);
             };
             advance();
             if (matchOperator(":")) {
@@ -1184,7 +1270,7 @@ public final class Parser {
                 final var op = ((JsOperator) t).getValue();
                 if (ParserTables.PREFIX_UNARY_OPERATORS.contains(op)) {
                     advance();
-                    return new UnaryExpression(op, parseUnary(), true);
+                    return rejectExponentiationBase(new UnaryExpression(op, parseUnary(), true));
                 }
                 if ("++".equals(op) || "--".equals(op)) {
                     advance();
@@ -1205,21 +1291,30 @@ public final class Parser {
                             && member.getProperty() instanceof PrivateIdentifier) {
                         throw new SyntaxErrorException("Private fields can not be deleted");
                     }
-                    return new UnaryExpression(kw, argument, true);
+                    return rejectExponentiationBase(new UnaryExpression(kw, argument, true));
                 }
                 if ("typeof".equals(kw) || "void".equals(kw)) {
                     advance();
-                    return new UnaryExpression(kw, parseUnary(), true);
+                    return rejectExponentiationBase(new UnaryExpression(kw, parseUnary(), true));
                 }
                 if ("await".equals(kw)) {
                     advance();
                     if (!inAsync) {
                         throw new SyntaxErrorException("await is only valid inside an async function");
                     }
-                    return new AwaitExpression(parseUnary());
+                    return rejectExponentiationBase(new AwaitExpression(parseUnary()));
                 }
             }
             return parsePostfix();
+        }
+
+        // ExponentiationExpression takes an UpdateExpression as its base, so an unparenthesised
+        // unary expression on the left of `**` is a Syntax Error.
+        private Expression rejectExponentiationBase(Expression unary) {
+            if (isOperator("**")) {
+                throw new SyntaxErrorException("Unary operator used immediately before an exponentiation expression");
+            }
+            return unary;
         }
 
         private Expression parsePostfix() {
@@ -1236,6 +1331,27 @@ public final class Parser {
             if (argument instanceof Identifier id && ParserTables.RESTRICTED_BINDINGS.contains(id.getName())) {
                 throw new SyntaxErrorException("'" + id.getName() + "' cannot be updated in strict mode");
             }
+            if (!isSimpleAssignmentTarget(argument)) {
+                throw new SyntaxErrorException("Invalid left-hand side expression in an update expression");
+            }
+        }
+
+        // AssignmentTargetType simple: a bare reference or a member access outside an optional chain.
+        // Everything else - a call, `this`, `new.target`, a literal, a function - is invalid.
+        private static boolean isSimpleAssignmentTarget(Expression expression) {
+            if (expression instanceof Identifier) {
+                return true;
+            }
+            return expression instanceof MemberExpression member && !member.isOptional()
+                    && !isOptionalChain(member.getObject());
+        }
+
+        private static boolean isOptionalChain(Expression expression) {
+            return switch (expression) {
+                case MemberExpression member -> member.isOptional() || isOptionalChain(member.getObject());
+                case CallExpression call -> call.isOptional() || isOptionalChain(call.getCallee());
+                case null, default -> false;
+            };
         }
 
         private Expression parseCallMember() {
@@ -1246,10 +1362,12 @@ public final class Parser {
         private Expression parseCallMemberTail(Expression start) {
             var expr = start;
             var advancing = true;
+            var optionalChain = false;
             while (advancing) {
                 if (matchOperator(".")) {
-                    expr = new MemberExpression(expr, parseMemberProperty(), false, false);
+                    expr = memberExpression(expr, parseMemberProperty(), false);
                 } else if (matchOperator("?.")) {
+                    optionalChain = true;
                     expr = parseOptionalTail(expr);
                 } else if (isSeparator('[')) {
                     advance();
@@ -1259,6 +1377,10 @@ public final class Parser {
                 } else if (isSeparator('(')) {
                     expr = new CallExpression(expr, parseArguments());
                 } else if (current().getType() == JsType.TEMPLATE_STRING) {
+                    // A tagged template is not part of an optional chain: `a?.b`x`` is an early error.
+                    if (optionalChain) {
+                        throw new SyntaxErrorException("Invalid tagged template on an optional chain");
+                    }
                     final var template = parseTemplate((JsTemplateString) advance());
                     expr = new TaggedTemplateExpression(expr, template);
                 } else {
@@ -1278,24 +1400,60 @@ public final class Parser {
                 expectSeparator(']');
                 return new MemberExpression(object, property, true, true);
             }
-            return new MemberExpression(object, parseMemberProperty(), false, true);
+            return memberExpression(object, parseMemberProperty(), true);
         }
 
         private Expression parseMemberProperty() {
             final var t = current();
-            if (t.getType() == JsType.IDENTIFIER) {
+            final var name = identifierName(t);
+            if (name != null) {
                 advance();
-                return new Identifier(((JsIdentifier) t).getValue());
-            }
-            if (t.getType() == JsType.KEYWORD) {
-                advance();
-                return new Identifier(((JsKeyword) t).getValue());
+                return new Identifier(name);
             }
             if (t.getType() == JsType.PRIVATE_IDENTIFIER) {
                 advance();
-                return new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
+                return referencePrivateName(((JsPrivateIdentifier) t).getValue());
             }
             throw error();
+        }
+
+        // Every IdentifierName is a legal property name, including the literals `true`, `false`,
+        // `null` and `undefined`, which the lexer turns into value tokens rather than keywords.
+        private static String identifierName(JsBaseElement t) {
+            return switch (t.getType()) {
+                case IDENTIFIER -> ((JsIdentifier) t).getValue();
+                case KEYWORD -> ((JsKeyword) t).getValue();
+                case BOOLEAN -> String.valueOf(((JsBoolean) t).getValue());
+                case NULL -> "null";
+                case UNDEFINED -> "undefined";
+                default -> null;
+            };
+        }
+
+        private Identifier literalPropertyKey(JsBaseElement t) {
+            final var name = identifierName(t);
+            if (name == null) {
+                throw error();
+            }
+            return new Identifier(name);
+        }
+
+        private PrivateIdentifier referencePrivateName(String name) {
+            if (privateScope == null) {
+                throw PrivateScope.undeclared(name);
+            }
+            privateScope.reference(name);
+            return new PrivateIdentifier(name);
+        }
+
+        // MemberExpression : super . PrivateName is not in the grammar - a private name is never
+        // reachable through the prototype chain.
+        private MemberExpression memberExpression(Expression object, Expression property,
+                                                  boolean optional) {
+            if (object instanceof SuperExpression && property instanceof PrivateIdentifier) {
+                throw new SyntaxErrorException("Private fields can not be accessed on 'super'");
+            }
+            return new MemberExpression(object, property, false, optional);
         }
 
         private Expression parseNew() {
@@ -1321,7 +1479,7 @@ public final class Parser {
             var advancing = true;
             while (advancing) {
                 if (matchOperator(".")) {
-                    expr = new MemberExpression(expr, parseMemberProperty(), false, false);
+                    expr = memberExpression(expr, parseMemberProperty(), false);
                 } else if (isSeparator('[')) {
                     advance();
                     final var property = parseExpression();
@@ -1407,7 +1565,11 @@ public final class Parser {
                 }
                 case PRIVATE_IDENTIFIER -> {
                     advance();
-                    return new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
+                    // A private name stands alone only as the left operand of `#x in obj`.
+                    if (!isKeyword("in")) {
+                        throw error();
+                    }
+                    return referencePrivateName(((JsPrivateIdentifier) t).getValue());
                 }
                 case KEYWORD -> {
                     return parseKeywordPrimary();
@@ -1545,11 +1707,48 @@ public final class Parser {
             return new ClassExpression(id, superClass, parseClassBody(superClass != null));
         }
 
+        // ClassHeritage is a LeftHandSideExpression, so an unparenthesised arrow function is a
+        // Syntax Error there even though `class C extends (() => {}) {}` is fine.
         private Expression parseClassHeritage() {
-            return matchKeyword("extends") ? parseCallMember() : null;
+            if (!matchKeyword("extends")) {
+                return null;
+            }
+            if (startsArrowFunction()) {
+                throw error();
+            }
+            return parseCallMember();
         }
 
+        private boolean startsArrowFunction() {
+            if (isSeparator('(')) {
+                return matchingParenFollowedByArrow();
+            }
+            final var asyncPrefix = isKeyword("async") && !newlineBeforePeek();
+            final var start = asyncPrefix ? 1 : 0;
+            final var head = peekAt(start);
+            if (head.getType() == JsType.IDENTIFIER) {
+                final var next = peekAt(start + 1);
+                return next.getType() == JsType.OPERATOR && "=>".equals(((JsOperator) next).getValue());
+            }
+            return asyncPrefix && head.getType() == JsType.SEPARATOR && ((JsSeparator) head).getValue() == '('
+                    && matchingParenFollowedByArrowFrom(pos + 1);
+        }
+
+        // The private environment covers the class body only: a `#name` used in the heritage
+        // belongs to the enclosing class, not to this one.
         private ClassBody parseClassBody(boolean hasHeritage) {
+            final var enclosing = privateScope;
+            privateScope = new PrivateScope(enclosing);
+            try {
+                final var body = parseClassBodyMembers(hasHeritage);
+                privateScope.resolve();
+                return body;
+            } finally {
+                privateScope = enclosing;
+            }
+        }
+
+        private ClassBody parseClassBodyMembers(boolean hasHeritage) {
             final var wasClassHasHeritage = classHasHeritage;
             classHasHeritage = hasHeritage;
             expectSeparator('{');
@@ -1594,6 +1793,7 @@ public final class Parser {
             }
             final var memberKey = parseClassMemberKey();
             if (isSeparator('(')) {
+                checkStaticMethodName(memberKey, isStatic);
                 final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic, async, generator);
                 final var parts = parseFunctionParts(generator, async,
                         "constructor".equals(resolvedKind) && classHasHeritage);
@@ -1618,18 +1818,31 @@ public final class Parser {
             return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
         }
 
+        // A static method cannot be named `prototype`: the class object already has that property.
+        private void checkStaticMethodName(MemberKey memberKey, boolean isStatic) {
+            if (isStatic && "prototype".equals(propName(memberKey))) {
+                throw new SyntaxErrorException("Classes may not have a static method named 'prototype'");
+            }
+        }
+
+        private static String propName(MemberKey memberKey) {
+            if (memberKey.computed()) {
+                return null;
+            }
+            if (memberKey.key() instanceof Identifier id) {
+                return id.getName();
+            }
+            if (memberKey.key() instanceof StringLiteral str) {
+                return str.getValue();
+            }
+            return null;
+        }
+
         // An instance field cannot be named `constructor`, and a static field cannot be named
         // `prototype` — both would collide with the class's own machinery.
         private void checkFieldName(MemberKey memberKey, boolean isStatic) {
-            if (memberKey.computed()) {
-                return;
-            }
-            final String name;
-            if (memberKey.key() instanceof Identifier id) {
-                name = id.getName();
-            } else if (memberKey.key() instanceof StringLiteral str) {
-                name = str.getValue();
-            } else {
+            final var name = propName(memberKey);
+            if (name == null) {
                 return;
             }
             if ("constructor".equals(name)) {
@@ -1646,6 +1859,10 @@ public final class Parser {
             if (!(memberKey.key() instanceof PrivateIdentifier priv)) {
                 return;
             }
+            if ("constructor".equals(priv.getName())) {
+                throw new SyntaxErrorException("Classes may not have a private member named #constructor");
+            }
+            privateScope.declare(priv.getName());
             final var existing = privateNames.computeIfAbsent(priv.getName(), _ -> new HashSet<>());
             final var isDuplicate = switch (kind) {
                 case "get" -> existing.contains("get") || existing.contains("field") || existing.contains("method");
@@ -1701,10 +1918,10 @@ public final class Parser {
         }
 
         private StaticBlock parseStaticBlock() {
-            return inFunctionScope(List.of(), () -> {
+            return inFunctionScope(List.of(), () -> inBreakableBoundary(() -> {
                 inStaticBlock = true;
                 return parseStaticBlockBody();
-            });
+            }));
         }
 
         private StaticBlock parseStaticBlockBody() {
@@ -1748,12 +1965,10 @@ public final class Parser {
             }
             final var t = current();
             final Expression key = switch (t.getType()) {
-                case IDENTIFIER -> new Identifier(((JsIdentifier) t).getValue());
-                case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
                 case PRIVATE_IDENTIFIER -> new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
-                default -> throw error();
+                default -> literalPropertyKey(t);
             };
             advance();
             return new MemberKey(key, false);
@@ -1827,14 +2042,23 @@ public final class Parser {
             expectSeparator('(');
             final var expr = withInAllowed(this::parseExpression);
             expectSeparator(')');
+            // Parentheses make a literal a PrimaryExpression, so `({}) = x` is an early error even
+            // though the identical unparenthesised `{} = x` is a destructuring assignment.
+            if (isOperator("=") && (expr instanceof ObjectExpression || expr instanceof ArrayExpression)) {
+                throw new SyntaxErrorException("Invalid destructuring assignment target");
+            }
             return expr;
         }
 
         // A '(' begins arrow params only if the matching ')' is immediately followed by '=>'; otherwise it is grouping.
         private boolean matchingParenFollowedByArrow() {
+            return matchingParenFollowedByArrowFrom(pos);
+        }
+
+        private boolean matchingParenFollowedByArrowFrom(int from) {
             var depth = 0;
             final var size = tokens.size();
-            for (var i = pos; i < size; i++) {
+            for (var i = from; i < size; i++) {
                 final var t = tokens.get(i);
                 if (t.getType() == JsType.SEPARATOR) {
                     final char c = ((JsSeparator) t).getValue();
@@ -1853,14 +2077,14 @@ public final class Parser {
         }
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
-            return inFunctionKind(async, () -> {
+            return inFunctionKind(async, () -> inBreakableBoundary(() -> {
                 if (isSeparator('{')) {
                     final var body = inFunctionScope(params, this::parseBlockBody);
                     checkUseStrictWithSimpleParams(params, body);
                     return new ArrowFunctionExpression(params, body, false, async);
                 }
                 return new ArrowFunctionExpression(params, parseAssignment(), true, async);
-            });
+            }));
         }
 
         private ArrayExpression parseArray() {
@@ -1963,11 +2187,9 @@ public final class Parser {
             }
             final var t = current();
             final Expression key = switch (t.getType()) {
-                case IDENTIFIER -> new Identifier(((JsIdentifier) t).getValue());
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
-                case KEYWORD -> new Identifier(((JsKeyword) t).getValue());
-                default -> throw error();
+                default -> literalPropertyKey(t);
             };
             advance();
             return key;
@@ -2010,6 +2232,7 @@ public final class Parser {
             nested.superCallAllowed = superCallAllowed;
             nested.inStaticBlock = inStaticBlock;
             nested.classHasHeritage = classHasHeritage;
+            nested.privateScope = privateScope;
             return nested;
         }
 

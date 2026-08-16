@@ -11,10 +11,12 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stati
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.internal.Completion;
+import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -39,9 +41,57 @@ import org.techhouse.simplejs.values.JsValue;
 // patterns, defaults, rest, computed keys) parameterised by a per-context LeafBinder. Value
 // evaluation and member access route through the Interpreter and MemberEvaluator seams.
 public final class BindingEvaluator {
-    @FunctionalInterface
     private interface LeafBinder {
         void bind(JsNode leaf, JsValue value, Environment env);
+
+        default PreparedTarget prepare(JsNode leaf, Environment env) {
+            return value -> bind(leaf, value, env);
+        }
+    }
+
+    @FunctionalInterface
+    private interface PreparedTarget {
+        void put(JsValue value);
+    }
+
+    // One element of an array pattern: the iterator record's [[Done]] flag lives here so a `next`
+    // that throws marks the iteration done (no close) while an abrupt binding closes it.
+    private static final class ArrayIteration {
+        private final Iteration iteration;
+        private boolean done;
+
+        private ArrayIteration(Iteration iteration) {
+            this.iteration = iteration;
+        }
+
+        private JsValue step() {
+            if (done) {
+                return null;
+            }
+            final JsValue item;
+            try {
+                item = iteration.next();
+            } catch (RuntimeException error) {
+                done = true;
+                throw error;
+            }
+            done = item == null;
+            return item;
+        }
+
+        private void close() {
+            if (!done) {
+                done = true;
+                iteration.close();
+            }
+        }
+
+        private void closeAfterThrow() {
+            if (!done) {
+                done = true;
+                iteration.closeAfterThrow();
+            }
+        }
     }
 
     private final Interpreter interp;
@@ -201,43 +251,71 @@ public final class BindingEvaluator {
 
     private void destructure(JsNode target, JsValue value, Environment env, LeafBinder leaf) {
         switch (target) {
-            case AssignmentPattern pattern -> {
-                var resolved = value;
-                if (value instanceof JsUndefined) {
-                    resolved = interp.eval(pattern.getRight(), env);
-                    if (pattern.getLeft() instanceof Identifier id) {
-                        InterpreterUtils.applyInferredName(pattern.getRight(), resolved, id.getName());
-                    }
-                }
-                destructure(pattern.getLeft(), resolved, env, leaf);
-            }
+            case AssignmentPattern pattern -> destructure(pattern.getLeft(), defaulted(pattern, value, env), env, leaf);
             case ArrayPattern pattern -> destructureArray(pattern, value, env, leaf);
             case ObjectPattern pattern -> destructureObject(pattern, value, env, leaf);
             default -> leaf.bind(target, value, env);
         }
     }
 
+    private JsValue defaulted(AssignmentPattern pattern, JsValue value, Environment env) {
+        if (!(value instanceof JsUndefined)) {
+            return value;
+        }
+        final var resolved = interp.eval(pattern.getRight(), env);
+        if (pattern.getLeft() instanceof Identifier id) {
+            InterpreterUtils.applyInferredName(pattern.getRight(), resolved, id.getName());
+        }
+        return resolved;
+    }
+
     private void destructureArray(ArrayPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
-        final var iteration = new Iteration(interp, value);
-        var exhausted = false;
+        final var source = new ArrayIteration(new Iteration(interp, value));
+        try {
+            bindArrayElements(pattern, source, env, leaf);
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (Coroutine.ReturnSignal signal) {
+            source.close();
+            throw signal;
+        } catch (RuntimeException error) {
+            source.closeAfterThrow();
+            throw error;
+        }
+        source.close();
+    }
+
+    private void bindArrayElements(ArrayPattern pattern, ArrayIteration source, Environment env, LeafBinder leaf) {
         for (final var element : pattern.getElements()) {
             if (element instanceof RestElement rest) {
+                final var target = prepareTarget(rest.getArgument(), env, leaf);
                 final var restArray = new JsArray();
-                for (var item = exhausted ? null : iteration.next(); item != null; item = iteration.next()) {
+                for (var item = source.step(); item != null; item = source.step()) {
                     restArray.push(item);
                 }
-                destructure(rest.getArgument(), restArray, env, leaf);
+                target.put(restArray);
                 return;
             }
-            final var item = exhausted ? null : iteration.next();
-            exhausted = item == null;
-            if (element != null) {
-                destructure(element, exhausted ? JsUndefined.getInstance() : item, env, leaf);
+            final var target = element == null ? null : prepareTarget(element, env, leaf);
+            final var item = source.step();
+            if (target != null) {
+                target.put(item == null ? JsUndefined.getInstance() : item);
             }
         }
-        if (!exhausted) {
-            iteration.close();
+    }
+
+    // The assignment target of an element is a reference evaluated before the iterator is stepped,
+    // so a throwing member expression aborts the destructuring before any `next` call.
+    private PreparedTarget prepareTarget(JsNode element, Environment env, LeafBinder leaf) {
+        if (element instanceof Identifier || element instanceof MemberExpression) {
+            return leaf.prepare(element, env);
         }
+        if (element instanceof AssignmentPattern pattern
+                && (pattern.getLeft() instanceof Identifier || pattern.getLeft() instanceof MemberExpression)) {
+            final var target = leaf.prepare(pattern.getLeft(), env);
+            return value -> target.put(defaulted(pattern, value, env));
+        }
+        return value -> destructure(element, value, env, leaf);
     }
 
     private void destructureObject(ObjectPattern pattern, JsValue value, Environment env, LeafBinder leaf) {
@@ -283,13 +361,26 @@ public final class BindingEvaluator {
     }
 
     private LeafBinder assignmentLeaf() {
-        return (leaf, value, env) -> {
-            if (leaf instanceof Identifier id) {
-                env.assign(id.getName(), value);
-            } else if (leaf instanceof MemberExpression member) {
-                members.setMember(interp.eval(member.getObject(), env), interp.memberKey(member, env), value);
-            } else {
-                throw new UnsupportedNodeException(leaf.getType().name());
+        return new LeafBinder() {
+            @Override
+            public void bind(JsNode leaf, JsValue value, Environment env) {
+                if (leaf instanceof Identifier id) {
+                    env.assign(id.getName(), value);
+                } else if (leaf instanceof MemberExpression member) {
+                    members.setMember(interp.eval(member.getObject(), env), interp.memberKey(member, env), value);
+                } else {
+                    throw new UnsupportedNodeException(leaf.getType().name());
+                }
+            }
+
+            @Override
+            public PreparedTarget prepare(JsNode leaf, Environment env) {
+                if (leaf instanceof MemberExpression member) {
+                    final var target = interp.eval(member.getObject(), env);
+                    final var key = interp.memberKey(member, env);
+                    return value -> members.setMember(target, key, value);
+                }
+                return value -> bind(leaf, value, env);
             }
         };
     }

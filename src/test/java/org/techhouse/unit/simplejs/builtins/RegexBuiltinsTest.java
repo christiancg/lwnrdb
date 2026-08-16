@@ -420,4 +420,98 @@ public class RegexBuiltinsTest {
     public void test_prototype_to_string() {
         assertEquals("/ab+c/gi", str("/ab+c/gi.toString()"));
     }
+
+    // String.prototype.match/replace/search/split have their own implementations, so the
+    // RegExpExec-based abstract operations are driven through the @@ methods directly.
+    private static final String RP = "RegExp.prototype";
+
+    @Test
+    public void escapeRendersControlCharactersInTheirNamedForm() {
+        assertEquals("\\t", str("RegExp.escape('\\t')"));
+        assertEquals("\\n", str("RegExp.escape('\\n')"));
+        assertEquals("\\v", str("RegExp.escape('\\v')"));
+        assertEquals("\\f", str("RegExp.escape('\\f')"));
+        assertEquals("\\r", str("RegExp.escape('\\r')"));
+    }
+
+    @Test
+    public void escapeHexEncodesPunctuatorsAndOtherWhitespace() {
+        assertEquals("\\x2c", str("RegExp.escape(',')"));
+        assertEquals("\\x20", str("RegExp.escape(' ')"));
+        assertEquals("\\u1680", str("RegExp.escape('\\u1680')"));
+        assertEquals("\\u2028", str("RegExp.escape('\\u2028')"));
+        assertEquals("\\u2029", str("RegExp.escape('\\u2029')"));
+    }
+
+    @Test
+    public void symbolReplaceExpandsEveryDollarToken() {
+        assertEquals("$", str(RP + "[Symbol.replace].call(/a/, 'a', '$$')"));
+        assertEquals("[a]", str(RP + "[Symbol.replace].call(/a/, 'a', '[$&]')"));
+        assertEquals("xy-xy", str(RP + "[Symbol.replace].call(/a/, 'xya', '-$`')"));
+        assertEquals("-xyzxyz", str(RP + "[Symbol.replace].call(/a/, 'axyz', '-$\\'')"));
+        assertEquals("$z", str(RP + "[Symbol.replace].call(/a/, 'a', '$z')"));
+        assertEquals("$", str(RP + "[Symbol.replace].call(/a/, 'a', '$')"));
+    }
+
+    @Test
+    public void symbolReplaceResolvesNumberedCaptureGroups() {
+        assertEquals("ba", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$2$1')"));
+        assertEquals("$5", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$5')"));
+        assertEquals("$0", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$0')"));
+        assertEquals("a1", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$11')"));
+    }
+
+    @Test
+    public void symbolReplaceResolvesNamedCaptureGroups() {
+        assertEquals("a", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', '$<x>')"));
+        assertEquals("", str(RP + "[Symbol.replace].call(/(?<x>a)(?<y>z)?b/, 'ab', '$<y>')"));
+        assertEquals("$x>", str(RP + "[Symbol.replace].call(/ab/, 'ab', '$<x>')"));
+    }
+
+    // a functional replacer receives the named-groups object as one extra trailing argument
+    @Test
+    public void symbolReplacePassesNamedGroupsToAFunctionReplacer() {
+        assertEquals("5", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', (...args) => String(args.length))"));
+        assertEquals("a", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', (...args) => args[args.length - 1].x)"));
+        assertEquals("4", str(RP + "[Symbol.replace].call(/(a)b/, 'ab', (...args) => String(args.length))"));
+    }
+
+    @Test
+    public void symbolReplaceAdvancesPastEmptyGlobalMatches() {
+        assertEquals("-a-b-", str(RP + "[Symbol.replace].call(/(?:)/g, 'ab', '-')"));
+        assertEquals(4, num(RP + "[Symbol.replace].call(/(?:)/gu, 'a\\u{1F600}', '-').split('-').length"));
+    }
+
+    @Test
+    public void symbolMatchCollectsEveryGlobalMatch() {
+        assertEquals("a,a", str(RP + "[Symbol.match].call(/a/g, 'aba').join(',')"));
+        assertEquals(3, num(RP + "[Symbol.match].call(/(?:)/g, 'ab').length"));
+        assertInstanceOf(JsNull.class, Interpreter.run(RP + "[Symbol.match].call(/z/g, 'abc')"));
+        assertEquals("b", str(RP + "[Symbol.match].call(/b/, 'abc')[0]"));
+    }
+
+    @Test
+    public void symbolSearchRestoresLastIndexAfterTheProbe() {
+        assertEquals(1, num(RP + "[Symbol.search].call(/b/g, 'abc')"));
+        assertEquals(5, num("const r = /b/g; r.lastIndex = 5; " + RP + "[Symbol.search].call(r, 'abc'); r.lastIndex"));
+        assertEquals(-1, num(RP + "[Symbol.search].call(/z/, 'abc')"));
+    }
+
+    @Test
+    public void symbolSplitHandlesEmptyInputAndUnmatchedRegions() {
+        assertEquals(1, num(RP + "[Symbol.split].call(/z/, '').length"));
+        assertEquals(0, num(RP + "[Symbol.split].call(/(?:)/, '').length"));
+        assertEquals("a,b,c", str(RP + "[Symbol.split].call(/[0-9]/, 'a1b2c').join(',')"));
+        assertEquals("a,1,b", str(RP + "[Symbol.split].call(/([0-9])/, 'a1b').join(',')"));
+        assertEquals(0, num(RP + "[Symbol.split].call(/b/, 'abc', 0).length"));
+        assertEquals("a,1", str(RP + "[Symbol.split].call(/([0-9])/, 'a1b', 2).join(',')"));
+        assertEquals("abc", str(RP + "[Symbol.split].call(/z/, 'abc').join(',')"));
+    }
+
+    // Symbol.split is not generic: it needs a real RegExp receiver
+    @Test
+    public void symbolSplitRejectsANonRegexpReceiver() {
+        assertEquals("TypeError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call({}, 'abc'); }"
+                + " catch (e) { caught = e.constructor.name; } caught"));
+    }
 }

@@ -15,6 +15,8 @@ import org.techhouse.simplejs.internal.JsCoercion;
  * surface {@link JsNumber}.
  */
 public final class JsTypedArray extends JsValue {
+    private PropertyTable table;
+
     public enum Kind {
         INT8("Int8Array", 1), UINT8("Uint8Array", 1), UINT8CLAMPED("Uint8ClampedArray", 1), INT16("Int16Array",
                 2), UINT16("Uint16Array", 2), INT32("Int32Array", 4), UINT32("Uint32Array", 4), FLOAT16("Float16Array",
@@ -143,5 +145,13 @@ public final class JsTypedArray extends JsValue {
 
     private static BigInteger toUnsignedBig(long raw) {
         return raw >= 0 ? BigInteger.valueOf(raw) : BigInteger.valueOf(raw).add(BigInteger.ONE.shiftLeft(64));
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

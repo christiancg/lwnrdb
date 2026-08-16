@@ -28,6 +28,8 @@ dir:     staging/                    # not part of the conformance corpus
 dir:     annexB/                     # normative-optional web-legacy semantics; not required of a non-browser host
 dir:     built-ins/RegExp/property-escapes/generated/  # exhaustive per-code-point assertions against one UCD version
 keep:    built-ins/RegExp/property-escapes/generated/strings/  # properties of strings: our own gap, not the JDK's
+dir:     language/eval-code/indirect/  # indirect eval — written (0, eval)(…) or through an alias, so no source pattern catches it
+dir:     built-ins/eval/               # the descriptor surface of a global eval that deliberately does not exist
 #
 # The property-escapes pair is not a feature gap. With no ICU dependency our Unicode data is
 # whatever the JDK ships, and the project builds on both 25 (Unicode 16.0) and 26 (Unicode 17.0),
@@ -58,7 +60,11 @@ feature: json-modules                # deliberate: ditto
 feature: import-defer                # deliberate: ditto
 feature: source-phase-imports        # deliberate: ditto
 feature: arbitrary-module-namespace-names  # deliberate: ditto
+feature: ShadowRealm                 # deliberate: evaluate(sourceText) is runtime codegen from a string, like eval
 
 pattern: \beval\s*\(                 # eval absent by design (sandbox boundary)
-pattern: \bnew\s+Function\b          # Function constructor disabled by design
+pattern: \bFunction\s*\(             # Function constructor disabled by design (called or newed)
+pattern: \bnew\s+Function\s*;        # ditto, the bare `new Function;` form. Deliberately not the broader
+                                     # `\bnew\s+Function\b`, which also swallowed `new Function.prototype.apply()`
+                                     # — those measure [[Construct]], not the constructor we do not provide
 pattern: \$262\.(createRealm|evalScript|agent|gc|IsHTMLDDA)  # host APIs the shim does not provide

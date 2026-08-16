@@ -4,29 +4,35 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 
 public final class JsArray extends JsValue {
     private static final JsValue HOLE = JsUndefined.getHole();
+    // Elements are stored densely, one slot per index, so a spec-legal length near 2^32 would have to
+    // be materialised hole by hole - hours of padding and gigabytes of list. Until the representation
+    // grows a sparse mode, a length that far out is refused rather than attempted.
+    private static final int MAX_DENSE_LENGTH = 1 << 24;
 
     private final List<JsValue> elements = new ArrayList<>();
-    private Map<String, JsValue> ownProperties;
+    private final PropertyTable table = new PropertyTable();
     private boolean frozen;
     private boolean sealed;
-    private boolean extensible = true;
     // Per-property descriptor flags, consulted by Object.defineProperty/getOwnPropertyDescriptor -
     // sparse (absent key == JsObject.PropertyFlags.DEFAULT) since most array elements/props never
     // have their flags individually redefined.
     private Map<Integer, JsObject.PropertyFlags> indexFlags;
-    private Map<String, JsObject.PropertyFlags> propFlags;
-    // Accessor storage, separate from the plain elements/ownProperties value slots.
-    private Map<String, JsValue> propGetters;
-    private Map<String, JsValue> propSetters;
+    // Accessor storage, separate from the plain element value slots.
     private Map<Integer, JsValue> indexGetters;
     private Map<Integer, JsValue> indexSetters;
     // Spec: Array "length" is always non-enumerable, non-configurable; only writable is mutable.
     private JsObject.PropertyFlags lengthFlags = new JsObject.PropertyFlags(true, false, false);
 
     public JsArray() {
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        return table;
     }
 
     public JsArray(List<JsValue> initial) {
@@ -46,7 +52,7 @@ public final class JsArray extends JsValue {
 
     public void pushHole() {
         if (!frozen) {
-            elements.add(HOLE);
+            padTo(elements.size() + 1);
         }
     }
 
@@ -76,15 +82,13 @@ public final class JsArray extends JsValue {
     }
 
     public boolean set(int index, JsValue value) {
-        if (frozen || (!extensible && index >= elements.size())) {
+        if (frozen || (!table.isExtensible() && index >= elements.size())) {
             return false;
         }
         if (index < elements.size() && !getIndexFlags(index).writable()) {
             return false;
         }
-        while (elements.size() <= index) {
-            elements.add(HOLE);
-        }
+        padToIndex(index);
         elements.set(index, value);
         return true;
     }
@@ -93,9 +97,7 @@ public final class JsArray extends JsValue {
     // Object.defineProperty can place a value regardless of the slot's current flags (the caller is
     // responsible for the extensibility/configurability checks the spec performs beforehand).
     public void defineIndexValue(int index, JsValue value) {
-        while (elements.size() <= index) {
-            elements.add(HOLE);
-        }
+        padToIndex(index);
         elements.set(index, value);
     }
 
@@ -159,46 +161,28 @@ public final class JsArray extends JsValue {
     }
 
     public boolean push(JsValue value) {
-        if (frozen || !extensible) {
+        if (frozen || !table.isExtensible()) {
             return false;
         }
+        checkDenseBound(elements.size() + 1);
         elements.add(value);
         return true;
     }
 
     public JsValue getProperty(String key) {
-        return ownProperties == null ? null : ownProperties.get(key);
+        return table.has(key) ? table.get(key) : null;
     }
 
     public boolean setProperty(String key, JsValue value) {
-        if (frozen || (!extensible && !hasProperty(key))) {
-            return false;
-        }
-        if (hasProperty(key) && !getPropFlags(key).writable()) {
-            return false;
-        }
-        if (ownProperties == null) {
-            ownProperties = new LinkedHashMap<>();
-        }
-        ownProperties.put(key, value);
-        return true;
+        return !frozen && table.set(key, value);
     }
 
     public boolean hasProperty(String key) {
-        return ownProperties != null && ownProperties.containsKey(key);
-    }
-
-    // [[DefineOwnProperty]] bypass, mirroring defineIndexValue for named (non-index) properties.
-    public void defineOwnProperty(String key, JsValue value) {
-        if (ownProperties == null) {
-            ownProperties = new LinkedHashMap<>();
-        }
-        ownProperties.put(key, value);
+        return table.has(key);
     }
 
     public JsObject.PropertyFlags getPropFlags(String key) {
-        final var stored = propFlags == null ? null : propFlags.get(key);
-        var flags = stored == null ? JsObject.PropertyFlags.DEFAULT : stored;
+        var flags = table.getFlags(key);
         if (frozen) {
             flags = new JsObject.PropertyFlags(false, flags.enumerable(), false);
         } else if (sealed) {
@@ -207,75 +191,42 @@ public final class JsArray extends JsValue {
         return flags;
     }
 
-    public void setPropFlags(String key, JsObject.PropertyFlags flags) {
-        if (propFlags == null) {
-            propFlags = new LinkedHashMap<>();
-        }
-        propFlags.put(key, flags);
-    }
-
     public boolean deleteProperty(String key) {
-        if (ownProperties != null) {
-            ownProperties.remove(key);
-        }
-        if (propFlags != null) {
-            propFlags.remove(key);
-        }
+        table.delete(key);
         clearPropAccessor(key);
         return true;
     }
 
-    public void definePropAccessor(String key, JsValue getter, JsValue setter) {
-        if (getter != null) {
-            if (propGetters == null) {
-                propGetters = new LinkedHashMap<>();
-            }
-            propGetters.put(key, getter);
-        }
-        if (setter != null) {
-            if (propSetters == null) {
-                propSetters = new LinkedHashMap<>();
-            }
-            propSetters.put(key, setter);
-        }
-    }
-
     public JsValue getPropAccessorGetter(String key) {
-        return propGetters == null ? null : propGetters.get(key);
+        return table.getAccessorGetter(key);
     }
 
     public JsValue getPropAccessorSetter(String key) {
-        return propSetters == null ? null : propSetters.get(key);
+        return table.getAccessorSetter(key);
     }
 
     public boolean hasPropAccessor(String key) {
-        return (propGetters != null && propGetters.containsKey(key))
-                || (propSetters != null && propSetters.containsKey(key));
+        return table.hasAccessor(key);
     }
 
     public void clearPropAccessor(String key) {
-        if (propGetters != null) {
-            propGetters.remove(key);
-        }
-        if (propSetters != null) {
-            propSetters.remove(key);
-        }
+        table.clearAccessor(key);
     }
 
     public void freeze() {
         frozen = true;
         sealed = true;
-        extensible = false;
+        table.freeze();
         lengthFlags = new JsObject.PropertyFlags(false, lengthFlags.enumerable(), false);
     }
 
     public boolean isFrozen() {
-        return frozen || (!extensible && elements.isEmpty());
+        return frozen || (!table.isExtensible() && elements.isEmpty() && table.isFrozen());
     }
 
     public void seal() {
         sealed = true;
-        extensible = false;
+        table.seal();
     }
 
     public boolean isSealed() {
@@ -283,11 +234,12 @@ public final class JsArray extends JsValue {
     }
 
     public void preventExtensions() {
-        extensible = false;
+        table.preventExtensions();
     }
 
+    @Override
     public boolean isExtensible() {
-        return extensible;
+        return table.isExtensible();
     }
 
     public int length() {
@@ -298,7 +250,7 @@ public final class JsArray extends JsValue {
         if (frozen || (sealed && length != elements.size())) {
             return false;
         }
-        if (!extensible && length > elements.size()) {
+        if (!table.isExtensible() && length > elements.size()) {
             return false;
         }
         if (!lengthFlags.writable() && length != elements.size()) {
@@ -307,9 +259,7 @@ public final class JsArray extends JsValue {
         while (elements.size() > length) {
             elements.removeLast();
         }
-        while (elements.size() < length) {
-            elements.add(HOLE);
-        }
+        padTo(length);
         return true;
     }
 
@@ -328,25 +278,30 @@ public final class JsArray extends JsValue {
         while (elements.size() > length) {
             elements.removeLast();
         }
+        padTo(length);
+    }
+
+    private void padToIndex(int index) {
+        checkDenseBound(index);
+        padTo(index + 1);
+    }
+
+    private void padTo(int length) {
+        checkDenseBound(length);
         while (elements.size() < length) {
             elements.add(HOLE);
         }
     }
 
-    // Named (non-index) own property keys, merging plain data properties with accessor-only ones
-    // (an accessor property has no entry in ownProperties).
+    private static void checkDenseBound(int length) {
+        if (length > MAX_DENSE_LENGTH) {
+            throw new RangeErrorException("Invalid array length");
+        }
+    }
+
+    // Named (non-index) own property keys, merging plain data properties with accessor-only ones.
     public java.util.Set<String> namedPropertyKeys() {
-        final var keys = new java.util.LinkedHashSet<String>();
-        if (ownProperties != null) {
-            keys.addAll(ownProperties.keySet());
-        }
-        if (propGetters != null) {
-            keys.addAll(propGetters.keySet());
-        }
-        if (propSetters != null) {
-            keys.addAll(propSetters.keySet());
-        }
-        return keys;
+        return table.keys();
     }
 
     public List<JsValue> getElements() {

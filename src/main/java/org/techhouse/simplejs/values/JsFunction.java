@@ -1,6 +1,9 @@
 package org.techhouse.simplejs.values;
 
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.nodes.JsNode;
 
@@ -13,7 +16,8 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private final boolean async;
     private final boolean generator;
     private final Environment closure;
-    private final CallablePropertyStore properties = new CallablePropertyStore();
+    private final PropertyTable table = new PropertyTable();
+    private Set<String> deletedMetadataKeys;
     private JsObject prototype;
     // Concise methods and accessors are not constructors, so they have no `prototype` property.
     private boolean method;
@@ -77,6 +81,10 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         return method;
     }
 
+    public boolean isConstructor() {
+        return !arrow && !async && !generator && !method;
+    }
+
     public void markMethod() {
         this.method = true;
     }
@@ -98,47 +106,56 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     }
 
     @Override
+    public PropertyTable ownProperties() {
+        return table;
+    }
+
+    @Override
     public void setProperty(String key, JsValue value) {
-        properties.setProperty(key, value);
+        table.defineValue(key, value);
+        table.setFlags(key, HIDDEN);
     }
 
     @Override
     public void setEnumerableProperty(String key, JsValue value) {
-        properties.setEnumerableProperty(key, value);
+        table.set(key, value);
     }
 
     @Override
     public JsValue getProperty(String key) {
-        return properties.getProperty(key);
+        return table.has(key) ? table.get(key) : null;
     }
 
     @Override
     public boolean hasProperty(String key) {
-        return properties.hasProperty(key);
+        return table.has(key);
     }
 
     @Override
     public boolean deleteProperty(String key) {
-        return properties.deleteProperty(key);
+        return table.delete(key);
     }
 
     @Override
     public void markMetadataDeleted(String key) {
-        properties.markMetadataDeleted(key);
+        if (deletedMetadataKeys == null) {
+            deletedMetadataKeys = new LinkedHashSet<>();
+        }
+        deletedMetadataKeys.add(key);
     }
 
     @Override
     public boolean isMetadataDeleted(String key) {
-        return properties.isMetadataDeleted(key);
+        return deletedMetadataKeys != null && deletedMetadataKeys.contains(key);
     }
 
     @Override
     public List<String> propertyKeys() {
-        return properties.propertyKeys();
+        return new ArrayList<>(table.keys());
     }
 
     @Override
     public List<String> enumerablePropertyKeys() {
-        return properties.enumerablePropertyKeys();
+        return table.keys().stream().filter(table::isEnumerable).toList();
     }
 }

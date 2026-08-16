@@ -97,7 +97,7 @@ public class IntrinsicsTest {
         assertKeys(realm.stringProto(), StringBuiltins.NAMES);
         assertKeys(realm.numberProto(), NumberBuiltins.NAMES);
         assertKeys(realm.bigintProto(), BigIntBuiltins.NAMES);
-        assertKeys(realm.symbolProto(), SymbolBuiltins.NAMES);
+        assertKeys(realm.symbolProto(), SymbolBuiltins.NAMES, SymbolBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.regexpProto(), RegexBuiltins.NAMES, RegexBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.dateProto(), DateBuiltins.NAMES);
         assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES);
@@ -161,7 +161,8 @@ public class IntrinsicsTest {
             assertNotNull(ObjectProtoBuiltins.getMethod(new JsObject(), name, null, null), name);
         }
         for (final var name : FunctionProtoBuiltins.NAMES) {
-            assertNotNull(FunctionProtoBuiltins.getMethod(new JsNativeFunction("f", (_, _) -> null), name, null), name);
+            assertNotNull(FunctionProtoBuiltins.getMethod(new JsNativeFunction("f", (_, _) -> null), name, null, null),
+                    name);
         }
         for (final var name : TypedArrayBuiltins.BUFFER_NAMES) {
             assertNotNull(TypedArrayBuiltins.bufferMethod(buffer, name), name);
@@ -177,7 +178,7 @@ public class IntrinsicsTest {
             assertNotNull(MapBuiltins.getMethod(new JsMap(false), name, null), name);
         }
         for (final var name : SetBuiltins.NAMES) {
-            assertNotNull(SetBuiltins.getMethod(new JsSet(false), name, null), name);
+            assertNotNull(SetBuiltins.getMethod(new JsSet(false), name, null, null), name);
         }
     }
 
@@ -192,7 +193,7 @@ public class IntrinsicsTest {
         assertNull(SymbolBuiltins.getProperty(new JsSymbol("s"), "nope"));
         assertNull(RegexBuiltins.getMethod(RegexTranslator.compile("a", ""), "nope"));
         assertNull(ObjectProtoBuiltins.getMethod(new JsObject(), "nope", null, null));
-        assertNull(FunctionProtoBuiltins.getMethod(new JsNativeFunction("f", (_, _) -> null), "nope", null));
+        assertNull(FunctionProtoBuiltins.getMethod(new JsNativeFunction("f", (_, _) -> null), "nope", null, null));
         assertNull(FunctionProtoBuiltins.metadata(new JsNativeFunction("f", (_, _) -> null), "nope"));
     }
 

@@ -13,6 +13,8 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
  * takes an explicit {@code littleEndian} flag (default big-endian per spec).
  */
 public final class JsDataView extends JsValue {
+    private PropertyTable table;
+
     private final JsArrayBuffer buffer;
     private final int byteOffset;
     private final int byteLength;
@@ -119,5 +121,13 @@ public final class JsDataView extends JsValue {
             return 4;
         }
         return 8;
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

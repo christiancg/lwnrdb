@@ -11,6 +11,12 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
  * {@code transfer} detaches this buffer and hands its bytes to a new one.
  */
 public final class JsArrayBuffer extends JsValue {
+    // A Data Block is a Java byte[], so a request past the JVM array limit is one CreateByteDataBlock
+    // reports as impossible (a RangeError) rather than one it attempts.
+    public static final long MAX_BYTE_LENGTH = Integer.MAX_VALUE - 8L;
+
+    private PropertyTable table;
+
     private byte[] bytes;
     private final int maxByteLength;
     private final boolean resizable;
@@ -27,9 +33,17 @@ public final class JsArrayBuffer extends JsValue {
     }
 
     public JsArrayBuffer(int byteLength, int maxByteLength, boolean resizable) {
+        checkAllocation(byteLength);
+        checkAllocation(maxByteLength);
         this.bytes = new byte[Math.max(byteLength, 0)];
         this.maxByteLength = Math.max(maxByteLength, 0);
         this.resizable = resizable;
+    }
+
+    public static void checkAllocation(long byteLength) {
+        if (byteLength > MAX_BYTE_LENGTH) {
+            throw new RangeErrorException("ArrayBuffer allocation failed");
+        }
     }
 
     public byte[] getBytes() {
@@ -76,6 +90,7 @@ public final class JsArrayBuffer extends JsValue {
             throw new TypeErrorException("Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer");
         }
         final var length = newByteLength < 0 ? bytes.length : newByteLength;
+        checkAllocation(length);
         final var moved = Arrays.copyOf(bytes, length);
         detached = true;
         bytes = new byte[0];
@@ -90,5 +105,13 @@ public final class JsArrayBuffer extends JsValue {
     private int clamp(int index) {
         final var resolved = index < 0 ? bytes.length + index : index;
         return Math.clamp(resolved, 0, bytes.length);
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

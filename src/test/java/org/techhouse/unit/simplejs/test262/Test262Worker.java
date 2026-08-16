@@ -35,7 +35,7 @@ public final class Test262Worker {
     private Test262Worker() {
     }
 
-    public static void main(String[] args) throws IOException {
+    public static void main() throws IOException {
         final var eJson = new EJson();
         try (var stdin = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8))) {
             String line;
@@ -128,8 +128,8 @@ public final class Test262Worker {
         return source.append(body).toString();
     }
 
-    // Corpus files are not guaranteed to be well-formed UTF-8, so decode replacing bad input rather
-    // than failing the test on its encoding.
+    // Corpus files are well-formed UTF-8 (the driver verifies this and reports any that are not), so
+    // a strict decode is right: a malformed file is a corpus problem, not a test failure to mask.
     private static String read(Path path) throws IOException {
         return Files.readString(path);
     }

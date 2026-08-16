@@ -9,6 +9,25 @@ public abstract class JsValue {
         return internalGetType(this);
     }
 
+    // The ordinary-object substrate every non-primitive value type carries. A primitive answers
+    // null, which is what distinguishes it from an object at every property choke point.
+    public PropertyTable ownProperties() {
+        return null;
+    }
+
+    public JsObject getProto() {
+        return null;
+    }
+
+    public void setProto(JsObject proto) {
+        // A value type without a [[Prototype]] slot silently ignores the link.
+    }
+
+    public boolean isExtensible() {
+        final var properties = ownProperties();
+        return properties != null && properties.isExtensible();
+    }
+
     private static JsValueType internalGetType(Object object) {
         return switch (object) {
             case JsNumber ignored -> JsValueType.NUMBER;

@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -57,11 +58,170 @@ public final class AsyncIteratorBuiltins {
         // consult for a JsNativeFunction - GlobalScope must not overwrite this with the unrelated
         // AsyncGenerator.prototype intrinsic.
         ctor.setPrototype(prototype);
+        ctor.markConstructor();
         return ctor;
     }
 
-    public static JsValue drainToArray(InterpreterOps ops, EventLoop loop, JsValue iterable) {
-        return toArray(loop, new AsyncDriver(ops, loop, getAsyncIterator(ops, loop, iterable)));
+    // Array.fromAsync: the spec's async closure, expressed as a promise-driven state machine so it
+    // never needs a coroutine. Everything the closure `await`s (each element of a sync iterable, the
+    // mapfn result, each array-like element) becomes one `toPromise(...).subscribe(...)` hop.
+    public static JsValue fromAsync(InterpreterOps ops, EventLoop loop, JsValue receiver, List<JsValue> args) {
+        final var out = new JsPromise(loop);
+        try {
+            final var items = arg0(args);
+            final var mapFn = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+            final var mapThis = args.size() > 2 ? args.get(2) : JsUndefined.getInstance();
+            if (!(mapFn instanceof JsUndefined) && !isCallable(mapFn)) {
+                throw new TypeErrorException("Array.fromAsync mapfn is not a function");
+            }
+            final var mapper = mapFn instanceof JsUndefined ? null : mapFn;
+            final var iterator = openForFromAsync(ops, loop, items);
+            if (iterator == null) {
+                fromArrayLike(ops, loop, receiver, items, mapper, mapThis, out);
+            } else {
+                final var target = InterpreterUtils.isConstructor(receiver)
+                        ? ops.construct(receiver, List.of())
+                        : new JsArray();
+                fromIterator(ops, loop, new AsyncDriver(ops, loop, iterator), target, mapper, mapThis, new long[]{0},
+                        out);
+            }
+        } catch (SimpleJsRuntimeException error) {
+            out.reject(InterpreterUtils.toErrorValue(error, out.intrinsics()));
+        }
+        return out;
+    }
+
+    // Returns null when the input is neither async- nor sync-iterable, which is the spec's signal to
+    // fall back to the array-like path rather than to throw.
+    private static JsValue openForFromAsync(InterpreterOps ops, EventLoop loop, JsValue items) {
+        final var asyncMethod = ops.getMember(items, JsSymbol.ASYNC_ITERATOR);
+        if (!InterpreterUtils.isNullish(asyncMethod)) {
+            if (!isCallable(asyncMethod)) {
+                throw new TypeErrorException("Symbol.asyncIterator is not a function");
+            }
+            return ops.call(asyncMethod, items, List.of());
+        }
+        final var syncMethod = ops.getMember(items, JsSymbol.ITERATOR);
+        if (InterpreterUtils.isNullish(syncMethod)) {
+            return null;
+        }
+        if (!isCallable(syncMethod)) {
+            throw new TypeErrorException("Symbol.iterator is not a function");
+        }
+        return syncToAsync(ops, loop, ops.call(syncMethod, items, List.of()));
+    }
+
+    private static void fromIterator(InterpreterOps ops, EventLoop loop, AsyncDriver source, JsValue target,
+            JsValue mapper, JsValue mapThis, long[] index, JsPromise out) {
+        source.step().subscribe(result -> {
+            if (source.isDone(result)) {
+                finishFromAsync(ops, target, index[0], out);
+                return;
+            }
+            final var value = source.valueOf(result);
+            mapThenStore(ops, loop, source, target, mapper, mapThis, index, value, out,
+                    () -> fromIterator(ops, loop, source, target, mapper, mapThis, index, out));
+        }, reason -> closeAndReject(source, out, reason));
+    }
+
+    private static void fromArrayLike(InterpreterOps ops, EventLoop loop, JsValue receiver, JsValue items,
+            JsValue mapper, JsValue mapThis, JsPromise out) {
+        final var length = InterpreterUtils.isObjectLike(items) ? arrayLikeLength(ops, items) : 0;
+        final var target = InterpreterUtils.isConstructor(receiver)
+                ? ops.construct(receiver, List.of(new JsNumber(length)))
+                : new JsArray();
+        arrayLikeStep(ops, loop, target, items, mapper, mapThis, new long[]{0}, length, out);
+    }
+
+    private static void arrayLikeStep(InterpreterOps ops, EventLoop loop, JsValue target, JsValue items, JsValue mapper,
+            JsValue mapThis, long[] index, long length, JsPromise out) {
+        if (index[0] >= length) {
+            finishFromAsync(ops, target, length, out);
+            return;
+        }
+        guarded(out, () -> {
+            final var raw = ops.getMember(items, new JsString(Long.toString(index[0])));
+            toPromise(loop, raw).subscribe(
+                    value -> mapThenStore(ops, loop, null, target, mapper, mapThis, index, value, out,
+                            () -> arrayLikeStep(ops, loop, target, items, mapper, mapThis, index, length, out)),
+                    out::reject);
+        });
+    }
+
+    private static void mapThenStore(InterpreterOps ops, EventLoop loop, AsyncDriver source, JsValue target,
+            JsValue mapper, JsValue mapThis, long[] index, JsValue value, JsPromise out, Runnable next) {
+        if (mapper == null) {
+            if (storeElement(ops, target, index, value, source, out)) {
+                next.run();
+            }
+            return;
+        }
+        final JsValue mapped;
+        try {
+            mapped = ops.call(mapper, mapThis, List.of(value, new JsNumber(index[0])));
+        } catch (SimpleJsRuntimeException error) {
+            closeAndReject(source, out, InterpreterUtils.toErrorValue(error, out.intrinsics()));
+            return;
+        }
+        toPromise(loop, mapped).subscribe(awaited -> {
+            if (storeElement(ops, target, index, awaited, source, out)) {
+                next.run();
+            }
+        }, reason -> closeAndReject(source, out, reason));
+    }
+
+    private static boolean storeElement(InterpreterOps ops, JsValue target, long[] index, JsValue value,
+            AsyncDriver source, JsPromise out) {
+        try {
+            createDataPropertyOrThrow(ops, target, index[0], value);
+        } catch (SimpleJsRuntimeException error) {
+            closeAndReject(source, out, InterpreterUtils.toErrorValue(error, out.intrinsics()));
+            return false;
+        }
+        index[0]++;
+        return true;
+    }
+
+    private static long arrayLikeLength(InterpreterOps ops, JsValue items) {
+        final var raw = JsCoercion.toNumber(ops.getMember(items, new JsString("length")), ops);
+        if (Double.isNaN(raw) || raw <= 0) {
+            return 0;
+        }
+        return (long) Math.min(raw, 9007199254740991d);
+    }
+
+    private static void closeAndReject(AsyncDriver source, JsPromise out, JsValue reason) {
+        if (source != null) {
+            source.close();
+        }
+        out.reject(reason);
+    }
+
+    private static void finishFromAsync(InterpreterOps ops, JsValue target, long length, JsPromise out) {
+        guarded(out, () -> {
+            if (!ops.setMember(target, new JsString("length"), new JsNumber(length))) {
+                throw new TypeErrorException("Cannot assign to read only property 'length'");
+            }
+            out.resolve(target);
+        });
+    }
+
+    private static void createDataPropertyOrThrow(InterpreterOps ops, JsValue target, long index, JsValue value) {
+        final var key = new JsString(Long.toString(index));
+        if (target instanceof JsArray array) {
+            if (!array.set((int) index, value)) {
+                throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
+            }
+            return;
+        }
+        final var descriptor = new JsObject();
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.of(true));
+        descriptor.set("enumerable", JsBoolean.of(true));
+        descriptor.set("configurable", JsBoolean.of(true));
+        if (!ops.defineProperty(target, key, descriptor)) {
+            throw new TypeErrorException("Cannot define property " + index);
+        }
     }
 
     public static JsNativeFunction helper(InterpreterOps ops, EventLoop loop, String name) {
@@ -224,8 +384,9 @@ public final class AsyncIteratorBuiltins {
         source.step().subscribe(result -> {
             if (source.isDone(result)) {
                 if (accumulator[0] == null) {
-                    out.reject(InterpreterUtils
-                            .toErrorValue(new TypeErrorException("Reduce of empty iterator with no initial value")));
+                    out.reject(InterpreterUtils.toErrorValue(
+                            new TypeErrorException("Reduce of empty iterator with no initial value"),
+                            loop.intrinsics()));
                 } else {
                     out.resolve(accumulator[0]);
                 }
@@ -377,7 +538,8 @@ public final class AsyncIteratorBuiltins {
             final var out = new JsPromise(loop);
             final var nextFn = ops.getMember(syncIterator, new JsString("next"));
             if (!isCallable(nextFn)) {
-                out.reject(InterpreterUtils.toErrorValue(new TypeErrorException("iterator.next is not a function")));
+                out.reject(InterpreterUtils.toErrorValue(new TypeErrorException("iterator.next is not a function"),
+                        out.intrinsics()));
                 return out;
             }
             guarded(out, () -> {
@@ -421,8 +583,8 @@ public final class AsyncIteratorBuiltins {
     private static void guarded(JsPromise out, Runnable body) {
         try {
             body.run();
-        } catch (RuntimeException error) {
-            out.reject(InterpreterUtils.toErrorValue(error));
+        } catch (SimpleJsRuntimeException error) {
+            out.reject(InterpreterUtils.toErrorValue(error, out.intrinsics()));
         }
     }
 
@@ -477,7 +639,8 @@ public final class AsyncIteratorBuiltins {
             }
             final var nextFn = ops.getMember(iterator, new JsString("next"));
             if (!isCallable(nextFn)) {
-                out.reject(InterpreterUtils.toErrorValue(new TypeErrorException("iterator.next is not a function")));
+                out.reject(InterpreterUtils.toErrorValue(new TypeErrorException("iterator.next is not a function"),
+                        out.intrinsics()));
                 return out;
             }
             guarded(out, () -> {

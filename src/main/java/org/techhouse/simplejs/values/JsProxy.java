@@ -27,6 +27,17 @@ public final class JsProxy extends JsValue {
     }
 
     public boolean isCallable() {
-        return target instanceof JsFunction || target instanceof JsNativeFunction || target instanceof JsClass;
+        return target instanceof JsFunction || target instanceof JsNativeFunction || target instanceof JsClass
+                || (target instanceof JsProxy proxy && proxy.isCallable());
+    }
+
+    public boolean isConstructor() {
+        return switch (target) {
+            case JsClass ignored -> true;
+            case JsNativeFunction nativeFunction -> nativeFunction.isConstructor();
+            case JsFunction function -> function.isConstructor();
+            case JsProxy proxy -> proxy.isConstructor();
+            default -> false;
+        };
     }
 }

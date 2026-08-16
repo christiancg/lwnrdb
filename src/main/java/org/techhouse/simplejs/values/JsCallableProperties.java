@@ -7,6 +7,10 @@ import java.util.List;
 // Environment.declareBuiltin); script assignments go through setEnumerableProperty, so
 // Object.keys(f) reports what a script added without leaking the builtin surface.
 public interface JsCallableProperties {
+    // Builtin statics are non-enumerable but writable and configurable, the spec shape for a
+    // function's own builtin surface.
+    JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(true, false, true);
+
     void setProperty(String key, JsValue value);
 
     void setEnumerableProperty(String key, JsValue value);

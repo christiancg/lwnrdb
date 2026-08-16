@@ -146,7 +146,7 @@ public class JsValueTest {
     public void test_class_value() {
         final var cls = new JsClass("Widget", null, Environment.global());
         assertEquals("function", JsCoercion.typeOf(cls));
-        assertEquals("class Widget", JsCoercion.toStr(cls));
+        assertEquals("function Widget() { [native code] }", JsCoercion.toStr(cls));
         assertEquals("Widget", cls.getName());
     }
 

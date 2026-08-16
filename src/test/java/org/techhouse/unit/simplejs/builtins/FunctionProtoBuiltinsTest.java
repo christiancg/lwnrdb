@@ -1,8 +1,10 @@
 package org.techhouse.unit.simplejs.builtins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsNumber;
 
@@ -58,6 +60,60 @@ public class FunctionProtoBuiltinsTest {
     @Test
     public void test_unknown_function_member() {
         assertEquals("undefined", str());
+    }
+
+    @Test
+    public void applyAcceptsArrayLike() {
+        assertEquals(6, num("function f(a, b, c) { return a + b + c; } f.apply(null, {0: 1, 1: 2, 2: 3, length: 3})"));
+        assertEquals(6, num("function f(a, b, c) { return a + b + c; }"
+                + " function g() { return f.apply(null, arguments); } g(1, 2, 3)"));
+        assertEquals(0, num("function f() { return arguments.length; } f.apply(null)"));
+    }
+
+    @Test
+    public void applyThrowsOnNonObjectArgArray() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("(function() {}).apply(null, 1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("(function() {}).apply(null, 'ab')"));
+    }
+
+    @Test
+    public void bindComputesLength() {
+        assertEquals(2, num("(function(a, b, c) {}).bind(null, 1).length"));
+        assertEquals(0, num("(function(a) {}).bind(null, 1, 2, 3).length"));
+        assertEquals(1, num("Math.max.bind(null, 1).length"));
+    }
+
+    @Test
+    public void bindDerivesNameFromTarget() {
+        assertEquals("bound f", strOf("(function f() {}).bind(null).name"));
+        assertEquals("bound bound f", strOf("(function f() {}).bind(null).bind(null).name"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Function.prototype.bind.call({})"));
+    }
+
+    @Test
+    public void toStringReturnsSourceTextForUserFunctions() {
+        assertEquals("function f() { [native code] }", strOf("(function f() { return 1; }).toString()"));
+        assertEquals("function f() { [native code] }", strOf("'' + function f() {}"));
+        assertEquals("function () { [native code] }", strOf("String(function () {})"));
+        assertEquals("function C() { [native code] }", strOf("String(class C {})"));
+    }
+
+    @Test
+    public void functionPrototypeExposesSymbolHasInstance() {
+        assertEquals("function", strOf("typeof Function.prototype[Symbol.hasInstance]"));
+        assertEquals("true", strOf("let f = function() {}; String(f[Symbol.hasInstance](new f()))"));
+        assertEquals("false", strOf("String((function() {})[Symbol.hasInstance]({}))"));
+    }
+
+    @Test
+    public void instanceofReadsThePrototypeProperty() {
+        assertEquals("true", strOf("function f() {} let p = f.prototype; String(Object.create(p) instanceof f)"));
+        assertEquals("false", strOf("function f() {} String({} instanceof f)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("({}) instanceof Object.create(null)"));
+    }
+
+    private static String strOf(String source) {
+        return ((org.techhouse.simplejs.values.JsString) Interpreter.run(source)).getValue();
     }
 
     private static String str() {

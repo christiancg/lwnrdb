@@ -37,7 +37,7 @@ public final class GlobalScope {
         define(global, "Math", MathBuiltins.create(iterableToList));
         define(global, "JSON", JsonBuiltins.create(ops, invoker));
         define(global, "console", consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
-        constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, iterableToList, intrinsics),
+        constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, intrinsics),
                 intrinsics.promiseProto());
         TimerBuiltins.install(global, eventLoop, invoker);
         constructor(global, "RegExp", RegexBuiltins.create(), intrinsics.regexpProto());
@@ -48,9 +48,9 @@ public final class GlobalScope {
         global.declareBuiltin("AsyncIterator", AsyncIteratorBuiltins.create(ops, eventLoop));
         constructor(global, "Symbol", SymbolBuiltins.create(), intrinsics.symbolProto());
         constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, false), intrinsics.mapProto());
-        constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true), intrinsics.mapProto());
+        constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true), intrinsics.weakMapProto());
         constructor(global, "Set", SetBuiltins.create(iterableToList, false), intrinsics.setProto());
-        constructor(global, "WeakSet", SetBuiltins.create(iterableToList, true), intrinsics.setProto());
+        constructor(global, "WeakSet", SetBuiltins.create(iterableToList, true), intrinsics.weakSetProto());
         constructor(global, "Date", DateBuiltins.create(), intrinsics.dateProto());
         constructor(global, "DisposableStack", DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false),
                 intrinsics.disposableStackProto());
@@ -58,7 +58,9 @@ public final class GlobalScope {
                 DisposableStackBuiltins.create(intrinsics.asyncDisposableStackProto(), true),
                 intrinsics.asyncDisposableStackProto());
         define(global, "Reflect", ReflectBuiltins.create(ops));
-        define(global, "Proxy", ProxyBuiltins.create());
+        final var proxyCtor = ProxyBuiltins.create();
+        proxyCtor.markConstructor();
+        define(global, "Proxy", proxyCtor);
         constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(), intrinsics.arrayBufferProto());
         constructor(global, "DataView", TypedArrayBuiltins.dataView(), intrinsics.dataViewProto());
         // %TypedArray% is a real spec intrinsic but - unlike Iterator - is never itself exposed as
@@ -67,6 +69,7 @@ public final class GlobalScope {
         // constructor-level [[Prototype]] chain without declaring a "TypedArray" global binding.
         final var typedArrayCtor = TypedArrayBuiltins.abstractTypedArray();
         typedArrayCtor.setPrototype(intrinsics.typedArrayProto());
+        typedArrayCtor.markConstructor();
         intrinsics.typedArrayProto().defineValue("constructor", typedArrayCtor);
         intrinsics.typedArrayProto().setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         for (final var kind : JsTypedArray.Kind.values()) {
@@ -81,8 +84,8 @@ public final class GlobalScope {
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
         define(global, "isNaN", NumberBuiltins.isNaNFunction());
         define(global, "isFinite", NumberBuiltins.isFiniteFunction());
-        GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops);
-        FetchBuiltins.install(global, eventLoop, network, limits);
+        GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops, intrinsics);
+        FetchBuiltins.install(global, eventLoop, network, limits, intrinsics);
         define(global, "globalThis", globalThis);
         applyStaticLengths(global);
         return globalThis;
@@ -136,6 +139,7 @@ public final class GlobalScope {
 
     private static void constructor(Environment global, String name, JsNativeFunction value, JsObject proto) {
         value.setPrototype(proto);
+        value.markConstructor();
         proto.defineValue("constructor", value);
         proto.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         global.declareBuiltin(name, value);

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
@@ -141,5 +142,39 @@ public class CoroutineTest {
         assertFalse(coroutine.isAsync());
         coroutine.markAsync();
         assertTrue(coroutine.isAsync());
+    }
+
+    // resuming from inside the body would wait on a hand-off that can never come, so it throws
+    @Test
+    public void test_reentrant_resume_throws_type_error_instead_of_deadlocking() {
+        final var coroutine = new Coroutine();
+        final var reentrant = new RuntimeException[1];
+        coroutine.prime(() -> {
+            reentrant[0] = assertThrows(TypeErrorException.class,
+                    () -> coroutine.resumeNext(JsUndefined.getInstance()));
+            return new JsNumber(1);
+        });
+        final var step = coroutine.resumeNext(JsUndefined.getInstance());
+        assertTrue(step.done());
+        assertNotNull(reentrant[0]);
+    }
+
+    // a delegated yield is marked for the driver and the marking is consumed by the yield itself
+    @Test
+    public void test_delegated_yield_marker_is_one_shot() {
+        final var coroutine = new Coroutine();
+        final var flags = new boolean[2];
+        coroutine.prime(() -> {
+            coroutine.markDelegatedYield();
+            coroutine.yieldOut(new JsNumber(1));
+            coroutine.yieldOut(new JsNumber(2));
+            return JsUndefined.getInstance();
+        });
+        coroutine.resumeNext(JsUndefined.getInstance());
+        flags[0] = coroutine.isDelegatedYield();
+        coroutine.resumeNext(JsUndefined.getInstance());
+        flags[1] = coroutine.isDelegatedYield();
+        assertTrue(flags[0]);
+        assertFalse(flags[1]);
     }
 }

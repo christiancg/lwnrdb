@@ -54,7 +54,7 @@ public class Test262WorkerTest {
         try {
             System.setIn(new ByteArrayInputStream(input.toString().getBytes(StandardCharsets.UTF_8)));
             System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
-            Test262Worker.main(new String[0]);
+            Test262Worker.main();
         } catch (IOException error) {
             throw new IllegalStateException(error);
         } finally {

@@ -35,6 +35,9 @@ public final class IteratorBuiltins {
 
     private static final Set<String> ZERO_ARG_HELPERS = Set.of("toArray", "join");
 
+    private static final Set<String> CALLBACK_HELPERS = Set.of("map", "filter", "flatMap", "reduce", "forEach", "some",
+            "every", "find");
+
     private static final double MAX_SAFE_INTEGER = 9007199254740991d;
 
     private IteratorBuiltins() {
@@ -66,6 +69,7 @@ public final class IteratorBuiltins {
         // consult for a JsNativeFunction (see ClassEvaluator.evalInstanceof/Interpreter.constructValue)
         // - GlobalScope must not overwrite this with the unrelated Generator.prototype intrinsic.
         ctor.setPrototype(prototype);
+        ctor.markConstructor();
         ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(ops, arg0(args), objectProto)));
         ctor.setProperty("concat", new JsNativeFunction("concat", (thisArg, args) -> {
             // `constructNative`'s fallback path passes JsUndefined as thisArg specifically to signal
@@ -100,26 +104,54 @@ public final class IteratorBuiltins {
         return fn;
     }
 
+    // Spec order: the receiver is checked, then the argument (whose coercion may throw, and must be
+    // observable *before* anything is read off the iterator), and only then does GetIteratorDirect
+    // read `next` - which is why every arm evaluates its argument before constructing the Driver.
     private static JsValue dispatch(InterpreterOps ops, String name, JsValue thisArg, List<JsValue> args,
             JsObject objectProto) {
-        final var source = new Driver(ops, requireIterator(thisArg));
+        final var iterator = requireIterator(thisArg);
+        if (CALLBACK_HELPERS.contains(name)) {
+            final var fn = callback(args);
+            return withCallback(ops, name, new Driver(ops, iterator), fn, args, objectProto);
+        }
         return switch (name) {
-            case "map" -> map(ops, source, callback(args), objectProto);
-            case "filter" -> filter(ops, source, callback(args), objectProto);
-            case "take" -> take(source, limit(arg0(args)), objectProto);
-            case "drop" -> drop(source, limit(arg0(args)), objectProto);
-            case "flatMap" -> flatMap(ops, source, callback(args), objectProto);
-            case "reduce" -> reduce(ops, source, callback(args), args);
-            case "toArray" -> toArray(source);
-            case "forEach" -> forEach(ops, source, callback(args));
-            case "some" -> JsBoolean.of(matchAny(ops, source, callback(args)));
-            case "every" -> JsBoolean.of(matchAll(ops, source, callback(args)));
-            case "find" -> find(ops, source, callback(args));
-            case "chunks" -> chunks(source, windowSize(arg0(args), "chunkSize"), objectProto);
-            case "windows" -> windows(source, windowSize(arg0(args), "windowSize"), objectProto);
-            case "includes" -> JsBoolean.of(includes(source, arg0(args), skipCount(args)));
-            case "join" -> join(source, args);
+            case "take" -> {
+                final var count = limit(arg0(args));
+                yield take(new Driver(ops, iterator), count, objectProto);
+            }
+            case "drop" -> {
+                final var count = limit(arg0(args));
+                yield drop(new Driver(ops, iterator), count, objectProto);
+            }
+            case "chunks" -> {
+                final var size = windowSize(arg0(args), "chunkSize");
+                yield chunks(new Driver(ops, iterator), size, objectProto);
+            }
+            case "windows" -> {
+                final var size = windowSize(arg0(args), "windowSize");
+                yield windows(new Driver(ops, iterator), size, objectProto);
+            }
+            case "includes" -> {
+                final var skip = skipCount(args);
+                yield JsBoolean.of(includes(new Driver(ops, iterator), arg0(args), skip));
+            }
+            case "toArray" -> toArray(new Driver(ops, iterator));
+            case "join" -> join(new Driver(ops, iterator), args);
             default -> JsUndefined.getInstance();
+        };
+    }
+
+    private static JsValue withCallback(InterpreterOps ops, String name, Driver source, JsValue fn, List<JsValue> args,
+            JsObject objectProto) {
+        return switch (name) {
+            case "map" -> map(ops, source, fn, objectProto);
+            case "filter" -> filter(ops, source, fn, objectProto);
+            case "flatMap" -> flatMap(ops, source, fn, objectProto);
+            case "reduce" -> reduce(ops, source, fn, args);
+            case "forEach" -> forEach(ops, source, fn);
+            case "some" -> JsBoolean.of(matchAny(ops, source, fn));
+            case "every" -> JsBoolean.of(matchAll(ops, source, fn));
+            default -> find(ops, source, fn);
         };
     }
 
@@ -674,18 +706,22 @@ public final class IteratorBuiltins {
     private static final class Driver {
         private final InterpreterOps ops;
         private final JsValue iterator;
+        // GetIteratorDirect reads `next` once and stores it in the Iterator Record; re-reading it per
+        // step lets a `next` getter that returns a fresh iterator restart the source forever.
+        private final JsValue nextMethod;
         private boolean done;
 
         private Driver(InterpreterOps ops, JsValue iterator) {
             this.ops = ops;
             this.iterator = iterator;
+            this.nextMethod = ops.getMember(iterator, new JsString("next"));
         }
 
         private JsValue next() {
             if (done) {
                 return null;
             }
-            final var nextFn = ops.getMember(iterator, new JsString("next"));
+            final var nextFn = nextMethod;
             if (!(nextFn instanceof JsFunction) && !(nextFn instanceof JsNativeFunction)) {
                 throw new TypeErrorException("iterator.next is not a function");
             }

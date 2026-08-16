@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class JsMap extends JsValue {
+    private PropertyTable table;
+
     public record Entry(JsValue key, JsValue value) {
     }
 
@@ -50,5 +52,13 @@ public final class JsMap extends JsValue {
 
     public Collection<Entry> entries() {
         return entries.values();
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

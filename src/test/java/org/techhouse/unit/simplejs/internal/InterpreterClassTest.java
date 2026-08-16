@@ -414,12 +414,12 @@ public class InterpreterClassTest {
         assertFalse(bool("class A { static #x = 1; static check(o) { return #x in o } } A.check({})"));
     }
 
-    // Another class cannot reach a static private member
+    // Another class cannot even name a private member it does not declare
     @Test
     public void test_static_private_is_not_shared() {
-        assertThrows(TypeErrorException.class, () -> Interpreter
+        assertThrows(SyntaxErrorException.class, () -> Interpreter
                 .run("class A { static #x = 1 } class B { static probe() { return A.#x } } B.probe()"));
-        assertThrows(TypeErrorException.class, () -> Interpreter
+        assertThrows(SyntaxErrorException.class, () -> Interpreter
                 .run("class A { static #m() {} } class B { static probe() { return A.#m() } } B.probe()"));
     }
 
@@ -501,21 +501,19 @@ public class InterpreterClassTest {
         assertEquals(2, num("class A { static [1 + 1] = 2; } A['2']"));
     }
 
-    // An abrupt completion (break) inside a static block stops processing later static members
+    // A static block is a break boundary: the enclosing iteration statement is out of its reach
     @Test
-    public void test_static_block_break_stops_early() {
+    public void test_static_block_break_is_syntax_error() {
         final var source = """
-                class A {
-                    static out = 1;
-                    static {
-                        A.out = 2;
-                        break;
-                        A.out = 99;
+                while (false) {
+                    class A {
+                        static {
+                            break;
+                        }
                     }
                 }
-                A.out
                 """;
-        assertEquals(2, num(source));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run(source));
     }
 
     // An instance field declared with no initializer defaults to undefined

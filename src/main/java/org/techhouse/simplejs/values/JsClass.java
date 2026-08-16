@@ -49,6 +49,13 @@ public final class JsClass extends JsValue {
         return staticOwner;
     }
 
+    // A class's own properties are its statics, so the class and its static owner share one table
+    // rather than the substrate seeing two.
+    @Override
+    public PropertyTable ownProperties() {
+        return staticOwner.ownProperties();
+    }
+
     public JsNativeFunction getNativeSuperClass() {
         return nativeSuperClass;
     }

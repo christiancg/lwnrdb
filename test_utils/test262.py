@@ -63,9 +63,8 @@ DIVERGENCES = [
     ("for-in skips the prototype chain", ["language/statements/for-in/"]),
     ("super.x = v is a SyntaxError", ["language/expressions/super/", "language/statements/class/"]),
     ("Date component accessors are UTC, not local", ["built-ins/Date/"]),
-    ("function objects have no descriptor surface", ["built-ins/Object/defineProperty/"]),
-    ("Reflect gaps (ownKeys symbols, construct newTarget)", ["built-ins/Reflect/"]),
-    ("Function.prototype.apply rejects array-likes", ["built-ins/Function/prototype/"]),
+    ("descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor)", ["built-ins/Object/defineProperty/"]),
+    ("Reflect.ownKeys omits symbol keys", ["built-ins/Reflect/"]),
     ("Object.assign bypasses the target's setter", ["built-ins/Object/assign/"]),
     ("instanceof survives F.prototype reassignment", ["language/expressions/instanceof/"]),
     ("in on a typed array throws", ["built-ins/TypedArray/", "built-ins/TypedArrayConstructors/"]),
@@ -343,8 +342,12 @@ def collect(test_root, harness_dir, exclusions, name_filter, known):
         if name_filter and name_filter not in test_id:
             continue
         raw = path.read_bytes()
-        source = raw.decode("utf-8", errors="replace")
-        if "�" in source:
+        try:
+            source = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # Only a genuinely malformed file counts: a U+FFFD the corpus committed on purpose is
+            # ordinary content, not a decoding failure, and flagging it buried the real signal.
+            source = raw.decode("utf-8", errors="replace")
             undecodable.append(test_id)
         meta = parse_frontmatter(source, test_id)
         for feature in meta["features"]:

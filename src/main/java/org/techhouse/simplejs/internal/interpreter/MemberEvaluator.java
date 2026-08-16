@@ -14,10 +14,8 @@ import org.techhouse.simplejs.builtins.IteratorBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
-import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
-import org.techhouse.simplejs.exceptions.ReferenceErrorException;
-import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.EventLoop;
@@ -563,65 +561,153 @@ public final class MemberEvaluator {
         return AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key);
     }
 
+    // The spec's [[AsyncGeneratorQueue]] and [[AsyncGeneratorState]]: a request is always appended,
+    // and only a generator that is not already running (or awaiting a return) starts draining, so a
+    // re-entrant next()/return()/throw() from the generator's own body queues instead of deadlocking.
     public JsValue driveAsyncGenerator(JsAsyncGenerator generator, AsyncStep kind, JsValue arg) {
-        final var coroutine = generator.getCoroutine();
         final var promise = new JsPromise(eventLoop);
-        if (coroutine.isDone()) {
-            if (kind == AsyncStep.THROW) {
-                promise.reject(arg);
-            } else {
-                promise.resolve(stepResult(kind == AsyncStep.RETURN ? arg : JsUndefined.getInstance(), true));
-            }
-            return promise;
-        }
-        generator.setPending(promise);
-        try {
-            final var step = switch (kind) {
-                case NEXT -> coroutine.resumeNext(arg);
-                case RETURN -> coroutine.resumeReturn(arg);
-                case THROW -> coroutine.resumeThrow(arg);
-            };
-            if (!coroutine.isDone() && coroutine.pauseReason() == Coroutine.PauseReason.AWAIT) {
-                return promise;
-            }
-            resolveStep(generator, step.value(), step.done());
-        } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
-                | SyntaxErrorException error) {
-            rejectStep(generator, error);
+        generator.enqueue(new JsAsyncGenerator.Request(requestKind(kind), arg, promise));
+        final var state = generator.getState();
+        if (state != JsAsyncGenerator.State.EXECUTING && state != JsAsyncGenerator.State.AWAITING_RETURN) {
+            drainAsyncGenerator(generator);
         }
         return promise;
+    }
+
+    private static JsAsyncGenerator.RequestKind requestKind(AsyncStep kind) {
+        return switch (kind) {
+            case NEXT -> JsAsyncGenerator.RequestKind.NEXT;
+            case RETURN -> JsAsyncGenerator.RequestKind.RETURN;
+            case THROW -> JsAsyncGenerator.RequestKind.THROW;
+        };
+    }
+
+    private void drainAsyncGenerator(JsAsyncGenerator generator) {
+        final var coroutine = generator.getCoroutine();
+        var draining = true;
+        while (draining && generator.hasRequests()) {
+            final var state = generator.getState();
+            final var request = generator.peekRequest();
+            final var startOnly = state == JsAsyncGenerator.State.SUSPENDED_START
+                    && request.kind() != JsAsyncGenerator.RequestKind.NEXT;
+            if (state == JsAsyncGenerator.State.EXECUTING || state == JsAsyncGenerator.State.AWAITING_RETURN) {
+                draining = false;
+            } else if (state == JsAsyncGenerator.State.COMPLETED || coroutine.isDone() || startOnly) {
+                draining = settleWithoutResuming(generator, request);
+            } else {
+                startRequest(generator, request);
+                draining = false;
+            }
+        }
+    }
+
+    private void startRequest(JsAsyncGenerator generator, JsAsyncGenerator.Request request) {
+        generator.setState(JsAsyncGenerator.State.EXECUTING);
+        if (request.kind() == JsAsyncGenerator.RequestKind.RETURN) {
+            // AsyncGeneratorUnwrapYieldResumption awaits a return completion's value before the body
+            // resumes, so `gen.return(promise)` unwraps rather than returning the promise itself.
+            interp.toPromise(request.value()).subscribe(
+                    value -> resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.RETURN, value),
+                    reason -> resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.THROW, reason));
+            return;
+        }
+        resumeAsyncGenerator(generator, request.kind(), request.value());
+    }
+
+    // Returns false when the request is settled asynchronously (AsyncGeneratorAwaitReturn), so the
+    // caller stops draining and lets the await's continuation resume it.
+    private boolean settleWithoutResuming(JsAsyncGenerator generator, JsAsyncGenerator.Request request) {
+        if (request.kind() == JsAsyncGenerator.RequestKind.RETURN) {
+            generator.setState(JsAsyncGenerator.State.AWAITING_RETURN);
+            interp.toPromise(request.value()).subscribe(value -> {
+                generator.setState(JsAsyncGenerator.State.COMPLETED);
+                generator.pollRequest();
+                request.capability().resolve(stepResult(value, true));
+                drainAsyncGenerator(generator);
+            }, reason -> {
+                generator.setState(JsAsyncGenerator.State.COMPLETED);
+                generator.pollRequest();
+                request.capability().reject(reason);
+                drainAsyncGenerator(generator);
+            });
+            return false;
+        }
+        generator.setState(JsAsyncGenerator.State.COMPLETED);
+        generator.pollRequest();
+        if (request.kind() == JsAsyncGenerator.RequestKind.THROW) {
+            request.capability().reject(request.value());
+        } else {
+            request.capability().resolve(stepResult(JsUndefined.getInstance(), true));
+        }
+        return true;
+    }
+
+    private void resumeAsyncGenerator(JsAsyncGenerator generator, JsAsyncGenerator.RequestKind kind, JsValue value) {
+        final var coroutine = generator.getCoroutine();
+        try {
+            switch (kind) {
+                case RETURN -> coroutine.resumeReturn(value);
+                case THROW -> coroutine.resumeThrow(value);
+                default -> coroutine.resumeNext(value);
+            }
+        } catch (SimpleJsRuntimeException error) {
+            generator.setState(JsAsyncGenerator.State.COMPLETED);
+            completeStep(generator, error);
+        }
     }
 
     public void observeAsyncGenerator(JsAsyncGenerator generator, RuntimeException escaped) {
         final var coroutine = generator.getCoroutine();
         if (escaped != null) {
-            rejectStep(generator, escaped);
-        } else if (coroutine.isDone()) {
-            resolveStep(generator, coroutine.completedValue(), true);
-        } else if (coroutine.pauseReason() == Coroutine.PauseReason.YIELD) {
-            resolveStep(generator, coroutine.yieldedValue(), false);
-        }
-    }
-
-    private void resolveStep(JsAsyncGenerator generator, JsValue value, boolean done) {
-        final var promise = generator.clearPending();
-        if (promise != null) {
-            promise.resolve(stepResult(value, done));
-        }
-    }
-
-    private void rejectStep(JsAsyncGenerator generator, RuntimeException error) {
-        final var promise = generator.clearPending();
-        if (promise == null) {
+            generator.setState(JsAsyncGenerator.State.COMPLETED);
+            completeStep(generator, escaped);
             return;
         }
-        if (error instanceof JsThrowException || error instanceof TypeErrorException
-                || error instanceof ReferenceErrorException || error instanceof RangeErrorException
-                || error instanceof SyntaxErrorException) {
-            promise.reject(toErrorValue(error, interp.intrinsics()));
-        } else {
+        if (coroutine.isDone()) {
+            generator.setState(JsAsyncGenerator.State.COMPLETED);
+            completeResolve(generator, coroutine.completedValue(), true);
+            return;
+        }
+        if (coroutine.pauseReason() == Coroutine.PauseReason.YIELD) {
+            yieldStep(generator, coroutine.yieldedValue());
+        }
+    }
+
+    // AsyncGeneratorYield awaits the yielded operand before the step settles, so `yield promise`
+    // hands the consumer the promise's value and a rejection re-enters the body at the yield.
+    private void yieldStep(JsAsyncGenerator generator, JsValue value) {
+        if (generator.getCoroutine().isDelegatedYield()) {
+            generator.setState(JsAsyncGenerator.State.SUSPENDED_YIELD);
+            completeResolve(generator, value, false);
+            return;
+        }
+        generator.setState(JsAsyncGenerator.State.EXECUTING);
+        interp.toPromise(value).subscribe(settled -> {
+            generator.setState(JsAsyncGenerator.State.SUSPENDED_YIELD);
+            completeResolve(generator, settled, false);
+        }, reason -> {
+            generator.setState(JsAsyncGenerator.State.EXECUTING);
+            resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.THROW, reason);
+        });
+    }
+
+    private void completeResolve(JsAsyncGenerator generator, JsValue value, boolean done) {
+        final var request = generator.pollRequest();
+        if (request != null) {
+            request.capability().resolve(stepResult(value, done));
+        }
+        drainAsyncGenerator(generator);
+    }
+
+    private void completeStep(JsAsyncGenerator generator, RuntimeException error) {
+        if (!(error instanceof SimpleJsRuntimeException)) {
             throw error;
         }
+        final var request = generator.pollRequest();
+        if (request != null) {
+            request.capability().reject(toErrorValue(error, interp.intrinsics()));
+        }
+        drainAsyncGenerator(generator);
     }
 
     private JsValue regExpMember(JsRegExp regexp, String key) {

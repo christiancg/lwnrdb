@@ -129,12 +129,10 @@ public class LexerTest {
         assertEquals(5.0, ((JsNumber) Lexer.lex("0b101").getFirst()).getValue());
     }
 
-    // A number immediately followed by an identifier does not crash
+    // A number immediately followed by an identifier is a Syntax Error
     @Test
     public void test_lex_number_followed_by_identifier() {
-        final List<JsBaseElement> tokens = Lexer.lex("3in");
-        assertInstanceOf(JsNumber.class, tokens.get(0));
-        assertInstanceOf(JsKeyword.class, tokens.get(1));
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("3in"));
     }
 
     // Numeric separators are allowed between digits (decimal, fraction, exponent, radix) and stripped
@@ -147,15 +145,11 @@ public class LexerTest {
         assertEquals(170.0, ((JsNumber) Lexer.lex("0b1010_1010").getFirst()).getValue());
     }
 
-    // A misplaced separator ends the number rather than being consumed
+    // A misplaced separator leaves an identifier character against the digits, which is a Syntax Error
     @Test
     public void test_lex_misplaced_separator_stops_number() {
-        final var doubled = Lexer.lex("1__0");
-        assertEquals(1.0, ((JsNumber) doubled.get(0)).getValue());
-        assertInstanceOf(JsIdentifier.class, doubled.get(1));
-        final var trailing = Lexer.lex("1_");
-        assertEquals(1.0, ((JsNumber) trailing.get(0)).getValue());
-        assertInstanceOf(JsIdentifier.class, trailing.get(1));
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("1__0"));
+        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("1_"));
     }
 
     // A trailing n suffix produces a BigInt token in every integer form

@@ -1,8 +1,10 @@
 package org.techhouse.simplejs.builtins;
 
 import java.util.List;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -26,8 +28,6 @@ public final class ErrorBuiltins {
         final var error = new JsObject();
         error.set("name", new JsString(name));
         error.set("message", new JsString(message));
-        // No interpreter call stack is retained, so `stack` is a single synthetic frame.
-        error.set("stack", new JsString(name + ": " + message + "\n    at <script>"));
         error.markErrorData();
         error.setProto(proto);
         return error;
@@ -48,6 +48,58 @@ public final class ErrorBuiltins {
         }
         result.set("errors", array);
         return result;
+    }
+
+    // `stack` is an accessor pair on Error.prototype, not an own data property of each instance: the
+    // getter is brand-checked on [[ErrorData]] and the setter installs an own property on whatever
+    // receiver it is handed (SetterThatIgnoresPrototypeProperties).
+    public static void installStackAccessor(JsObject errorProto, InterpreterOps ops) {
+        final var getter = new JsNativeFunction("get stack", (thisArg, _) -> stackOf(thisArg));
+        getter.setLength(0);
+        final var setter = new JsNativeFunction("set stack",
+                (thisArg, args) -> setStack(errorProto, thisArg, arg(args, 0), ops));
+        setter.setLength(1);
+        errorProto.defineAccessor("stack", getter, setter);
+        errorProto.setFlags("stack", new JsObject.PropertyFlags(true, false, true));
+    }
+
+    private static JsValue stackOf(JsValue thisArg) {
+        if (!InterpreterUtils.isObjectLike(thisArg)) {
+            throw new TypeErrorException("Error.prototype.stack getter called on a non-object");
+        }
+        if (!(thisArg instanceof JsObject error) || !error.isErrorData()) {
+            return JsUndefined.getInstance();
+        }
+        // No interpreter call stack is retained, so the trace is a single synthetic frame.
+        final var name = error.has("name") ? JsCoercion.toStr(error.get("name")) : "Error";
+        final var message = error.has("message") ? JsCoercion.toStr(error.get("message")) : "";
+        return new JsString(name + ": " + message + "\n    at <script>");
+    }
+
+    private static JsValue setStack(JsObject home, JsValue thisArg, JsValue value, InterpreterOps ops) {
+        if (!InterpreterUtils.isObjectLike(thisArg)) {
+            throw new TypeErrorException("Error.prototype.stack setter called on a non-object");
+        }
+        if (!(value instanceof JsString)) {
+            throw new TypeErrorException("Error.prototype.stack setter requires a string");
+        }
+        if (thisArg == home || ops == null) {
+            return JsUndefined.getInstance();
+        }
+        final var key = new JsString("stack");
+        if (ops.getOwnPropertyDescriptor(thisArg, key) instanceof JsUndefined) {
+            final var descriptor = new JsObject();
+            descriptor.set("value", value);
+            descriptor.set("writable", JsBoolean.of(true));
+            descriptor.set("enumerable", JsBoolean.of(true));
+            descriptor.set("configurable", JsBoolean.of(true));
+            if (!ops.defineProperty(thisArg, key, descriptor)) {
+                throw new TypeErrorException("Cannot create property 'stack' on the receiver");
+            }
+        } else if (!ops.setMember(thisArg, key, value)) {
+            throw new TypeErrorException("Cannot assign to read only property 'stack' of the receiver");
+        }
+        return JsUndefined.getInstance();
     }
 
     public static void install(Environment global, Intrinsics intrinsics) {
@@ -92,6 +144,7 @@ public final class ErrorBuiltins {
         proto.defineValue("constructor", constructor);
         proto.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         constructor.setPrototype(proto);
+        constructor.markConstructor();
     }
 
     private static boolean isError(JsValue value) {

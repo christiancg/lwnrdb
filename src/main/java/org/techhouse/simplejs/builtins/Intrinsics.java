@@ -69,7 +69,9 @@ public final class Intrinsics {
     private final JsObject symbolProto;
     private final JsObject regexpProto;
     private final JsObject mapProto;
+    private final JsObject weakMapProto;
     private final JsObject setProto;
+    private final JsObject weakSetProto;
     private final JsObject dateProto;
     private final JsObject promiseProto;
     private final JsObject iteratorProto;
@@ -81,6 +83,7 @@ public final class Intrinsics {
     private final JsObject disposableStackProto;
     private final JsObject asyncDisposableStackProto;
     private final JsObject errorProto = new JsObject();
+    private JsValue defaultHasInstance;
     private JsValue defaultArrayIterator;
     private JsValue defaultStringIterator;
     private JsValue defaultTypedArrayIterator;
@@ -89,14 +92,18 @@ public final class Intrinsics {
     public Intrinsics(Invoker invoker, InterpreterOps ops, EventLoop eventLoop, GeneratorBuiltins.AsyncDriver driver) {
         this.invoker = invoker;
         this.ops = ops;
-        promiseProto = prototypeOf(PromiseBuiltins.PROTO_NAMES, "Promise.prototype", (receiver, name) -> PromiseBuiltins
-                .getMethod(requirePromise(receiver, name), name, eventLoop, invoker, this));
+        // Unlike the other prototypes, the receiver is handed to PromiseBuiltins unchecked: only
+        // `then` carries the [[PromiseState]] brand check, while `catch`/`finally` are generic and
+        // must work on any thenable.
+        promiseProto = prototypeOf(PromiseBuiltins.PROTO_NAMES, "Promise.prototype",
+                (receiver, name) -> PromiseBuiltins.getMethod(receiver, name, eventLoop, invoker, this));
         iteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "Generator.prototype",
                 (receiver, name) -> GeneratorBuiltins.getMethod(requireGenerator(receiver, name), name));
         asyncIteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "AsyncGenerator.prototype", (receiver,
                 name) -> GeneratorBuiltins.getAsyncMethod(requireAsyncGenerator(receiver, name), name, driver));
-        functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype",
-                (receiver, name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker));
+        functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype", (receiver,
+                name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker, ops));
+        installFunctionHasInstance(functionProto);
         arrayProto = arrayPrototype();
         stringProto = prototypeOf(StringBuiltins.NAMES, "String.prototype",
                 (receiver, name) -> StringBuiltins.getMethod(requireString(receiver, name), name, invoker, ops));
@@ -107,16 +114,22 @@ public final class Intrinsics {
                 (receiver, name) -> BigIntBuiltins.getMethod(requireBigInt(receiver, name), name));
         symbolProto = prototypeOf(SymbolBuiltins.NAMES, "Symbol.prototype",
                 (receiver, name) -> SymbolBuiltins.getMethod(requireSymbol(receiver, name), name));
+        installSymbolAccessors(symbolProto);
         regexpProto = prototypeOf(RegexBuiltins.NAMES, "RegExp.prototype",
                 (receiver, name) -> RegexBuiltins.getMethod(requireRegExp(receiver, name), name));
         installRegExpSymbolMethods(regexpProto);
         installRegExpAccessors(regexpProto);
         mapProto = prototypeOf(MapBuiltins.NAMES, "Map.prototype",
-                (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name), name, invoker));
+                (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name, false), name, invoker));
+        weakMapProto = prototypeOf(MapBuiltins.WEAK_NAMES, "WeakMap.prototype",
+                (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name, true), name, invoker));
         setProto = prototypeOf(SetBuiltins.NAMES, "Set.prototype",
-                (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name), name, invoker));
+                (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, false), name, invoker, ops));
+        weakSetProto = prototypeOf(SetBuiltins.WEAK_NAMES, "WeakSet.prototype",
+                (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, true), name, invoker, ops));
         dateProto = prototypeOf(DateBuiltins.NAMES, "Date.prototype",
                 (receiver, name) -> DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
+        defineSymbol(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops));
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -171,14 +184,54 @@ public final class Intrinsics {
                 new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
         defineSymbol(asyncIteratorProto, JsSymbol.ASYNC_ITERATOR,
                 new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
+        defineToStringTag(promiseProto, "Promise");
+        defineToStringTag(asyncIteratorProto, "AsyncGenerator");
         defaultArrayIterator = arrayProto.getSymbol(JsSymbol.ITERATOR);
         defaultStringIterator = stringProto.getSymbol(JsSymbol.ITERATOR);
         defaultTypedArrayIterator = typedArrayProto.getSymbol(JsSymbol.ITERATOR);
     }
 
+    // `description` is an accessor on Symbol.prototype, not a per-symbol own property, and
+    // Symbol.prototype[Symbol.toPrimitive] is what keeps `+sym` from coercing through toString.
+    private void installSymbolAccessors(JsObject proto) {
+        final var getter = new JsNativeFunction("get description",
+                (thisArg, _) -> SymbolBuiltins.descriptionOf(requireSymbol(thisArg, "description")));
+        getter.setLength(0);
+        proto.defineAccessor("description", getter, null);
+        proto.setFlags("description", HIDDEN);
+        final var toPrimitive = new JsNativeFunction("[Symbol.toPrimitive]",
+                (thisArg, _) -> requireSymbol(thisArg, "[Symbol.toPrimitive]"));
+        toPrimitive.setLength(1);
+        proto.setSymbol(JsSymbol.TO_PRIMITIVE, toPrimitive);
+        proto.setSymbolFlags(JsSymbol.TO_PRIMITIVE, new PropertyFlags(false, false, true));
+        proto.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("Symbol"));
+        proto.setSymbolFlags(JsSymbol.TO_STRING_TAG, new PropertyFlags(false, false, true));
+    }
+
+    // The interpreter's own `instanceof` keeps its faster brand-aware path, so this exists for a
+    // direct call and for a script that reads it off Function.prototype; isDefaultHasInstance lets
+    // the operator tell the intrinsic apart from a user-installed override.
+    private void installFunctionHasInstance(JsObject proto) {
+        final var hasInstance = new JsNativeFunction("[Symbol.hasInstance]", (thisArg, args) -> FunctionProtoBuiltins
+                .ordinaryHasInstance(thisArg, args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(), ops));
+        hasInstance.setLength(1);
+        proto.setSymbol(JsSymbol.HAS_INSTANCE, hasInstance);
+        proto.setSymbolFlags(JsSymbol.HAS_INSTANCE, new PropertyFlags(false, false, false));
+        defaultHasInstance = hasInstance;
+    }
+
+    public boolean isDefaultHasInstance(JsValue candidate) {
+        return candidate == defaultHasInstance;
+    }
+
     private static void defineSymbol(JsObject target, JsSymbol key, JsValue value) {
         target.setSymbol(key, value);
         target.setSymbolFlags(key, HIDDEN);
+    }
+
+    private static void defineToStringTag(JsObject target, String tag) {
+        target.setSymbol(JsSymbol.TO_STRING_TAG, new JsString(tag));
+        target.setSymbolFlags(JsSymbol.TO_STRING_TAG, new PropertyFlags(false, false, true));
     }
 
     // The array-like values iterate straight out of their backing storage; that shortcut is only
@@ -205,6 +258,7 @@ public final class Intrinsics {
     private void installErrorPrototypes() {
         define(errorProto, "toString",
                 new JsNativeFunction("toString", (thisArg, _) -> new JsString(errorText(requireObject(thisArg)))));
+        ErrorBuiltins.installStackAccessor(errorProto, ops);
         // Error.prototype is the shared base so `e instanceof Error` holds for every error subtype.
         define(errorProto, "name", new JsString("Error"));
         define(errorProto, "message", new JsString(""));
@@ -347,8 +401,8 @@ public final class Intrinsics {
             case JsBigInt ignored -> bigintProto;
             case JsSymbol ignored -> symbolProto;
             case JsRegExp ignored -> regexpProto;
-            case JsMap ignored -> mapProto;
-            case JsSet ignored -> setProto;
+            case JsMap map -> map.isWeak() ? weakMapProto : mapProto;
+            case JsSet set -> set.isWeak() ? weakSetProto : setProto;
             case JsDate ignored -> dateProto;
             case JsPromise ignored -> promiseProto;
             case JsGenerator ignored -> iteratorProto;
@@ -410,8 +464,16 @@ public final class Intrinsics {
         return mapProto;
     }
 
+    public JsObject weakMapProto() {
+        return weakMapProto;
+    }
+
     public JsObject setProto() {
         return setProto;
+    }
+
+    public JsObject weakSetProto() {
+        return weakSetProto;
     }
 
     public JsObject dateProto() {
@@ -598,16 +660,6 @@ public final class Intrinsics {
         return !args.isEmpty() ? JsCoercion.toStr(args.getFirst(), ops) : "undefined";
     }
 
-    private JsPromise requirePromise(JsValue receiver, String method) {
-        if (receiver instanceof JsPromise promise) {
-            return promise;
-        }
-        if (unwrap(receiver) instanceof JsPromise wrapped) {
-            return wrapped;
-        }
-        throw incompatible("Promise.prototype." + method, receiver);
-    }
-
     private JsGenerator requireGenerator(JsValue receiver, String method) {
         if (receiver instanceof JsGenerator generator) {
             return generator;
@@ -622,24 +674,24 @@ public final class Intrinsics {
         throw incompatible("AsyncGenerator.prototype." + method, receiver);
     }
 
-    private JsMap requireMap(JsValue receiver, String method) {
-        if (receiver instanceof JsMap map) {
+    private JsMap requireMap(JsValue receiver, String method, boolean weak) {
+        if (receiver instanceof JsMap map && map.isWeak() == weak) {
             return map;
         }
-        if (unwrap(receiver) instanceof JsMap wrapped) {
+        if (unwrap(receiver) instanceof JsMap wrapped && wrapped.isWeak() == weak) {
             return wrapped;
         }
-        throw incompatible("Map.prototype." + method, receiver);
+        throw incompatible((weak ? "WeakMap.prototype." : "Map.prototype.") + method, receiver);
     }
 
-    private JsSet requireSet(JsValue receiver, String method) {
-        if (receiver instanceof JsSet set) {
+    private JsSet requireSet(JsValue receiver, String method, boolean weak) {
+        if (receiver instanceof JsSet set && set.isWeak() == weak) {
             return set;
         }
-        if (unwrap(receiver) instanceof JsSet wrapped) {
+        if (unwrap(receiver) instanceof JsSet wrapped && wrapped.isWeak() == weak) {
             return wrapped;
         }
-        throw incompatible("Set.prototype." + method, receiver);
+        throw incompatible((weak ? "WeakSet.prototype." : "Set.prototype.") + method, receiver);
     }
 
     private JsDate requireDate(JsValue receiver, String method) {

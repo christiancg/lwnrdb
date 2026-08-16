@@ -132,8 +132,8 @@ public class JsCoercionTest {
         final var nativeFunction = new JsNativeFunction("n", (_, _) -> JsUndefined.getInstance());
         assertEquals("function", JsCoercion.typeOf(function));
         assertEquals("function", JsCoercion.typeOf(nativeFunction));
-        assertEquals("function f() { }", JsCoercion.toStr(function));
-        assertEquals("function n() { }", JsCoercion.toStr(nativeFunction));
+        assertEquals("function f() { [native code] }", JsCoercion.toStr(function));
+        assertEquals("function n() { [native code] }", JsCoercion.toStr(nativeFunction));
         assertTrue(JsCoercion.toBoolean(function));
     }
 

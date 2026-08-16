@@ -1,8 +1,10 @@
 package org.techhouse.simplejs.internal;
 
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -25,12 +27,18 @@ public final class Coroutine {
     public record StepResult(JsValue value, boolean done) {
     }
 
-    private static final class ReturnSignal extends RuntimeException {
+    // A `return` completion injected at a suspended yield. `yield*` catches it to forward the
+    // completion to the inner iterator and re-raises it with the inner iterator's return value.
+    public static final class ReturnSignal extends RuntimeException {
         private final transient JsValue value;
 
-        private ReturnSignal(JsValue value) {
+        public ReturnSignal(JsValue value) {
             super(null, null, false, false);
             this.value = value;
+        }
+
+        public JsValue value() {
+            return value;
         }
     }
 
@@ -43,6 +51,9 @@ public final class Coroutine {
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition turn = lock.newCondition();
     private boolean bodyTurn;
+    // Claimed exactly while the body owns the turn. The only way the claim can fail is a re-entrant
+    // drive from the body's own thread, which would otherwise block on a hand-off that can never come.
+    private final AtomicBoolean running = new AtomicBoolean();
     private volatile boolean started;
     private volatile boolean done;
 
@@ -57,6 +68,7 @@ public final class Coroutine {
 
     private Body body;
     private PauseReason pauseReason = PauseReason.YIELD;
+    private volatile boolean delegatedYield;
     private ResumeObserver resumeObserver;
     private volatile boolean async;
     private volatile boolean yieldAllowed;
@@ -150,14 +162,28 @@ public final class Coroutine {
         resume();
     }
 
+    // `yield*` over an async iterator must hand the delegated value through untouched, while a plain
+    // `yield x` in an async generator awaits its operand. The delegating step marks the coroutine so
+    // the very next yieldOut is reported as delegated and the driver skips that await.
+    public void markDelegatedYield() {
+        this.delegatedYield = true;
+    }
+
+    public boolean isDelegatedYield() {
+        return delegatedYield;
+    }
+
     public JsValue yieldOut(JsValue value) {
         this.yielded = value;
         this.pauseReason = PauseReason.YIELD;
-        return pause();
+        final var result = pause();
+        this.delegatedYield = false;
+        return result;
     }
 
     public JsValue await(JsPromise promise) {
         this.pauseReason = PauseReason.AWAIT;
+        this.delegatedYield = false;
         promise.subscribe(this::resumeValue, reason -> resumeError(new JsThrowException(reason)));
         return pause();
     }
@@ -176,6 +202,9 @@ public final class Coroutine {
     }
 
     private void resume() {
+        if (!running.compareAndSet(false, true)) {
+            throw new TypeErrorException("Generator is already running");
+        }
         if (!started) {
             started = true;
             Thread.ofVirtual().start(this::threadMain);
@@ -195,6 +224,7 @@ public final class Coroutine {
             throw new IllegalStateException("Coroutine driver interrupted", interrupted);
         } finally {
             lock.unlock();
+            running.set(false);
         }
         if (resumeObserver != null) {
             resumeObserver.afterResume(esc);
@@ -255,7 +285,7 @@ public final class Coroutine {
         try {
             result = body.run();
         } catch (ReturnSignal signal) {
-            result = signal.value;
+            result = signal.value();
         } catch (CancelSignal ignored) {
             // cancellation unwinds the body silently; the result stays undefined
         } catch (RuntimeException runtime) {

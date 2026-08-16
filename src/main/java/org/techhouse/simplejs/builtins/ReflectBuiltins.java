@@ -3,14 +3,20 @@ package org.techhouse.simplejs.builtins;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsProxy;
+import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class ReflectBuiltins {
+    private static final double MAX_ARGUMENTS = Integer.MAX_VALUE;
+
     private ReflectBuiltins() {
     }
 
@@ -47,11 +53,46 @@ public final class ReflectBuiltins {
     }
 
     private static JsValue apply(InterpreterOps ops, List<JsValue> args) {
-        return ops.call(arg(args, 0), arg(args, 1), toList(arg(args, 2)));
+        final var target = arg(args, 0);
+        if (!InterpreterUtils.isCallable(target) && !(target instanceof JsProxy proxy && proxy.isCallable())) {
+            throw new TypeErrorException("Reflect.apply called on non-callable target");
+        }
+        return ops.call(target, arg(args, 1), argumentsList(ops, arg(args, 2)));
     }
 
     private static JsValue construct(InterpreterOps ops, List<JsValue> args) {
-        return ops.construct(arg(args, 0), toList(arg(args, 1)));
+        final var target = arg(args, 0);
+        if (!InterpreterUtils.isConstructor(target)) {
+            throw new TypeErrorException("Reflect.construct called on non-constructor target");
+        }
+        final var newTarget = args.size() > 2 ? args.get(2) : target;
+        if (!InterpreterUtils.isConstructor(newTarget)) {
+            throw new TypeErrorException("Reflect.construct called with a non-constructor newTarget");
+        }
+        return ops.construct(target, argumentsList(ops, arg(args, 1)), newTarget);
+    }
+
+    // CreateListFromArrayLike: any object is walked by length + indexed Get; a primitive is a
+    // TypeError rather than the empty list a literal-JsArray-only check would silently produce.
+    private static List<JsValue> argumentsList(InterpreterOps ops, JsValue value) {
+        if (!InterpreterUtils.isObjectLike(value)) {
+            throw new TypeErrorException("CreateListFromArrayLike called on non-object");
+        }
+        if (value instanceof JsArray array) {
+            return new ArrayList<>(array.getElements());
+        }
+        final var length = JsCoercion.toNumber(ops.getMember(value, new JsString("length")), ops);
+        if (Double.isNaN(length) || length <= 0) {
+            return new ArrayList<>();
+        }
+        if (length > MAX_ARGUMENTS) {
+            throw new TypeErrorException("Arguments list length exceeds the supported maximum");
+        }
+        final var list = new ArrayList<JsValue>((int) length);
+        for (var i = 0; i < (int) length; i++) {
+            list.add(ops.getMember(value, new JsString(Integer.toString(i))));
+        }
+        return list;
     }
 
     private static JsValue defineProperty(InterpreterOps ops, List<JsValue> args) {
@@ -61,10 +102,6 @@ public final class ReflectBuiltins {
         } catch (TypeErrorException ignored) {
             return JsBoolean.FALSE;
         }
-    }
-
-    private static List<JsValue> toList(JsValue value) {
-        return value instanceof JsArray array ? new ArrayList<>(array.getElements()) : new ArrayList<>();
     }
 
     private static JsValue arg(List<JsValue> args, int index) {

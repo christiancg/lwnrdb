@@ -28,6 +28,7 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.values.JsObject;
 
 public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
@@ -37,6 +38,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     private final String username;
     private final UUID clientId;
+    private JsObject errorPrototype;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
         this.username = username;
@@ -132,7 +134,12 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
     }
 
+    @Override
+    public void useErrorPrototype(JsObject prototype) {
+        this.errorPrototype = prototype;
+    }
+
     private JsThrowException jsError(String message) {
-        return new JsThrowException(ErrorBuiltins.makeError("Error", message));
+        return new JsThrowException(ErrorBuiltins.makeError("Error", message, errorPrototype));
     }
 }

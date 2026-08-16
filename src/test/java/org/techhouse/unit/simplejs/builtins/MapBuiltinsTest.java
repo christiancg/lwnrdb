@@ -156,4 +156,39 @@ public class MapBuiltinsTest {
     public void test_weakmap_no_group_by() {
         assertEquals("undefined", str("typeof WeakMap.groupBy"));
     }
+
+    @Test
+    public void getOrInsertReturnsExisting() {
+        assertEquals(1, num("let m = new Map([['a', 1]]); m.getOrInsert('a', 9)"));
+        assertEquals(1, num("let m = new Map([['a', 1]]); m.getOrInsert('a', 9); m.size"));
+    }
+
+    @Test
+    public void getOrInsertStoresDefault() {
+        assertEquals(9, num("let m = new Map(); m.getOrInsert('a', 9)"));
+        assertEquals(9, num("let m = new Map(); m.getOrInsert('a', 9); m.get('a')"));
+        assertEquals(42, num("let m = new Map(); m.getOrInsert(-0, 42); m.get(0)"));
+    }
+
+    @Test
+    public void getOrInsertComputedInvokesCallbackOnce() {
+        final var setup = "let calls = 0; let m = new Map(); "
+                + "m.getOrInsertComputed('a', () => { calls++; return 5; }); "
+                + "m.getOrInsertComputed('a', () => { calls++; return 6; }); ";
+        assertEquals(1, num(setup + "calls"));
+        assertEquals(5, num(setup + "m.get('a')"));
+        assertEquals(Double.POSITIVE_INFINITY, num("let k; new Map().getOrInsertComputed(-0, a => { k = a; }); 1 / k"));
+        Assertions.assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Map().getOrInsertComputed('a', 1)"));
+    }
+
+    @Test
+    public void weakMapGetOrInsertVariants() {
+        assertEquals(9, num("let k = {}; let w = new WeakMap(); w.getOrInsert(k, 9)"));
+        assertEquals(1, num("let k = {}; let w = new WeakMap([[k, 1]]); w.getOrInsert(k, 9)"));
+        assertEquals(5, num("let k = {}; let w = new WeakMap(); w.getOrInsertComputed(k, () => 5)"));
+        Assertions.assertThrows(TypeErrorException.class, () -> Interpreter.run("new WeakMap().getOrInsert(1, 2)"));
+        Assertions.assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Map.prototype.getOrInsert.call(new WeakMap(), {}, 1)"));
+    }
 }

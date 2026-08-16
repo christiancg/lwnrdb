@@ -225,11 +225,15 @@ public final class ClassEvaluator {
         }
     }
 
-    public JsValue construct(JsClass cls, List<JsValue> args) {
+    public JsValue construct(JsClass cls, List<JsValue> args, JsValue newTarget) {
         final var instance = new JsObject();
         instance.setKlass(cls);
-        instance.setProto(cls.getPrototype());
-        callConstructorChain(cls, instance, args, cls);
+        // OrdinaryCreateFromConstructor: an ordinary Get(newTarget, "prototype"), so an
+        // accessor-valued or throwing `prototype` behaves like any other property read.
+        instance.setProto(interp.getMemberByKey(newTarget, new JsString("prototype")) instanceof JsObject proto
+                ? proto
+                : cls.getPrototype());
+        callConstructorChain(cls, instance, args, newTarget);
         return instance;
     }
 
@@ -424,23 +428,44 @@ public final class ClassEvaluator {
     public JsValue evalInstanceof(JsValue left, JsValue right) {
         if (isObjectLike(right)) {
             final var hasInstance = interp.getMemberByKey(right, JsSymbol.HAS_INSTANCE);
-            if (isCallable(hasInstance)) {
+            if (isCallable(hasInstance) && !interp.intrinsics().isDefaultHasInstance(hasInstance)) {
                 return JsBoolean.of(JsCoercion.toBoolean(interp.callValue(hasInstance, right, List.of(left))));
             }
         }
+        if (right instanceof JsNativeFunction bound && bound.isBound()) {
+            return evalInstanceof(left, bound.getBoundTarget());
+        }
+        if (!(right instanceof JsClass) && !(right instanceof JsFunction) && !(right instanceof JsNativeFunction)) {
+            throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
+        }
+        // OrdinaryHasInstance rejects a non-object left operand before it reads the prototype, so a
+        // primitive never triggers the accessor or the non-object-prototype TypeError.
+        if (!isObjectLike(left)) {
+            return JsBoolean.FALSE;
+        }
+        final var prototype = declaredPrototype(right);
         return switch (right) {
-            case JsClass cls -> JsBoolean.of(isInstanceOfClass(left, cls));
-            case JsFunction function -> JsBoolean.of(hasInPrototypeChain(left, function.getPrototype()));
-            case JsNativeFunction nativeFunction when nativeFunction.isBound() ->
-                evalInstanceof(left, nativeFunction.getBoundTarget());
-            case JsNativeFunction nativeFunction ->
-                JsBoolean.of(isInstanceOfNative(left, nativeFunction.getPrototype()));
-            default -> throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
+            case JsClass cls -> JsBoolean.of(isInstanceOfClass(left, cls, prototype));
+            case JsFunction ignored -> JsBoolean.of(hasInPrototypeChain(left, prototype));
+            default -> JsBoolean.of(isInstanceOfNative(left, prototype));
         };
     }
 
-    private boolean isInstanceOfClass(JsValue left, JsClass cls) {
+    // OrdinaryHasInstance reads Get(C, "prototype"), not the internal slot, so an accessor-valued
+    // `prototype` runs and a non-object result is a TypeError instead of a silent false.
+    private JsObject declaredPrototype(JsValue constructor) {
+        final var prototype = interp.getMember(constructor, "prototype");
+        if (prototype instanceof JsObject object) {
+            return object;
+        }
+        throw new TypeErrorException("Function has a non-object prototype in an instanceof check");
+    }
+
+    private boolean isInstanceOfClass(JsValue left, JsClass cls, JsObject prototype) {
         if (left instanceof JsObject object && object.getKlass() != null && object.getKlass().isSubclassOf(cls)) {
+            return true;
+        }
+        if (hasInPrototypeChain(left, prototype)) {
             return true;
         }
         final var nativeSuper = cls.findNativeSuperClass();

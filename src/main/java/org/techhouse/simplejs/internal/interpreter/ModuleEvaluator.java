@@ -5,7 +5,6 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.colle
 import java.util.ArrayList;
 import java.util.Map;
 import org.techhouse.simplejs.builtins.DbModule;
-import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
 import org.techhouse.simplejs.host.HostBindings;
@@ -56,13 +55,16 @@ public final class ModuleEvaluator {
         return switch (source) {
             case "args" -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args());
             case "db" -> {
-                if (host.database() == null) {
-                    throw new JsThrowException(ErrorBuiltins.makeError("Error", "Database access is not available"));
+                final var database = host.database();
+                if (database == null) {
+                    throw new JsThrowException(
+                            interp.intrinsics().makeError("Error", "Database access is not available"));
                 }
-                yield DbModule.create(host.database());
+                database.useErrorPrototype(interp.intrinsics().errorProto("Error"));
+                yield DbModule.create(database);
             }
-            default ->
-                throw new JsThrowException(ErrorBuiltins.makeError("Error", "Cannot find module '" + source + "'"));
+            default -> throw new JsThrowException(
+                    interp.intrinsics().makeError("Error", "Cannot find module '" + source + "'"));
         };
     }
 

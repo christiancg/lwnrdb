@@ -197,18 +197,21 @@ public final class StringBuiltins {
                 new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
             case "toLowerCase" ->
                 new JsNativeFunction("toLowerCase", (_, _) -> new JsString(value.toLowerCase(Locale.ROOT)));
-            case "trim" -> new JsNativeFunction("trim", (_, _) -> new JsString(value.strip()));
+            case "trim" -> new JsNativeFunction("trim", (_, _) -> new JsString(trim(value, true, true)));
             case "includes" -> new JsNativeFunction("includes", (_, args) -> {
                 requireNotRegExp(args, "includes", ops);
-                return JsBoolean.of(value.contains(str(args, 0, ops)));
+                final var search = str(args, 0, ops);
+                return JsBoolean.of(value.indexOf(search, startPosition(value, args, ops)) >= 0);
             });
             case "startsWith" -> new JsNativeFunction("startsWith", (_, args) -> {
                 requireNotRegExp(args, "startsWith", ops);
-                return JsBoolean.of(value.startsWith(str(args, 0, ops)));
+                final var search = str(args, 0, ops);
+                return JsBoolean.of(value.startsWith(search, startPosition(value, args, ops)));
             });
             case "endsWith" -> new JsNativeFunction("endsWith", (_, args) -> {
                 requireNotRegExp(args, "endsWith", ops);
-                return JsBoolean.of(value.endsWith(str(args, 0, ops)));
+                final var search = str(args, 0, ops);
+                return JsBoolean.of(endsWith(value, search, args, ops));
             });
             case "padStart" -> new JsNativeFunction("padStart", (_, args) -> new JsString(padStart(value, args, ops)));
             case "repeat" -> new JsNativeFunction("repeat", (_, args) -> new JsString(repeat(value, args, ops)));
@@ -220,8 +223,8 @@ public final class StringBuiltins {
             case "codePointAt" -> new JsNativeFunction("codePointAt", (_, args) -> codePointAt(value, args, ops));
             case "at" -> new JsNativeFunction("at", (_, args) -> at(value, args, ops));
             case "padEnd" -> new JsNativeFunction("padEnd", (_, args) -> new JsString(padEnd(value, args, ops)));
-            case "trimStart" -> new JsNativeFunction("trimStart", (_, _) -> new JsString(value.stripLeading()));
-            case "trimEnd" -> new JsNativeFunction("trimEnd", (_, _) -> new JsString(value.stripTrailing()));
+            case "trimStart" -> new JsNativeFunction("trimStart", (_, _) -> new JsString(trim(value, true, false)));
+            case "trimEnd" -> new JsNativeFunction("trimEnd", (_, _) -> new JsString(trim(value, false, true)));
             case "normalize" ->
                 new JsNativeFunction("normalize", (_, args) -> new JsString(normalize(value, args, ops)));
             case "localeCompare" ->
@@ -234,8 +237,8 @@ public final class StringBuiltins {
                     (_, _) -> new JsString(value.toUpperCase(Locale.getDefault())));
             case "toLocaleLowerCase" -> new JsNativeFunction("toLocaleLowerCase",
                     (_, _) -> new JsString(value.toLowerCase(Locale.getDefault())));
-            case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> new JsString(value.stripLeading()));
-            case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> new JsString(value.stripTrailing()));
+            case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> new JsString(trim(value, true, false)));
+            case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> new JsString(trim(value, false, true)));
             default -> null;
         };
     }
@@ -307,7 +310,7 @@ public final class StringBuiltins {
         if (value.length() >= target) {
             return value;
         }
-        final var pad = args.size() < 2 ? " " : str(args, 1, ops);
+        final var pad = args.size() < 2 || args.get(1) instanceof JsUndefined ? " " : str(args, 1, ops);
         if (pad.isEmpty()) {
             return value;
         }
@@ -471,9 +474,9 @@ public final class StringBuiltins {
 
     private static String replaceAllLiteral(String value, String search, List<JsValue> args, Invoker invoker,
             InterpreterOps ops) {
-        if (search.isEmpty()) {
-            return value;
-        }
+        // advanceBy is max(1, searchLength), so an empty search matches at every position including
+        // the one past the end.
+        final var advanceBy = Math.max(1, search.length());
         final var sb = new StringBuilder();
         var from = 0;
         var index = value.indexOf(search);
@@ -481,9 +484,13 @@ public final class StringBuiltins {
             sb.append(value, from, index);
             sb.append(literalPiece(value, search, index, args, invoker, ops));
             from = index + search.length();
-            index = value.indexOf(search, from);
+            final var next = index + advanceBy;
+            if (next > value.length()) {
+                break;
+            }
+            index = value.indexOf(search, next);
         }
-        sb.append(value.substring(from));
+        sb.append(value.substring(Math.min(from, value.length())));
         return sb.toString();
     }
 
@@ -557,14 +564,20 @@ public final class StringBuiltins {
         return sb.toString();
     }
 
+    // GetSubstitution leaves the token literal when it cannot resolve: an unterminated $<, a $<name>
+    // on a pattern with no named groups at all, or a $NN past the group count.
     private static int appendNamedGroup(StringBuilder sb, String template, int start, Matcher matcher,
             JsRegExp regexp) {
         final var close = template.indexOf('>', start);
-        if (close < 0) {
+        if (close < 0 || regexp.getGroupAliases().isEmpty()) {
             sb.append("$<");
-            return start;
+            return start - 1;
         }
-        final var alias = RegexBuiltins.participatingGroup(regexp, template.substring(start, close), matcher);
+        final var name = template.substring(start, close);
+        if (!regexp.getGroupAliases().containsKey(name)) {
+            return close;
+        }
+        final var alias = RegexBuiltins.participatingGroup(regexp, name, matcher);
         final var group = alias == null ? null : matcher.group(alias);
         if (group != null) {
             sb.append(group);
@@ -579,7 +592,9 @@ public final class StringBuiltins {
             end++;
         }
         final var group = Integer.parseInt(template.substring(start, end));
-        if (group >= 1 && group <= matcher.groupCount() && matcher.group(group) != null) {
+        if (group < 1 || group > matcher.groupCount()) {
+            sb.append('$').append(template, start, end);
+        } else if (matcher.group(group) != null) {
             sb.append(matcher.group(group));
         }
         return end - 1;
@@ -663,7 +678,7 @@ public final class StringBuiltins {
         if (value.length() >= target) {
             return value;
         }
-        final var pad = args.size() < 2 ? " " : str(args, 1, ops);
+        final var pad = args.size() < 2 || args.get(1) instanceof JsUndefined ? " " : str(args, 1, ops);
         if (pad.isEmpty()) {
             return value;
         }
@@ -688,6 +703,40 @@ public final class StringBuiltins {
             return "";
         }
         return String.valueOf(value.charAt(index));
+    }
+
+    // The spec's WhiteSpace + LineTerminator sets, which Java's Character.isWhitespace does not
+    // match: it omits U+00A0/U+2007/U+202F/U+FEFF and adds the U+001C-001F separators.
+    private static boolean isJsWhitespace(char c) {
+        return c == '\t' || c == '\n' || c == 0x0B || c == '\f' || c == '\r' || c == ' ' || c == 0x00A0 || c == 0x1680
+                || (c >= 0x2000 && c <= 0x200A) || c == 0x2028 || c == 0x2029 || c == 0x202F || c == 0x205F
+                || c == 0x3000 || c == 0xFEFF;
+    }
+
+    private static String trim(String value, boolean start, boolean end) {
+        var from = 0;
+        var to = value.length();
+        while (start && from < to && isJsWhitespace(value.charAt(from))) {
+            from++;
+        }
+        while (end && to > from && isJsWhitespace(value.charAt(to - 1))) {
+            to--;
+        }
+        return value.substring(from, to);
+    }
+
+    private static int startPosition(String value, List<JsValue> args, InterpreterOps ops) {
+        final var pos = args.size() > 1 ? JsCoercion.toNumber(args.get(1), ops) : 0;
+        return clampPosition(pos, value.length());
+    }
+
+    private static boolean endsWith(String value, String search, List<JsValue> args, InterpreterOps ops) {
+        final var raw = args.size() > 1 && !(args.get(1) instanceof JsUndefined)
+                ? JsCoercion.toNumber(args.get(1), ops)
+                : value.length();
+        final var end = clampPosition(raw, value.length());
+        final var start = end - search.length();
+        return start >= 0 && value.startsWith(search, start);
     }
 
     private static int clampIndex(int index, int length) {

@@ -2,7 +2,10 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -19,6 +22,7 @@ public final class SetBuiltins {
     public static final List<String> NAMES = List.of("add", "has", "delete", "clear", "forEach", "keys", "values",
             "entries", "union", "intersection", "difference", "symmetricDifference", "isSubsetOf", "isSupersetOf",
             "isDisjointFrom");
+    public static final List<String> WEAK_NAMES = List.of("add", "has", "delete");
 
     private SetBuiltins() {
     }
@@ -37,7 +41,7 @@ public final class SetBuiltins {
         return set;
     }
 
-    public static JsValue getMethod(JsSet receiver, String name, Invoker invoker) {
+    public static JsValue getMethod(JsSet receiver, String name, Invoker invoker, InterpreterOps ops) {
         return switch (name) {
             case "size" -> new JsNumber(receiver.size());
             case "add" -> new JsNativeFunction("add", (_, args) -> {
@@ -53,96 +57,191 @@ public final class SetBuiltins {
             case "forEach" -> new JsNativeFunction("forEach", (_, args) -> forEach(receiver, args, invoker));
             case "keys", "values" -> new JsNativeFunction(name, (_, _) -> valuesIterator(receiver));
             case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(receiver));
-            case "union" -> new JsNativeFunction("union", (_, args) -> union(receiver, other(args)));
+            case "union" -> new JsNativeFunction("union", (_, args) -> union(receiver, record(args, ops)));
             case "intersection" ->
-                new JsNativeFunction("intersection", (_, args) -> intersection(receiver, other(args)));
-            case "difference" -> new JsNativeFunction("difference", (_, args) -> difference(receiver, other(args)));
-            case "symmetricDifference" ->
-                new JsNativeFunction("symmetricDifference", (_, args) -> symmetricDifference(receiver, other(args)));
+                new JsNativeFunction("intersection", (_, args) -> intersection(receiver, record(args, ops)));
+            case "difference" ->
+                new JsNativeFunction("difference", (_, args) -> difference(receiver, record(args, ops)));
+            case "symmetricDifference" -> new JsNativeFunction("symmetricDifference",
+                    (_, args) -> symmetricDifference(receiver, record(args, ops)));
             case "isSubsetOf" ->
-                new JsNativeFunction("isSubsetOf", (_, args) -> JsBoolean.of(isSubsetOf(receiver, other(args))));
-            case "isSupersetOf" ->
-                new JsNativeFunction("isSupersetOf", (_, args) -> JsBoolean.of(isSupersetOf(receiver, other(args))));
+                new JsNativeFunction("isSubsetOf", (_, args) -> JsBoolean.of(isSubsetOf(receiver, record(args, ops))));
+            case "isSupersetOf" -> new JsNativeFunction("isSupersetOf",
+                    (_, args) -> JsBoolean.of(isSupersetOf(receiver, record(args, ops))));
             case "isDisjointFrom" -> new JsNativeFunction("isDisjointFrom",
-                    (_, args) -> JsBoolean.of(isDisjointFrom(receiver, other(args))));
+                    (_, args) -> JsBoolean.of(isDisjointFrom(receiver, record(args, ops))));
             default -> null;
         };
     }
 
-    private static JsSet other(List<JsValue> args) {
-        if (arg(args, 0) instanceof JsSet set) {
-            return set;
+    // The spec's GetSetRecord: any object exposing a numeric `size` plus callable `has` and `keys`
+    // is a valid argument, not just a real Set.
+    private static SetRecord record(List<JsValue> args, InterpreterOps ops) {
+        final var other = arg(args, 0);
+        if (!InterpreterUtils.isObjectLike(other) || ops == null) {
+            throw new TypeErrorException("Set method argument is not an object");
         }
-        throw new TypeErrorException("Set method argument is not a Set");
+        final var rawSize = ops.getMember(other, new JsString("size"));
+        final var numSize = JsCoercion.toNumber(rawSize, ops);
+        if (Double.isNaN(numSize)) {
+            throw new TypeErrorException("Set method argument has no numeric size");
+        }
+        final var intSize = numSize < 0 ? -Math.floor(-numSize) : Math.floor(numSize);
+        if (intSize < 0) {
+            throw new RangeErrorException("Set method argument has a negative size");
+        }
+        final var has = ops.getMember(other, new JsString("has"));
+        if (!InterpreterUtils.isCallable(has)) {
+            throw new TypeErrorException("Set method argument has no callable has");
+        }
+        final var keys = ops.getMember(other, new JsString("keys"));
+        if (!InterpreterUtils.isCallable(keys)) {
+            throw new TypeErrorException("Set method argument has no callable keys");
+        }
+        return new SetRecord(other, intSize, has, keys, ops);
     }
 
-    private static JsSet union(JsSet receiver, JsSet other) {
+    private record SetRecord(JsValue target, double size, JsValue has, JsValue keys, InterpreterOps ops) {
+        boolean contains(JsValue value) {
+            return JsCoercion.toBoolean(ops.call(has, target, List.of(value)));
+        }
+
+        KeysIterator openKeys() {
+            final var iterator = ops.call(keys, target, List.of());
+            final var next = ops.getMember(iterator, new JsString("next"));
+            if (!InterpreterUtils.isCallable(next)) {
+                throw new TypeErrorException("Set method argument keys iterator has no next");
+            }
+            return new KeysIterator(iterator, next, ops);
+        }
+    }
+
+    private record KeysIterator(JsValue iterator, JsValue next, InterpreterOps ops) {
+        JsValue step() {
+            final var result = ops.call(next, iterator, List.of());
+            if (JsCoercion.toBoolean(ops.getMember(result, new JsString("done")))) {
+                return null;
+            }
+            return canonicalize(ops.getMember(result, new JsString("value")));
+        }
+
+        void close() {
+            final var returnFn = ops.getMember(iterator, new JsString("return"));
+            if (InterpreterUtils.isCallable(returnFn)) {
+                ops.call(returnFn, iterator, List.of());
+            }
+        }
+    }
+
+    private static JsValue canonicalize(JsValue value) {
+        return value instanceof JsNumber number && number.getValue() == 0 ? new JsNumber(0) : value;
+    }
+
+    private static JsSet copyOf(JsSet source) {
         final var result = new JsSet();
-        for (final var value : receiver.values()) {
+        for (final var value : source.values()) {
             result.add(value);
         }
-        for (final var value : other.values()) {
+        return result;
+    }
+
+    private static JsSet union(JsSet receiver, SetRecord other) {
+        final var result = copyOf(receiver);
+        final var keys = other.openKeys();
+        for (var value = keys.step(); value != null; value = keys.step()) {
             result.add(value);
         }
         return result;
     }
 
-    private static JsSet intersection(JsSet receiver, JsSet other) {
+    private static JsSet intersection(JsSet receiver, SetRecord other) {
         final var result = new JsSet();
-        for (final var value : receiver.values()) {
-            if (other.has(value)) {
+        if (receiver.size() <= other.size()) {
+            for (final var value : new ArrayList<>(receiver.values())) {
+                if (other.contains(value)) {
+                    result.add(value);
+                }
+            }
+            return result;
+        }
+        final var keys = other.openKeys();
+        for (var value = keys.step(); value != null; value = keys.step()) {
+            if (receiver.has(value)) {
                 result.add(value);
             }
         }
         return result;
     }
 
-    private static JsSet difference(JsSet receiver, JsSet other) {
-        final var result = new JsSet();
-        for (final var value : receiver.values()) {
-            if (!other.has(value)) {
+    private static JsSet difference(JsSet receiver, SetRecord other) {
+        final var result = copyOf(receiver);
+        if (receiver.size() <= other.size()) {
+            for (final var value : new ArrayList<>(receiver.values())) {
+                if (other.contains(value)) {
+                    result.delete(value);
+                }
+            }
+            return result;
+        }
+        final var keys = other.openKeys();
+        for (var value = keys.step(); value != null; value = keys.step()) {
+            result.delete(value);
+        }
+        return result;
+    }
+
+    private static JsSet symmetricDifference(JsSet receiver, SetRecord other) {
+        final var result = copyOf(receiver);
+        final var keys = other.openKeys();
+        for (var value = keys.step(); value != null; value = keys.step()) {
+            if (receiver.has(value)) {
+                result.delete(value);
+            } else {
                 result.add(value);
             }
         }
         return result;
     }
 
-    private static JsSet symmetricDifference(JsSet receiver, JsSet other) {
-        final var result = new JsSet();
-        for (final var value : receiver.values()) {
-            if (!other.has(value)) {
-                result.add(value);
-            }
+    private static boolean isSubsetOf(JsSet receiver, SetRecord other) {
+        if (receiver.size() > other.size()) {
+            return false;
         }
-        for (final var value : other.values()) {
-            if (!receiver.has(value)) {
-                result.add(value);
-            }
-        }
-        return result;
-    }
-
-    private static boolean isSubsetOf(JsSet receiver, JsSet other) {
-        for (final var value : receiver.values()) {
-            if (!other.has(value)) {
+        for (final var value : new ArrayList<>(receiver.values())) {
+            if (!other.contains(value)) {
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean isSupersetOf(JsSet receiver, JsSet other) {
-        for (final var value : other.values()) {
+    private static boolean isSupersetOf(JsSet receiver, SetRecord other) {
+        if (receiver.size() < other.size()) {
+            return false;
+        }
+        final var keys = other.openKeys();
+        for (var value = keys.step(); value != null; value = keys.step()) {
             if (!receiver.has(value)) {
+                keys.close();
                 return false;
             }
         }
         return true;
     }
 
-    private static boolean isDisjointFrom(JsSet receiver, JsSet other) {
-        for (final var value : receiver.values()) {
-            if (other.has(value)) {
+    private static boolean isDisjointFrom(JsSet receiver, SetRecord other) {
+        if (receiver.size() <= other.size()) {
+            for (final var value : new ArrayList<>(receiver.values())) {
+                if (other.contains(value)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        final var keys = other.openKeys();
+        for (var value = keys.step(); value != null; value = keys.step()) {
+            if (receiver.has(value)) {
+                keys.close();
                 return false;
             }
         }

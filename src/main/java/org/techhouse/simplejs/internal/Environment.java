@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -19,17 +20,20 @@ public final class Environment {
         private boolean initialized;
         private final boolean enumerable;
         private final boolean writable;
+        private final boolean configurable;
 
         private Binding(JsValue value, String kind, boolean initialized, boolean enumerable) {
-            this(value, kind, initialized, enumerable, true);
+            this(value, kind, initialized, enumerable, true, false);
         }
 
-        private Binding(JsValue value, String kind, boolean initialized, boolean enumerable, boolean writable) {
+        private Binding(JsValue value, String kind, boolean initialized, boolean enumerable, boolean writable,
+                boolean configurable) {
             this.value = value;
             this.kind = kind;
             this.initialized = initialized;
             this.enumerable = enumerable;
             this.writable = writable;
+            this.configurable = configurable;
         }
     }
 
@@ -155,13 +159,13 @@ public final class Environment {
     // Installs a host builtin as a non-enumerable global binding, so it is not reported by
     // Object.keys(globalThis)/for-in (spec: global-object builtins are non-enumerable).
     public void declareBuiltin(String name, JsValue value) {
-        bindings.put(name, new Binding(value, "var", true, false));
+        bindings.put(name, new Binding(value, "var", true, false, true, true));
     }
 
     // NaN/Infinity/undefined are the global object's non-writable, non-configurable data
     // properties (unlike every other global builtin, which stays plain-writable).
     public void declareNonWritableBuiltin(String name, JsValue value) {
-        bindings.put(name, new Binding(value, "var", true, false, false));
+        bindings.put(name, new Binding(value, "var", true, false, false, false));
     }
 
     public boolean hasLocal(String name) {
@@ -250,11 +254,33 @@ public final class Environment {
         return names;
     }
 
+    // CreateGlobalVarBinding vs an implicit property creation: a `var` at the top level is a
+    // non-configurable global property, while `globalThis.x = 1` on a fresh name is an ordinary
+    // configurable one.
     public void setGlobal(String name, JsValue value) {
         if (resolve(name) == null) {
-            declareVar(name);
+            bindings.put(name, new Binding(JsUndefined.getInstance(), "var", true, true, true, true));
         }
         assign(name, value);
+    }
+
+    public JsObject.PropertyFlags globalFlags(String name) {
+        final var binding = resolve(name);
+        return binding == null
+                ? null
+                : new JsObject.PropertyFlags(binding.writable, binding.enumerable, binding.configurable);
+    }
+
+    public boolean deleteGlobal(String name) {
+        final var binding = bindings.get(name);
+        if (binding == null) {
+            return true;
+        }
+        if (!binding.configurable) {
+            return false;
+        }
+        bindings.remove(name);
+        return true;
     }
 
     private Binding resolve(String name) {

@@ -12,6 +12,7 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class SymbolBuiltins {
     public static final List<String> NAMES = List.of("toString", "valueOf");
+    public static final List<String> PROTO_ACCESSORS = List.of("description");
 
     private SymbolBuiltins() {
     }
@@ -21,8 +22,8 @@ public final class SymbolBuiltins {
         // Interpreter run) rather than JVM-global: a static map would grow unbounded across
         // script runs and would leak symbol identities between different users' scripts.
         final Map<String, JsSymbol> registry = new ConcurrentHashMap<>();
-        final var symbol = new JsNativeFunction("Symbol",
-                (_, args) -> new JsSymbol(args.isEmpty() ? null : JsCoercion.toStr(args.getFirst())));
+        final var symbol = new JsNativeFunction("Symbol", (_, args) -> new JsSymbol(
+                args.isEmpty() || args.getFirst() instanceof JsUndefined ? null : JsCoercion.toStr(args.getFirst())));
         symbol.setProperty("dispose", JsSymbol.DISPOSE);
         symbol.setProperty("asyncDispose", JsSymbol.ASYNC_DISPOSE);
         symbol.setProperty("iterator", JsSymbol.ITERATOR);
@@ -37,6 +38,7 @@ public final class SymbolBuiltins {
         symbol.setProperty("matchAll", JsSymbol.MATCH_ALL);
         symbol.setProperty("isConcatSpreadable", JsSymbol.IS_CONCAT_SPREADABLE);
         symbol.setProperty("unscopables", JsSymbol.UNSCOPABLES);
+        symbol.setProperty("species", JsSymbol.SPECIES);
         symbol.setProperty("for",
                 new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args), JsSymbol::new)));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));
@@ -53,11 +55,13 @@ public final class SymbolBuiltins {
 
     public static JsValue getProperty(JsSymbol receiver, String name) {
         if ("description".equals(name)) {
-            return receiver.getDescription() == null
-                    ? JsUndefined.getInstance()
-                    : new JsString(receiver.getDescription());
+            return descriptionOf(receiver);
         }
         return null;
+    }
+
+    public static JsValue descriptionOf(JsSymbol receiver) {
+        return receiver.getDescription() == null ? JsUndefined.getInstance() : new JsString(receiver.getDescription());
     }
 
     static String describe(JsSymbol symbol) {

@@ -76,13 +76,17 @@ public final class ProxyDispatch {
                 List.of(proxy.getTarget(), thisArg, new JsArray(new ArrayList<>(args))));
     }
 
-    public JsValue construct(JsProxy proxy, List<JsValue> args) {
+    public JsValue construct(JsProxy proxy, List<JsValue> args, JsValue newTarget) {
         final var trap = trapOf(proxy, "construct");
         if (trap == null) {
-            return ops.construct(proxy.getTarget(), args);
+            return ops.construct(proxy.getTarget(), args, newTarget == proxy ? proxy.getTarget() : newTarget);
         }
-        return ops.call(trap, proxy.getHandler(),
-                List.of(proxy.getTarget(), new JsArray(new ArrayList<>(args)), proxy));
+        final var result = ops.call(trap, proxy.getHandler(),
+                List.of(proxy.getTarget(), new JsArray(new ArrayList<>(args)), newTarget));
+        if (!InterpreterUtils.isObjectLike(result)) {
+            throw new TypeErrorException("proxy [[Construct]] must return an object");
+        }
+        return result;
     }
 
     public JsValue getPrototypeOf(JsProxy proxy) {

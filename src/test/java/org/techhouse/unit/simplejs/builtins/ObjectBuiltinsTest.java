@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -598,10 +599,12 @@ public class ObjectBuiltinsTest {
         assertEquals(0, num("Object.keys(Object.getOwnPropertyDescriptors({})).length"));
     }
 
-    // a non-object argument is rejected
+    // ToObject(O) rejects only null/undefined; another primitive simply has no own properties
     @Test
     public void test_get_own_property_descriptors_non_object_throws() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptors(1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptors(undefined)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptors(null)"));
+        assertEquals(0, num("Object.keys(Object.getOwnPropertyDescriptors(1)).length"));
     }
 
     // a function's name is an own property, not only a lookup-time synthesis
@@ -654,7 +657,7 @@ public class ObjectBuiltinsTest {
                 const d = Object.getOwnPropertyDescriptor(globalThis, 'gg');
                 JSON.stringify([d.value, d.writable, d.enumerable, d.configurable])
                 """;
-        assertEquals("[7,true,true,true]", str(source));
+        assertEquals("[7,true,true,false]", str(source));
         assertTrue(flag("Object.getOwnPropertyDescriptor(globalThis, 'neverDeclared') === undefined"));
     }
 
@@ -1002,5 +1005,302 @@ public class ObjectBuiltinsTest {
     public void test_array_index_get_own_property_descriptor_hole_is_undefined() {
         assertInstanceOf(JsUndefined.class,
                 Interpreter.run("var arr = [1,2,3]; delete arr[1]; Object.getOwnPropertyDescriptor(arr, '1')"));
+    }
+
+    // OrdinarySetPrototypeOf rejects a prototype that already inherits from the target
+    @Test
+    public void test_set_prototype_of_detects_cycle() {
+        assertEquals("TypeError", str("""
+                let caught = 'none';
+                const parent = {};
+                const child = Object.create(parent);
+                try { Object.setPrototypeOf(parent, child); } catch (e) { caught = e.name; }
+                caught
+                """));
+        assertEquals("TypeError", str("""
+                let caught = 'none';
+                const self = {};
+                try { Object.setPrototypeOf(self, self); } catch (e) { caught = e.name; }
+                caught
+                """));
+        assertTrue(flag("const a = {}; const b = {}; Object.setPrototypeOf(a, b); Object.getPrototypeOf(a) === b"));
+    }
+
+    // A descriptor carrying only enumerable/configurable leaves an existing accessor intact
+    @Test
+    public void test_generic_descriptor_preserves_existing_accessor() {
+        assertTrue(flag("const o = {}; Object.defineProperty(o, 'x', { get() { return 5; }, configurable: true });"
+                + "Object.defineProperty(o, 'x', { enumerable: true });"
+                + "typeof Object.getOwnPropertyDescriptor(o, 'x').get === 'function' && o.x === 5"));
+    }
+
+    // A symbol-keyed defineProperty stores its flags instead of always reporting all-true
+    @Test
+    public void test_symbol_descriptor_stores_flags() {
+        assertTrue(flag("const s = Symbol('s'); const o = {};"
+                + "Object.defineProperty(o, s, { value: 1, enumerable: false, configurable: false });"
+                + "const d = Object.getOwnPropertyDescriptor(o, s);"
+                + "d.value === 1 && d.enumerable === false && d.configurable === false"));
+    }
+
+    // ToObject rejects only null/undefined, so getOwnPropertyDescriptor throws for them alone
+    @Test
+    public void test_get_own_property_descriptor_throws_on_undefined_target() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.getOwnPropertyDescriptor(undefined, 'x')"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptor(null, 'x')"));
+    }
+
+    // Object.defineProperties rejects a non-object Properties argument
+    @Test
+    public void test_define_properties_throws_on_undefined_props() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperties({}, undefined)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperties({}, null)"));
+    }
+
+    // defineProperty is honoured on an exotic target rather than silently returning it
+    @Test
+    public void test_define_property_on_exotic_target_is_honoured() {
+        assertTrue(flag("const m = new Map(); Object.defineProperty(m, 'x', { value: 1, enumerable: false });"
+                + "const d = Object.getOwnPropertyDescriptor(m, 'x');" + "d.value === 1 && d.enumerable === false"));
+        assertTrue(flag("const dt = new Date(0); Object.defineProperty(dt, 'y', { value: 2 });"
+                + "Object.getOwnPropertyDescriptor(dt, 'y').value === 2"));
+    }
+
+    // A builtin constructor's `prototype` is non-writable, non-enumerable and non-configurable
+    @Test
+    public void test_builtin_constructor_prototype_descriptor() {
+        assertTrue(flag("const d = Object.getOwnPropertyDescriptor(Array, 'prototype');"
+                + "!d.writable && !d.enumerable && !d.configurable"));
+        assertTrue(flag("const d = Object.getOwnPropertyDescriptor(function f() {}, 'prototype');"
+                + "d.writable && !d.enumerable && !d.configurable"));
+    }
+
+    // An object literal is linked to %Object.prototype%
+    @Test
+    public void test_object_literal_is_linked_to_object_prototype() {
+        assertTrue(flag("Object.getPrototypeOf({}) === Object.prototype"));
+        assertTrue(flag("Object.create({}) instanceof Object"));
+    }
+
+    @Test
+    public void valuesAndEntriesIncludeAnArraysNamedProperties() {
+        assertEquals("1,2,3", str("const a = [1, 2]; a.x = 3; Object.values(a).join(',')"));
+        assertEquals("0=1,1=2,x=3",
+                str("const a = [1, 2]; a.x = 3; Object.entries(a).map(e => e[0] + '=' + e[1]).join(',')"));
+    }
+
+    @Test
+    public void assignRejectsANullishTarget() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.assign(null, {a: 1})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.assign(undefined, {a: 1})"));
+    }
+
+    @Test
+    public void assignThrowsWhenAWriteIsRejected() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.assign(Object.freeze({a: 1}), {a: 2})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const s = Symbol('s');
+                const target = Object.preventExtensions({});
+                const source = {};
+                source[s] = 2;
+                Object.assign(target, source)
+                """));
+    }
+
+    @Test
+    public void createRejectsANonObjectPrototypeAndNullProperties() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.create(5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.create('x')"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.create({}, null)"));
+    }
+
+    @Test
+    public void definePropertyRejectsANonObjectTargetOrDescriptor() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty(1, 'a', {})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty('s', 'a', {})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'a')"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'a', 5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperties(1, {})"));
+    }
+
+    @Test
+    public void definePropertyWritesThroughTheGlobalObject() {
+        assertEquals(1, num("Object.defineProperty(globalThis, 'gDefined', { value: 1 });"
+                + " Object.getOwnPropertyDescriptor(globalThis, 'gDefined').value"));
+        assertEquals(7, num("globalThis.gAssigned = 1;"
+                + " Object.defineProperty(globalThis, 'gAssigned', { value: 7 }); gAssigned"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("var gVar = 1; Object.defineProperty(globalThis, 'gVar', { value: 7 })"));
+        assertEquals("undefined", str("typeof Object.getOwnPropertyDescriptor(globalThis, Symbol('never'))"));
+    }
+
+    @Test
+    public void definePropertyMaterialisesCallableMetadata() {
+        assertTrue(flag("function f() {} Object.defineProperty(f, 'prototype', { value: { tag: 1 } });"
+                + " f.prototype.tag === 1"));
+        assertTrue(flag(
+                "function f() {} Object.defineProperty(f, 'name', { value: 'renamed' });" + " f.name === 'renamed'"));
+        assertTrue(flag("function f(a, b) {} Object.defineProperty(f, 'length', { value: 9 }); f.length === 9"));
+    }
+
+    @Test
+    public void arrayLengthRedefinitionIsChecked() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], 'length', { configurable: true })"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], 'length', { enumerable: true })"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1];
+                Object.defineProperty(a, 'length', { writable: false });
+                Object.defineProperty(a, 'length', { writable: true })
+                """));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], 'length', { value: -1 })"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([], 'length', { value: 1.5 })"));
+    }
+
+    @Test
+    public void arrayIndexRedefinitionIsChecked() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1];
+                Object.defineProperty(a, '0', { configurable: false, enumerable: true });
+                Object.defineProperty(a, '0', { enumerable: false })
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1];
+                Object.defineProperty(a, '0', { writable: false, configurable: false });
+                Object.defineProperty(a, '0', { writable: true })
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1];
+                Object.defineProperty(a, '0', { configurable: false });
+                Object.defineProperty(a, '0', { get() { return 2; } })
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [];
+                Object.preventExtensions(a);
+                Object.defineProperty(a, '0', { get() { return 2; } })
+                """));
+    }
+
+    @Test
+    public void arrayIndexAccessorsAreValidated() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([1], '0', { get: 1, configurable: true })"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty([1], '0', { set: 1, configurable: true })"));
+        assertEquals(5, num("const a = [1]; Object.defineProperty(a, '0', { get() { return 5; } }); a[0]"));
+        assertEquals(6, num("""
+                const a = [1];
+                let seen = 0;
+                Object.defineProperty(a, '0', { get() { return seen; }, set(v) { seen = v + 1; } });
+                a[0] = 5;
+                a[0]
+                """));
+    }
+
+    @Test
+    public void arrayOwnPropertyDescriptorsCoverEveryKeyShape() {
+        assertEquals("undefined", str("typeof Object.getOwnPropertyDescriptor([], Symbol('x'))"));
+        assertEquals(2, num("Object.getOwnPropertyDescriptor([1, 2], 'length').value"));
+        assertEquals("undefined", str("typeof Object.getOwnPropertyDescriptor([], 'nope')"));
+        assertEquals(3, num("const a = []; a.x = 3; Object.getOwnPropertyDescriptor(a, 'x').value"));
+        assertTrue(flag("""
+                const a = [1];
+                Object.defineProperty(a, '0', { get() { return 1; }, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(a, '0');
+                typeof d.get === 'function' && d.set === undefined && d.configurable === true
+                """));
+        assertTrue(flag("""
+                const a = [];
+                Object.defineProperty(a, 'x', { set(v) {}, enumerable: true });
+                const d = Object.getOwnPropertyDescriptor(a, 'x');
+                d.get === undefined && typeof d.set === 'function' && d.enumerable === true
+                """));
+    }
+
+    @Test
+    public void accessorDescriptorsAreValidated() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty({}, 'x', { get() { return 1; }, value: 1 })"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.defineProperty({}, 'x', { set(v) {}, writable: true })"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'x', { get: 1 })"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'x', { set: 1 })"));
+    }
+
+    // 'get' and 'set' both present but neither callable is still an accessor: it reads as undefined
+    @Test
+    public void anAllUndefinedAccessorReadsAsUndefined() {
+        assertEquals("undefined",
+                str("const o = {}; Object.defineProperty(o, 'x', { get: undefined, set: undefined }); typeof o.x"));
+    }
+
+    @Test
+    public void redefiningAnAccessorClearsTheSideTheDescriptorNames() {
+        assertTrue(flag("""
+                const o = {};
+                Object.defineProperty(o, 'x', { get() { return 1; }, set(v) {}, configurable: true });
+                Object.defineProperty(o, 'x', { set: undefined, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(o, 'x');
+                typeof d.get === 'function' && d.set === undefined
+                """));
+        assertTrue(flag("""
+                const o = {};
+                Object.defineProperty(o, 'x', { get() { return 1; }, set(v) {}, configurable: true });
+                Object.defineProperty(o, 'x', { get: undefined, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(o, 'x');
+                d.get === undefined && typeof d.set === 'function'
+                """));
+    }
+
+    @Test
+    public void symbolKeyedDescriptorsGoThroughTheSameSlotProtocol() {
+        assertTrue(flag("""
+                const s = Symbol('s');
+                const o = {};
+                Object.defineProperty(o, s, { get() { return 1; }, configurable: true });
+                Object.defineProperty(o, s, { set(v) {}, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(o, s);
+                typeof d.get === 'function' && typeof d.set === 'function'
+                """));
+        assertTrue(flag("""
+                const s = Symbol('s');
+                const o = {};
+                Object.defineProperty(o, s, { get() { return 1; }, set(v) {}, configurable: true });
+                Object.defineProperty(o, s, { get: undefined, configurable: true });
+                Object.defineProperty(o, s, { set: undefined, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(o, s);
+                d.get === undefined && d.set === undefined
+                """));
+        assertEquals(5, num("""
+                const s = Symbol('s');
+                const o = {};
+                Object.defineProperty(o, s, { get() { return 1; }, configurable: true });
+                Object.defineProperty(o, s, { value: 5, configurable: true });
+                o[s]
+                """));
+    }
+
+    @Test
+    public void ownPropertyNamesCoverClassesAndExoticTargets() {
+        assertTrue(flag("class C { static x = 1; } Object.getOwnPropertyNames(C).includes('x')"));
+        assertTrue(flag("const s = Symbol('s'); class C { static [s] = 1; } Object.hasOwn(C, s)"));
+        assertEquals("x", str("const m = new Map(); Object.defineProperty(m, 'x', { value: 1 });"
+                + " Object.getOwnPropertyNames(m).join(',')"));
+    }
+
+    @Test
+    public void ownPropertyDescriptorsWalkSymbolsAndSkipAbsentProxyKeys() {
+        assertEquals(0, num(
+                "Object.keys(Object.getOwnPropertyDescriptors(new Proxy({}, " + "{ ownKeys: () => ['a'] }))).length"));
+        assertTrue(flag("""
+                const s = Symbol('s');
+                const o = {};
+                o[s] = 1;
+                Object.getOwnPropertyDescriptors(o)[s].value === 1
+                """));
     }
 }

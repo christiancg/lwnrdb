@@ -42,15 +42,16 @@ public final class GlobalFunctionsBuiltins {
     private GlobalFunctionsBuiltins() {
     }
 
-    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops) {
+    public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops,
+            Intrinsics intrinsics) {
         define(global, "encodeURI", new JsNativeFunction("encodeURI",
-                (_, args) -> new JsString(encode(str(args), URI_UNESCAPED + URI_RESERVED))));
+                (_, args) -> new JsString(encode(str(args), URI_UNESCAPED + URI_RESERVED, intrinsics))));
         define(global, "encodeURIComponent", new JsNativeFunction("encodeURIComponent",
-                (_, args) -> new JsString(encode(str(args), URI_UNESCAPED))));
+                (_, args) -> new JsString(encode(str(args), URI_UNESCAPED, intrinsics))));
         define(global, "decodeURI",
-                new JsNativeFunction("decodeURI", (_, args) -> new JsString(decode(str(args), true))));
-        define(global, "decodeURIComponent",
-                new JsNativeFunction("decodeURIComponent", (_, args) -> new JsString(decode(str(args), false))));
+                new JsNativeFunction("decodeURI", (_, args) -> new JsString(decode(str(args), true, intrinsics))));
+        define(global, "decodeURIComponent", new JsNativeFunction("decodeURIComponent",
+                (_, args) -> new JsString(decode(str(args), false, intrinsics))));
         define(global, "escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(str(args)))));
         define(global, "unescape", new JsNativeFunction("unescape", (_, args) -> new JsString(unescape(str(args)))));
         define(global, "structuredClone",
@@ -67,7 +68,7 @@ public final class GlobalFunctionsBuiltins {
         }));
     }
 
-    private static String encode(String input, String unescaped) {
+    private static String encode(String input, String unescaped, Intrinsics intrinsics) {
         final var out = new StringBuilder();
         var i = 0;
         while (i < input.length()) {
@@ -75,7 +76,7 @@ public final class GlobalFunctionsBuiltins {
             if (cp < 128 && unescaped.indexOf((char) cp) >= 0) {
                 out.append((char) cp);
             } else if (cp >= 0xD800 && cp <= 0xDFFF) {
-                throw uriError();
+                throw uriError(intrinsics);
             } else {
                 for (final var b : new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8)) {
                     out.append('%').append(HEX[(b >> 4) & 0xF]).append(HEX[b & 0xF]);
@@ -86,7 +87,7 @@ public final class GlobalFunctionsBuiltins {
         return out.toString();
     }
 
-    private static String decode(String input, boolean preserveReserved) {
+    private static String decode(String input, boolean preserveReserved, Intrinsics intrinsics) {
         final var out = new StringBuilder();
         var i = 0;
         while (i < input.length()) {
@@ -96,7 +97,7 @@ public final class GlobalFunctionsBuiltins {
                 i++;
                 continue;
             }
-            final var first = hexByte(input, i);
+            final var first = hexByte(input, i, intrinsics);
             if ((first & 0x80) == 0) {
                 if (preserveReserved && URI_RESERVED.indexOf((char) first) >= 0) {
                     out.append(input, i, i + 3);
@@ -105,17 +106,17 @@ public final class GlobalFunctionsBuiltins {
                 }
                 i += 3;
             } else {
-                final var count = leadingByteCount(first);
+                final var count = leadingByteCount(first, intrinsics);
                 final var bytes = new byte[count];
                 bytes[0] = (byte) first;
                 var pos = i + 3;
                 for (var k = 1; k < count; k++) {
                     if (pos >= input.length() || input.charAt(pos) != '%') {
-                        throw uriError();
+                        throw uriError(intrinsics);
                     }
-                    final var next = hexByte(input, pos);
+                    final var next = hexByte(input, pos, intrinsics);
                     if ((next & 0xC0) != 0x80) {
-                        throw uriError();
+                        throw uriError(intrinsics);
                     }
                     bytes[k] = (byte) next;
                     pos += 3;
@@ -127,7 +128,7 @@ public final class GlobalFunctionsBuiltins {
         return out.toString();
     }
 
-    private static int leadingByteCount(int first) {
+    private static int leadingByteCount(int first, Intrinsics intrinsics) {
         if ((first & 0xE0) == 0xC0) {
             return 2;
         }
@@ -137,17 +138,17 @@ public final class GlobalFunctionsBuiltins {
         if ((first & 0xF8) == 0xF0) {
             return 4;
         }
-        throw uriError();
+        throw uriError(intrinsics);
     }
 
-    private static int hexByte(String input, int index) {
+    private static int hexByte(String input, int index, Intrinsics intrinsics) {
         if (index + 2 >= input.length()) {
-            throw uriError();
+            throw uriError(intrinsics);
         }
         final var high = Character.digit(input.charAt(index + 1), 16);
         final var low = Character.digit(input.charAt(index + 2), 16);
         if (high < 0 || low < 0) {
-            throw uriError();
+            throw uriError(intrinsics);
         }
         return (high << 4) | low;
     }
@@ -280,8 +281,8 @@ public final class GlobalFunctionsBuiltins {
         return new TypeErrorException(JsCoercion.toStr(value) + " could not be cloned");
     }
 
-    private static JsThrowException uriError() {
-        return new JsThrowException(ErrorBuiltins.makeError("URIError", "URI malformed"));
+    private static JsThrowException uriError(Intrinsics intrinsics) {
+        return new JsThrowException(intrinsics.makeError("URIError", "URI malformed"));
     }
 
     private static String str(List<JsValue> args) {

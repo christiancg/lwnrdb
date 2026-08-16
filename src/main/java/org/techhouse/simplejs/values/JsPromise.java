@@ -6,17 +6,17 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObj
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
+import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.exceptions.JsThrowException;
-import org.techhouse.simplejs.exceptions.RangeErrorException;
-import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
-import org.techhouse.simplejs.exceptions.SyntaxErrorException;
-import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 
 public final class JsPromise extends JsValue {
+    private PropertyTable table;
+
     public enum State {
         PENDING, FULFILLED, REJECTED
     }
@@ -35,6 +35,10 @@ public final class JsPromise extends JsValue {
         eventLoop.registerPromise(this);
     }
 
+    public Intrinsics intrinsics() {
+        return eventLoop.intrinsics();
+    }
+
     public State getState() {
         return state;
     }
@@ -51,17 +55,20 @@ public final class JsPromise extends JsValue {
         if (state != State.PENDING) {
             return;
         }
-        if (value instanceof JsPromise other) {
-            other.subscribe(this::resolve, this::reject);
+        if (value == this) {
+            reject(chainingCycleError());
             return;
         }
         final var ops = eventLoop.ops();
+        if (ops == null && value instanceof JsPromise other) {
+            other.subscribe(this::resolve, this::reject);
+            return;
+        }
         if (ops != null && isObjectLike(value)) {
             final JsValue then;
             try {
                 then = ops.getMember(value, new JsString("then"));
-            } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
-                    | SyntaxErrorException error) {
+            } catch (SimpleJsRuntimeException error) {
                 reject(errorValueOf(error));
                 return;
             }
@@ -77,21 +84,42 @@ public final class JsPromise extends JsValue {
     // functions bound to this promise, rather than fulfilling with the thenable object itself.
     private void resolveThenable(JsValue thenable, JsValue then, InterpreterOps ops) {
         eventLoop.queueMicrotask(() -> {
-            final var resolveFn = new JsNativeFunction("resolve", (_, args) -> {
+            final var alreadyResolved = new boolean[]{false};
+            final var resolveFn = new JsNativeFunction("", (_, args) -> {
+                if (alreadyResolved[0]) {
+                    return JsUndefined.getInstance();
+                }
+                alreadyResolved[0] = true;
                 resolve(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
                 return JsUndefined.getInstance();
             });
-            final var rejectFn = new JsNativeFunction("reject", (_, args) -> {
+            resolveFn.setLength(1);
+            final var rejectFn = new JsNativeFunction("", (_, args) -> {
+                if (alreadyResolved[0]) {
+                    return JsUndefined.getInstance();
+                }
+                alreadyResolved[0] = true;
                 reject(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
                 return JsUndefined.getInstance();
             });
+            rejectFn.setLength(1);
             try {
                 ops.call(then, thenable, List.of(resolveFn, rejectFn));
-            } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
-                    | SyntaxErrorException error) {
-                reject(errorValueOf(error));
+            } catch (SimpleJsRuntimeException error) {
+                if (!alreadyResolved[0]) {
+                    alreadyResolved[0] = true;
+                    reject(errorValueOf(error));
+                }
             }
         });
+    }
+
+    private JsValue chainingCycleError() {
+        final var intrinsics = eventLoop.intrinsics();
+        final var message = "Chaining cycle detected for promise";
+        return intrinsics == null
+                ? ErrorBuiltins.makeError("TypeError", message)
+                : intrinsics.makeError("TypeError", message);
     }
 
     private JsValue errorValueOf(SimpleJsRuntimeException error) {
@@ -141,5 +169,13 @@ public final class JsPromise extends JsValue {
                 reaction.onRejected().accept(settledValue);
             }
         });
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class JsSet extends JsValue {
+    private PropertyTable table;
+
     private final Map<Object, JsValue> members = new LinkedHashMap<>();
     private final boolean weak;
 
@@ -42,5 +44,13 @@ public final class JsSet extends JsValue {
 
     public Collection<JsValue> values() {
         return members.values();
+    }
+
+    @Override
+    public PropertyTable ownProperties() {
+        if (table == null) {
+            table = new PropertyTable();
+        }
+        return table;
     }
 }

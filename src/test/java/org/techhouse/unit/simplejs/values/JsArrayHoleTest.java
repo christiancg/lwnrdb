@@ -3,9 +3,12 @@ package org.techhouse.unit.simplejs.values;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -162,5 +165,86 @@ public class JsArrayHoleTest {
     public void test_overwriting_a_hole() {
         assertTrue(bool("const h = [1, , 3]; h[1] = 2; 1 in h"));
         assertEquals(2, num("const h = [1, , 3]; h[1] = 2; h[1]"));
+    }
+
+    // deleting an index with overridden flags drops the override, not just the value
+    @Test
+    public void deletingAConfiguredIndexClearsItsFlags() {
+        assertFalse(bool("""
+                const a = [1];
+                Object.defineProperty(a, '0', { value: 1, writable: true, configurable: true });
+                delete a[0];
+                0 in a
+                """));
+        assertTrue(bool("""
+                const a = [1];
+                Object.defineProperty(a, '0', { value: 1, writable: false, configurable: true });
+                delete a[0];
+                a[0] = 5;
+                a[0] === 5
+                """));
+    }
+
+    // redefining an accessor index as a data property drops the stored getter and setter
+    @Test
+    public void redefiningAnAccessorIndexAsDataClearsTheAccessor() {
+        assertTrue(bool("""
+                const a = [1];
+                Object.defineProperty(a, '0', { get() { return 9; }, set(v) {}, configurable: true });
+                Object.defineProperty(a, '0', { value: 3, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(a, '0');
+                a[0] === 3 && d.get === undefined && d.set === undefined
+                """));
+    }
+
+    @Test
+    public void writingANonWritableIndexIsRejected() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1];
+                Object.defineProperty(a, '0', { writable: false });
+                a[0] = 2
+                """));
+    }
+
+    @Test
+    public void freezingAndSealingRewriteTheIndexFlags() {
+        assertFalse(bool("const a = [1]; Object.freeze(a); Object.getOwnPropertyDescriptor(a, '0').writable"));
+        assertFalse(bool("const a = [1]; Object.freeze(a); Object.getOwnPropertyDescriptor(a, '0').configurable"));
+        assertTrue(bool("const a = [1]; Object.seal(a); Object.getOwnPropertyDescriptor(a, '0').writable"));
+        assertFalse(bool("const a = [1]; Object.seal(a); Object.getOwnPropertyDescriptor(a, '0').configurable"));
+    }
+
+    @Test
+    public void namedArrayPropertiesCarryTheirOwnFlags() {
+        assertTrue(bool("""
+                const a = [];
+                Object.defineProperty(a, 'x', { value: 1, enumerable: true, writable: true, configurable: true });
+                const d = Object.getOwnPropertyDescriptor(a, 'x');
+                d.value === 1 && d.enumerable && d.writable && d.configurable
+                """));
+        assertFalse(bool("const a = []; a.x = 1; Object.freeze(a); Object.getOwnPropertyDescriptor(a, 'x').writable"));
+        assertTrue(bool("const a = []; a.x = 1; Object.seal(a); Object.getOwnPropertyDescriptor(a, 'x').writable"));
+        assertFalse(
+                bool("const a = []; a.x = 1; Object.seal(a); Object.getOwnPropertyDescriptor(a, 'x').configurable"));
+    }
+
+    @Test
+    public void lengthAssignmentHonoursExtensibilityAndWritability() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const a = [1]; Object.preventExtensions(a); a.length = 5"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1];
+                Object.defineProperty(a, 'length', { writable: false });
+                a.length = 0
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const a = [1]; Object.seal(a); a.length = 0"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("const a = [1]; Object.freeze(a); a.length = 0"));
+    }
+
+    // the dense backing store is bounded, so an absurd length is a RangeError instead of an OOM
+    @Test
+    public void anOversizedLengthIsARangeError() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = []; a.length = 33554433"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = []; a[33554433] = 1"));
     }
 }

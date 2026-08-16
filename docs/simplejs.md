@@ -731,9 +731,50 @@ a function boundary and lexical inside a block, so `function f(){} function f(){
 level and `{ function f(){} function f(){} }` is not — the always-strict reading, with no Annex-B
 sloppy-function allowance.
 
+### The ordinary-object substrate
+
+Every value that is an object in the spec sense owns an ordinary property table. `values/PropertyTable`
+holds what `JsObject` used to keep privately — the data and accessor entries, the insertion-ordered
+`keyOrder` that gives spec own-key order, the per-key `PropertyFlags`, the symbol-keyed parallel maps
+and the `extensible` flag — and `JsValue` exposes it through `ownProperties()`, `getProto()`,
+`setProto()` and `isExtensible()`.
+
+Seventeen types hold a table: `JsObject`, `JsArray`, `JsFunction`, `JsNativeFunction`, `JsClass`,
+`JsPromise`, `JsTypedArray`, `JsArrayBuffer`, `JsDataView`, `JsDate`, `JsMap`, `JsSet`, `JsRegExp`,
+`JsArguments`, `JsGlobalObject`, `JsGenerator` and `JsAsyncGenerator`. Each keeps its exotic behaviour
+*in front of* the table — `JsArray` its index and `length` handling, `JsTypedArray` its canonical
+numeric indices, `JsGlobalObject` its `Environment` fallthrough — and delegates everything else to it,
+allocating the table lazily so an array of numbers does not carry one. The table is what makes
+`Object.defineProperty` on a function, a descriptor surface on a promise, and `delete globalThis.x`
+work at all; before it, those calls silently returned their target.
+
+The **primitives keep `ownProperties() == null`** (`JsNumber`, `JsString`, `JsBoolean`, `JsBigInt`,
+`JsUndefined`, `JsNull`, `JsSymbol`) — that null is what identifies a primitive at every choke point.
+`JsProxy` also has no table: every trap in `ProxyDispatch` intercepts ahead of one and falls back to
+the target.
+
+One consequence worth stating: descriptor validation is now a single
+`ValidateAndApplyPropertyDescriptor` over the table, rather than the three divergent implementations
+(plain, array, symbol) that preceded it.
+
+### Constructor-ness
+
+Callability and constructor-ness are separate bits, as they are in the spec. `JsNativeFunction`
+carries an explicit `[[Construct]]` flag that **defaults to false** and is set by `markConstructor()`
+at the handful of sites that install a real constructor; `JsFunction` computes it from flags it
+already had (`!arrow && !async && !generator && !method`); `JsProxy` recurses into its target.
+`InterpreterUtils.isConstructor` is the single source of truth, and `newTarget` is threaded through
+`[[Construct]]` so `Reflect.construct(target, args, newTarget)` derives the instance prototype from
+an ordinary `Get(newTarget, "prototype")`.
+
+The bit is deliberately **not** derived from `getPrototype() != null`: a script can assign
+`Array.from.prototype = {}`, and that must not make `new Array.from()` legal. For the same reason
+`ObjectBuiltins.hasPrototype` stays divergent from `isConstructor` — a generator has a `.prototype`
+but is not a constructor.
+
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **80.43%**, 29,921/37,202). The official
+Conformance is **measured, not asserted** (currently **86.09%**, 31,845/36,992). The official
 tc39/test262 corpus runs against
 `SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
 the language + built-ins surface a database script host actually exposes, and gated on a tracked
@@ -785,7 +826,7 @@ commands above; the limitations below are the ones that need an explanation rath
 | 2 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
 | 3 | **Generic array-like receivers are snapshotted** | Any object with a `length` is accepted for the non-mutating methods (`Array.prototype.map.call({length: 2, 0: 'a', 1: 'b'}, f)` works), but the receiver is copied into a fresh `JsArray`. So `arguments`/typed-array/string receivers do not write through for a mutating call (`Array.prototype.push.call(arguments, x)`), a plain object is rejected outright for the mutating methods rather than losing the write silently, and a `length` past the int range is a `TypeError` rather than a materialised snapshot — see *Intrinsic prototypes*. |
 | 4 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
-| 5 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. |
+| 5 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. `toString` emits the spec's `NativeFunction` form for user functions too, which is legal precisely because no source is retained (`HostHasSourceTextAvailable` is false), so the output is conformant while the underlying gap remains. |
 | 6 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
 | 7 | **The Unicode version is the build JDK's, not a pinned one** | A conformant engine pins the UCD version the spec requires; with no ICU dependency ours is whatever `java.util.regex` ships — Unicode 16.0 on JDK 25, 17.0 on JDK 26. So `\p{…}` escapes answer differently across the two supported build JDKs for anything added in 17.0, and on JDK 25 the scripts added there (`Sidetic`, `Tolong_Siki`, `Tai_Yo`, `Beria_Erfe`) throw a `SyntaxError` instead of compiling. This is why `built-ins/RegExp/property-escapes/generated/` is excluded from the gate rather than baselined — see `config/test262-exclusions.txt`. **Properties of strings** (`\p{RGI_Emoji}`, `\p{Basic_Emoji}`, …) are a separate, genuine gap and stay measured. |
 
@@ -881,7 +922,18 @@ per decision, each carrying its reason), so the two must be kept in step — an 
 entry here is a number being flattered.
 
 - **`eval` / the `Function` constructor** — no runtime code generation from strings. Allowing it
-  would defeat the instruction-budget/deadline sandbox and open an injection surface.
+  would defeat the instruction-budget/deadline sandbox and open an injection surface. The `Function`
+  constructor is filtered by source pattern in both spellings (`Function(…)` and `new Function(…)`);
+  the deliberately narrower `\bnew\s+Function\s*;` line exists so that `new Function.prototype.apply()`
+  and friends — which test `[[Construct]]`, not the constructor — stay measured.
+- **Indirect `eval`** — `(0, eval)("…")` and `var e = eval; e("…")` are the same code generation by
+  another spelling, so `language/eval-code/indirect/` is excluded as a directory: no source pattern
+  can recognise an alias, and the direct form's pattern does not fire on it.
+- **The `eval` global's own descriptor surface** — `built-ins/eval/` asserts the attributes,
+  `length` and `name` of a global function that deliberately does not exist.
+- **`ShadowRealm`** — `ShadowRealm.prototype.evaluate(sourceText)` is runtime code generation from a
+  string, ruled out for the same reason as `eval`; a second realm would also need a second set of
+  intrinsics per script, which the per-`Interpreter` `Intrinsics` model does not provide.
 - **`Intl`** — the internationalization API is enormous; only ad-hoc `toLocaleString`/
   `localeCompare` defaults (backed by `java.text`) are provided.
 - **`Temporal`** — the date/time proposal is out of scope; `Date` is the only temporal type.

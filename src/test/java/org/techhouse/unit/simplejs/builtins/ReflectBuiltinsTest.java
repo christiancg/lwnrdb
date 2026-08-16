@@ -73,10 +73,11 @@ public class ReflectBuiltinsTest {
         assertFalse(bool("const t = { a: 1 }; const p = new Proxy(t, {}); Reflect.deleteProperty(p, 'a'); 'a' in t"));
     }
 
-    // Reflect.apply with a missing arguments list uses an empty argument list
+    // CreateListFromArrayLike rejects a missing (non-object) arguments list
     @Test
     public void test_apply_missing_args_list() {
-        assertEquals(42, num("Reflect.apply(function () { return 42; }, null)"));
+        assertEquals("TypeError", str("let name = 'none';"
+                + "try { Reflect.apply(function () { return 42; }, null); } catch (e) { name = e.name; } name"));
     }
 
     // Reflect.get with a missing key reads the "undefined" property
@@ -172,5 +173,51 @@ public class ReflectBuiltinsTest {
     @Test
     public void test_set_with_receiver() {
         assertEquals(9, num("let t = { set x(v) { this._w = v; } }; let r = {}; Reflect.set(t, 'x', 9, r); r._w"));
+    }
+
+    // Reflect.construct rejects a target without [[Construct]]
+    @Test
+    public void test_construct_rejects_non_constructor_target() {
+        assertEquals("TypeError",
+                str("let n = 'none';" + "try { Reflect.construct(Math.max, []); } catch (e) { n = e.name; } n"));
+    }
+
+    // Reflect.construct rejects a newTarget without [[Construct]]
+    @Test
+    public void test_construct_rejects_non_constructor_new_target() {
+        assertEquals("TypeError", str("let n = 'none';"
+                + "try { Reflect.construct(function () {}, [], Math.max); } catch (e) { n = e.name; } n"));
+    }
+
+    // An omitted newTarget defaults to the target itself
+    @Test
+    public void test_construct_defaults_new_target_to_target() {
+        assertTrue(bool("function F() {} Reflect.construct(F, []) instanceof F"));
+    }
+
+    // The created instance's prototype comes from Get(newTarget, "prototype")
+    @Test
+    public void test_construct_derives_proto_from_new_target() {
+        assertTrue(bool("function F() {} function G() {} Reflect.construct(F, [], G) instanceof G"));
+    }
+
+    // CreateListFromArrayLike walks any object by length + indexed Get
+    @Test
+    public void test_construct_accepts_array_like_arguments_list() {
+        assertEquals(3,
+                num("function F(a, b) { this.sum = a + b; }" + "Reflect.construct(F, { length: 2, 0: 1, 1: 2 }).sum"));
+    }
+
+    // A non-object arguments list is a TypeError, not an empty list
+    @Test
+    public void test_construct_throws_on_non_object_arguments_list() {
+        assertEquals("TypeError",
+                str("let n = 'none';" + "try { Reflect.construct(function () {}, 1); } catch (e) { n = e.name; } n"));
+    }
+
+    // Reflect.apply accepts the same array-like arguments list
+    @Test
+    public void test_apply_accepts_array_like_arguments_list() {
+        assertEquals(3, num("Reflect.apply(function (a, b) { return a + b; }, null, { length: 2, 0: 1, 1: 2 })"));
     }
 }

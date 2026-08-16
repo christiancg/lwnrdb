@@ -20,6 +20,9 @@ public final class ParserTables {
 
     public static final Set<String> USING_KINDS = Set.of("using", "await using");
 
+    // The keywords that begin an IterationStatement, the only statements `continue` can target.
+    public static final Set<String> ITERATION_KEYWORDS = Set.of("for", "while", "do");
+
     public static final Set<String> LOGICAL_OPERATORS = Set.of("&&", "||", "??");
 
     public static final Map<String, Integer> BINARY_PRECEDENCE = Map.ofEntries(Map.entry("??", 1), Map.entry("||", 2),

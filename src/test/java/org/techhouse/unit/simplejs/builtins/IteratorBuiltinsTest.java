@@ -329,6 +329,46 @@ public class IteratorBuiltinsTest {
         assertEquals("a-b", str("['a', 'b'].values().join('-')"));
     }
 
+    // GetIteratorDirect reads `next` once: a getter handing back a fresh source must not restart it
+    @Test
+    public void test_helpers_cache_next_method_once() {
+        final var source = """
+                let gets = 0;
+                const counting = {
+                    get next() {
+                        gets++;
+                        const inner = (function* () { yield 1; yield 2; })();
+                        return function () { return inner.next(); };
+                    }
+                };
+                const mapped = Iterator.prototype.map.call(counting, v => v);
+                let total = 0;
+                let step = mapped.next();
+                while (!step.done) {
+                    total += step.value;
+                    step = mapped.next();
+                }
+                gets + ':' + total
+                """;
+        assertEquals("1:3", str(source));
+    }
+
+    // Iterator.zip runs the shortest input to completion and then reports done
+    @Test
+    public void test_zip_terminates() {
+        final var source = """
+                const zipped = Iterator.zip([['a', 'b', 'c'], ['d', 'e']]);
+                const rounds = [];
+                let step = zipped.next();
+                while (!step.done) {
+                    rounds.push(step.value.join(''));
+                    step = zipped.next();
+                }
+                rounds.join('|') + ':' + zipped.next().done
+                """;
+        assertEquals("ad|be:true", str(source));
+    }
+
     // Each helper reports its spec-declared length
     @Test
     public void test_iterator_helper_lengths() {

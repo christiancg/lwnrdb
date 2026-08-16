@@ -153,6 +153,7 @@ public final class ExpressionEvaluator {
 
     public JsValue evalObject(ObjectExpression object, Environment env) {
         final var result = new JsObject();
+        result.setProto(interp.intrinsics().objectProto());
         final var homeScope = env.child();
         homeScope.defineHomeClass(result);
         for (final var member : object.getProperties()) {
@@ -217,7 +218,7 @@ public final class ExpressionEvaluator {
     }
 
     private static JsValue markIfMethod(JsValue value, boolean concise) {
-        if (concise && value instanceof JsFunction function && !function.isGenerator()) {
+        if (concise && value instanceof JsFunction function) {
             function.markMethod();
         }
         return value;

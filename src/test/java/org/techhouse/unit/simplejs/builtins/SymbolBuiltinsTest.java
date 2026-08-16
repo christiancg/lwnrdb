@@ -93,4 +93,26 @@ public class SymbolBuiltinsTest {
     public void test_symbol_match_all_hook() {
         assertEquals("got:abc", str("'abc'.matchAll({ [Symbol.matchAll](s) { return 'got:' + s } })"));
     }
+
+    @Test
+    public void descriptionIsAnAccessorOnThePrototype() {
+        final var descriptor = "let d = Object.getOwnPropertyDescriptor(Symbol.prototype, 'description'); ";
+        assertTrue(bool(descriptor + "typeof d.get === 'function' && d.set === undefined"));
+        assertTrue(bool(descriptor + "d.enumerable === false && d.configurable === true"));
+        assertEquals("get description",
+                str("Object.getOwnPropertyDescriptor(" + "Symbol.prototype, 'description').get.name"));
+        assertEquals("x", str("Symbol('x').description"));
+        assertTrue(bool("Symbol().description === undefined"));
+        assertTrue(bool("Symbol(undefined).description === undefined"));
+        assertEquals("", str("Symbol('').description"));
+    }
+
+    @Test
+    public void symbolPrototypeHasToPrimitiveAndToStringTag() {
+        assertTrue(bool("typeof Symbol.prototype[Symbol.toPrimitive] === 'function'"));
+        assertTrue(bool("let s = Symbol('x'); s[Symbol.toPrimitive]() === s"));
+        assertEquals("Symbol", str("Symbol.prototype[Symbol.toStringTag]"));
+        final var descriptor = "let d = Object.getOwnPropertyDescriptor(Symbol.prototype, Symbol.toPrimitive); ";
+        assertTrue(bool(descriptor + "d.writable === false && d.enumerable === false && d.configurable === true"));
+    }
 }

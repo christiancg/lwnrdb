@@ -38,6 +38,7 @@ public final class TypedArrayBuiltins {
     private static final List<String> VIEW_ACCESSOR_NAMES = List.of("buffer", "byteLength", "byteOffset");
     private static final Set<String> BUFFER_ACCESSORS = Set.copyOf(BUFFER_ACCESSOR_NAMES);
     private static final Set<String> VIEW_ACCESSORS = Set.copyOf(VIEW_ACCESSOR_NAMES);
+    private static final double MAX_SAFE_INTEGER = 9007199254740991d;
 
     public static List<String> bufferAccessorNames() {
         return BUFFER_ACCESSOR_NAMES;
@@ -77,15 +78,17 @@ public final class TypedArrayBuiltins {
     }
 
     private static JsValue constructArrayBuffer(List<JsValue> args) {
-        final var byteLength = (int) intArg(args, 0, 0);
+        final var byteLength = toIndex(arg(args, 0), "ArrayBuffer length");
+        JsArrayBuffer.checkAllocation(byteLength);
         if (args.size() > 1 && args.get(1) instanceof JsObject options && options.has("maxByteLength")) {
-            final var maxByteLength = (int) JsCoercion.toNumber(options.get("maxByteLength"));
+            final var maxByteLength = toIndex(options.get("maxByteLength"), "ArrayBuffer maxByteLength");
             if (maxByteLength < byteLength) {
                 throw new RangeErrorException("ArrayBuffer maxByteLength must be >= byteLength");
             }
-            return new JsArrayBuffer(byteLength, maxByteLength, true);
+            JsArrayBuffer.checkAllocation(maxByteLength);
+            return new JsArrayBuffer((int) byteLength, (int) maxByteLength, true);
         }
-        return new JsArrayBuffer(byteLength);
+        return new JsArrayBuffer((int) byteLength);
     }
 
     public static JsNativeFunction dataView() {
@@ -143,8 +146,8 @@ public final class TypedArrayBuiltins {
         if (first instanceof JsArrayBuffer buffer) {
             return viewOverBuffer(kind, buffer, args);
         }
-        if (first instanceof JsNumber n) {
-            return allocate(kind, (int) n.getValue());
+        if (first instanceof JsNumber) {
+            return allocate(kind, toIndex(first, kind.ctorName() + " length"));
         }
         return fromItems(kind, sourceItems(first, iterableToList, ops));
     }
@@ -158,7 +161,11 @@ public final class TypedArrayBuiltins {
         final int length;
         final boolean lengthTracking;
         if (args.size() > 2 && !(args.get(2) instanceof JsUndefined)) {
-            length = (int) intArg(args, 2, 0);
+            final var requested = toIndex(args.get(2), "typed array length");
+            if (byteOffset + requested * bpe > buffer.byteLength()) {
+                throw new RangeErrorException("Invalid typed array length");
+            }
+            length = (int) requested;
             lengthTracking = false;
         } else {
             if ((buffer.byteLength() - byteOffset) % bpe != 0) {
@@ -173,9 +180,11 @@ public final class TypedArrayBuiltins {
         return new JsTypedArray(kind, buffer, byteOffset, length, lengthTracking);
     }
 
-    private static JsTypedArray allocate(JsTypedArray.Kind kind, int length) {
+    private static JsTypedArray allocate(JsTypedArray.Kind kind, long length) {
         final var safe = Math.max(length, 0);
-        return new JsTypedArray(kind, new JsArrayBuffer(safe * kind.bytesPerElement()), 0, safe);
+        final var byteLength = safe * kind.bytesPerElement();
+        JsArrayBuffer.checkAllocation(byteLength);
+        return new JsTypedArray(kind, new JsArrayBuffer((int) byteLength), 0, (int) safe);
     }
 
     private static List<JsValue> sourceItems(JsValue source, IterableToList iterableToList, InterpreterOps ops) {
@@ -343,14 +352,10 @@ public final class TypedArrayBuiltins {
                 buffer.resize((int) intArg(args, 0, 0));
                 return JsUndefined.getInstance();
             });
-            case "transfer" -> new JsNativeFunction("transfer",
-                    (_, args) -> buffer.transfer(
-                            args.isEmpty() || args.getFirst() instanceof JsUndefined ? -1 : (int) intArg(args, 0, 0),
-                            false));
-            case "transferToFixedLength" -> new JsNativeFunction("transferToFixedLength",
-                    (_, args) -> buffer.transfer(
-                            args.isEmpty() || args.getFirst() instanceof JsUndefined ? -1 : (int) intArg(args, 0, 0),
-                            true));
+            case "transfer" ->
+                new JsNativeFunction("transfer", (_, args) -> buffer.transfer(transferLength(args), false));
+            case "transferToFixedLength" ->
+                new JsNativeFunction("transferToFixedLength", (_, args) -> buffer.transfer(transferLength(args), true));
             default -> null;
         };
     }
@@ -751,22 +756,34 @@ public final class TypedArrayBuiltins {
         return index < args.size() ? args.get(index) : JsUndefined.getInstance();
     }
 
-    // ToIndex: unlike intArg's relative/clamping indices, a DataView byteOffset is an absolute
-    // position that must reject negative/too-large values with a RangeError rather than silently
-    // truncating - `(int) hugeDouble` clamps to Integer.MAX_VALUE, which then overflowed the old
-    // int bounds check in JsDataView and let a raw IndexOutOfBoundsException escape from the
-    // ByteBuffer instead of a spec RangeError.
     private static long toIndexArg(List<JsValue> args) {
-        if (0 >= args.size() || args.getFirst() instanceof JsUndefined) {
+        return toIndex(arg(args, 0), "DataView offset");
+    }
+
+    private static int transferLength(List<JsValue> args) {
+        if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
+            return -1;
+        }
+        final var length = toIndex(args.getFirst(), "ArrayBuffer length");
+        JsArrayBuffer.checkAllocation(length);
+        return (int) length;
+    }
+
+    // ToIndex: a non-negative integral index bounded by 2^53-1. Unlike intArg's relative/clamping
+    // indices this is an absolute position or allocation size, so an out-of-range request is a
+    // RangeError rather than an `(int)` cast that silently saturates at Integer.MAX_VALUE - which
+    // used to turn an obviously-impossible allocation into a multi-gigabyte attempt.
+    private static long toIndex(JsValue value, String label) {
+        if (value instanceof JsUndefined) {
             return 0;
         }
-        final var value = JsCoercion.toNumber(args.getFirst());
-        if (Double.isNaN(value)) {
+        final var number = JsCoercion.toNumber(value);
+        if (Double.isNaN(number)) {
             return 0;
         }
-        final var integer = value < 0 ? Math.ceil(value) : Math.floor(value);
-        if (integer < 0 || integer > 9007199254740991.0) {
-            throw new RangeErrorException("Invalid DataView offset: " + value);
+        final var integer = number < 0 ? Math.ceil(number) : Math.floor(number);
+        if (integer < 0 || integer > MAX_SAFE_INTEGER) {
+            throw new RangeErrorException("Invalid " + label + ": " + number);
         }
         return (long) integer;
     }
