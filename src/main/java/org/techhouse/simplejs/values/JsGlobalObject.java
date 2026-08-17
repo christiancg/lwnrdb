@@ -47,7 +47,8 @@ public final class JsGlobalObject extends JsValue {
         if (!env.isDeclared(name)) {
             return super.getOwnProperty(key);
         }
-        return PropertyDescriptor.data(OrdinaryProperties.orUndefined(env.tryGet(name)), Objects.requireNonNull(env.globalFlags(name)));
+        return PropertyDescriptor.data(OrdinaryProperties.orUndefined(env.tryGet(name)),
+                Objects.requireNonNull(env.globalFlags(name)));
     }
 
     // A declared global is written through to its binding rather than shadowed by a table entry.

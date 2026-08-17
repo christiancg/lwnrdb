@@ -372,7 +372,193 @@ public class IteratorBuiltinsTest {
     // Each helper reports its spec-declared length
     @Test
     public void test_iterator_helper_lengths() {
-        assertEquals("1,1,1,0", str("[Iterator.prototype.chunks.length, Iterator.prototype.windows.length,"
+        assertEquals("1,1,1,1", str("[Iterator.prototype.chunks.length, Iterator.prototype.windows.length,"
                 + " Iterator.prototype.includes.length, Iterator.prototype.join.length].join(',')"));
+    }
+
+    // A failing argument validation closes the underlying iterator before `next` is ever read
+    @Test
+    public void test_argument_validation_closes_underlying() {
+        final var source = """
+                let closed = 'no';
+                const closable = {
+                    __proto__: Iterator.prototype,
+                    get next() { throw new Error('next should not be read'); },
+                    return() { closed = 'yes'; return {}; }
+                };
+                let thrown = 'none';
+                try { closable.map(); } catch (e) { thrown = e.name; }
+                thrown + ':' + closed
+                """;
+        assertEquals("TypeError:yes", str(source));
+    }
+
+    // take/drop coerce and range-check their limit before touching the iterator, then close it
+    @Test
+    public void test_take_limit_validated_before_iteration() {
+        final var source = """
+                let closed = 'no';
+                const closable = {
+                    __proto__: Iterator.prototype,
+                    get next() { throw new Error('next should not be read'); },
+                    return() { closed = 'yes'; return {}; }
+                };
+                let thrown = 'none';
+                try { closable.take(NaN); } catch (e) { thrown = e.name; }
+                const coerced = [0, 1, 2].values().take({ valueOf() { return 2; } }).toArray().join('');
+                thrown + ':' + closed + ':' + coerced
+                """;
+        assertEquals("RangeError:yes:01", str(source));
+    }
+
+    // A throwing predicate closes the underlying iterator (IfAbruptCloseIterator)
+    @Test
+    public void test_predicate_throw_closes_underlying() {
+        final var source = """
+                let returns = 0;
+                class TestIterator extends Iterator {
+                    next() { return { done: false, value: 1 }; }
+                    return() { ++returns; return {}; }
+                }
+                const mapped = new TestIterator().map(() => { throw new Error('boom'); });
+                let thrown = 'none';
+                try { mapped.next(); } catch (e) { thrown = e.message; }
+                thrown + ':' + returns
+                """;
+        assertEquals("boom:1", str(source));
+    }
+
+    // Re-entering a helper from its own callback is the spec's "already running" TypeError
+    @Test
+    public void test_helper_reentry_throws() {
+        final var source = """
+                function* g() { while (true) { yield 1; } }
+                const iter = g().map(() => iter.next());
+                let thrown = 'none';
+                try { iter.next(); } catch (e) { thrown = e.name; }
+                thrown
+                """;
+        assertEquals("TypeError", str(source));
+    }
+
+    // A helper result is an Iterator instance carrying %IteratorHelperPrototype%'s tag
+    @Test
+    public void test_helper_result_is_iterator() {
+        final var source = """
+                const helper = [1, 2].values().map(x => x);
+                (helper instanceof Iterator) + ':' + Object.prototype.toString.call(helper)
+                """;
+        assertEquals("true:[object Iterator Helper]", str(source));
+    }
+
+    // Iterator.prototype[Symbol.dispose] calls the receiver's `return` and answers undefined
+    @Test
+    public void test_iterator_prototype_dispose() {
+        final var source = """
+                let called = 'no';
+                const iter = Object.create(Iterator.prototype);
+                iter.return = function () { called = 'yes'; return { done: true }; };
+                const returned = iter[Symbol.dispose]();
+                called + ':' + (returned === undefined)
+                """;
+        assertEquals("yes:true", str(source));
+    }
+
+    // Iterator.prototype's tag and constructor are accessors whose setter refuses to write home
+    @Test
+    public void test_iterator_prototype_accessors() {
+        final var source = """
+                const tag = Object.getOwnPropertyDescriptor(Iterator.prototype, Symbol.toStringTag);
+                const ctor = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor');
+                let thrown = 'none';
+                try { tag.set.call(Iterator.prototype, 'x'); } catch (e) { thrown = e.name; }
+                [typeof tag.get, typeof tag.set, tag.configurable, tag.enumerable, typeof ctor.get,
+                    Iterator.prototype[Symbol.toStringTag], thrown].join(',')
+                """;
+        assertEquals("function,function,true,false,function,Iterator,TypeError", str(source));
+    }
+
+    // Iterator.prototype is a non-writable, non-configurable own property of the constructor
+    @Test
+    public void test_iterator_prototype_property_flags() {
+        final var source = """
+                const desc = Object.getOwnPropertyDescriptor(Iterator, 'prototype');
+                [desc.writable, desc.enumerable, desc.configurable].join(',')
+                """;
+        assertEquals("false,false,false", str(source));
+    }
+
+    // Iterator.from wraps a plain iterator but hands a real Iterator instance straight back
+    @Test
+    public void test_iterator_from_wrapper() {
+        final var source = """
+                const wrapped = Iterator.from({ next() { return { done: true }; } });
+                const wrapProto = Object.getPrototypeOf(wrapped);
+                function* g() {}
+                const gen = g();
+                let thrown = 'none';
+                try { wrapProto.return.call({}); } catch (e) { thrown = e.name; }
+                [Object.getPrototypeOf(wrapProto) === Iterator.prototype,
+                    Iterator.from(gen) === gen, thrown].join(',')
+                """;
+        assertEquals("true,true,TypeError", str(source));
+    }
+
+    // Every built-in iterator prototype carries its own tag, linked to %IteratorPrototype%
+    @Test
+    public void test_builtin_iterator_prototypes() {
+        final var source = """
+                const tags = [[].values(), 'a'[Symbol.iterator](), new Map().values(), new Set().values()]
+                    .map(it => Object.prototype.toString.call(it));
+                const arrayProto = Object.getPrototypeOf([].values());
+                const linked = Object.getPrototypeOf(arrayProto) === Iterator.prototype;
+                tags.join('|') + ':' + linked
+                """;
+        assertEquals("[object Array Iterator]|[object String Iterator]|[object Map Iterator]|"
+                + "[object Set Iterator]:true", str(source));
+    }
+
+    // The tag is non-writable and configurable, and `next` lives on the prototype and brand-checks
+    @Test
+    public void test_builtin_iterator_prototype_flags() {
+        final var source = """
+                const proto = Object.getPrototypeOf([].values());
+                const tag = Object.getOwnPropertyDescriptor(proto, Symbol.toStringTag);
+                const next = Object.getOwnPropertyDescriptor(proto, 'next');
+                let thrown = 'none';
+                try { Object.create([].values()).next(); } catch (e) { thrown = e.name; }
+                [tag.writable, tag.enumerable, tag.configurable, tag.value, next.writable,
+                    next.enumerable, next.configurable, next.value.length, thrown].join(',')
+                """;
+        assertEquals("false,false,true,Array Iterator,true,false,true,0,TypeError", str(source));
+    }
+
+    // An exhausted array iterator stays exhausted even though it reads its source lazily
+    @Test
+    public void test_array_iterator_is_live_but_latches() {
+        final var source = """
+                const array = [];
+                const it = array[Symbol.iterator]();
+                array.push('a');
+                const first = it.next();
+                const second = it.next();
+                array.push('b');
+                const third = it.next();
+                [first.value, second.done, third.done].join(',')
+                """;
+        assertEquals("a,true,true", str(source));
+    }
+
+    // windows(size, "allow-partial") yields the short trailing buffer; a bad undersized is a TypeError
+    @Test
+    public void test_windows_allow_partial() {
+        final var source = """
+                function* g() { yield 0; yield 1; yield 2; }
+                const partial = g().windows(100, 'allow-partial').toArray();
+                let thrown = 'none';
+                try { g().windows(1, 'bad'); } catch (e) { thrown = e.name; }
+                partial.length + ':' + partial[0].join('') + ':' + thrown
+                """;
+        assertEquals("1:012:TypeError", str(source));
     }
 }

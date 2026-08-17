@@ -2,10 +2,12 @@ package org.techhouse.simplejs.values;
 
 public final class JsProxy extends JsValue {
     private final JsValue target;
-    private final JsObject handler;
+    private final JsValue handler;
     private boolean revoked;
 
-    public JsProxy(JsValue target, JsObject handler) {
+    // Target and handler are any object, a revoked proxy included: ProxyCreate only rejects a
+    // primitive, and a revoked handler surfaces later as a TypeError from the trap lookup.
+    public JsProxy(JsValue target, JsValue handler) {
         this.target = target;
         this.handler = handler;
     }
@@ -14,7 +16,7 @@ public final class JsProxy extends JsValue {
         return target;
     }
 
-    public JsObject getHandler() {
+    public JsValue getHandler() {
         return handler;
     }
 

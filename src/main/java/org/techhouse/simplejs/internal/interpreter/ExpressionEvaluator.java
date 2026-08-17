@@ -39,6 +39,7 @@ import org.techhouse.simplejs.nodes.TaggedTemplateExpression;
 import org.techhouse.simplejs.nodes.TemplateLiteral;
 import org.techhouse.simplejs.nodes.UnaryExpression;
 import org.techhouse.simplejs.nodes.UpdateExpression;
+import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
@@ -311,6 +312,12 @@ public final class ExpressionEvaluator {
             case JsArray array -> {
                 if (!deleteArrayElement(array, key)) {
                     throw new TypeErrorException("Cannot delete property '" + key + "' of #<Array>");
+                }
+                yield JsBoolean.TRUE;
+            }
+            case JsArguments arguments -> {
+                if (!arguments.deleteOwnProperty(new JsString(key))) {
+                    throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
                 }
                 yield JsBoolean.TRUE;
             }

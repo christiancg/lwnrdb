@@ -162,10 +162,11 @@ public class FunctionProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("function f(){ return arguments.callee; } f()"));
     }
 
-    // arguments.caller is a poisoned accessor in strict mode
+    // An arguments object has no 'caller' property at all (removed from the spec in ES2017)
     @Test
-    public void test_arguments_caller_poisoned() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("function f(){ return arguments.caller; } f()"));
+    public void test_arguments_caller_absent() {
+        assertTrue(bool("function f(){ return Object.getOwnPropertyDescriptor(arguments, 'caller') === undefined"
+                + " && arguments.caller === undefined; } f()"));
     }
 
     // A property assigned to a function value is readable back off the function

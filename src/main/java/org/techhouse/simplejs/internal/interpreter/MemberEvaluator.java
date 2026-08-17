@@ -81,9 +81,13 @@ public final class MemberEvaluator {
     }
 
     // Fallback for value types with no dedicated case above (JsRegExp, JsDate, JsPromise, numeric/
-    // boolean wrappers, ...): walk the realm's intrinsic prototype chain for a symbol-keyed method,
-    // mirroring what intrinsicMember already does for string-keyed lookups.
+    // boolean wrappers, ...): an own symbol-keyed property first, then the realm's intrinsic prototype
+    // chain, mirroring what intrinsicMember already does for string-keyed lookups.
     private JsValue intrinsicSymbolMember(JsValue target, JsSymbol symbol) {
+        final var own = target.getOwnProperty(symbol);
+        if (own != null) {
+            return fromDescriptor(own, target);
+        }
         return orUndefined(chainSymbolMember(interp.intrinsics().protoFor(target), symbol, target));
     }
 
@@ -139,18 +143,11 @@ public final class MemberEvaluator {
         return null;
     }
 
-    private PropertyDescriptor chainAccessor(JsValue start, String key) {
-        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
-            final var accessor = protoAccessor(chain.link(), key);
-            if (accessor != null) {
-                return accessor;
-            }
-        }
-        return null;
-    }
-
     public boolean chainHasKey(JsValue start, String key) {
         for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            if (chain.link() instanceof JsProxy proxy) {
+                return proxies.has(proxy, new JsString(key));
+            }
             if (InterpreterUtils.protoOwnsKey(chain.link(), key)) {
                 return true;
             }
@@ -160,6 +157,9 @@ public final class MemberEvaluator {
 
     public boolean chainHasSymbol(JsValue start, JsSymbol symbol) {
         for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            if (chain.link() instanceof JsProxy proxy) {
+                return proxies.has(proxy, symbol);
+            }
             if (InterpreterUtils.protoOwnsSymbol(chain.link(), symbol)) {
                 return true;
             }
@@ -172,6 +172,11 @@ public final class MemberEvaluator {
     // plain JsObject takes the direct-table fast path; anything else is read through the generic
     // [[GetOwnProperty]] protocol.
     JsValue protoMember(JsValue proto, String key, JsValue receiver) {
+        // A proxy link's [[Get]] is authoritative for the rest of the chain, so the trap's answer
+        // ends the walk even when it is undefined.
+        if (proto instanceof JsProxy proxy) {
+            return proxies.get(proxy, new JsString(key), receiver);
+        }
         if (proto instanceof JsObject object) {
             final var getter = object.getAccessorGetter(key);
             if (getter != null) {
@@ -183,6 +188,9 @@ public final class MemberEvaluator {
     }
 
     private JsValue protoSymbolMember(JsValue proto, JsSymbol symbol, JsValue receiver) {
+        if (proto instanceof JsProxy proxy) {
+            return proxies.get(proxy, symbol, receiver);
+        }
         if (proto instanceof JsObject object) {
             if (object.hasSymbolAccessor(symbol)) {
                 final var getter = object.getSymbolAccessorGetter(symbol);
@@ -336,14 +344,28 @@ public final class MemberEvaluator {
     }
 
     private JsValue getArgumentsMember(JsArguments arguments, String key) {
-        if ("length".equals(key)) {
-            return new JsNumber(arguments.length());
+        final var descriptor = arguments.getOwnProperty(new JsString(key));
+        if (descriptor == null) {
+            return intrinsicMember(arguments, key);
         }
-        if ("callee".equals(key) || "caller".equals(key)) {
-            throw new TypeErrorException("'" + key + "' may not be accessed on a strict mode arguments object");
+        if (!descriptor.isAccessorDescriptor()) {
+            return descriptor.value();
         }
-        final var index = arrayIndex(key);
-        return index == null ? JsUndefined.getInstance() : arguments.get(index);
+        return isCallable(descriptor.getter())
+                ? interp.callValue(descriptor.getter(), arguments, List.of())
+                : JsUndefined.getInstance();
+    }
+
+    private boolean setArgumentsMember(JsArguments arguments, String key, JsValue value) {
+        final var descriptor = arguments.getOwnProperty(new JsString(key));
+        if (descriptor != null && descriptor.isAccessorDescriptor()) {
+            if (!isCallable(descriptor.setter())) {
+                return false;
+            }
+            interp.callValue(descriptor.setter(), arguments, List.of(value));
+            return true;
+        }
+        return arguments.setProperty(key, value);
     }
 
     // The last dispatch step for every value type: walk the realm's intrinsic prototype chain, so a
@@ -353,17 +375,26 @@ public final class MemberEvaluator {
     }
 
     private JsValue functionMember(JsValue function, String key) {
-        if (function instanceof JsCallableProperties callable && callable.hasProperty(key)) {
-            return callable.getProperty(key);
+        final var table = function.ownProperties();
+        if (table.hasAccessor(key)) {
+            final var getter = table.getAccessorGetter(key);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, function, List.of());
         }
-        if (function instanceof JsFunction fn && "prototype".equals(key)) {
-            return fn.getPrototype();
-        }
-        if (function instanceof JsNativeFunction nf && "prototype".equals(key)) {
-            return orUndefined(nf.getPrototype());
-        }
-        if (function instanceof JsCallableProperties callable && callable.isMetadataDeleted(key)) {
-            return JsUndefined.getInstance();
+        switch (function) {
+            case JsCallableProperties callable when callable.hasProperty(key) -> {
+                return callable.getProperty(key);
+            }
+            case JsFunction fn when "prototype".equals(key) -> {
+                return fn.getPrototype();
+            }
+            case JsNativeFunction nf when "prototype".equals(key) -> {
+                return orUndefined(nf.getPrototype());
+            }
+            case JsCallableProperties callable when callable.isMetadataDeleted(key) -> {
+                return JsUndefined.getInstance();
+            }
+            default -> {
+            }
         }
         final var metadata = FunctionProtoBuiltins.metadata(function, key);
         if (metadata != null) {
@@ -494,6 +525,11 @@ public final class MemberEvaluator {
     }
 
     public boolean setMember(JsValue target, String key, JsValue value, JsValue receiver) {
+        // An integer-indexed write is the view's own [[Set]]: it never coerces for, or falls through
+        // to, a foreign receiver.
+        if (target instanceof JsTypedArray typed && typed.setExoticIndex(new JsString(key), value, receiver)) {
+            return true;
+        }
         if (target instanceof JsObject object) {
             return setObjectMember(object, key, value, receiver);
         }
@@ -502,35 +538,56 @@ public final class MemberEvaluator {
 
     private boolean setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
         if (!object.has(key)) {
-            final var accessor = chainAccessor(object, key);
-            if (accessor != null) {
-                if (!isCallable(accessor.setter())) {
-                    return false;
+            for (var chain = new Chain(object); chain.hasLink(); chain.advance()) {
+                if (chain.link() instanceof JsProxy proxy) {
+                    return proxies.set(proxy, new JsString(key), value, receiver);
                 }
-                interp.callValue(accessor.setter(), receiver, List.of(value));
-                return true;
+                final var accessor = protoAccessor(chain.link(), key);
+                if (accessor != null) {
+                    if (!isCallable(accessor.setter())) {
+                        return false;
+                    }
+                    interp.callValue(accessor.setter(), receiver, List.of(value));
+                    return true;
+                }
             }
         }
-        return object.set(key, value);
+        return receiver == object ? object.set(key, value) : setOnReceiver(receiver, key, value);
+    }
+
+    // OrdinarySet lands the write on the receiver, not on the object whose chain answered the lookup:
+    // reached when a proxy or Reflect.set supplies a receiver other than the target.
+    private boolean setOnReceiver(JsValue receiver, String key, JsValue value) {
+        final var keyValue = new JsString(key);
+        if (receiver instanceof JsProxy proxy) {
+            return proxies.defineProperty(proxy, keyValue, dataDescriptorObject(value));
+        }
+        final var existing = receiver.getOwnProperty(keyValue);
+        if (existing != null && (existing.isAccessorDescriptor() || !existing.writableOr(false))) {
+            return false;
+        }
+        return receiver.defineOwnProperty(keyValue, existing == null
+                ? PropertyDescriptor.data(value, JsObject.PropertyFlags.DEFAULT)
+                : new PropertyDescriptor(value, null, null, null, null, null));
+    }
+
+    private static JsObject dataDescriptorObject(JsValue value) {
+        final var descriptor = new JsObject();
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.TRUE);
+        descriptor.set("enumerable", JsBoolean.TRUE);
+        descriptor.set("configurable", JsBoolean.TRUE);
+        return descriptor;
     }
 
     public boolean setMember(JsValue target, String key, JsValue value) {
         return switch (target) {
-            case JsProxy proxy -> {
-                proxies.set(proxy, new JsString(key), value);
-                yield true;
-            }
+            case JsProxy proxy -> proxies.set(proxy, new JsString(key), value);
             case JsGlobalObject global -> {
                 global.getEnv().setGlobal(key, value);
                 yield true;
             }
-            case JsArguments arguments -> {
-                final var index = arrayIndex(key);
-                if (index != null) {
-                    arguments.set(index, value);
-                }
-                yield true;
-            }
+            case JsArguments arguments -> setArgumentsMember(arguments, key, value);
             case JsObject object -> setObjectMember(object, key, value, object);
             case JsClass cls -> {
                 final var setter = cls.findStaticSetter(key);
@@ -552,6 +609,9 @@ public final class MemberEvaluator {
                 // IntegerIndexedElementSet; it must never become an ordinary own property.
                 yield InterpreterUtils.isCanonicalNumericIndexString(key) || typed.ownProperties().set(key, value);
             }
+            // PerformPromiseThen invokes the receiver's own `then`, and SpeciesConstructor reads its
+            // own `constructor`, so an assignment to either has to land as an ordinary own property.
+            case JsPromise promise -> promise.ownProperties().set(key, value);
             case JsRegExp regexp -> {
                 if ("lastIndex".equals(key)) {
                     final var next = JsCoercion.toNumber(value);
@@ -844,6 +904,11 @@ public final class MemberEvaluator {
     }
 
     private JsValue promiseMethod(JsPromise promise, String key) {
-        return intrinsicMember(promise, key);
+        final var table = promise.ownProperties();
+        if (table.hasAccessor(key)) {
+            final var getter = table.getAccessorGetter(key);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, promise, List.of());
+        }
+        return table.has(key) ? table.get(key) : intrinsicMember(promise, key);
     }
 }

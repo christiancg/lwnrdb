@@ -337,7 +337,8 @@ public class PromiseBuiltinsTest {
         assertEquals(0, arr(source).length());
     }
 
-    // `new` on a Promise subclass runs the subclass constructor with the base executor
+    // `new` on a Promise subclass runs the subclass constructor with the base executor; then() then
+    // builds its result through the same constructor, so it runs a second time
     @Test
     public void test_subclass_constructor_is_honoured() {
         final var source = """
@@ -349,7 +350,7 @@ public class PromiseBuiltinsTest {
                 new Sub(res => res(7)).then(v => out.push(seen + ':' + v));
                 out
                 """;
-        assertEquals("1:7", string(arr(source)));
+        assertEquals("2:7", string(arr(source)));
     }
 
     // then() builds its result through SpeciesConstructor, so a subclass receiver yields a subclass
@@ -489,5 +490,146 @@ public class PromiseBuiltinsTest {
                 out
                 """;
         assertEquals("b", string(arr(source)));
+    }
+
+    // a subclass constructor's super(executor) initialises the wrapped promise exactly once, and the
+    // instance behaves as a promise
+    @Test
+    public void test_subclass_super_initialises_the_wrapped_promise() {
+        final var source = """
+                let out = [];
+                let calls = 0;
+                class P extends Promise { constructor(e) { super(e); } }
+                let p = new P(res => { calls++; res('v'); });
+                p.then(v => out.push(calls + '|' + v + '|' + (p instanceof P) + ',' + (p instanceof Promise)));
+                out
+                """;
+        assertEquals("1|v|true,true", string(arr(source)));
+    }
+
+    // a subclass inherits the statics of its native superclass, and they build instances of it
+    @Test
+    public void test_subclass_inherits_native_statics() {
+        final var source = """
+                let out = [];
+                class P extends Promise { constructor(e) { super(e); } }
+                let p = P.resolve('v');
+                p.then(v => out.push(v + '|' + (p instanceof P)));
+                out
+                """;
+        assertEquals("v|true", string(arr(source)));
+    }
+
+    // a subclass with no explicit Symbol.species inherits %Promise%'s, which selects the subclass
+    @Test
+    public void test_then_uses_the_inherited_species_constructor() {
+        final var source = """
+                let out = [];
+                class P extends Promise { constructor(e) { super(e); } }
+                let q = P.resolve(1).then(v => v);
+                q.then(() => out.push(String(q instanceof P)));
+                out
+                """;
+        assertEquals("true", string(arr(source)));
+    }
+
+    // NewPromiseCapability rejects a `this` that is not a constructor
+    @Test
+    public void test_combinator_on_a_non_constructor_this_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise.all.call(Math.max, [])"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise.resolve.call(Math.max, 1)"));
+    }
+
+    // PerformPromiseAll reads Get(C, "resolve") once, then calls it per element
+    @Test
+    public void test_combinator_reads_resolve_once() {
+        final var source = """
+                let out = [];
+                let gets = 0;
+                let calls = 0;
+                let original = Promise.resolve;
+                Object.defineProperty(Promise, 'resolve', {
+                    configurable: true,
+                    get() {
+                        gets++;
+                        return function (v) { calls++; return original.call(Promise, v); };
+                    }
+                });
+                Promise.all([1, 2, 3]);
+                out.push(gets + '|' + calls);
+                out
+                """;
+        assertEquals("1|3", string(arr(source)));
+    }
+
+    // the per-element resolve functions are ordinary extensible functions of length 1, called once
+    @Test
+    public void test_resolve_element_functions_are_single_shot() {
+        final var source = """
+                let out = [];
+                let element;
+                let thenable = { then(fulfil) { element = fulfil; } };
+                function NotPromise(executor) { executor(function () {}, function () {}); }
+                NotPromise.resolve = function (v) { return v; };
+                Promise.all.call(NotPromise, [thenable]);
+                element('first');
+                element('second');
+                out.push(Object.isExtensible(element) + '|' + element.length + '|' + element.prototype);
+                out
+                """;
+        assertEquals("true|1|undefined", string(arr(source)));
+    }
+
+    // an assignment to a promise's own `then` is what PerformPromiseThen invokes
+    @Test
+    public void test_own_then_overrides_the_builtin() {
+        final var source = """
+                let out = [];
+                let p = new Promise(() => {});
+                p.then = function (onFulfilled, onRejected) {
+                    out.push(typeof onFulfilled + ',' + onFulfilled.length + '|' + (this === p));
+                };
+                Promise.all([p]);
+                out
+                """;
+        assertEquals("function,1|true", string(arr(source)));
+    }
+
+    // a thenable's `then` is called from a microtask, so it runs after the current script finishes
+    @Test
+    public void test_thenable_then_is_called_from_a_microtask() {
+        final var source = """
+                let out = [];
+                let thenable = { then(res) { out.push('then'); res(1); } };
+                Promise.resolve().then(() => thenable).then(() => out.push('done'));
+                out.push('sync');
+                out
+                """;
+        assertEquals("sync", string(arr(source)));
+    }
+
+    // Promise.try hands back the callback's own promise rather than wrapping it again
+    @Test
+    public void test_try_avoids_wrapping_a_matching_promise() {
+        final var source = """
+                let out = [];
+                let sentinel = Promise.resolve(1);
+                out.push(String(Promise.try(() => sentinel) === sentinel));
+                out
+                """;
+        assertEquals("true", string(arr(source)));
+    }
+
+    // a throwing callback settles a fresh capability built from the receiver
+    @Test
+    public void test_try_rejects_through_the_receiver_capability() {
+        final var source = """
+                let out = [];
+                class P extends Promise { constructor(e) { super(e); } }
+                let p = P.try(() => { throw 'boom'; });
+                p.catch(e => out.push(e + '|' + (p instanceof P)));
+                out
+                """;
+        assertEquals("boom|true", string(arr(source)));
     }
 }

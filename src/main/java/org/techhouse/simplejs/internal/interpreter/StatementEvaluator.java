@@ -37,6 +37,7 @@ import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
+import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsCallableProperties;
@@ -418,6 +419,9 @@ public final class StatementEvaluator {
                 keys.add(Integer.toString(i));
             }
             return keys;
+        }
+        if (target instanceof JsArguments arguments) {
+            return arguments.enumerablePropertyKeys();
         }
         if (target instanceof JsCallableProperties callable) {
             return callable.enumerablePropertyKeys();

@@ -103,7 +103,7 @@ public class IntrinsicsTest {
         assertKeys(realm.symbolProto(), SymbolBuiltins.NAMES, SymbolBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.regexpProto(), RegexBuiltins.NAMES, RegexBuiltins.PROTO_ACCESSORS);
         assertKeys(realm.dateProto(), DateBuiltins.NAMES);
-        assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES);
+        assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES, List.of("__proto__"));
         assertKeys(realm.functionProto(), FunctionProtoBuiltins.NAMES, List.of("caller", "arguments"));
         assertKeys(realm.promiseProto(), org.techhouse.simplejs.builtins.PromiseBuiltins.PROTO_NAMES);
         assertKeys(realm.iteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);

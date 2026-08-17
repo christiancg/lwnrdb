@@ -533,6 +533,9 @@ public final class Interpreter {
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue)) || exoticHasMember(array, keyValue);
             case JsArguments arguments ->
                 indexInRange(keyValue, arguments.length()) || exoticHasMember(arguments, keyValue);
+            // A canonical numeric index is answered only by the view itself: an out-of-range or
+            // non-integral one is absent, never inherited from the prototype chain.
+            case JsTypedArray typed when typed.hasCanonicalNumericIndex(keyValue) -> typed.hasOwnKey(keyValue);
             case JsTypedArray typed -> indexInRange(keyValue, typed.length()) || exoticHasMember(typed, keyValue);
             case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue));
             default -> {
@@ -687,7 +690,7 @@ public final class Interpreter {
 
     public JsValue getMemberByKey(JsValue target, JsValue keyValue, JsValue receiver) {
         if (target instanceof JsProxy proxy) {
-            return proxies.get(proxy, keyValue);
+            return proxies.get(proxy, keyValue, receiver);
         }
         if (keyValue instanceof JsSymbol symbol) {
             return members.getSymbolMember(target, symbol);
@@ -717,8 +720,7 @@ public final class Interpreter {
 
     public boolean setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
         if (target instanceof JsProxy proxy) {
-            proxies.set(proxy, keyValue, value);
-            return true;
+            return proxies.set(proxy, keyValue, value);
         }
         if (keyValue instanceof JsSymbol symbol) {
             if (target instanceof JsObject object) {
@@ -746,8 +748,7 @@ public final class Interpreter {
 
     public boolean setMemberByKey(JsValue target, JsValue keyValue, JsValue value, JsValue receiver) {
         if (target instanceof JsProxy proxy) {
-            proxies.set(proxy, keyValue, value);
-            return true;
+            return proxies.set(proxy, keyValue, value, receiver);
         }
         if (keyValue instanceof JsSymbol) {
             return setMemberByKey(target, keyValue, value);
@@ -1061,17 +1062,23 @@ public final class Interpreter {
             }
         }
         if (!mapped) {
-            return poisoned(new JsArguments(args, null, null));
+            return withOwnProperties(new JsArguments(args, null, null));
         }
         final var names = new ArrayList<String>();
         for (final var param : params) {
             names.add(((Identifier) param).getName());
         }
-        return poisoned(new JsArguments(args, names, activation));
+        return withOwnProperties(new JsArguments(args, names, activation));
     }
 
-    private JsArguments poisoned(JsArguments arguments) {
+    // CreateUnmappedArgumentsObject's non-index properties: "callee" is the poison-pill accessor pair
+    // (non-configurable, unlike a function's own poisoned callee) and @@iterator is %Array.prototype.values%.
+    private JsArguments withOwnProperties(JsArguments arguments) {
         intrinsics.poison(arguments, "callee");
+        final var table = arguments.ownProperties();
+        table.setFlags("callee", new JsObject.PropertyFlags(false, false, false));
+        table.defineSymbolValue(JsSymbol.ITERATOR, intrinsics.arrayProto().getSymbol(JsSymbol.ITERATOR));
+        table.setSymbolFlags(JsSymbol.ITERATOR, new JsObject.PropertyFlags(true, false, true));
         return arguments;
     }
 
@@ -1099,7 +1106,10 @@ public final class Interpreter {
                 return current.getStaticProp(key);
             }
         }
-        return JsUndefined.getInstance();
+        // A class constructor's [[Prototype]] is its heritage, so a builtin superclass's statics
+        // (Promise.resolve on `class P extends Promise`) are inherited by the subclass constructor.
+        final var nativeSuper = cls.findNativeSuperClass();
+        return nativeSuper == null ? JsUndefined.getInstance() : getMember(nativeSuper, key);
     }
 
     public JsValue getPrivateMember(JsValue target, String name, Environment env) {
@@ -1212,23 +1222,10 @@ public final class Interpreter {
         return value;
     }
 
+    // [[OwnPropertyKeys]] is the value's own protocol method, so Reflect.ownKeys and
+    // Object.getOwnPropertyNames cannot report different key sets for the same value.
     private List<JsValue> ownKeysOf(JsValue target) {
-        return switch (target) {
-            case JsProxy proxy -> proxies.ownKeys(proxy);
-            case JsObject object -> objectOwnKeys(object);
-            case JsClass cls -> objectOwnKeys(cls.getStaticOwner());
-            case JsArray array -> arrayOwnKeys(array);
-            case JsCallableProperties callable -> callableOwnKeys(callable);
-            default -> new ArrayList<>();
-        };
-    }
-
-    private static List<JsValue> callableOwnKeys(JsCallableProperties callable) {
-        final var keys = new ArrayList<JsValue>();
-        for (final var key : callable.propertyKeys()) {
-            keys.add(new JsString(key));
-        }
-        return keys;
+        return target instanceof JsProxy proxy ? proxies.ownKeys(proxy) : new ArrayList<>(target.ownPropertyKeys());
     }
 
     private boolean deleteMemberValue(JsValue target, JsValue rawKey) {

@@ -40,6 +40,7 @@ public final class BuiltinLengths {
         put("WeakMap.prototype", 2, "set", "getOrInsert", "getOrInsertComputed");
         zeroArg("Set.prototype", "clear", "keys", "values", "entries");
         zeroArg("Object.prototype", "toString", "valueOf", "toLocaleString");
+        put("Object.prototype", 2, "__defineGetter__", "__defineSetter__");
         put("Promise.prototype", 2, "then");
         put("Promise.prototype", 1, "catch", "finally");
         zeroArg("Function.prototype", "toString");

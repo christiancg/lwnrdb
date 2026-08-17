@@ -238,4 +238,28 @@ public class AsyncIteratorHelperTest {
                 """;
         assertEquals("1,2,pulled=2", joined(source));
     }
+
+    // AsyncIteratorClose's GetMethod rejects a present-but-non-callable `return`
+    @Test
+    public void test_for_await_close_rejects_non_callable_return() {
+        final var source = """
+                let out = [];
+                const asyncIterable = {
+                    [Symbol.asyncIterator]() {
+                        return { next() { return { done: false, value: 1 }; }, return: 5 };
+                    }
+                };
+                async function main() {
+                    try {
+                        for await (const x of asyncIterable) { break; }
+                        out.push('no throw');
+                    } catch (e) {
+                        out.push(e.name);
+                    }
+                }
+                main();
+                out
+                """;
+        assertEquals("TypeError", joined(source));
+    }
 }

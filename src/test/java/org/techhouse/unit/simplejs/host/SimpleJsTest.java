@@ -103,6 +103,17 @@ public class SimpleJsTest {
         assertEquals(7, result.getValue().asJsonNumber().asInteger());
     }
 
+    // A Promise subclass awaited at the top level settles through the public entrypoint
+    @Test
+    public void test_top_level_await_of_a_promise_subclass() {
+        final var result = run("""
+                class P extends Promise { constructor(e) { super(e); } }
+                return await P.resolve(3).then(v => v * 2);
+                """);
+        assertFalse(result.isError());
+        assertEquals(6, result.getValue().asJsonNumber().asInteger());
+    }
+
     // A rejected top-level await surfaces as an error result
     @Test
     public void test_top_level_await_rejection_is_error() {

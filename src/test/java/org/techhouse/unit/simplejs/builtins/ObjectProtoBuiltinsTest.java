@@ -217,4 +217,116 @@ public class ObjectProtoBuiltinsTest {
         assertEquals("[object String]", strOf("Object.prototype.toString.call(new String('a'))"));
         assertEquals("[object Boolean]", strOf("Object.prototype.toString.call(new Boolean(true))"));
     }
+
+    // toLocaleString delegates to the receiver's own toString
+    @Test
+    public void test_to_locale_string() {
+        assertEquals("[object Object]", strOf("({}).toLocaleString()"));
+        assertEquals("custom", strOf("({toString() { return 'custom'; }}).toLocaleString()"));
+    }
+
+    // toLocaleString on null or undefined is a TypeError
+    @Test
+    public void test_to_locale_string_nullish_receiver_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.prototype.toLocaleString.call(null)"));
+    }
+
+    // __defineGetter__ installs an enumerable, configurable accessor
+    @Test
+    public void test_define_getter() {
+        assertTrue(bool("const o = {}; o.__defineGetter__('x', function () { return 42; }); o.x === 42"));
+        assertTrue(bool("const o = {}; o.__defineGetter__('x', function () {}); "
+                + "const d = Object.getOwnPropertyDescriptor(o, 'x'); "
+                + "d.enumerable === true && d.configurable === true && d.set === undefined"));
+    }
+
+    // __defineSetter__ installs the setter side without disturbing an existing getter
+    @Test
+    public void test_define_setter() {
+        assertTrue(bool("const o = {}; let seen; o.__defineSetter__('x', function (v) { seen = v; }); "
+                + "o.x = 7; seen === 7"));
+        assertTrue(bool("const o = {}; o.__defineGetter__('x', function () { return 1; }); "
+                + "o.__defineSetter__('x', function () {}); const d = Object.getOwnPropertyDescriptor(o, 'x'); "
+                + "typeof d.get === 'function' && typeof d.set === 'function'"));
+    }
+
+    // a non-callable accessor argument is a TypeError, and the receiver is coerced first
+    @Test
+    public void test_define_accessor_non_callable_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("({}).__defineGetter__('x', 1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("({}).__defineSetter__('x', null)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.prototype.__defineGetter__.call(null, 'x', function () {})"));
+    }
+
+    // __lookupGetter__/__lookupSetter__ find an own accessor and walk the prototype chain for an
+    // inherited one, reporting undefined for a data property
+    @Test
+    public void test_lookup_accessor() {
+        assertTrue(bool("const g = function () {}; const o = {}; Object.defineProperty(o, 'x', {get: g}); "
+                + "o.__lookupGetter__('x') === g"));
+        assertTrue(bool("const s = function () {}; const p = {}; Object.defineProperty(p, 'x', {set: s}); "
+                + "const o = Object.create(p); o.__lookupSetter__('x') === s"));
+        assertTrue(bool("({x: 1}).__lookupGetter__('x') === undefined"));
+        assertTrue(bool("({}).__lookupGetter__('missing') === undefined"));
+    }
+
+    // the lookups coerce a non-object receiver rather than rejecting it, but still reject a nullish one
+    @Test
+    public void test_lookup_accessor_receiver() {
+        assertTrue(bool("Object.prototype.__lookupGetter__.call(1, 'x') === undefined"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.prototype.__lookupSetter__.call(undefined, 'x')"));
+    }
+
+    // __proto__ reads and writes the receiver's [[Prototype]]
+    @Test
+    public void test_proto_accessor() {
+        assertTrue(bool("const p = {}; const o = Object.create(p); o.__proto__ === p"));
+        assertTrue(bool("const p = {}; const o = {}; o.__proto__ = p; Object.getPrototypeOf(o) === p"));
+        assertTrue(bool("const o = Object.create({}); o.__proto__ = null; Object.getPrototypeOf(o) === null"));
+    }
+
+    // a cyclic assignment is rejected
+    @Test
+    public void test_proto_cycle_rejected() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const a = {}; const b = Object.create(a); a.__proto__ = b;"));
+    }
+
+    // a real change on a non-extensible object is a TypeError, while a no-op assignment is allowed
+    @Test
+    public void test_proto_non_extensible() {
+        assertTrue(bool("const p = {}; const o = Object.create(p); Object.preventExtensions(o); "
+                + "o.__proto__ = p; Object.getPrototypeOf(o) === p"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("const p = {}; const o = Object.create(p); Object.preventExtensions(o); o.__proto__ = {};"));
+    }
+
+    // a value that is neither an object nor null is silently ignored
+    @Test
+    public void test_proto_non_object_value_ignored() {
+        assertTrue(
+                bool("const p = {}; const o = Object.create(p); o.__proto__ = 1; " + "Object.getPrototypeOf(o) === p"));
+    }
+
+    // the accessor pair is non-enumerable, configurable and carries the spec function names
+    @Test
+    public void test_proto_property_descriptor() {
+        assertTrue(bool("const d = Object.getOwnPropertyDescriptor(Object.prototype, '__proto__'); "
+                + "d.enumerable === false && d.configurable === true && d.value === undefined"));
+        assertEquals("get __proto__", strOf("Object.getOwnPropertyDescriptor(Object.prototype, '__proto__').get.name"));
+        assertEquals("set __proto__", strOf("Object.getOwnPropertyDescriptor(Object.prototype, '__proto__').set.name"));
+    }
+
+    // the four Annex B accessors report their spec name and length
+    @Test
+    public void test_annex_b_accessor_metadata() {
+        assertTrue(bool(
+                "Object.prototype.__defineGetter__.length === 2 " + "&& Object.prototype.__defineSetter__.length === 2 "
+                        + "&& Object.prototype.__lookupGetter__.length === 1 "
+                        + "&& Object.prototype.__lookupSetter__.length === 1"));
+        assertEquals("__defineGetter__", strOf("Object.prototype.__defineGetter__.name"));
+        assertEquals("__lookupSetter__", strOf("Object.prototype.__lookupSetter__.name"));
+    }
 }

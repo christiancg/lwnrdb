@@ -220,4 +220,95 @@ public class ReflectBuiltinsTest {
     public void test_apply_accepts_array_like_arguments_list() {
         assertEquals(3, num("Reflect.apply(function (a, b) { return a + b; }, null, { length: 2, 0: 1, 1: 2 })"));
     }
+
+    // Every Reflect method rejects a non-object target before doing anything else
+    @Test
+    public void test_non_object_target_is_a_type_error() {
+        final var methods = "get,set,has,deleteProperty,ownKeys,getPrototypeOf,setPrototypeOf,isExtensible,"
+                + "preventExtensions,defineProperty,getOwnPropertyDescriptor";
+        assertEquals("", str("""
+                let bad = "";
+                for (const name of "%s".split(",")) {
+                    try { Reflect[name](1, "x", {}); bad += name + " "; } catch (e) {
+                        if (!(e instanceof TypeError)) { bad += name + "! "; }
+                    }
+                }
+                bad
+                """.formatted(methods)));
+    }
+
+    // A property key is resolved through ToPropertyKey, so an abrupt toString propagates
+    @Test
+    public void test_property_key_coercion_is_observable() {
+        assertEquals("boom", str("""
+                const key = { toString() { throw new Error("boom"); } };
+                let message = "none";
+                try { Reflect.get({}, key); } catch (e) { message = e.message; }
+                message
+                """));
+    }
+
+    // OrdinarySetPrototypeOf answers false instead of throwing on a cycle or a sealed target
+    @Test
+    public void test_set_prototype_of_returns_false_rather_than_throwing() {
+        assertFalse(bool("const o = {}; const child = Object.create(o); Reflect.setPrototypeOf(o, child)"));
+        assertFalse(bool("const o = Object.preventExtensions({}); Reflect.setPrototypeOf(o, { a: 1 })"));
+        assertTrue(bool("const o = Object.preventExtensions(Object.create(null)); Reflect.setPrototypeOf(o, null)"));
+    }
+
+    // A prototype that is neither an object nor null is a TypeError
+    @Test
+    public void test_set_prototype_of_rejects_a_primitive_prototype() {
+        assertEquals("TypeError",
+                str("let n = 'none'; try { Reflect.setPrototypeOf({}, 1); } catch (e) { n = e.name; } n"));
+    }
+
+    // With a receiver, the write lands on the receiver and the target is left untouched
+    @Test
+    public void test_set_with_a_receiver_writes_to_the_receiver() {
+        assertEquals("42:1", str("""
+                const target = { p: 42 };
+                const receiver = {};
+                Reflect.set(target, "p", 1, receiver);
+                target.p + ":" + receiver.p
+                """));
+    }
+
+    // A receiver whose property is an accessor or non-writable refuses the write
+    @Test
+    public void test_set_with_a_receiver_reports_a_refusal() {
+        assertFalse(bool("""
+                const receiver = {};
+                Object.defineProperty(receiver, "p", { set(v) {} });
+                Reflect.set({}, "p", 1, receiver)
+                """));
+        assertFalse(bool("""
+                const receiver = {};
+                Object.defineProperty(receiver, "p", { value: 1, writable: false });
+                Reflect.set({}, "p", 2, receiver)
+                """));
+        assertFalse(bool("Reflect.set({ p: 1 }, 'p', 2, 'not an object')"));
+    }
+
+    // An inherited setter runs with the receiver as its `this`
+    @Test
+    public void test_set_with_a_receiver_runs_an_inherited_setter() {
+        assertEquals(5, num("""
+                const proto = { set p(value) { this.stored = value; } };
+                const target = Object.create(proto);
+                const receiver = {};
+                Reflect.set(target, "p", 5, receiver);
+                receiver.stored
+                """));
+    }
+
+    // A non-writable target property refuses the write even before the receiver is consulted
+    @Test
+    public void test_set_with_a_receiver_honours_a_non_writable_target() {
+        assertFalse(bool("""
+                const target = {};
+                Object.defineProperty(target, "p", { value: 1, writable: false });
+                Reflect.set(target, "p", 2, {})
+                """));
+    }
 }

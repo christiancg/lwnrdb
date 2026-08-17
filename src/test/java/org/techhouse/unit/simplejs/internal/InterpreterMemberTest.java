@@ -30,7 +30,8 @@ public class InterpreterMemberTest {
     }
 
     private static boolean bool() {
-        return ((JsBoolean) Interpreter.run("let a = [1, 2, 3]; Reflect.set(a, '0', 9, {}); a[0] === 9")).getValue();
+        return ((JsBoolean) Interpreter
+                .run("let a = [1, 2, 3]; let r = {}; Reflect.set(a, '0', 9, r); a[0] === 1 && r[0] === 9")).getValue();
     }
 
     // reads the accumulator array reference after the event loop has drained
@@ -105,7 +106,7 @@ public class InterpreterMemberTest {
         assertEquals(4, num("new Int32Array(1).BYTES_PER_ELEMENT"));
     }
 
-    // Reflect.set with an explicit receiver on a non-JsObject target (an array) still writes through
+    // Reflect.set with an explicit receiver writes to the receiver, leaving the array target alone
     @Test
     public void test_reflect_set_on_array_with_receiver_delegates() {
         assertTrue(bool());

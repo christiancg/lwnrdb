@@ -35,7 +35,11 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class ObjectProtoBuiltins {
     public static final List<String> NAMES = List.of("hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
-            "toString", "valueOf");
+            "toString", "toLocaleString", "valueOf", "__defineGetter__", "__defineSetter__", "__lookupGetter__",
+            "__lookupSetter__");
+
+    private static final JsString GET = new JsString("get");
+    private static final JsString SET = new JsString("set");
 
     private ObjectProtoBuiltins() {
     }
@@ -49,9 +53,92 @@ public final class ObjectProtoBuiltins {
             case "propertyIsEnumerable" ->
                 new JsNativeFunction("propertyIsEnumerable", (_, args) -> JsBoolean.of(isEnumerable(receiver, args)));
             case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(objectToString(receiver, ops)));
+            case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> toLocaleString(receiver, ops));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> requireCoercible(receiver, "valueOf"));
+            case "__defineGetter__" -> new JsNativeFunction("__defineGetter__",
+                    (_, args) -> defineAccessor(receiver, args, ops, intrinsics, GET));
+            case "__defineSetter__" -> new JsNativeFunction("__defineSetter__",
+                    (_, args) -> defineAccessor(receiver, args, ops, intrinsics, SET));
+            case "__lookupGetter__" -> new JsNativeFunction("__lookupGetter__",
+                    (_, args) -> lookupAccessor(receiver, args, ops, intrinsics, GET));
+            case "__lookupSetter__" -> new JsNativeFunction("__lookupSetter__",
+                    (_, args) -> lookupAccessor(receiver, args, ops, intrinsics, SET));
             default -> null;
         };
+    }
+
+    // Object.prototype.__proto__ is an accessor pair rather than a data property, so it is installed
+    // on the intrinsic prototype itself instead of being resolved per receiver through getMethod.
+    public static void installProtoAccessor(JsObject objectProto, InterpreterOps ops, Intrinsics intrinsics) {
+        final var getter = new JsNativeFunction("get __proto__",
+                (thisArg, _) -> ops.getPrototypeOf(intrinsics.toObject(thisArg)));
+        getter.setLength(0);
+        final var setter = new JsNativeFunction("set __proto__", (thisArg, args) -> setProto(thisArg, arg(args), ops));
+        setter.setLength(1);
+        objectProto.defineAccessor("__proto__", getter, setter);
+        objectProto.setFlags("__proto__", new JsObject.PropertyFlags(true, false, true));
+    }
+
+    private static JsValue setProto(JsValue receiver, JsValue proto, InterpreterOps ops) {
+        requireCoercible(receiver, "__proto__");
+        if (!isObjectLike(receiver) || !(isObjectLike(proto) || proto instanceof JsNull)) {
+            return JsUndefined.getInstance();
+        }
+        final var current = ops.getPrototypeOf(receiver);
+        if (current == proto || (current instanceof JsNull && proto instanceof JsNull)) {
+            return JsUndefined.getInstance();
+        }
+        // OrdinarySetPrototypeOf returns false for a real change on a non-extensible object, and the
+        // Annex B setter turns that false into a TypeError.
+        if (!ops.isExtensible(receiver)) {
+            throw new TypeErrorException("Cannot set prototype of a non-extensible object");
+        }
+        ops.setPrototypeOf(receiver, proto);
+        return JsUndefined.getInstance();
+    }
+
+    private static JsValue toLocaleString(JsValue receiver, InterpreterOps ops) {
+        requireCoercible(receiver, "toLocaleString");
+        return ops.call(ops.getMember(receiver, new JsString("toString")), receiver, List.of());
+    }
+
+    // ToObject runs before ToPropertyKey, so a non-coercible receiver rejects without ever coercing
+    // the key.
+    private static JsValue defineAccessor(JsValue receiver, List<JsValue> args, InterpreterOps ops,
+            Intrinsics intrinsics, JsString side) {
+        final var target = intrinsics.toObject(receiver);
+        final var accessor = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        if (!isCallable(accessor)) {
+            throw new TypeErrorException(
+                    "Object.prototype.__define" + (side == GET ? "Getter" : "Setter") + "__: Expecting function");
+        }
+        final var descriptor = new JsObject();
+        descriptor.set(side.getValue(), accessor);
+        descriptor.set("enumerable", JsBoolean.TRUE);
+        descriptor.set("configurable", JsBoolean.TRUE);
+        ops.defineProperty(target, arg(args), descriptor);
+        return JsUndefined.getInstance();
+    }
+
+    private static JsValue lookupAccessor(JsValue receiver, List<JsValue> args, InterpreterOps ops,
+            Intrinsics intrinsics, JsString side) {
+        final var target = intrinsics.toObject(receiver);
+        final var key = JsCoercion.toPropertyKey(arg(args), ops);
+        for (var link = target; isObjectLike(link); link = ops.getPrototypeOf(link)) {
+            final var descriptor = ops.getOwnPropertyDescriptor(link, key);
+            if (!(descriptor instanceof JsUndefined)) {
+                return ops.getMember(descriptor, side);
+            }
+        }
+        return JsUndefined.getInstance();
+    }
+
+    private static JsValue arg(List<JsValue> args) {
+        return args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+    }
+
+    private static boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction || value instanceof JsClass;
     }
 
     private static String objectToString(JsValue receiver, InterpreterOps ops) {

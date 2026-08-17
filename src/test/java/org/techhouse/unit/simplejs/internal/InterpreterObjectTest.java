@@ -249,8 +249,10 @@ public class InterpreterObjectTest {
     // A __proto__ value that is neither object nor null is ignored
     @Test
     public void test_object_literal_proto_key_ignored() {
-        assertInstanceOf(JsUndefined.class, Interpreter.run("({ __proto__: 1 }).__proto__"));
-        assertInstanceOf(JsUndefined.class, Interpreter.run("({ __proto__: 'x' }).__proto__"));
+        assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter
+                .run("({ __proto__: 1 }).__proto__ === Object.prototype")).getValue());
+        assertTrue(((org.techhouse.simplejs.values.JsBoolean) Interpreter
+                .run("({ __proto__: 'x' }).__proto__ === Object.prototype")).getValue());
     }
 
     // Assigning length truncates or grows an array

@@ -238,18 +238,20 @@ public final class ClassEvaluator {
 
     private void callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args, JsValue newTarget) {
         final var constructor = cls.getConstructor();
-        if (cls.getSuperClass() == null) {
-            if (cls.getNativeSuperClass() != null) {
-                applyNativeSuper(cls.getNativeSuperClass(), instance, args);
-            }
-            initFields(cls, instance);
-            if (constructor != null) {
-                interp.callFunction(constructor, instance, args, newTarget);
-            }
-        } else if (constructor == null) {
+        final var nativeSuper = cls.getSuperClass() == null ? cls.getNativeSuperClass() : null;
+        // A derived class with its own constructor reaches its heritage through that constructor's
+        // super() call, so running the native super here too would construct the base twice.
+        if (constructor != null && (cls.getSuperClass() != null || nativeSuper != null)) {
+            interp.callFunction(constructor, instance, args, newTarget);
+            return;
+        }
+        if (nativeSuper != null) {
+            applyNativeSuper(nativeSuper, instance, args);
+        } else if (cls.getSuperClass() != null) {
             callConstructorChain(cls.getSuperClass(), instance, args, newTarget);
-            initFields(cls, instance);
-        } else {
+        }
+        initFields(cls, instance);
+        if (constructor != null) {
             interp.callFunction(constructor, instance, args, newTarget);
         }
     }

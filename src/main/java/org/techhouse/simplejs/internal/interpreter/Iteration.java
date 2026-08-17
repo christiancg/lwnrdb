@@ -27,6 +27,7 @@ public final class Iteration {
     private final Interpreter interp;
     private final JsGenerator generator;
     private final List<JsValue> buffer;
+    private final JsValue indexed;
     private final JsValue iterator;
     // GetIterator reads `next` once and every step calls that same function, so a script replacing
     // the property mid-iteration is not observed.
@@ -38,14 +39,19 @@ public final class Iteration {
         if (iterable instanceof JsGenerator gen) {
             this.generator = gen;
             this.buffer = null;
+            this.indexed = null;
             this.iterator = null;
         } else if (usesDefaultIterator(interp, iterable)) {
             this.generator = null;
-            this.buffer = iterableElements(iterable);
+            // %ArrayIteratorPrototype%.next re-reads length and Get(index) on every step, so an array
+            // or typed array is walked lazily; a string's code points cannot change under it.
+            this.buffer = iterable instanceof JsString string ? iterableElements(string) : null;
+            this.indexed = buffer == null ? iterable : null;
             this.iterator = null;
         } else {
             this.generator = null;
             this.buffer = null;
+            this.indexed = null;
             this.iterator = openIterator(iterable);
         }
         this.nextMethod = iterator == null ? null : interp.getMember(iterator, "next");
@@ -66,7 +72,19 @@ public final class Iteration {
             }
             return JsCoercion.toBoolean(interp.getMember(step, "done")) ? null : interp.getMember(step, "value");
         }
+        if (indexed != null) {
+            return index < currentLength(indexed) ? interp.getMember(indexed, Integer.toString(index++)) : null;
+        }
         return index < buffer.size() ? buffer.get(index++) : null;
+    }
+
+    private static int currentLength(JsValue target) {
+        return switch (target) {
+            case JsArray array -> array.getElements().size();
+            case JsArguments arguments -> arguments.snapshot().size();
+            case JsTypedArray typed -> typed.length();
+            default -> 0;
+        };
     }
 
     // IteratorClose under a normal completion: a `return` that is present but not callable, or that

@@ -8,6 +8,7 @@ import java.util.Objects;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
@@ -135,6 +136,7 @@ public final class ObjectBuiltins {
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
             case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
             case JsGlobalObject global -> global.getEnv().isDeclared(key);
+            case JsArguments arguments -> arguments.hasOwnKey(new JsString(key));
             case JsCallableProperties callable ->
                 callable.hasProperty(key) || OrdinaryProperties.metadataKey(callable, key);
             default -> false;
@@ -259,6 +261,11 @@ public final class ObjectBuiltins {
             case JsGlobalObject global -> {
                 for (final var name : global.getEnv().enumerableGlobalNames()) {
                     result.push(new JsString(name));
+                }
+            }
+            case JsArguments arguments -> {
+                for (final var key : arguments.enumerablePropertyKeys()) {
+                    result.push(new JsString(key));
                 }
             }
             case JsCallableProperties callable -> {
@@ -437,6 +444,10 @@ public final class ObjectBuiltins {
             case JsObject object -> object.preventExtensions();
             case JsArray array -> array.preventExtensions();
             default -> {
+                final var table = target.ownProperties();
+                if (table != null) {
+                    table.preventExtensions();
+                }
             }
         }
         return target;
@@ -446,7 +457,7 @@ public final class ObjectBuiltins {
         return JsBoolean.of(switch (first(args)) {
             case JsObject object -> object.isExtensible();
             case JsArray array -> array.isExtensible();
-            default -> false;
+            case JsValue other -> other.isExtensible();
         });
     }
 

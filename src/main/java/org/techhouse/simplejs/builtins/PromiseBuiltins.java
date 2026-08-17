@@ -15,6 +15,7 @@ import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
@@ -146,15 +147,20 @@ public final class PromiseBuiltins {
     }
 
     private static JsValue tryCall(Ctx ctx, JsValue receiver, List<JsValue> args) {
-        final var capability = newPromiseCapability(ctx, receiver);
+        if (!isObjectLike(receiver)) {
+            throw new TypeErrorException("Promise.try called on a non-object");
+        }
         final var callback = arg(args, 0);
         final var rest = args.isEmpty() ? List.<JsValue>of() : args.subList(1, args.size());
+        final JsValue result;
         try {
-            call(ctx, capability.resolve(), ctx.invoker().call(callback, JsUndefined.getInstance(), rest));
+            result = ctx.invoker().call(callback, JsUndefined.getInstance(), rest);
         } catch (SimpleJsRuntimeException error) {
+            final var capability = newPromiseCapability(ctx, receiver);
             call(ctx, capability.reject(), errorValue(ctx, error));
+            return capability.promise();
         }
-        return capability.promise();
+        return promiseResolve(ctx, receiver, result);
     }
 
     // ---------------------------------------------------------------------
@@ -532,12 +538,19 @@ public final class PromiseBuiltins {
         }
         final var species = ctx.ops().getMember(constructor, JsSymbol.SPECIES);
         if (InterpreterUtils.isNullish(species)) {
-            return fallback;
+            // %Promise%[Symbol.species] is an accessor returning its receiver, so a constructor that
+            // inherits it - Promise itself or a subclass - selects itself, not the default.
+            return inheritsPromiseSpecies(constructor, fallback) ? constructor : fallback;
         }
         if (!isConstructor(species)) {
             throw new TypeErrorException("Promise species is not a constructor");
         }
         return species;
+    }
+
+    private static boolean inheritsPromiseSpecies(JsValue constructor, JsValue promiseConstructor) {
+        return constructor == promiseConstructor
+                || constructor instanceof JsClass cls && cls.findNativeSuperClass() == promiseConstructor;
     }
 
     private static JsPromise requirePromise(JsValue receiver) {

@@ -548,8 +548,23 @@ corresponding parameter (built by `Interpreter.makeArguments`), so `arguments[0]
 the named parameter and reassigning the parameter is observed through `arguments[0]`. A
 rest/default/pattern parameter makes it **unmapped** (a plain backing store, no aliasing).
 `length` counts the passed arguments; the object is iterable (`for-of`, spread) via an
-`arrayLikeElements` snapshot. Arrows still inherit `arguments` lexically. **Deliberate
-limitation**: `arguments.callee` is `undefined` (not a strict-mode throwing accessor).
+`arrayLikeElements` snapshot. Arrows still inherit `arguments` lexically.
+
+Every own property — the canonical indices (writable/enumerable/configurable), `length`
+(writable, non-enumerable, configurable), the poison-pill `callee` accessor pair
+(non-enumerable, **non-configurable**) and `@@iterator` (%Array.prototype.values%) — lives in
+the object's `PropertyTable`, and `JsArguments` overrides the Wave-0 ordinary-object protocol
+(`getOwnProperty`/`defineOwnProperty`/`deleteOwnProperty`/`ownPropertyKeys`) so
+`Object.defineProperty`/`getOwnPropertyDescriptor`/`getOwnPropertyNames`/`keys`,
+`hasOwnProperty`, `propertyIsEnumerable`, `for-in`, `in` and `delete` all behave ordinarily.
+The [[ParameterMap]] is layered in front of the canonical index keys only: a mapped index
+reads/writes its parameter binding, and defining it as an accessor or with `writable: false`,
+or deleting it, **detaches** the mapping so the ordinary property takes over. `arguments`
+has no `caller` property at all (removed from the spec in ES2017). **Deliberate divergence**:
+the spec makes *every* strict-mode arguments object unmapped, and this engine is always-strict,
+so the mapping is a deliberate extension — it costs four test262 tests
+(`built-ins/Object/defineProperty/15.2.3.6-4-292-2`, `-293-4`,
+`language/arguments-object/10.6-10-c-ii-1-s`, `unmapped/via-strict`).
 `globalThis` is a distinguished `values/JsGlobalObject` backed by the global `Environment`:
 member reads fall through to the global binding (`Environment.tryGet`), writes assign the
 global binding declaring it if absent (`Environment.setGlobal`), and `in` consults it
@@ -716,8 +731,9 @@ non-octal-decimal integer literals (`0755`, `08`), octal/non-octal string escape
 unqualified identifier or a private reference (`delete x`, `delete this.#p`), the `with`
 statement, future-reserved words (`implements`/`interface`/`package`/`private`/`protected`/`public`)
 as binding identifiers, and `eval`/`arguments` as binding or assignment/update targets. At runtime
-the poisoned `arguments.callee`/`arguments.caller` accessors throw a `TypeError` (see the ES2026
-conformance closers below).
+the poisoned `arguments.callee` and function `caller`/`callee`/`arguments` accessors throw a
+`TypeError` (see the ES2026 conformance closers below); an arguments object has no `caller`
+property at all.
 
 Two **declaration** early errors join them, both in the parser because the negative tests assert
 that *no statement executes*: a `const` declarator with no initializer (legal only in a `for-in`/
@@ -1073,8 +1089,8 @@ The following were previously listed as gaps and are now implemented:
 
 - **Strict early errors** — future-reserved words (`implements`/`interface`/`package`/`private`/
   `protected`/`public`) as binding identifiers, `eval`/`arguments` as binding or assignment/update
-  targets, and the poisoned `arguments.callee`/`caller` accessors are all rejected (parse-time for
-  the binding/assignment errors, a `TypeError` at runtime for `callee`/`caller`). Reserved words
+  targets, and the poisoned `arguments.callee` accessor are all rejected (parse-time for
+  the binding/assignment errors, a `TypeError` at runtime for `callee`). Reserved words
   remain valid as property keys.
 - **Regex `v` (unicodeSets) set notation** — `RegexTranslator` now parses `v`-mode character classes
   and rewrites the set notation to `java.util.regex` form: subtraction `A--B` → `[A&&[^B]]`,

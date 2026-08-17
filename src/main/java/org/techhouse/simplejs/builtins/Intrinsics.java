@@ -26,6 +26,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
@@ -78,6 +79,10 @@ public final class Intrinsics {
     private final JsObject errorProto = new JsObject();
     private final JsNativeFunction throwTypeError;
     private final JsObject regexpStringIteratorProto;
+    private final JsObject arrayIteratorProto;
+    private final JsObject stringIteratorProto;
+    private final JsObject mapIteratorProto;
+    private final JsObject setIteratorProto;
     private final JsObject generatorFunctionProto;
     private final JsObject asyncGeneratorFunctionProto;
     private final JsObject asyncFunctionProto;
@@ -160,7 +165,7 @@ public final class Intrinsics {
         }
         for (final var name : TypedArrayBuiltins.UINT8_NAMES) {
             define(typedArrayProtos.get(JsTypedArray.Kind.UINT8), name, wrapper(name, "Uint8Array.prototype",
-                    (receiver, key) -> TypedArrayBuiltins.uint8Method(requireUint8(receiver, key), key)));
+                    (receiver, key) -> TypedArrayBuiltins.uint8Method(requireUint8(receiver, key), key, ops)));
         }
         disposableStackProto = prototypeOf(DisposableStackBuiltins.NAMES, "DisposableStack.prototype",
                 (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker,
@@ -179,6 +184,10 @@ public final class Intrinsics {
         installPoisonPill(functionProto, "caller");
         installPoisonPill(functionProto, "arguments");
         regexpStringIteratorProto = regexpStringIteratorPrototype();
+        arrayIteratorProto = JsIterators.prototype("Array Iterator", objectProto);
+        stringIteratorProto = JsIterators.prototype("String Iterator", objectProto);
+        mapIteratorProto = JsIterators.prototype("Map Iterator", objectProto);
+        setIteratorProto = JsIterators.prototype("Set Iterator", objectProto);
         generatorFunctionProto = functionKindPrototype("GeneratorFunction", iteratorProto);
         asyncGeneratorFunctionProto = functionKindPrototype("AsyncGeneratorFunction", asyncIteratorProto);
         asyncFunctionProto = functionKindPrototype("AsyncFunction", null);
@@ -252,6 +261,10 @@ public final class Intrinsics {
             iteratorPrototype.setProto(objectProto);
             iteratorProto.setProto(iteratorPrototype);
             regexpStringIteratorProto.setProto(iteratorPrototype);
+            arrayIteratorProto.setProto(iteratorPrototype);
+            stringIteratorProto.setProto(iteratorPrototype);
+            mapIteratorProto.setProto(iteratorPrototype);
+            setIteratorProto.setProto(iteratorPrototype);
         }
         if (asyncIteratorPrototype != null) {
             asyncIteratorPrototype.setProto(objectProto);
@@ -301,9 +314,9 @@ public final class Intrinsics {
         defineSymbol(setProto, JsSymbol.ITERATOR, setProto.get("values"));
         defineSymbol(stringProto, JsSymbol.ITERATOR,
                 new JsNativeFunction("[Symbol.iterator]", (thisArg,
-                        _) -> JsIterators.of(InterpreterUtils
+                        _) -> JsIterators.linkPrototype(JsIterators.of(InterpreterUtils
                                 .stringCodePoints(JsCoercion.toStr(requireString(thisArg, "[Symbol.iterator]"), ops))
-                                .iterator())));
+                                .iterator()), stringIteratorProto)));
         defineSymbol(iteratorProto, JsSymbol.ITERATOR,
                 new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
         defineSymbol(asyncIteratorProto, JsSymbol.ASYNC_ITERATOR,
@@ -376,6 +389,7 @@ public final class Intrinsics {
             define(objectProto, name, wrapper(name, "Object.prototype",
                     (receiver, key) -> ObjectProtoBuiltins.getMethod(receiver, key, ops, this)));
         }
+        ObjectProtoBuiltins.installProtoAccessor(objectProto, ops, this);
         errorProto.setProto(objectProto);
     }
 
@@ -456,7 +470,8 @@ public final class Intrinsics {
         if (resolved == null) {
             throw incompatible("Array.prototype." + name, thisArg);
         }
-        return invoker.call(resolved, receiver, args);
+        return JsIterators.linkPrototype(invoker.call(resolved, receiver, args),
+                builtinIteratorProto("Array.prototype", name));
     }
 
     // ToObject: a primitive receiver is boxed so the callback's third argument is an object and the
@@ -495,10 +510,25 @@ public final class Intrinsics {
             if (method == null) {
                 throw incompatible(label + "." + name, thisArg);
             }
-            return invoker.call(method, thisArg, args);
+            return JsIterators.linkPrototype(invoker.call(method, thisArg, args), builtinIteratorProto(label, name));
         });
         wrapped.setLength(BuiltinLengths.lengthOf(label, name));
         return wrapped;
+    }
+
+    // The keys/values/entries builtins hand back a bare JsIterators instance, which only becomes a
+    // %MapIteratorPrototype% (etc) instance here: this dispatch seam is the one place that knows both
+    // which builtin ran and which realm it ran in.
+    private JsObject builtinIteratorProto(String label, String name) {
+        if (!"keys".equals(name) && !"values".equals(name) && !"entries".equals(name)) {
+            return null;
+        }
+        return switch (label) {
+            case "Map.prototype", "WeakMap.prototype" -> mapIteratorProto;
+            case "Set.prototype", "WeakSet.prototype" -> setIteratorProto;
+            case "Array.prototype", "TypedArray.prototype" -> arrayIteratorProto;
+            default -> null;
+        };
     }
 
     private static void define(JsObject target, String key, JsValue value) {
@@ -897,7 +927,8 @@ public final class Intrinsics {
     }
 
     private JsValue requireCallable(JsValue receiver, String method) {
-        if (receiver instanceof JsFunction || receiver instanceof JsNativeFunction || receiver instanceof JsClass) {
+        if (receiver instanceof JsFunction || receiver instanceof JsNativeFunction || receiver instanceof JsClass
+                || (receiver instanceof JsProxy proxy && proxy.isCallable())) {
             return receiver;
         }
         throw incompatible("Function" + ".prototype." + method, receiver);

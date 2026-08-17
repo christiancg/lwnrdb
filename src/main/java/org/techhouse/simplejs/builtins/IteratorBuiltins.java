@@ -2,11 +2,15 @@ package org.techhouse.simplejs.builtins;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
@@ -16,6 +20,7 @@ import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -33,12 +38,22 @@ public final class IteratorBuiltins {
     private static final Set<String> HELPERS = Set.of("map", "filter", "take", "drop", "flatMap", "reduce", "toArray",
             "forEach", "some", "every", "find", "chunks", "windows", "includes", "join");
 
-    private static final Set<String> ZERO_ARG_HELPERS = Set.of("toArray", "join");
+    private static final Set<String> ZERO_ARG_HELPERS = Set.of("toArray");
 
     private static final Set<String> CALLBACK_HELPERS = Set.of("map", "filter", "flatMap", "reduce", "forEach", "some",
             "every", "find");
 
     private static final double MAX_SAFE_INTEGER = 9007199254740991d;
+    private static final double MAX_WINDOW_SIZE = 4294967295d;
+    private static final PropertyFlags HIDDEN = new PropertyFlags(true, false, true);
+    private static final PropertyFlags TAG = new PropertyFlags(false, false, true);
+
+    // The realm's %IteratorHelperPrototype% and %WrapForValidIteratorPrototype%, keyed by the realm's
+    // Object.prototype: the interpreter routes a helper onto an arbitrary iterator-like object without
+    // an Intrinsics reference, and a per-realm entry keeps one script's monkey-patch out of another's.
+    private static final Map<JsObject, JsObject[]> REALM_PROTOS = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<JsObject, HelperState> HELPER_STATE = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<JsObject, WrapState> WRAP_STATE = Collections.synchronizedMap(new WeakHashMap<>());
 
     private IteratorBuiltins() {
     }
@@ -58,16 +73,18 @@ public final class IteratorBuiltins {
             return thisArg;
         });
         final var prototype = new JsObject();
+        prototype.setProto(objectProto);
+        REALM_PROTOS.put(objectProto,
+                new JsObject[]{helperPrototype(prototype, objectProto), wrapPrototype(ops, prototype, objectProto)});
         for (final var name : HELPERS) {
             Intrinsics.defineHidden(prototype, name, helper(ops, name, objectProto));
         }
-        prototype.setSymbol(JsSymbol.ITERATOR, new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg));
-        prototype.setSymbolFlags(JsSymbol.ITERATOR, new JsObject.PropertyFlags(true, false, true));
-        prototype.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("Iterator"));
-        prototype.setSymbolFlags(JsSymbol.TO_STRING_TAG, new JsObject.PropertyFlags(true, false, true));
-        prototype.defineValue("constructor", ctor);
-        prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
+        installIteratorSymbol(prototype);
+        installDispose(ops, prototype);
+        installIgnoringAccessor(prototype, "@@toStringTag", JsSymbol.TO_STRING_TAG, new JsString("Iterator"), ops);
+        installIgnoringAccessor(prototype, "constructor", null, ctor, ops);
         ctor.setProperty("prototype", prototype);
+        ctor.ownProperties().setFlags("prototype", new PropertyFlags(false, false, false));
         // The dedicated field (not just the "prototype" own property) is what `instanceof`/`new`
         // consult for a JsNativeFunction (see ClassEvaluator.evalInstanceof/Interpreter.constructValue)
         // - GlobalScope must not overwrite this with the unrelated Generator.prototype intrinsic.
@@ -82,23 +99,162 @@ public final class IteratorBuiltins {
             if (thisArg instanceof JsUndefined) {
                 throw new TypeErrorException("Iterator.concat is not a constructor");
             }
-            return concat(ops, args, prototype, objectProto);
+            return concat(ops, args, objectProto);
         }));
         ctor.setProperty("zip", new JsNativeFunction("zip", (thisArg, args) -> {
             if (thisArg instanceof JsUndefined) {
                 throw new TypeErrorException("Iterator.zip is not a constructor");
             }
-            return zip(ops, arg0(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), prototype,
-                    objectProto);
+            return zip(ops, arg0(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), objectProto);
         }));
         ctor.setProperty("zipKeyed", new JsNativeFunction("zipKeyed", (thisArg, args) -> {
             if (thisArg instanceof JsUndefined) {
                 throw new TypeErrorException("Iterator.zipKeyed is not a constructor");
             }
-            return zipKeyed(ops, arg0(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), prototype,
-                    objectProto);
+            return zipKeyed(ops, arg0(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), objectProto);
         }));
         return ctor;
+    }
+
+    private static void installIteratorSymbol(JsObject prototype) {
+        final var iterator = new JsNativeFunction("[Symbol.iterator]", (thisArg, _) -> thisArg);
+        iterator.setLength(0);
+        prototype.setSymbol(JsSymbol.ITERATOR, iterator);
+        prototype.setSymbolFlags(JsSymbol.ITERATOR, HIDDEN);
+    }
+
+    // %IteratorPrototype%[@@dispose]: GetMethod(this, "return") then call it, discarding its result.
+    private static void installDispose(InterpreterOps ops, JsObject prototype) {
+        final var dispose = new JsNativeFunction("[Symbol.dispose]", (thisArg, _) -> {
+            final var returnFn = ops.getMember(thisArg, new JsString("return"));
+            if (!InterpreterUtils.isNullish(returnFn)) {
+                if (!isCallable(returnFn)) {
+                    throw new TypeErrorException("iterator.return is not a function");
+                }
+                ops.call(returnFn, thisArg, List.of());
+            }
+            return JsUndefined.getInstance();
+        });
+        dispose.setLength(0);
+        prototype.setSymbol(JsSymbol.DISPOSE, dispose);
+        prototype.setSymbolFlags(JsSymbol.DISPOSE, HIDDEN);
+    }
+
+    // SetterThatIgnoresPrototypeProperties: `Iterator.prototype.constructor` and its @@toStringTag are
+    // accessors whose setter refuses to write through to the home object but still defines the property
+    // on a derived receiver, so a subclass prototype can shadow them without patching the intrinsic.
+    private static void installIgnoringAccessor(JsObject home, String label, JsSymbol symbolKey, JsValue value,
+            InterpreterOps ops) {
+        final var getter = new JsNativeFunction("get " + label, (_, _) -> value);
+        getter.setLength(0);
+        final var setter = new JsNativeFunction("set " + label, (thisArg, args) -> {
+            if (!InterpreterUtils.isObjectLike(thisArg)) {
+                throw new TypeErrorException("Cannot set " + label + " on a non-object");
+            }
+            if (thisArg == home) {
+                throw new TypeErrorException(label + " is not writable on Iterator.prototype");
+            }
+            final var key = symbolKey == null ? new JsString(label) : symbolKey;
+            final var incoming = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+            if (ops.getOwnPropertyDescriptor(thisArg, key) instanceof JsUndefined) {
+                ops.defineProperty(thisArg, key, descriptor(incoming));
+            } else {
+                ops.setMember(thisArg, key, incoming);
+            }
+            return JsUndefined.getInstance();
+        });
+        setter.setLength(1);
+        if (symbolKey == null) {
+            home.defineAccessor(label, getter, setter);
+            home.setFlags(label, HIDDEN);
+        } else {
+            home.defineSymbolAccessor(symbolKey, getter, setter);
+            home.setSymbolFlags(symbolKey, HIDDEN);
+        }
+    }
+
+    private static JsObject descriptor(JsValue value) {
+        final var descriptor = new JsObject();
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.TRUE);
+        descriptor.set("enumerable", JsBoolean.TRUE);
+        descriptor.set("configurable", JsBoolean.TRUE);
+        return descriptor;
+    }
+
+    // %IteratorHelperPrototype%: next/return live here (not on the instance) and brand-check their
+    // receiver, and the running flag is what turns a helper re-entered from its own callback into the
+    // spec's "generator is already running" TypeError instead of unbounded recursion.
+    private static JsObject helperPrototype(JsObject iteratorProto, JsObject objectProto) {
+        final var proto = new JsObject();
+        proto.setProto(iteratorProto);
+        final var next = new JsNativeFunction("next", (thisArg, _) -> {
+            final var state = requireHelper(thisArg);
+            return state.run(() -> stepOf(state.closed ? null : state.nextValue.get(), state, objectProto));
+        });
+        next.setLength(0);
+        Intrinsics.defineHidden(proto, "next", next);
+        final var close = new JsNativeFunction("return", (thisArg, _) -> {
+            final var state = requireHelper(thisArg);
+            return state.run(() -> {
+                if (!state.closed) {
+                    state.closed = true;
+                    state.onClose.run();
+                }
+                return step(null, objectProto);
+            });
+        });
+        close.setLength(0);
+        Intrinsics.defineHidden(proto, "return", close);
+        proto.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("Iterator Helper"));
+        proto.setSymbolFlags(JsSymbol.TO_STRING_TAG, TAG);
+        return proto;
+    }
+
+    // %WrapForValidIteratorPrototype%: Iterator.from's wrapper forwards to the iterator record it
+    // captured, so `next` uses the method read at wrap time while `return` is looked up per call.
+    private static JsObject wrapPrototype(InterpreterOps ops, JsObject iteratorProto, JsObject objectProto) {
+        final var proto = new JsObject();
+        proto.setProto(iteratorProto);
+        final var next = new JsNativeFunction("next", (thisArg, _) -> {
+            final var state = requireWrap(thisArg);
+            if (!isCallable(state.nextMethod)) {
+                throw new TypeErrorException("iterator.next is not a function");
+            }
+            return ops.call(state.nextMethod, state.iterator, List.of());
+        });
+        next.setLength(0);
+        Intrinsics.defineHidden(proto, "next", next);
+        final var close = new JsNativeFunction("return", (thisArg, _) -> {
+            final var state = requireWrap(thisArg);
+            final var returnFn = ops.getMember(state.iterator, new JsString("return"));
+            if (InterpreterUtils.isNullish(returnFn)) {
+                return step(null, objectProto);
+            }
+            if (!isCallable(returnFn)) {
+                throw new TypeErrorException("iterator.return is not a function");
+            }
+            return ops.call(returnFn, state.iterator, List.of());
+        });
+        close.setLength(0);
+        Intrinsics.defineHidden(proto, "return", close);
+        return proto;
+    }
+
+    private static HelperState requireHelper(JsValue receiver) {
+        final var state = receiver instanceof JsObject object ? HELPER_STATE.get(object) : null;
+        if (state == null) {
+            throw new TypeErrorException("Iterator Helper method called on an incompatible receiver");
+        }
+        return state;
+    }
+
+    private static WrapState requireWrap(JsValue receiver) {
+        final var state = receiver instanceof JsObject object ? WRAP_STATE.get(object) : null;
+        if (state == null) {
+            throw new TypeErrorException("Iterator wrapper method called on an incompatible receiver");
+        }
+        return state;
     }
 
     public static JsNativeFunction helper(InterpreterOps ops, String name, JsObject objectProto) {
@@ -110,38 +266,67 @@ public final class IteratorBuiltins {
     // Spec order: the receiver is checked, then the argument (whose coercion may throw, and must be
     // observable *before* anything is read off the iterator), and only then does GetIteratorDirect
     // read `next` - which is why every arm evaluates its argument before constructing the Driver.
+    // An abrupt argument validation closes the receiver first (IfAbruptCloseIterator).
     private static JsValue dispatch(InterpreterOps ops, String name, JsValue thisArg, List<JsValue> args,
             JsObject objectProto) {
         final var iterator = requireIterator(thisArg);
         if (CALLBACK_HELPERS.contains(name)) {
-            final var fn = callback(args);
+            final var fn = validated(ops, iterator, () -> callback(args));
             return withCallback(ops, name, new Driver(ops, iterator), fn, args, objectProto);
         }
         return switch (name) {
             case "take" -> {
-                final var count = limit(arg0(args));
+                final var count = validated(ops, iterator, () -> limit(ops, arg0(args)));
                 yield take(new Driver(ops, iterator), count, objectProto);
             }
             case "drop" -> {
-                final var count = limit(arg0(args));
+                final var count = validated(ops, iterator, () -> limit(ops, arg0(args)));
                 yield drop(new Driver(ops, iterator), count, objectProto);
             }
             case "chunks" -> {
-                final var size = windowSize(arg0(args), "chunkSize");
+                final var size = validated(ops, iterator, () -> windowSize(arg0(args), "chunkSize"));
                 yield chunks(new Driver(ops, iterator), size, objectProto);
             }
             case "windows" -> {
-                final var size = windowSize(arg0(args), "windowSize");
-                yield windows(new Driver(ops, iterator), size, objectProto);
+                final var size = validated(ops, iterator, () -> windowSize(arg0(args), "windowSize"));
+                final var partial = validated(ops, iterator, () -> allowPartial(args));
+                yield windows(new Driver(ops, iterator), size, partial, objectProto);
             }
             case "includes" -> {
-                final var skip = skipCount(args);
+                final var skip = validated(ops, iterator, () -> skipCount(args));
                 yield JsBoolean.of(includes(new Driver(ops, iterator), arg0(args), skip));
             }
             case "toArray" -> toArray(new Driver(ops, iterator));
-            case "join" -> join(new Driver(ops, iterator), args);
+            case "join" -> {
+                final var separator = validated(ops, iterator, () -> separator(ops, args));
+                yield join(ops, new Driver(ops, iterator), separator);
+            }
             default -> JsUndefined.getInstance();
         };
+    }
+
+    private static <T> T validated(InterpreterOps ops, JsValue iterator, Supplier<T> validation) {
+        try {
+            return validation.get();
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException error) {
+            closeQuietly(ops, iterator);
+            throw error;
+        }
+    }
+
+    private static void closeQuietly(InterpreterOps ops, JsValue iterator) {
+        try {
+            final var returnFn = ops.getMember(iterator, new JsString("return"));
+            if (isCallable(returnFn)) {
+                ops.call(returnFn, iterator, List.of());
+            }
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException ignored) {
+            // discarded on purpose: the original validation error is the one that propagates
+        }
     }
 
     private static JsValue withCallback(InterpreterOps ops, String name, Driver source, JsValue fn, List<JsValue> args,
@@ -158,29 +343,57 @@ public final class IteratorBuiltins {
         };
     }
 
+    // Iterator.from: GetIteratorFlattenable with iterate-string-primitives, then the wrapper is only
+    // built when the result is not already an Iterator instance.
     private static JsValue from(InterpreterOps ops, JsValue value, JsObject objectProto) {
-        final var driver = new Driver(ops, iteratorOf(ops, value));
-        return lazyIterator(driver::next, driver::close, objectProto);
+        final var iterator = flattenable(ops, value);
+        if (isIteratorInstance(ops, iterator, objectProto)) {
+            return iterator;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setProto(REALM_PROTOS.get(objectProto)[1]);
+        WRAP_STATE.put(wrapper, new WrapState(iterator, ops.getMember(iterator, new JsString("next"))));
+        return wrapper;
+    }
+
+    // Iterator.from is the one GetIteratorFlattenable caller that also accepts a string primitive.
+    private static JsValue flattenable(InterpreterOps ops, JsValue value) {
+        if (!InterpreterUtils.isObjectLike(value) && !(value instanceof JsString)) {
+            throw new TypeErrorException("Iterator.from called on a non-object");
+        }
+        return iteratorOf(ops, value);
+    }
+
+    private static boolean isIteratorInstance(InterpreterOps ops, JsValue iterator, JsObject objectProto) {
+        final var target = REALM_PROTOS.get(objectProto)[0].getProto();
+        var proto = ops.getPrototypeOf(iterator);
+        while (proto != null && !(proto instanceof JsUndefined) && !InterpreterUtils.isNullish(proto)) {
+            if (proto == target) {
+                return true;
+            }
+            proto = ops.getPrototypeOf(proto);
+        }
+        return false;
     }
 
     // Iterator.concat(...items): each item's Symbol.iterator method is fetched and validated
     // eagerly, in argument order, before any iteration starts - but the method is only *called*
     // (opening the actual inner iterator) lazily, item by item, as the result is driven.
-    private static JsValue concat(InterpreterOps ops, List<JsValue> items, JsObject proto, JsObject objectProto) {
+    private static JsValue concat(InterpreterOps ops, List<JsValue> items, JsObject objectProto) {
         final var openMethods = new ArrayList<JsValue[]>();
         for (final var item : items) {
             if (!InterpreterUtils.isObjectLike(item)) {
                 throw new TypeErrorException("Iterator.concat argument must be an object");
             }
             final var method = ops.getMember(item, JsSymbol.ITERATOR);
-            if (!(method instanceof JsFunction) && !(method instanceof JsNativeFunction)) {
+            if (!isCallable(method)) {
                 throw new TypeErrorException("Iterator.concat argument is not iterable");
             }
             openMethods.add(new JsValue[]{item, method});
         }
         final var index = new int[]{0};
         final var current = new Driver[]{null};
-        final var result = lazyIterator(() -> {
+        return lazyIterator(() -> {
             while (true) {
                 if (current[0] == null) {
                     if (index[0] >= openMethods.size()) {
@@ -201,14 +414,11 @@ public final class IteratorBuiltins {
             }
             index[0] = openMethods.size();
         }, objectProto);
-        result.setProto(proto);
-        return result;
     }
 
     // Iterator.zip(iterables, options): every inner iterable is opened eagerly (unlike concat,
     // where opening is lazy) since a divergent length must be observable before the first `next()`.
-    private static JsValue zip(InterpreterOps ops, JsValue iterablesArg, JsValue optionsArg, JsObject proto,
-            JsObject objectProto) {
+    private static JsValue zip(InterpreterOps ops, JsValue iterablesArg, JsValue optionsArg, JsObject objectProto) {
         // Step 1 of the spec algorithm - checked before options is even read, so a badOptions
         // object with throwing getters must never be touched for an invalid iterables argument.
         if (!InterpreterUtils.isObjectLike(iterablesArg)) {
@@ -218,7 +428,7 @@ public final class IteratorBuiltins {
         final var padding = resolveZipPadding(ops, optionsArg, mode);
         final var entries = new ArrayList<Driver>();
         final var outerMethod = ops.getMember(iterablesArg, JsSymbol.ITERATOR);
-        if (!(outerMethod instanceof JsFunction) && !(outerMethod instanceof JsNativeFunction)) {
+        if (!isCallable(outerMethod)) {
             throw new TypeErrorException("Iterator.zip argument must be iterable");
         }
         final var outerDriver = new Driver(ops, ops.call(outerMethod, iterablesArg, List.of()));
@@ -227,21 +437,19 @@ public final class IteratorBuiltins {
             entries.add(openFlattenable(ops, item, entries));
         }
         final var pads = resolvePads(ops, padding, entries.size());
-        final var result = lazyIterator(zipRound(entries, mode, pads, values -> {
+        return lazyIterator(zipRound(entries, mode, pads, values -> {
             final var array = new JsArray();
             for (final var value : values) {
                 array.push(value);
             }
             return array;
         }), () -> entries.forEach(Driver::close), objectProto);
-        result.setProto(proto);
-        return result;
     }
 
     // Iterator.zipKeyed(iterables, options): like zip, but "iterables" is a plain object whose own
     // enumerable keys (string and symbol) map to iterables, and each round yields an object keyed
     // the same way instead of an array.
-    private static JsValue zipKeyed(InterpreterOps ops, JsValue iterablesArg, JsValue optionsArg, JsObject proto,
+    private static JsValue zipKeyed(InterpreterOps ops, JsValue iterablesArg, JsValue optionsArg,
             JsObject objectProto) {
         // Step 1 of the spec algorithm - checked before options is even read, so a badOptions
         // object with throwing getters must never be touched for an invalid iterables argument.
@@ -265,7 +473,7 @@ public final class IteratorBuiltins {
             entries.add(openFlattenable(ops, value, entries));
         }
         final var pads = resolvePads(ops, padding, entries.size());
-        final var result = lazyIterator(zipRound(entries, mode, pads, values -> {
+        return lazyIterator(zipRound(entries, mode, pads, values -> {
             // Per spec this round object is OrdinaryObjectCreate(null) - a null-proto object, not
             // one linked to %Object.prototype% (unlike the {value,done} IteratorResult wrapping it).
             final var obj = new JsObject();
@@ -278,8 +486,6 @@ public final class IteratorBuiltins {
             }
             return obj;
         }), () -> entries.forEach(Driver::close), objectProto);
-        result.setProto(proto);
-        return result;
     }
 
     // The shared per-round stepping logic for both zip and zipKeyed: steps every still-live entry,
@@ -331,7 +537,7 @@ public final class IteratorBuiltins {
         final JsValue iterObj;
         if (method instanceof JsUndefined) {
             iterObj = item;
-        } else if (method instanceof JsFunction || method instanceof JsNativeFunction) {
+        } else if (isCallable(method)) {
             iterObj = ops.call(method, item, List.of());
             if (!InterpreterUtils.isObjectLike(iterObj)) {
                 alreadyOpened.forEach(Driver::close);
@@ -401,7 +607,7 @@ public final class IteratorBuiltins {
             if (value == null) {
                 return null;
             }
-            return ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index[0]++)));
+            return callOrClose(ops, source, fn, List.of(value, new JsNumber(index[0]++)));
         }, source::close, objectProto);
     }
 
@@ -410,8 +616,7 @@ public final class IteratorBuiltins {
         return lazyIterator(() -> {
             JsValue value;
             while ((value = source.next()) != null) {
-                if (JsCoercion
-                        .toBoolean(ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index[0]++))))) {
+                if (JsCoercion.toBoolean(callOrClose(ops, source, fn, List.of(value, new JsNumber(index[0]++))))) {
                     return value;
                 }
             }
@@ -460,8 +665,8 @@ public final class IteratorBuiltins {
                 if (value == null) {
                     return null;
                 }
-                final var mapped = ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index[0]++)));
-                inner[0] = new Driver(ops, iteratorOf(ops, mapped));
+                final var mapped = callOrClose(ops, source, fn, List.of(value, new JsNumber(index[0]++)));
+                inner[0] = new Driver(ops, flattenOrClose(ops, source, mapped));
             }
         }, () -> {
             if (inner[0] != null) {
@@ -479,7 +684,7 @@ public final class IteratorBuiltins {
         var index = args.size() > 1 ? 0L : 1L;
         JsValue value;
         while ((value = source.next()) != null) {
-            accumulator = ops.call(fn, JsUndefined.getInstance(), List.of(accumulator, value, new JsNumber(index++)));
+            accumulator = callOrClose(ops, source, fn, List.of(accumulator, value, new JsNumber(index++)));
         }
         return accumulator;
     }
@@ -497,7 +702,7 @@ public final class IteratorBuiltins {
         var index = 0L;
         JsValue value;
         while ((value = source.next()) != null) {
-            ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index++)));
+            callOrClose(ops, source, fn, List.of(value, new JsNumber(index++)));
         }
         return JsUndefined.getInstance();
     }
@@ -506,7 +711,7 @@ public final class IteratorBuiltins {
         var index = 0L;
         JsValue value;
         while ((value = source.next()) != null) {
-            if (JsCoercion.toBoolean(ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index++))))) {
+            if (JsCoercion.toBoolean(callOrClose(ops, source, fn, List.of(value, new JsNumber(index++))))) {
                 source.close();
                 return true;
             }
@@ -518,7 +723,7 @@ public final class IteratorBuiltins {
         var index = 0L;
         JsValue value;
         while ((value = source.next()) != null) {
-            if (!JsCoercion.toBoolean(ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index++))))) {
+            if (!JsCoercion.toBoolean(callOrClose(ops, source, fn, List.of(value, new JsNumber(index++))))) {
                 source.close();
                 return false;
             }
@@ -530,7 +735,7 @@ public final class IteratorBuiltins {
         var index = 0L;
         JsValue value;
         while ((value = source.next()) != null) {
-            if (JsCoercion.toBoolean(ops.call(fn, JsUndefined.getInstance(), List.of(value, new JsNumber(index++))))) {
+            if (JsCoercion.toBoolean(callOrClose(ops, source, fn, List.of(value, new JsNumber(index++))))) {
                 source.close();
                 return value;
             }
@@ -538,44 +743,75 @@ public final class IteratorBuiltins {
         return JsUndefined.getInstance();
     }
 
-    // Every %IteratorHelperPrototype% instance has a real, directly-callable `return` (not merely
-    // observed by for-of/spread's own early-exit forwarding) that closes the underlying source and
-    // permanently exhausts this helper; `closed` makes both effects idempotent.
+    // IfAbruptCloseIterator: a callback that throws closes the underlying iterator before the error
+    // propagates, and a `return` that throws in turn is discarded so the callback's error wins.
+    private static JsValue callOrClose(InterpreterOps ops, Driver source, JsValue fn, List<JsValue> args) {
+        try {
+            return ops.call(fn, JsUndefined.getInstance(), args);
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException error) {
+            source.closeAfterThrow();
+            throw error;
+        }
+    }
+
+    // GetIteratorFlattenable(value, reject-primitives): unlike Iterator.from, flatMap never accepts a
+    // primitive, so a mapped string is a TypeError rather than an iteration over its code points.
+    private static JsValue flattenOrClose(InterpreterOps ops, Driver source, JsValue mapped) {
+        try {
+            if (!InterpreterUtils.isObjectLike(mapped)) {
+                throw new TypeErrorException("flatMap mapper did not return an object");
+            }
+            return iteratorOf(ops, mapped);
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException error) {
+            source.closeAfterThrow();
+            throw error;
+        }
+    }
+
     private static JsObject lazyIterator(Supplier<JsValue> nextValue, Runnable onClose, JsObject objectProto) {
         final var iterator = new JsObject();
-        final var closed = new boolean[]{false};
-        iterator.set("next", new JsNativeFunction("next", (_, _) -> {
-            final var value = closed[0] ? null : nextValue.get();
-            if (value == null) {
-                closed[0] = true;
-            }
-            final var step = new JsObject();
-            step.setProto(objectProto);
-            step.set("value", value == null ? JsUndefined.getInstance() : value);
-            step.set("done", JsBoolean.of(value == null));
-            return step;
-        }));
-        iterator.set("return", new JsNativeFunction("return", (_, _) -> {
-            if (!closed[0]) {
-                closed[0] = true;
-                onClose.run();
-            }
-            final var step = new JsObject();
-            step.setProto(objectProto);
-            step.set("value", JsUndefined.getInstance());
-            step.set("done", JsBoolean.of(true));
-            return step;
-        }));
-        iterator.setSymbol(JsSymbol.ITERATOR, new JsNativeFunction("[Symbol.iterator]", (_, _) -> iterator));
+        final var protos = REALM_PROTOS.get(objectProto);
+        if (protos != null) {
+            iterator.setProto(protos[0]);
+        }
+        HELPER_STATE.put(iterator, new HelperState(nextValue, onClose));
         return iterator;
     }
 
+    private static JsValue stepOf(JsValue value, HelperState state, JsObject objectProto) {
+        if (value == null) {
+            state.closed = true;
+        }
+        return step(value, objectProto);
+    }
+
+    private static JsObject step(JsValue value, JsObject objectProto) {
+        final var result = new JsObject();
+        result.setProto(objectProto);
+        result.set("value", value == null ? JsUndefined.getInstance() : value);
+        result.set("done", JsBoolean.of(value == null));
+        return result;
+    }
+
+    // GetIteratorFlattenable's object branch: a nullish @@iterator means the value is already the
+    // iterator, while a present-but-not-callable one is a TypeError rather than the same fallback.
     private static JsValue iteratorOf(InterpreterOps ops, JsValue value) {
         final var iterFn = ops.getMember(value, JsSymbol.ITERATOR);
-        if (iterFn instanceof JsFunction || iterFn instanceof JsNativeFunction) {
-            return ops.call(iterFn, value, List.of());
+        if (InterpreterUtils.isNullish(iterFn)) {
+            return requireIterator(value);
         }
-        return requireIterator(value);
+        if (!isCallable(iterFn)) {
+            throw new TypeErrorException("Symbol.iterator is not a function");
+        }
+        final var iterator = ops.call(iterFn, value, List.of());
+        if (!InterpreterUtils.isObjectLike(iterator)) {
+            throw new TypeErrorException("Symbol.iterator did not return an object");
+        }
+        return iterator;
     }
 
     private static JsValue requireIterator(JsValue value) {
@@ -585,15 +821,19 @@ public final class IteratorBuiltins {
         return value;
     }
 
+    private static boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction;
+    }
+
     private static JsValue callback(List<JsValue> args) {
         final var fn = arg0(args);
-        if (!(fn instanceof JsFunction) && !(fn instanceof JsNativeFunction)) {
+        if (!isCallable(fn)) {
             throw new TypeErrorException("Iterator helper callback is not a function");
         }
         return fn;
     }
 
-    // chunks/windows take an integral size in [1, 2^53-1]: a non-integral or NaN size is a
+    // chunks/windows take an integral size in [1, 2^32-1]: a non-integral or NaN size is a
     // TypeError (not a RangeError), which is what separates it from `take`/`drop`'s limit.
     private static int windowSize(JsValue value, String label) {
         if (!(value instanceof JsNumber size)) {
@@ -603,10 +843,25 @@ public final class IteratorBuiltins {
         if (Double.isNaN(number) || number != Math.floor(number) || Double.isInfinite(number)) {
             throw new TypeErrorException(label + " must be an integral Number");
         }
-        if (number < 1 || number > MAX_SAFE_INTEGER) {
+        if (number < 1 || number > MAX_WINDOW_SIZE) {
             throw new RangeErrorException(label + " is out of range");
         }
         return (int) Math.min(number, Integer.MAX_VALUE);
+    }
+
+    private static boolean allowPartial(List<JsValue> args) {
+        final var undersized = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        if (undersized instanceof JsUndefined || isText(undersized, "only-full")) {
+            return false;
+        }
+        if (isText(undersized, "allow-partial")) {
+            return true;
+        }
+        throw new TypeErrorException("undersized must be \"only-full\" or \"allow-partial\"");
+    }
+
+    private static boolean isText(JsValue value, String expected) {
+        return value instanceof JsString text && expected.equals(text.getValue());
     }
 
     private static long skipCount(List<JsValue> args) {
@@ -620,10 +875,13 @@ public final class IteratorBuiltins {
         if (Double.isNaN(number) || (number != Math.floor(number) && !Double.isInfinite(number))) {
             throw new TypeErrorException("skipCount must be an integral Number");
         }
-        if (number < 0 || number > MAX_SAFE_INTEGER) {
+        if (number < 0) {
             throw new RangeErrorException("skipCount is out of range");
         }
-        return (long) number;
+        if (!Double.isInfinite(number) && number > MAX_SAFE_INTEGER) {
+            throw new RangeErrorException("skipCount is out of range");
+        }
+        return Double.isInfinite(number) ? Long.MAX_VALUE : (long) number;
     }
 
     private static JsValue chunks(Driver source, int size, JsObject objectProto) {
@@ -646,8 +904,9 @@ public final class IteratorBuiltins {
         }, source::close, objectProto);
     }
 
-    private static JsValue windows(Driver source, int size, JsObject objectProto) {
+    private static JsValue windows(Driver source, int size, boolean allowPartial, JsObject objectProto) {
         final var buffer = new ArrayList<JsValue>();
+        final var partialYielded = new boolean[]{false};
         return lazyIterator(() -> {
             for (var value = source.next(); value != null; value = source.next()) {
                 if (buffer.size() == size) {
@@ -658,7 +917,11 @@ public final class IteratorBuiltins {
                     return new JsArray(new ArrayList<>(buffer));
                 }
             }
-            return null;
+            if (!allowPartial || partialYielded[0] || buffer.isEmpty() || buffer.size() >= size) {
+                return null;
+            }
+            partialYielded[0] = true;
+            return new JsArray(new ArrayList<>(buffer));
         }, source::close, objectProto);
     }
 
@@ -676,10 +939,11 @@ public final class IteratorBuiltins {
         return false;
     }
 
-    private static JsValue join(Driver source, List<JsValue> args) {
-        final var separator = args.isEmpty() || args.getFirst() instanceof JsUndefined
-                ? ","
-                : JsCoercion.toStr(args.getFirst());
+    private static String separator(InterpreterOps ops, List<JsValue> args) {
+        return args.isEmpty() || args.getFirst() instanceof JsUndefined ? "," : JsCoercion.toStr(args.getFirst(), ops);
+    }
+
+    private static JsValue join(InterpreterOps ops, Driver source, String separator) {
         final var result = new StringBuilder();
         var first = true;
         for (var value = source.next(); value != null; value = source.next()) {
@@ -688,22 +952,73 @@ public final class IteratorBuiltins {
             }
             first = false;
             if (!InterpreterUtils.isNullish(value)) {
-                result.append(JsCoercion.toStr(value));
+                result.append(coerceOrClose(ops, source, value));
             }
         }
         return new JsString(result.toString());
     }
 
-    private static long limit(JsValue value) {
-        final var number = JsCoercion.toNumber(value);
-        if (Double.isNaN(number) || number < 0) {
+    private static String coerceOrClose(InterpreterOps ops, Driver source, JsValue value) {
+        try {
+            return JsCoercion.toStr(value, ops);
+        } catch (ScriptAbortException abort) {
+            throw abort;
+        } catch (RuntimeException error) {
+            source.closeAfterThrow();
+            throw error;
+        }
+    }
+
+    // ToNumber then ToIntegerOrInfinity, with NaN, a negative result and a finite value beyond
+    // 2^53-1 all rejected as a RangeError; +Infinity is a legal, unbounded limit.
+    private static long limit(InterpreterOps ops, JsValue value) {
+        final var number = JsCoercion.toNumber(value, ops);
+        if (Double.isNaN(number)) {
+            throw new RangeErrorException("Iterator helper limit must not be NaN");
+        }
+        if (!Double.isInfinite(number) && number > MAX_SAFE_INTEGER) {
+            throw new RangeErrorException("Iterator helper limit is out of range");
+        }
+        final var integral = number < 0 ? Math.ceil(number) : Math.floor(number);
+        if (integral < 0) {
             throw new RangeErrorException("Iterator helper limit must be a non-negative number");
         }
-        return (long) number;
+        return integral > MAX_SAFE_INTEGER ? Long.MAX_VALUE : (long) integral;
     }
 
     private static JsValue arg0(List<JsValue> args) {
         return args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+    }
+
+    private static final class HelperState {
+        private final Supplier<JsValue> nextValue;
+        private final Runnable onClose;
+        private boolean closed;
+        private boolean running;
+
+        private HelperState(Supplier<JsValue> nextValue, Runnable onClose) {
+            this.nextValue = nextValue;
+            this.onClose = onClose;
+        }
+
+        private JsValue run(Supplier<JsValue> body) {
+            enter();
+            try {
+                return body.get();
+            } finally {
+                running = false;
+            }
+        }
+
+        private void enter() {
+            if (running) {
+                throw new TypeErrorException("Iterator Helper is already running");
+            }
+            running = true;
+        }
+    }
+
+    private record WrapState(JsValue iterator, JsValue nextMethod) {
     }
 
     private static final class Driver {
@@ -725,7 +1040,7 @@ public final class IteratorBuiltins {
                 return null;
             }
             final var nextFn = nextMethod;
-            if (!(nextFn instanceof JsFunction) && !(nextFn instanceof JsNativeFunction)) {
+            if (!isCallable(nextFn)) {
                 throw new TypeErrorException("iterator.next is not a function");
             }
             final var step = ops.call(nextFn, iterator, List.of());
@@ -742,8 +1057,18 @@ public final class IteratorBuiltins {
             }
             done = true;
             final var returnFn = ops.getMember(iterator, new JsString("return"));
-            if (returnFn instanceof JsFunction || returnFn instanceof JsNativeFunction) {
+            if (isCallable(returnFn)) {
                 ops.call(returnFn, iterator, List.of());
+            }
+        }
+
+        private void closeAfterThrow() {
+            try {
+                close();
+            } catch (ScriptAbortException abort) {
+                throw abort;
+            } catch (RuntimeException ignored) {
+                // discarded on purpose: the original throw completion wins
             }
         }
     }

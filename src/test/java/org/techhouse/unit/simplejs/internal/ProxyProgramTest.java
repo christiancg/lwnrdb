@@ -209,7 +209,7 @@ public class ProxyProgramTest {
         assertEquals(2, num(source));
     }
 
-    // A non-array ownKeys trap result yields no enumerated keys
+    // CreateListFromArrayLike rejects a non-object ownKeys trap result
     @Test
     public void test_own_keys_non_array_result() {
         final var source = """
@@ -218,7 +218,7 @@ public class ProxyProgramTest {
                 for (const k in p) { count++; }
                 count
                 """;
-        assertEquals(0, num(source));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
     // Nested proxies chain their traps
@@ -248,13 +248,21 @@ public class ProxyProgramTest {
                 """));
     }
 
-    // isExtensible / preventExtensions traps are consulted by the Object.* operations
+    // isExtensible / preventExtensions traps are consulted by the Object.* operations, but each
+    // result has to agree with the target's own extensibility
     @Test
     public void test_proxy_extensibility_traps() {
-        assertFalse(bool("let p = new Proxy({}, { isExtensible(t) { return false; } }); Object.isExtensible(p)"));
+        assertFalse(bool("""
+                let t = Object.preventExtensions({});
+                let p = new Proxy(t, { isExtensible(target) { return false; } });
+                Object.isExtensible(p)
+                """));
         assertTrue(bool("""
                 let hit = false;
-                let p = new Proxy({}, { preventExtensions(t) { hit = true; return true; } });
+                let t = {};
+                let p = new Proxy(t, {
+                    preventExtensions(target) { hit = true; Object.preventExtensions(target); return true; }
+                });
                 Object.preventExtensions(p);
                 hit
                 """));
@@ -336,5 +344,138 @@ public class ProxyProgramTest {
                 out.join(',')
                 """;
         assertEquals("a", str(source));
+    }
+
+    // A proxy reached as a [[Prototype]] dispatches its get trap, with the original object as receiver
+    @Test
+    public void test_proto_proxy_get_trap() {
+        final var source = """
+                const p = new Proxy({}, { get(target, key, receiver) { return key + ':' + (receiver === o); } });
+                const o = Object.create(p);
+                o.x
+                """;
+        assertEquals("x:true", str(source));
+    }
+
+    // A get trap on a prototype proxy answers even when it yields undefined, ending the walk
+    @Test
+    public void test_proto_proxy_get_trap_undefined_ends_walk() {
+        final var source = """
+                Object.prototype.shared = 'from Object.prototype';
+                const p = new Proxy({}, { get() { return undefined; } });
+                const o = Object.create(p);
+                typeof o.shared
+                """;
+        assertEquals("undefined", str(source));
+    }
+
+    // An own property still wins over a prototype proxy's get trap
+    @Test
+    public void test_own_property_beats_proto_proxy() {
+        final var source = """
+                const p = new Proxy({}, { get() { return 'trap'; } });
+                const o = Object.create(p);
+                o.x = 'own';
+                o.x
+                """;
+        assertEquals("own", str(source));
+    }
+
+    // `in` walks into a prototype proxy's has trap
+    @Test
+    public void test_proto_proxy_has_trap() {
+        final var source = """
+                const p = new Proxy({}, { has(target, key) { return key === 'yes'; } });
+                const o = Object.create(p);
+                ('yes' in o) && !('no' in o)
+                """;
+        assertTrue(bool(source));
+    }
+
+    // A write on an object whose prototype is a proxy goes through the set trap with the receiver
+    @Test
+    public void test_proto_proxy_set_trap() {
+        final var source = """
+                let seen = '';
+                const p = new Proxy({}, {
+                    set(target, key, value, receiver) { seen = key + '=' + value + ':' + (receiver === o); return true; }
+                });
+                const o = Object.create(p);
+                o.y = 7;
+                seen
+                """;
+        assertEquals("y=7:true", str(source));
+    }
+
+    // A prototype proxy whose set trap returns false rejects the write, which throws in strict mode
+    @Test
+    public void test_proto_proxy_set_trap_false_throws() {
+        final var source = """
+                const p = new Proxy({}, { set() { return false; } });
+                const o = Object.create(p);
+                o.z = 1;
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // A symbol-keyed read walks into a prototype proxy's get trap
+    @Test
+    public void test_proto_proxy_symbol_get_trap() {
+        final var source = """
+                const s = Symbol('tag');
+                const p = new Proxy({}, { get(target, key) { return key === s ? 'sym' : 'other'; } });
+                const o = Object.create(p);
+                o[s]
+                """;
+        assertEquals("sym", str(source));
+    }
+
+    // A symbol-keyed `in` walks into a prototype proxy's has trap
+    @Test
+    public void test_proto_proxy_symbol_has_trap() {
+        final var source = """
+                const s = Symbol('tag');
+                const p = new Proxy({}, { has(target, key) { return key === s; } });
+                const o = Object.create(p);
+                (s in o) && !(Symbol('other') in o)
+                """;
+        assertTrue(bool(source));
+    }
+
+    // A prototype proxy with no trap of its own falls through to its target's properties
+    @Test
+    public void test_proto_proxy_without_trap_reads_target() {
+        final var source = """
+                const p = new Proxy({ inherited: 42 }, {});
+                const o = Object.create(p);
+                o.inherited
+                """;
+        assertEquals(42d, num(source));
+    }
+
+    // An inherited setter still runs when the chain holds no proxy
+    @Test
+    public void test_inherited_setter_without_proxy() {
+        final var source = """
+                let seen = 0;
+                const base = {};
+                Object.defineProperty(base, 'v', { set(value) { seen = value; } });
+                const o = Object.create(base);
+                o.v = 5;
+                seen
+                """;
+        assertEquals(5d, num(source));
+    }
+
+    // A setter-less accessor on a prototype rejects the write
+    @Test
+    public void test_inherited_getter_only_rejects_write() {
+        final var source = """
+                const base = {};
+                Object.defineProperty(base, 'v', { get() { return 1; } });
+                const o = Object.create(base);
+                o.v = 5;
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 }

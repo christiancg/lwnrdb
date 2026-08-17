@@ -127,15 +127,21 @@ public final class AsyncIteration {
         }
     }
 
+    // AsyncIteratorClose under a normal completion: GetMethod rejects a present-but-non-callable
+    // `return`, and that TypeError is the caller's.
     public void close() {
         if (done) {
             return;
         }
         done = true;
         final var returnFn = interp.getMember(iterator, "return");
-        if (isCallable(returnFn)) {
-            interp.callValue(returnFn, iterator, List.of());
+        if (isNullish(returnFn)) {
+            return;
         }
+        if (!isCallable(returnFn)) {
+            throw new TypeErrorException("iterator.return is not a function");
+        }
+        interp.callValue(returnFn, iterator, List.of());
     }
 
     private void closeSyncQuietly() {
