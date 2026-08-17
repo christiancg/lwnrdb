@@ -73,6 +73,12 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
         return boundArgs;
     }
 
+    // The new.target of the [[Construct]] currently running, or null when this is a plain call - the
+    // only signal a native constructor has that it was reached through `new`.
+    public static JsValue currentNewTarget() {
+        return NEW_TARGET.get();
+    }
+
     public JsValue invoke(JsValue thisArg, List<JsValue> args) {
         final var previous = NEW_TARGET.get();
         if (previous == null) {

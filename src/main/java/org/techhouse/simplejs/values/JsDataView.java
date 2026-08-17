@@ -35,7 +35,11 @@ public final class JsDataView extends JsValue {
         return buffer;
     }
 
+    // get byteOffset rejects an out-of-bounds view for the same reason get byteLength does.
     public int byteOffset() {
+        if (isOutOfBounds()) {
+            throw new TypeErrorException("DataView is out of bounds");
+        }
         return byteOffset;
     }
 
@@ -114,7 +118,7 @@ public final class JsDataView extends JsValue {
             case "setInt8", "setUint8" -> bb.put(pos, (byte) NumberFormatter.toInt32(value));
             case "setInt16", "setUint16" -> bb.putShort(pos, (short) NumberFormatter.toInt32(value));
             case "setInt32", "setUint32" -> bb.putInt(pos, NumberFormatter.toInt32(value));
-            case "setFloat16" -> bb.putShort(pos, Float.floatToFloat16((float) value));
+            case "setFloat16" -> bb.putShort(pos, JsTypedArray.toFloat16(value));
             case "setFloat32" -> bb.putFloat(pos, (float) value);
             default -> bb.putDouble(pos, value);
         }

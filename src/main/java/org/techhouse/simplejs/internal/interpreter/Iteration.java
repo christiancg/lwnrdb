@@ -73,6 +73,11 @@ public final class Iteration {
             return JsCoercion.toBoolean(interp.getMember(step, "done")) ? null : interp.getMember(step, "value");
         }
         if (indexed != null) {
+            // ValidateTypedArray runs on every step, so a buffer detached mid-iteration is a TypeError
+            // rather than a silently shortened walk.
+            if (indexed instanceof JsTypedArray typed && typed.isOutOfBounds()) {
+                throw new TypeErrorException("Cannot iterate a typed array over a detached buffer");
+            }
             return index < currentLength(indexed) ? interp.getMember(indexed, Integer.toString(index++)) : null;
         }
         return index < buffer.size() ? buffer.get(index++) : null;

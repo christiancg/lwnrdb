@@ -256,10 +256,26 @@ public final class JsArray extends JsValue {
         if (!table.isExtensible() && length > elements.size()) {
             return false;
         }
-        if (!lengthFlags.writable() && length != elements.size()) {
+        // OrdinarySet rejects a write to a non-writable data property even when the value is
+        // unchanged, so `array.length = array.length` on a frozen length still fails.
+        if (!lengthFlags.writable()) {
             return false;
         }
+        return truncateTo(length);
+    }
+
+    // ArraySetLength steps 16-17: the tail is deleted one index at a time in descending order and the
+    // walk stops at the first non-configurable index, leaving length just above it and answering false.
+    private boolean truncateTo(int length) {
         while (elements.size() > length) {
+            final var last = elements.size() - 1;
+            if (ownsIndex(last) && !getIndexFlags(last).configurable()) {
+                return false;
+            }
+            clearIndexAccessor(last);
+            if (indexFlags != null) {
+                indexFlags.remove(last);
+            }
             elements.removeLast();
         }
         padTo(length);
@@ -273,11 +289,8 @@ public final class JsArray extends JsValue {
     // [[DefineOwnProperty]] on "length" bypasses the writable check for the value itself (only a
     // later [[Set]] respects it), matching ArraySetLength's "set newLenDesc's [[Value]] first, then
     // apply the writable attribute" order.
-    public void defineLength(int length) {
-        while (elements.size() > length) {
-            elements.removeLast();
-        }
-        padTo(length);
+    public boolean defineLength(int length) {
+        return truncateTo(length);
     }
 
     private void padToIndex(int index) {
@@ -311,10 +324,12 @@ public final class JsArray extends JsValue {
                 keys.add(new JsString(Integer.toString(i)));
             }
         }
+        // "length" exists from the moment the array is created, so it precedes every later named key
+        // in the creation order OrdinaryOwnPropertyKeys reports.
+        keys.add(new JsString("length"));
         for (final var key : table.keys()) {
             keys.add(new JsString(key));
         }
-        keys.add(new JsString("length"));
         keys.addAll(table.symbolKeys());
         return keys;
     }
@@ -375,6 +390,9 @@ public final class JsArray extends JsValue {
     // ArraySetLength: the value is applied before the writable attribute, so a length redefine that
     // also clears writable still takes effect.
     private void defineLengthFrom(String key, PropertyDescriptor descriptor) {
+        // ArraySetLength coerces (and range-checks) the new length before any descriptor validation,
+        // so an out-of-range value is a RangeError even when the redefine itself is illegal.
+        final var newLength = descriptor.value() == null ? null : requireArrayLength(descriptor.value());
         if (!lengthFlags.configurable() && Boolean.TRUE.equals(descriptor.configurable())) {
             throw OrdinaryProperties.redefineError(key);
         }
@@ -383,16 +401,21 @@ public final class JsArray extends JsValue {
             throw OrdinaryProperties.redefineError(key);
         }
         final var writable = descriptor.writableOr(lengthFlags.writable());
-        if (descriptor.value() != null) {
-            final var newLength = requireArrayLength(descriptor.value());
-            if (!lengthFlags.writable() && newLength != elements.size()) {
-                throw new TypeErrorException("Cannot redefine property: length");
+        if (newLength == null) {
+            if (!lengthFlags.writable() && writable) {
+                throw OrdinaryProperties.redefineError(key);
             }
-            defineLength(newLength);
-        } else if (!lengthFlags.writable() && writable) {
-            throw OrdinaryProperties.redefineError(key);
+            setLengthWritable(writable);
+            return;
         }
+        if (!lengthFlags.writable() && newLength != elements.size()) {
+            throw new TypeErrorException("Cannot redefine property: length");
+        }
+        final var truncated = defineLength(newLength);
         setLengthWritable(writable);
+        if (!truncated) {
+            throw new TypeErrorException("Cannot redefine property: length");
+        }
     }
 
     private void defineIndexFrom(int index, String key, PropertyDescriptor descriptor) {

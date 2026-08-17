@@ -3,9 +3,11 @@ package org.techhouse.simplejs.builtins;
 import java.math.BigInteger;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsBigInt;
+import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -16,13 +18,18 @@ public final class BigIntBuiltins {
 
     private static final int MIN_RADIX = 2;
     private static final int MAX_RADIX = 36;
+    private static final double MAX_SAFE_INTEGER = 9007199254740991d;
+    // BigInteger cannot represent a value wider than Integer.MAX_VALUE bits, so a bit count the spec
+    // would accept but this implementation cannot allocate is reported the way engines report their
+    // own width limit rather than crashing out of the sandbox.
+    private static final int MAX_BITS = 1 << 24;
 
     private BigIntBuiltins() {
     }
 
-    public static void installStatics(JsNativeFunction bigInt) {
-        bigInt.setProperty("asIntN", new JsNativeFunction("asIntN", (_, args) -> asIntN(args, true)));
-        bigInt.setProperty("asUintN", new JsNativeFunction("asUintN", (_, args) -> asIntN(args, false)));
+    public static void installStatics(JsNativeFunction bigInt, InterpreterOps ops) {
+        bigInt.setProperty("asIntN", new JsNativeFunction("asIntN", (_, args) -> asIntN(args, true, ops)));
+        bigInt.setProperty("asUintN", new JsNativeFunction("asUintN", (_, args) -> asIntN(args, false, ops)));
     }
 
     public static JsValue getMethod(JsBigInt receiver, String name) {
@@ -33,6 +40,47 @@ public final class BigIntBuiltins {
                     java.text.NumberFormat.getInstance(java.util.Locale.getDefault()).format(receiver.getValue())));
             default -> null;
         };
+    }
+
+    // ToBigInt: unlike the BigInt() function a Number is rejected outright, and an unparseable
+    // string is a SyntaxError rather than a TypeError.
+    public static JsBigInt toBigInt(JsValue value, InterpreterOps ops) {
+        final var primitive = JsCoercion.toPrimitive(value, "number", ops);
+        return switch (primitive) {
+            case JsBigInt big -> big;
+            case JsBoolean bool -> new JsBigInt(bool.getValue() ? BigInteger.ONE : BigInteger.ZERO);
+            case JsString string -> fromString(string.getValue());
+            default -> throw new TypeErrorException("Cannot convert the argument to a BigInt");
+        };
+    }
+
+    public static int toIndex(JsValue value, InterpreterOps ops) {
+        if (value instanceof JsUndefined) {
+            return 0;
+        }
+        final var integer = toIntegerOrInfinity(JsCoercion.toNumber(value, ops));
+        if (integer < 0 || integer > MAX_SAFE_INTEGER) {
+            throw new RangeErrorException("Invalid value: not (convertible to) a safe integer");
+        }
+        return (int) integer;
+    }
+
+    private static double toIntegerOrInfinity(double number) {
+        if (Double.isNaN(number)) {
+            return 0;
+        }
+        if (Double.isInfinite(number)) {
+            return number;
+        }
+        return number < 0 ? Math.ceil(number) : Math.floor(number);
+    }
+
+    private static JsBigInt fromString(String raw) {
+        final var parsed = JsCoercion.stringToBigInt(raw);
+        if (parsed == null) {
+            throw new SyntaxErrorException("Cannot convert " + raw + " to a BigInt");
+        }
+        return new JsBigInt(parsed);
     }
 
     private static String toString(JsBigInt receiver, List<JsValue> args) {
@@ -46,13 +94,11 @@ public final class BigIntBuiltins {
         return receiver.getValue().toString(radix);
     }
 
-    private static JsValue asIntN(List<JsValue> args, boolean signed) {
-        final var bits = (int) JsCoercion.toNumber(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
-        if (bits < 0) {
-            throw new RangeErrorException("Invalid value: not (convertible to) a safe integer");
-        }
-        if (args.size() < 2 || !(args.get(1) instanceof JsBigInt value)) {
-            throw new TypeErrorException("Cannot convert the argument to a BigInt");
+    private static JsValue asIntN(List<JsValue> args, boolean signed, InterpreterOps ops) {
+        final var bits = toIndex(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(), ops);
+        final var value = toBigInt(args.size() < 2 ? JsUndefined.getInstance() : args.get(1), ops);
+        if (bits > MAX_BITS) {
+            throw new RangeErrorException("BigInt is too big");
         }
         final var modulus = BigInteger.ONE.shiftLeft(bits);
         final var remainder = value.getValue().mod(modulus);

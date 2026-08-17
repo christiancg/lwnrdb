@@ -136,8 +136,8 @@ public class StringBuiltinsTest {
     // matchAll yields every match with its capture groups
     @Test
     public void test_match_all() {
-        assertEquals(2, num("'a1b2'.matchAll(/\\d/g).length"));
-        assertEquals("1", str("'a1b2'.matchAll(/(\\d)/g)[0][1]"));
+        assertEquals(2, num("[...'a1b2'.matchAll(/\\d/g)].length"));
+        assertEquals("1", str("[...'a1b2'.matchAll(/(\\d)/g)][0][1]"));
     }
 
     // search returns the index of the first match or -1
@@ -198,7 +198,7 @@ public class StringBuiltinsTest {
     // matchAll over a zero-width global pattern still terminates
     @Test
     public void test_match_all_zero_width() {
-        assertEquals(3, num("'ab'.matchAll(/x*/g).length"));
+        assertEquals(3, num("[...'ab'.matchAll(/x*/g)].length"));
     }
 
     // match/search coerce a string argument into a regex
@@ -369,8 +369,8 @@ public class StringBuiltinsTest {
     public void test_match_all_requires_global() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
                 () -> Interpreter.run("'aa'.matchAll(/a/)"));
-        assertEquals(2, num("'aa'.matchAll(/a/g).length"));
-        assertEquals(2, num("'aa'.matchAll('a').length"));
+        assertEquals(2, num("[...'aa'.matchAll(/a/g)].length"));
+        assertEquals(2, num("[...'aa'.matchAll('a')].length"));
     }
 
     // Annex-B substr handles negative and absent lengths

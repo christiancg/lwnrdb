@@ -64,18 +64,17 @@ DIVERGENCES = [
     ("super.x = v is a SyntaxError", ["language/expressions/super/", "language/statements/class/"]),
     ("Date component accessors are UTC, not local", ["built-ins/Date/"]),
     ("descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor)", ["built-ins/Object/defineProperty/"]),
-    ("Reflect.ownKeys omits symbol keys", ["built-ins/Reflect/"]),
     ("Object.assign bypasses the target's setter", ["built-ins/Object/assign/"]),
     ("instanceof survives F.prototype reassignment", ["language/expressions/instanceof/"]),
-    ("typed arrays lack the integer-indexed exotic internals",
-     ["built-ins/TypedArray/", "built-ins/TypedArrayConstructors/"]),
-    ("String(symbol) throws", ["built-ins/Symbol/", "built-ins/String/"]),
     ("Math.round(-0.5) yields +0", ["built-ins/Math/"]),
-    ("primitive wrappers are shallow", ["built-ins/Object/", "language/expressions/equals/"]),
     ("tagged template strings array not per-site cached", ["language/expressions/tagged-template/"]),
     ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
-    ("regex named-group limitations", ["built-ins/RegExp/"]),
 ]
+# Rows are removed from the list above as their divergence is closed. A row only asserts that *some*
+# test under its prefix still fails, so a stale one keeps passing on an unrelated failure and quietly
+# becomes a false claim about the engine - the five dropped so far (String(symbol) throwing,
+# Reflect.ownKeys omitting symbols, shallow primitive wrappers, typed arrays lacking the
+# integer-indexed internals, regex named-group limitations) were each verified fixed by probe first.
 
 
 class HarnessError(RuntimeError):

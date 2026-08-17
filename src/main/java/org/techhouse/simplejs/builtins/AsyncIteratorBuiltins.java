@@ -135,7 +135,12 @@ public final class AsyncIteratorBuiltins {
 
     private static void fromArrayLike(InterpreterOps ops, EventLoop loop, JsValue receiver, JsValue items,
             JsValue mapper, JsValue mapThis, JsPromise out) {
-        final var length = InterpreterUtils.isObjectLike(items) ? arrayLikeLength(ops, items) : 0;
+        // The array-like path is ToObject(asyncItems), so a primitive is boxed (and reads its
+        // prototype's indexed properties) while null/undefined is a TypeError.
+        if (InterpreterUtils.isNullish(items)) {
+            throw new TypeErrorException("Array.fromAsync requires an array-like or iterable object");
+        }
+        final var length = arrayLikeLength(ops, items);
         final var target = InterpreterUtils.isConstructor(receiver)
                 ? ops.construct(receiver, List.of(new JsNumber(length)))
                 : new JsArray();

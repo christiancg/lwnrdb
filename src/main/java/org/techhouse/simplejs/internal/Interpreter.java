@@ -741,7 +741,14 @@ public final class Interpreter {
                 }
                 return object.setSymbol(symbol, value);
             }
-            return true;
+            if (target instanceof JsClass cls) {
+                cls.setStaticSymbolProp(symbol, value);
+                return true;
+            }
+            // Every other exotic object keeps its symbol keys in the same ordinary table, so the
+            // write has to land there rather than being discarded.
+            final var table = target.ownProperties();
+            return table == null || table.setSymbol(symbol, value);
         }
         return members.setMember(target, JsCoercion.toStr(keyValue), value);
     }

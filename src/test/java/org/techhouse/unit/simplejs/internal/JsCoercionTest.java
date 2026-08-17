@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,11 +16,13 @@ import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 
 public class JsCoercionTest {
@@ -145,5 +148,78 @@ public class JsCoercionTest {
         final var primitive = JsCoercion.toPrimitive(new JsObject(), "number", null);
         assertEquals("[object Object]", ((JsString) primitive).getValue());
         assertEquals("1,2", JsCoercion.toStr(new JsArray(List.of(new JsNumber(1), new JsNumber(2))), null));
+    }
+
+    // isObject is the complement of the spec's primitive set, so every non-primitive coerces
+    @Test
+    public void test_is_object() {
+        assertFalse(JsCoercion.isObject(new JsNumber(1)));
+        assertFalse(JsCoercion.isObject(new JsString("a")));
+        assertFalse(JsCoercion.isObject(JsBoolean.TRUE));
+        assertFalse(JsCoercion.isObject(new JsBigInt(BigInteger.ONE)));
+        assertFalse(JsCoercion.isObject(JsNull.getInstance()));
+        assertFalse(JsCoercion.isObject(JsUndefined.getInstance()));
+        assertFalse(JsCoercion.isObject(new JsSymbol("s")));
+        assertTrue(JsCoercion.isObject(new JsObject()));
+        assertTrue(JsCoercion.isObject(new JsArray()));
+        assertTrue(JsCoercion.isObject(new JsNativeFunction("n", (_, _) -> JsUndefined.getInstance())));
+    }
+
+    // toPrimitive covers every object-like value, not only plain objects and arrays
+    @Test
+    public void test_to_primitive_object_like() {
+        final var function = new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance());
+        assertEquals("function f() { [native code] }", ((JsString) JsCoercion.toPrimitive(function)).getValue());
+        assertEquals("1,2",
+                ((JsString) JsCoercion.toPrimitive(new JsArray(List.of(new JsNumber(1), new JsNumber(2))))).getValue());
+        assertEquals("[object Map]", ((JsString) JsCoercion.toPrimitive(new JsMap())).getValue());
+    }
+
+    // A primitive wrapper coerces through its boxed value, and a boxed symbol describes itself
+    @Test
+    public void test_wrapper_coercion() {
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(new JsNumber(7));
+        assertEquals(7, JsCoercion.toNumber(wrapper));
+        assertEquals("7", JsCoercion.toStr(wrapper));
+        assertEquals(7, ((JsNumber) JsCoercion.toPrimitive(wrapper)).getValue());
+        final var symbolWrapper = new JsObject();
+        symbolWrapper.setPrimitive(new JsSymbol("tag"));
+        assertEquals("Symbol(tag)", JsCoercion.toStr(symbolWrapper));
+    }
+
+    // toNumber of a symbol throws, mirroring +symbol in JS
+    @Test
+    public void test_to_number_symbol_throws() {
+        assertThrows(TypeErrorException.class, () -> JsCoercion.toNumber(new JsSymbol("s")));
+    }
+
+    // toNumeric keeps a BigInt a BigInt while everything else becomes a number
+    @Test
+    public void test_to_numeric() {
+        assertEquals(BigInteger.TEN, ((JsBigInt) JsCoercion.toNumeric(new JsBigInt(BigInteger.TEN), null)).getValue());
+        assertEquals(3, ((JsNumber) JsCoercion.toNumeric(new JsString("3"), null)).getValue());
+        assertEquals(1, ((JsNumber) JsCoercion.toNumeric(JsBoolean.TRUE, null)).getValue());
+    }
+
+    // StringToBigInt accepts the StringIntegerLiteral grammar and reports anything else as absent
+    @Test
+    public void test_string_to_big_int() {
+        assertEquals(BigInteger.ZERO, JsCoercion.stringToBigInt(""));
+        assertEquals(BigInteger.ZERO, JsCoercion.stringToBigInt("   "));
+        assertEquals(BigInteger.ONE, JsCoercion.stringToBigInt(" 1 "));
+        assertEquals(BigInteger.valueOf(-1), JsCoercion.stringToBigInt("-1"));
+        assertEquals(BigInteger.valueOf(1), JsCoercion.stringToBigInt("+1"));
+        assertEquals(BigInteger.valueOf(16), JsCoercion.stringToBigInt("0x10"));
+        assertEquals(BigInteger.valueOf(8), JsCoercion.stringToBigInt("0o10"));
+        assertEquals(BigInteger.valueOf(5), JsCoercion.stringToBigInt("0b101"));
+        assertEquals(new BigInteger("9007199254740993"), JsCoercion.stringToBigInt("9007199254740993"));
+        assertNull(JsCoercion.stringToBigInt("0."));
+        assertNull(JsCoercion.stringToBigInt(".0"));
+        assertNull(JsCoercion.stringToBigInt("1e0"));
+        assertNull(JsCoercion.stringToBigInt("0n"));
+        assertNull(JsCoercion.stringToBigInt("Infinity"));
+        assertNull(JsCoercion.stringToBigInt("0b2"));
+        assertNull(JsCoercion.stringToBigInt("-0x10"));
     }
 }

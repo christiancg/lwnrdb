@@ -3,10 +3,10 @@ package org.techhouse.simplejs.builtins;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.regex.Matcher;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
@@ -30,9 +30,15 @@ public final class StringBuiltins {
     private StringBuiltins() {
     }
 
+    // Spec GetMethod(argument, symbol) + Call, guarded by "If regexp is an Object": the well-known
+    // symbol wins for any object argument, a RegExp included, but is never read off a primitive.
     private static JsValue delegateToSymbol(String value, List<JsValue> args, JsSymbol symbol, InterpreterOps ops,
             List<JsValue> extra) {
-        if (ops == null || args.isEmpty() || !(args.getFirst() instanceof JsObject pattern)) {
+        if (ops == null || args.isEmpty()) {
+            return null;
+        }
+        final var pattern = args.getFirst();
+        if (!InterpreterUtils.isObjectLike(pattern)) {
             return null;
         }
         final var method = ops.getMember(pattern, symbol);
@@ -43,6 +49,16 @@ public final class StringBuiltins {
         callArgs.add(new JsString(value));
         callArgs.addAll(extra);
         return ops.call(method, pattern, callArgs);
+    }
+
+    // Spec RegExpCreate(pattern, flags) then Invoke(rx, symbol, S): the fallback of match/matchAll/
+    // search is not a private matcher, it is the ordinary RegExp protocol on a fresh RegExp.
+    private static JsValue viaRegExp(String value, List<JsValue> args, String flags, JsSymbol symbol,
+            InterpreterOps ops) {
+        final var pattern = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        final var source = pattern instanceof JsUndefined ? "" : JsCoercion.toStr(pattern, ops);
+        final var regexp = RegexTranslator.compile(source, flags);
+        return ops.call(ops.getMember(regexp, symbol), regexp, List.of(new JsString(value)));
     }
 
     private static List<JsValue> tail(List<JsValue> args) {
@@ -73,10 +89,18 @@ public final class StringBuiltins {
         }
     }
 
-    private static void requireGlobalRegExp(List<JsValue> args) {
-        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp && !regexp.isGlobal()) {
-            throw new TypeErrorException(
-                    "String.prototype." + "replaceAll" + " called with a non-global RegExp argument");
+    // Spec: replaceAll/matchAll reject an IsRegExp argument whose own "flags" lacks `g`, reading the
+    // flags off the object rather than off the compiled pattern.
+    private static void requireGlobalRegExp(List<JsValue> args, String method, InterpreterOps ops) {
+        if (args.isEmpty() || !RegexBuiltins.isRegExp(args.getFirst(), ops)) {
+            return;
+        }
+        final var flags = ops.getMember(args.getFirst(), new JsString("flags"));
+        if (flags instanceof JsUndefined || flags instanceof JsNull) {
+            throw new TypeErrorException("String.prototype." + method + " called with a RegExp without flags");
+        }
+        if (JsCoercion.toStr(flags, ops).indexOf('g') < 0) {
+            throw new TypeErrorException("String.prototype." + method + " called with a non-global RegExp argument");
         }
     }
 
@@ -177,21 +201,22 @@ public final class StringBuiltins {
                 return delegated != null ? delegated : replace(value, args, invoker, false, ops);
             });
             case "replaceAll" -> new JsNativeFunction("replaceAll", (_, args) -> {
-                requireGlobalRegExp(args);
+                requireGlobalRegExp(args, "replaceAll", ops);
                 final var delegated = delegateToSymbol(value, args, JsSymbol.REPLACE, ops, tail(args));
                 return delegated != null ? delegated : replace(value, args, invoker, true, ops);
             });
             case "match" -> new JsNativeFunction("match", (_, args) -> {
                 final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH, ops, List.of());
-                return delegated != null ? delegated : match(value, args, ops);
+                return delegated != null ? delegated : viaRegExp(value, args, "", JsSymbol.MATCH, ops);
             });
             case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> {
+                requireGlobalRegExp(args, "matchAll", ops);
                 final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH_ALL, ops, List.of());
-                return delegated != null ? delegated : matchAll(value, args, ops);
+                return delegated != null ? delegated : viaRegExp(value, args, "g", JsSymbol.MATCH_ALL, ops);
             });
             case "search" -> new JsNativeFunction("search", (_, args) -> {
                 final var delegated = delegateToSymbol(value, args, JsSymbol.SEARCH, ops, List.of());
-                return delegated != null ? delegated : new JsNumber(search(value, args, ops));
+                return delegated != null ? delegated : viaRegExp(value, args, "", JsSymbol.SEARCH, ops);
             });
             case "toUpperCase" ->
                 new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
@@ -396,9 +421,6 @@ public final class StringBuiltins {
             result.push(new JsString(value));
             return result;
         }
-        if (args.getFirst() instanceof JsRegExp regexp) {
-            return splitByRegex(value, regexp);
-        }
         final var separator = str(args, 0, ops);
         if (separator.isEmpty()) {
             for (var i = 0; i < value.length(); i++) {
@@ -425,9 +447,6 @@ public final class StringBuiltins {
     }
 
     private static JsValue replace(String value, List<JsValue> args, Invoker invoker, boolean all, InterpreterOps ops) {
-        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp) {
-            return new JsString(replaceRegex(value, regexp, args, invoker, all, ops));
-        }
         final var search = str(args, 0, ops);
         if (all) {
             return new JsString(replaceAllLiteral(value, search, args, invoker, ops));
@@ -492,181 +511,6 @@ public final class StringBuiltins {
         }
         sb.append(value.substring(Math.min(from, value.length())));
         return sb.toString();
-    }
-
-    private static String replaceRegex(String value, JsRegExp regexp, List<JsValue> args, Invoker invoker, boolean all,
-            InterpreterOps ops) {
-        final var matcher = regexp.getPattern().matcher(value);
-        final var global = all || regexp.isGlobal();
-        final var sb = new StringBuilder();
-        var last = 0;
-        while (matcher.find()) {
-            sb.append(value, last, matcher.start());
-            sb.append(replacementPiece(matcher, value, args, invoker, regexp, ops));
-            last = matcher.end();
-            if (!global) {
-                break;
-            }
-            if (matcher.end() == matcher.start()) {
-                if (matcher.end() >= value.length()) {
-                    break;
-                }
-                sb.append(value.charAt(matcher.end()));
-                last = matcher.end() + 1;
-                matcher.region(last, value.length());
-            }
-        }
-        sb.append(value.substring(last));
-        return sb.toString();
-    }
-
-    private static String replacementPiece(Matcher matcher, String input, List<JsValue> args, Invoker invoker,
-            JsRegExp regexp, InterpreterOps ops) {
-        if (args.size() > 1 && isCallable(args.get(1))) {
-            final var callArgs = new ArrayList<JsValue>();
-            callArgs.add(new JsString(matcher.group()));
-            for (var i = 1; i <= matcher.groupCount(); i++) {
-                callArgs.add(matcher.group(i) == null ? JsUndefined.getInstance() : new JsString(matcher.group(i)));
-            }
-            callArgs.add(new JsNumber(matcher.start()));
-            callArgs.add(new JsString(input));
-            return JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(), callArgs));
-        }
-        return expand(str(args, 1, ops), matcher, input, regexp);
-    }
-
-    private static String expand(String template, Matcher matcher, String input, JsRegExp regexp) {
-        final var sb = new StringBuilder();
-        for (var i = 0; i < template.length(); i++) {
-            final var ch = template.charAt(i);
-            if (ch != '$' || i + 1 >= template.length()) {
-                sb.append(ch);
-                continue;
-            }
-            final var next = template.charAt(i + 1);
-            switch (next) {
-                case '$' -> sb.append('$');
-                case '&' -> sb.append(matcher.group());
-                case '`' -> sb.append(input, 0, matcher.start());
-                case '\'' -> sb.append(input.substring(matcher.end()));
-                case '<' -> i = appendNamedGroup(sb, template, i + 2, matcher, regexp) - 1;
-                default -> {
-                    if (Character.isDigit(next)) {
-                        i = appendNumberedGroup(sb, template, i + 1, matcher) - 1;
-                    } else {
-                        sb.append('$');
-                        continue;
-                    }
-                }
-            }
-            i++;
-        }
-        return sb.toString();
-    }
-
-    // GetSubstitution leaves the token literal when it cannot resolve: an unterminated $<, a $<name>
-    // on a pattern with no named groups at all, or a $NN past the group count.
-    private static int appendNamedGroup(StringBuilder sb, String template, int start, Matcher matcher,
-            JsRegExp regexp) {
-        final var close = template.indexOf('>', start);
-        if (close < 0 || regexp.getGroupAliases().isEmpty()) {
-            sb.append("$<");
-            return start - 1;
-        }
-        final var name = template.substring(start, close);
-        if (!regexp.getGroupAliases().containsKey(name)) {
-            return close;
-        }
-        final var alias = RegexBuiltins.participatingGroup(regexp, name, matcher);
-        final var group = alias == null ? null : matcher.group(alias);
-        if (group != null) {
-            sb.append(group);
-        }
-        return close;
-    }
-
-    private static int appendNumberedGroup(StringBuilder sb, String template, int start, Matcher matcher) {
-        var end = start + 1;
-        if (end < template.length() && Character.isDigit(template.charAt(end))
-                && Integer.parseInt(template.substring(start, end + 1)) <= matcher.groupCount()) {
-            end++;
-        }
-        final var group = Integer.parseInt(template.substring(start, end));
-        if (group < 1 || group > matcher.groupCount()) {
-            sb.append('$').append(template, start, end);
-        } else if (matcher.group(group) != null) {
-            sb.append(matcher.group(group));
-        }
-        return end - 1;
-    }
-
-    private static JsValue match(String value, List<JsValue> args, InterpreterOps ops) {
-        final var regexp = toRegExp(args, ops);
-        if (!regexp.isGlobal()) {
-            final var matcher = regexp.getPattern().matcher(value);
-            return matcher.find() ? matchResult(matcher, value, regexp) : JsNull.getInstance();
-        }
-        final var matcher = regexp.getPattern().matcher(value);
-        final var result = new JsArray();
-        while (matcher.find()) {
-            result.push(new JsString(matcher.group()));
-            if (matcher.end() == matcher.start()) {
-                if (matcher.end() >= value.length()) {
-                    break;
-                }
-                matcher.region(matcher.end() + 1, value.length());
-            }
-        }
-        return result.length() == 0 ? JsNull.getInstance() : result;
-    }
-
-    private static JsValue matchAll(String value, List<JsValue> args, InterpreterOps ops) {
-        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp given && !given.isGlobal()) {
-            throw new TypeErrorException("String.prototype.matchAll called with a non-global RegExp argument");
-        }
-        final var regexp = toRegExp(args, ops);
-        final var matcher = regexp.getPattern().matcher(value);
-        final var result = new JsArray();
-        while (matcher.find()) {
-            result.push(matchResult(matcher, value, regexp));
-            if (matcher.end() == matcher.start()) {
-                if (matcher.end() >= value.length()) {
-                    break;
-                }
-                matcher.region(matcher.end() + 1, value.length());
-            }
-        }
-        return result;
-    }
-
-    private static JsValue matchResult(Matcher matcher, String input, JsRegExp regexp) {
-        final var result = RegexBuiltins.buildMatchResult(matcher, input, regexp);
-        if (regexp.hasIndices()) {
-            RegexBuiltins.addIndices(result, matcher, regexp);
-        }
-        return result;
-    }
-
-    private static int search(String value, List<JsValue> args, InterpreterOps ops) {
-        final var regexp = toRegExp(args, ops);
-        final var matcher = regexp.getPattern().matcher(value);
-        return matcher.find() ? matcher.start() : -1;
-    }
-
-    private static JsArray splitByRegex(String value, JsRegExp regexp) {
-        final var parts = regexp.getPattern().split(value, -1);
-        final var result = new JsArray();
-        for (final var part : parts) {
-            result.push(new JsString(part));
-        }
-        return result;
-    }
-
-    private static JsRegExp toRegExp(List<JsValue> args, InterpreterOps ops) {
-        if (!args.isEmpty() && args.getFirst() instanceof JsRegExp regexp) {
-            return regexp;
-        }
-        return RegexTranslator.compile(args.isEmpty() ? "" : str(args, 0, ops), "");
     }
 
     private static boolean isCallable(JsValue value) {

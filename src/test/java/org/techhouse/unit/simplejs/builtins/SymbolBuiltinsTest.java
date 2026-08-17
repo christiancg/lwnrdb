@@ -107,6 +107,51 @@ public class SymbolBuiltinsTest {
         assertEquals("", str("Symbol('').description"));
     }
 
+    // Every well-known symbol is a non-writable, non-configurable own property of the constructor
+    @Test
+    public void wellKnownSymbolsAreNonWritableAndNonConfigurable() {
+        final var names = new String[]{"asyncDispose", "asyncIterator", "dispose", "hasInstance", "isConcatSpreadable",
+                "iterator", "match", "matchAll", "replace", "search", "split", "toPrimitive", "toStringTag",
+                "unscopables"};
+        for (final var name : names) {
+            final var descriptor = "let d = Object.getOwnPropertyDescriptor(Symbol, '" + name + "'); ";
+            assertTrue(bool(descriptor + "d.writable === false"), name + " should not be writable");
+            assertTrue(bool(descriptor + "d.enumerable === false"), name + " should not be enumerable");
+            assertTrue(bool(descriptor + "d.configurable === false"), name + " should not be configurable");
+        }
+    }
+
+    // Symbol.prototype members accept a wrapper receiver, not only a primitive symbol
+    @Test
+    public void symbolPrototypeMembersAcceptAWrapperReceiver() {
+        assertEquals("x", str("Object(Symbol('x')).description"));
+        assertEquals("Symbol(x)", str("Object(Symbol('x')).toString()"));
+        assertTrue(bool("let s = Symbol('x'); Object(s).valueOf() === s"));
+        assertTrue(bool("let s = Symbol('x'); Object(s)[Symbol.toPrimitive]() === s"));
+        assertEquals("Symbol(x)", str("Symbol.prototype.toString.call(Object(Symbol('x')))"));
+    }
+
+    // Symbol() and Symbol.for run ToString over their argument, so user code decides the description
+    @Test
+    public void symbolDescriptionRunsToString() {
+        assertEquals("42", str("Symbol({ toString() { return '42' } }).description"));
+        assertEquals("7", str("Symbol.keyFor(Symbol.for({ toString() { return '7' } }))"));
+        assertEquals("1", str("Symbol(1).description"));
+    }
+
+    // Symbol.keyFor rejects a non-symbol, including a symbol wrapper object
+    @Test
+    public void symbolKeyForRejectsNonSymbols() {
+        assertTrue(bool(threwTypeError("Symbol.keyFor(null)")));
+        assertTrue(bool(threwTypeError("Symbol.keyFor('1')")));
+        assertTrue(bool(threwTypeError("Symbol.keyFor(Object(Symbol('s')))")));
+    }
+
+    private static String threwTypeError(String expression) {
+        return "(function() { try { " + expression
+                + "; return false } catch (e) { return e instanceof TypeError } })()";
+    }
+
     @Test
     public void symbolPrototypeHasToPrimitiveAndToStringTag() {
         assertTrue(bool("typeof Symbol.prototype[Symbol.toPrimitive] === 'function'"));

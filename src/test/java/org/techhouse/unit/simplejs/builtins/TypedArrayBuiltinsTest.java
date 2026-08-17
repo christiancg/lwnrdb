@@ -1,10 +1,17 @@
 package org.techhouse.unit.simplejs.builtins;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.values.JsArrayBuffer;
+import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsTypedArray;
 
 public class TypedArrayBuiltinsTest {
     private static String str(String source) {
@@ -49,8 +56,9 @@ public class TypedArrayBuiltinsTest {
         assertEquals("TypeError", caught(DETACHED + "ta.join(',')"));
         assertEquals("TypeError", caught(DETACHED + "ta.values()"));
         assertEquals("TypeError", caught(DETACHED + "ta.set([1])"));
-        // subarray is the one method the spec deliberately leaves unvalidated
-        assertEquals("none", caught(DETACHED + "ta.subarray(0)"));
+        // subarray skips ValidateTypedArray, but the view it species-creates over the same detached
+        // buffer cannot be built, so the rejection arrives from the constructor instead
+        assertEquals("TypeError", caught(DETACHED + "ta.subarray(0)"));
     }
 
     // a callback or coercion that detaches mid-call is observed rather than silently tolerated: the
@@ -180,5 +188,279 @@ public class TypedArrayBuiltinsTest {
         assertEquals("undefined", str("const ta = new Int8Array(1); ta[1.5] = 7; String(ta[1.5])"));
         assertEquals("5", str("const ta = new Int8Array(1);"
                 + "Object.defineProperty(ta, 'v', { get() { return 5; } }); String(ta.v)"));
+    }
+
+    // every canonical index inside the view is an own data property, and the spec made them
+    // writable, enumerable and configurable so a shrinking buffer can drop them
+    @Test
+    public void test_canonical_indices_are_own_data_properties() {
+        final var base = "const ta = new Int8Array(2); ";
+        assertEquals("0,1", str(base + "Object.getOwnPropertyNames(ta).join(',')"));
+        assertEquals("true,true,true", str(base + "const d = Object.getOwnPropertyDescriptor(ta, '0');"
+                + "[d.writable, d.enumerable, d.configurable].join(',')"));
+        assertEquals("0", str(base + "String(Object.getOwnPropertyDescriptor(ta, '0').value)"));
+        assertEquals("undefined", str(base + "String(Object.getOwnPropertyDescriptor(ta, '2'))"));
+        assertEquals("true", str(base + "String(Object.prototype.hasOwnProperty.call(ta, '1'))"));
+        assertEquals("false", str(base + "String(Object.prototype.hasOwnProperty.call(ta, '2'))"));
+    }
+
+    // ownPropertyKeys lists the indices ascending, then the table's string keys, then its symbols
+    @Test
+    public void test_own_keys_order_indices_then_strings() {
+        assertEquals("0,1,tag",
+                str("const ta = new Int8Array(2); ta.tag = 1;" + "Object.getOwnPropertyNames(ta).join(',')"));
+        assertEquals("", str("const ta = new Int8Array(4).subarray(4); Object.getOwnPropertyNames(ta).join(',')"));
+        assertEquals("0,1", str("const b = new ArrayBuffer(4, { maxByteLength: 4 });"
+                + "const ta = new Int8Array(b); b.resize(2); Object.getOwnPropertyNames(ta).join(',')"));
+    }
+
+    // a numeric string Number::toString would never produce is an ordinary key, not an index
+    @Test
+    public void test_non_canonical_numeric_keys_are_ordinary() {
+        final var base = "const ta = new Int8Array(2); ";
+        for (final var key : new String[]{"-0", "1.0", "+1", " 1", "01"}) {
+            assertEquals("false", str(base + "String(Object.prototype.hasOwnProperty.call(ta, '" + key + "'))"));
+        }
+        assertEquals("42",
+                str(base + "Object.defineProperty(ta, '1.0', { value: 42, writable: true, configurable: true });"
+                        + "String(ta['1.0'])"));
+        assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '-0', { value: 1 }))"));
+    }
+
+    // [[DefineOwnProperty]] on an index writes the element; anything the exotic cannot honour - an
+    // accessor, a cleared attribute, an out-of-range index - is rejected
+    @Test
+    public void test_define_own_property_on_indices() {
+        final var base = "const ta = new Int8Array(2); ";
+        assertEquals("7", str(base + "Object.defineProperty(ta, '0', { value: 7 }); String(ta[0])"));
+        assertEquals("true", str(base + "String(Reflect.defineProperty(ta, '0', { value: 7 }))"));
+        assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '2', { value: 7 }))"));
+        assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '0', { get() { return 1; } }))"));
+        assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '0', { value: 7, writable: false }))"));
+        assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '0', { value: 7, enumerable: false }))"));
+        assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '0', { value: 7, configurable: false }))"));
+        assertEquals("TypeError", caught(base + "Object.defineProperty(ta, '2', { value: 7 })"));
+    }
+
+    // [[Delete]] of a live index fails, while anything absent - out of range, non-canonical, gone
+    // with a detached buffer - deletes vacuously
+    @Test
+    public void test_delete_of_a_valid_index_is_refused() {
+        final var base = "const ta = new Int8Array(2); ";
+        assertEquals("false", str(base + "String(Reflect.deleteProperty(ta, '0'))"));
+        assertEquals("true", str(base + "String(Reflect.deleteProperty(ta, '2'))"));
+        assertEquals("true", str(base + "String(Reflect.deleteProperty(ta, '1.5'))"));
+        assertEquals("true", str(base + "String(Reflect.deleteProperty(ta, 'missing'))"));
+        assertEquals("true", str(DETACHED + "String(Reflect.deleteProperty(ta, '0'))"));
+    }
+
+    // an out-of-bounds element write is dropped without reporting failure
+    @Test
+    public void test_out_of_bounds_write_is_a_silent_no_op() {
+        final var base = "const ta = new Int8Array(1); ";
+        assertEquals("undefined", str(base + "ta[5] = 3; String(ta[5])"));
+        assertEquals("false", str(base + "ta[5] = 3; String(Object.prototype.hasOwnProperty.call(ta, '5'))"));
+        assertEquals("true", str(base + "String(Reflect.set(ta, '5', 3))"));
+        assertEquals("none", caught(DETACHED + "ta[0] = 1"));
+        assertEquals("undefined", str(DETACHED + "ta[0] = 1; String(ta[0])"));
+    }
+
+    // an element write runs the value's own valueOf even when the value is itself an exotic object
+    @Test
+    public void test_element_write_coerces_through_ordinary_to_primitive() {
+        assertEquals("Test262Error", caught("const ta = new Int8Array(1); const src = new Int8Array(1);"
+                + "src.valueOf = function () { throw { name: 'Test262Error' }; }; ta[0] = src"));
+        assertEquals("3", str("const ta = new Int8Array(1); const src = new Int8Array(1);"
+                + "src.valueOf = function () { return 3; }; ta[0] = src; String(ta[0])"));
+    }
+
+    // narrowing a double straight to a half: rounding through float first lands on the wrong value
+    @Test
+    public void test_float16_writes_round_once() {
+        assertEquals("5.960464477539063e-8",
+                str("const ta = new Float16Array(1); ta[0] = 2.980232238769532e-8; String(ta[0])"));
+        assertEquals("5.960464477539063e-8", str("const v = new DataView(new ArrayBuffer(2));"
+                + "v.setFloat16(0, 2.980232238769532e-8); String(v.getFloat16(0))"));
+    }
+
+    // from/of construct through the `this` constructor rather than a fixed kind
+    @Test
+    public void test_from_and_of_honour_the_this_constructor() {
+        assertEquals("1,2", str("Int8Array.of(1, 2).join(',')"));
+        assertEquals("2,4", str("Int8Array.from([1, 2], function (x) { return x * 2; }).join(',')"));
+        assertEquals("Int32Array", str("const TypedArray = Object.getPrototypeOf(Int8Array);"
+                + "TypedArray.of.call(Int32Array, 1).constructor.name"));
+        assertEquals("TypeError", caught("Object.getPrototypeOf(Int8Array).of.call(null, 1)"));
+        assertEquals("TypeError", caught("Int8Array.from([1], 'not a function')"));
+        assertEquals("42", str("const host = { mark: 42 };"
+                + "String(Int8Array.from([1], function () { return this.mark; }, host)[0])"));
+    }
+
+    // a constructor-only builtin rejects a plain call and reads new.target's prototype
+    @Test
+    public void test_constructors_require_new() {
+        assertEquals("TypeError", caught("Int8Array(1)"));
+        assertEquals("TypeError", caught("ArrayBuffer(8)"));
+        assertEquals("TypeError", caught("DataView(new ArrayBuffer(8))"));
+        assertEquals("3", str("String(Int8Array.length)"));
+    }
+
+    // isView answers for both view kinds and for nothing else
+    @Test
+    public void test_is_view_recognises_both_view_kinds() {
+        assertEquals("true", str("String(ArrayBuffer.isView(new Int8Array(1)))"));
+        assertEquals("true", str("String(ArrayBuffer.isView(new DataView(new ArrayBuffer(1))))"));
+        assertEquals("false", str("String(ArrayBuffer.isView({}))"));
+        assertEquals("false", str("String(ArrayBuffer.isView())"));
+        assertEquals("true", str("const isView = ArrayBuffer.isView; String(isView(new Int8Array(1)))"));
+    }
+
+    // indexOf/lastIndexOf compare strictly, and an explicitly passed undefined fromIndex is still
+    // a supplied argument that ToIntegerOrInfinity turns into 0
+    @Test
+    public void test_index_searches_are_strict() {
+        final var base = "const ta = new Int8Array([1, 2, 3]); ";
+        assertEquals("-1", str(base + "String(ta.indexOf('2'))"));
+        assertEquals("-1", str(base + "String(ta.lastIndexOf('2'))"));
+        assertEquals("1", str(base + "String(ta.indexOf(2))"));
+        assertEquals("-1", str(base + "String(ta.lastIndexOf(3, undefined))"));
+        assertEquals("2", str(base + "String(ta.lastIndexOf(3))"));
+    }
+
+    // FromBase64: whitespace is skipped, and the last chunk is governed by lastChunkHandling
+    @Test
+    public void test_from_base64_decodes_per_last_chunk_handling() {
+        assertEquals("101,120,97,102", str("Uint8Array.fromBase64('ZXhhZg==').join(',')"));
+        assertEquals("102", str("Uint8Array.fromBase64('Z\\tg==').join(',')"));
+        assertEquals("101,120,97",
+                str("Uint8Array.fromBase64('ZXhhZg', { lastChunkHandling: 'stop-before-partial' }).join(',')"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromBase64('ZXhhZg', { lastChunkHandling: 'strict' })"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromBase64('ZXhhZh==', { lastChunkHandling: 'strict' })"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromBase64('ZXhhZg=')"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromBase64('ZXhhZg===')"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromBase64('A')"));
+        assertEquals("", str("Uint8Array.fromBase64('A', { lastChunkHandling: 'stop-before-partial' }).join(',')"));
+        assertEquals("199,239,242", str("Uint8Array.fromBase64('x-_y', { alphabet: 'base64url' }).join(',')"));
+        assertEquals("TypeError", caught("Uint8Array.fromBase64('Zg==', { alphabet: 'base32' })"));
+        assertEquals("TypeError", caught("Uint8Array.fromBase64('Zg==', { lastChunkHandling: 'nope' })"));
+        assertEquals("TypeError", caught("Uint8Array.fromBase64(1)"));
+        assertEquals("1", str("String(Uint8Array.fromBase64.length)"));
+    }
+
+    // FromHex rejects an odd length before decoding anything, and setFromHex writes the valid prefix
+    @Test
+    public void test_from_hex_and_set_from_hex() {
+        assertEquals("102,111,111", str("Uint8Array.fromHex('666f6f').join(',')"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromHex('666')"));
+        assertEquals("SyntaxError", caught("Uint8Array.fromHex('66zz')"));
+        assertEquals("SyntaxError", caught("new Uint8Array(0).setFromHex('6')"));
+        assertEquals("102,0",
+                str("const ta = new Uint8Array(2);" + "try { ta.setFromHex('66zz'); } catch (e) {} ta.join(',')"));
+        assertEquals("4,2", str("const ta = new Uint8Array(4); const r = ta.setFromHex('66 6f'.replace(' ', ''));"
+                + "[r.read, r.written].join(',')"));
+    }
+
+    // setFromBase64 decodes only as much as the target holds and reports what it consumed
+    @Test
+    public void test_set_from_base64_reports_read_and_written() {
+        assertEquals("4,3,102,111,111,255,255", str("const ta = new Uint8Array([255, 255, 255, 255, 255]);"
+                + "const r = ta.setFromBase64('Zm9vYmFy');" + "[r.read, r.written].concat(Array.from(ta)).join(',')"));
+        assertEquals("8,5", str("const ta = new Uint8Array(5); const r = ta.setFromBase64('Zm9vYmE=');"
+                + "[r.read, r.written].join(',')"));
+        assertEquals("0,0", str(
+                "const ta = new Uint8Array(0); const r = ta.setFromBase64('#');" + "[r.read, r.written].join(',')"));
+        assertEquals("TypeError", caught(DETACHED + "new Uint8Array(new ArrayBuffer(0)).setFromBase64(1)"));
+    }
+
+    // toBase64/toHex read their options once and reject a detached receiver
+    @Test
+    public void test_to_base64_and_to_hex() {
+        assertEquals("Zm9v", str("new Uint8Array([102, 111, 111]).toBase64()"));
+        assertEquals("x-_y", str("new Uint8Array([199, 239, 242]).toBase64({ alphabet: 'base64url' })"));
+        assertEquals("/w", str("new Uint8Array([255]).toBase64({ omitPadding: true })"));
+        assertEquals("666f6f", str("new Uint8Array([102, 111, 111]).toHex()"));
+        assertEquals("TypeError", caught("new Uint8Array(1).toBase64({ alphabet: 'base32' })"));
+        assertEquals("TypeError",
+                caught("const b = new ArrayBuffer(2); const u = new Uint8Array(b); b.transfer(0); u.toBase64()"));
+        assertEquals("TypeError",
+                caught("const b = new ArrayBuffer(2); const u = new Uint8Array(b); b.transfer(0); u.toHex()"));
+    }
+
+    // `with` captures the length up front but validates the index against the live one
+    @Test
+    public void test_with_validates_the_index_after_coercion() {
+        assertEquals("11,22", str("const b = new ArrayBuffer(2, { maxByteLength: 5 }); const ta = new Int8Array(b);"
+                + "ta[0] = 11; ta[1] = 22;" + "const grow = { valueOf: function () { b.resize(5); return 123; } };"
+                + "ta.with(4, grow).join(',')"));
+        assertEquals("RangeError",
+                str("const b = new ArrayBuffer(4, { maxByteLength: 4 }); const ta = new Int8Array(b);"
+                        + "const shrink = { valueOf: function () { b.resize(1); return 1; } };"
+                        + "let name = 'none'; try { ta.with(-1, shrink); } catch (e) { name = e.name; } name"));
+    }
+
+    // ArrayBuffer.prototype.slice runs SpeciesConstructor. The rejection of a non-object
+    // `constructor` is not asserted here because a property write on an ArrayBuffer is still dropped
+    // by the member seam, so there is no way to install one - see the report's blocked list.
+    @Test
+    public void test_buffer_slice_consults_the_species_constructor() {
+        final var base = "const b = new ArrayBuffer(8); ";
+        assertEquals("4", str(base + "String(b.slice(0, 4).byteLength)"));
+        assertEquals("8", str(base + "String(b.slice(0).byteLength)"));
+        assertEquals("0", str(base + "String(b.slice(4, 2).byteLength)"));
+    }
+
+    // a DataView geometry read rejects a view whose window the buffer no longer covers
+    @Test
+    public void test_data_view_geometry_rejects_an_out_of_bounds_view() {
+        final var base = "const b = new ArrayBuffer(4, { maxByteLength: 5 }); const v = new DataView(b, 1); ";
+        assertEquals("1", str(base + "String(v.byteOffset)"));
+        assertEquals("1", str(base + "b.resize(1); String(v.byteOffset)"));
+        assertEquals("TypeError", caught(base + "b.resize(0); v.byteOffset"));
+        assertEquals("TypeError",
+                caught("const b = new ArrayBuffer(4); const v = new DataView(b); b.transfer(0); v.byteOffset"));
+    }
+
+    // CanonicalNumericIndexString is the gate every exotic decision goes through
+    @Test
+    public void test_canonical_numeric_index_string() {
+        assertEquals(-0.0, JsTypedArray.canonicalNumericIndex("-0"));
+        assertEquals(1.0, JsTypedArray.canonicalNumericIndex("1"));
+        assertEquals(1.5, JsTypedArray.canonicalNumericIndex("1.5"));
+        assertEquals(Double.POSITIVE_INFINITY, JsTypedArray.canonicalNumericIndex("Infinity"));
+        assertNull(JsTypedArray.canonicalNumericIndex("1.0"));
+        assertNull(JsTypedArray.canonicalNumericIndex("+1"));
+        assertNull(JsTypedArray.canonicalNumericIndex(" 1"));
+        assertNull(JsTypedArray.canonicalNumericIndex("01"));
+        assertNull(JsTypedArray.canonicalNumericIndex("tag"));
+        assertNull(JsTypedArray.canonicalNumericIndex(""));
+    }
+
+    // the integer-indexed [[Set]] arm: written through the array itself, answered without touching a
+    // foreign receiver when the index is absent, declined only for an ordinary key
+    @Test
+    public void test_set_exotic_index_never_reaches_a_foreign_receiver() {
+        final var typed = new JsTypedArray(JsTypedArray.Kind.INT8, new JsArrayBuffer(2), 0, 2);
+        final var other = new JsObject();
+        assertTrue(typed.setExoticIndex(new JsString("0"), new JsNumber(7), typed));
+        assertEquals(7d, ((JsNumber) typed.getElement(0)).getValue());
+        assertTrue(typed.setExoticIndex(new JsString("5"), new JsNumber(7), typed));
+        assertTrue(typed.setExoticIndex(new JsString("5"), new JsNumber(7), other));
+        assertTrue(typed.setExoticIndex(new JsString("-0"), new JsNumber(7), other));
+        assertTrue(typed.setExoticIndex(new JsString("1.5"), new JsNumber(7), other));
+        assertFalse(typed.setExoticIndex(new JsString("0"), new JsNumber(7), other));
+        assertFalse(typed.setExoticIndex(new JsString("tag"), new JsNumber(7), other));
+        assertTrue(typed.isValidIntegerIndex(1));
+        assertFalse(typed.isValidIntegerIndex(2));
+        assertFalse(typed.isValidIntegerIndex(1.5));
+        assertFalse(typed.isValidIntegerIndex(-0.0));
+    }
+
+    // setBigInt64 coerces the value through ToBigInt before the range is checked
+    @Test
+    public void test_set_big_int_coerces_the_value_first() {
+        assertEquals("Test262Error", caught("const v = new DataView(new ArrayBuffer(8));"
+                + "v.setBigInt64(100, { valueOf: function () { throw { name: 'Test262Error' }; } })"));
+        assertEquals("7", str("const v = new DataView(new ArrayBuffer(8));"
+                + "v.setBigInt64(0, { valueOf: function () { return 7n; } }); String(v.getBigInt64(0))"));
     }
 }

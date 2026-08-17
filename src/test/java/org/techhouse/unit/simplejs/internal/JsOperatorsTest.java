@@ -180,4 +180,65 @@ public class JsOperatorsTest {
         assertThrows(TypeErrorException.class, () -> JsOperators.binary("bogus", new JsNumber(1), new JsNumber(2)));
         assertThrows(TypeErrorException.class, () -> JsOperators.unary("bogus", new JsNumber(1)));
     }
+
+    // A BigInt against an unparseable string is unordered, so every relational operator is false
+    @Test
+    public void test_bigint_against_incomparable_string() {
+        assertFalse(bool(JsOperators.binary(">=", bi(1), new JsString("0."))));
+        assertFalse(bool(JsOperators.binary(">", bi(1), new JsString("0n"))));
+        assertFalse(bool(JsOperators.binary("<", bi(1), new JsString("Infinity"))));
+        assertFalse(bool(JsOperators.binary("<=", new JsString("1e0"), bi(0))));
+        assertTrue(bool(JsOperators.binary(">", bi(1), new JsString(""))));
+        assertTrue(bool(JsOperators.binary(">", new JsString("0x10"), bi(15))));
+    }
+
+    // A BigInt against a non-finite number compares against the infinity, not as unordered
+    @Test
+    public void test_bigint_against_non_finite() {
+        assertTrue(bool(JsOperators.binary(">", new JsNumber(Double.POSITIVE_INFINITY), bi(1))));
+        assertFalse(bool(JsOperators.binary(">", bi(1), new JsNumber(Double.POSITIVE_INFINITY))));
+        assertTrue(bool(JsOperators.binary(">", bi(1), new JsNumber(Double.NEGATIVE_INFINITY))));
+        assertFalse(bool(JsOperators.binary(">", new JsNumber(Double.NEGATIVE_INFINITY), bi(1))));
+        assertFalse(bool(JsOperators.binary(">", new JsNumber(Double.NaN), bi(0))));
+    }
+
+    // A BigInt against a huge number compares exactly rather than through a double round-trip
+    @Test
+    public void test_bigint_against_number_extremes() {
+        final var big = new BigInteger("9007199254740992");
+        assertTrue(bool(JsOperators.binary(">", new JsString("9007199254740993"), new JsBigInt(big))));
+        assertFalse(bool(JsOperators.binary(">", new JsBigInt(big), new JsNumber(Double.MAX_VALUE))));
+        assertTrue(bool(JsOperators.binary(">", new JsNumber(Double.MAX_VALUE), new JsBigInt(big))));
+        assertFalse(bool(JsOperators.binary("==", new JsBigInt(big), new JsNumber(Double.MAX_VALUE))));
+        assertTrue(bool(JsOperators.binary("==", bi(0), new JsString(""))));
+    }
+
+    // Signed zeroes are equal, so neither is strictly less than the other
+    @Test
+    public void test_signed_zero_relational() {
+        assertFalse(bool(JsOperators.binary(">", new JsNumber(0d), new JsNumber(-0d))));
+        assertFalse(bool(JsOperators.binary("<", new JsNumber(-0d), new JsNumber(0d))));
+        assertTrue(bool(JsOperators.binary(">=", new JsNumber(0d), new JsNumber(-0d))));
+    }
+
+    // Two objects are compared by identity, never coerced
+    @Test
+    public void test_loose_equals_two_objects() {
+        final var object = new JsObject();
+        assertTrue(bool(JsOperators.binary("==", object, object)));
+        assertFalse(bool(JsOperators.binary("==", object, new JsObject())));
+    }
+
+    // A wrapped BigInt reaches the BigInt arithmetic path instead of the mixed-type rejection
+    @Test
+    public void test_wrapped_bigint_arithmetic() {
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(bi(2));
+        assertEquals(BigInteger.valueOf(4), big(JsOperators.binary("*", wrapper, bi(2))));
+        assertEquals(BigInteger.valueOf(2), big(JsOperators.binary("&", wrapper, bi(3))));
+        assertEquals(BigInteger.valueOf(-2), big(JsOperators.unary("-", wrapper)));
+        assertEquals(BigInteger.valueOf(-3), big(JsOperators.unary("~", wrapper)));
+        assertEquals(BigInteger.valueOf(3), big(JsOperators.delta(wrapper, true)));
+        assertThrows(TypeErrorException.class, () -> JsOperators.binary("+", wrapper, new JsNumber(1)));
+    }
 }

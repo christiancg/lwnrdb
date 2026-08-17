@@ -1,6 +1,5 @@
 package org.techhouse.simplejs.builtins;
 
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -42,6 +41,11 @@ public final class TypedArrayBuiltins {
     private static final Set<String> BUFFER_ACCESSORS = Set.copyOf(BUFFER_ACCESSOR_NAMES);
     private static final Set<String> VIEW_ACCESSORS = Set.copyOf(VIEW_ACCESSOR_NAMES);
     private static final double MAX_SAFE_INTEGER = 9007199254740991d;
+    private static final String BASE64_DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    private static final String BASE64URL_DIGITS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    private static final String WHITESPACE = " \t\n\f\r";
+    private static final List<String> ALPHABETS = List.of("base64", "base64url");
+    private static final List<String> CHUNK_HANDLINGS = List.of("loose", "strict", "stop-before-partial");
 
     public static List<String> bufferAccessorNames() {
         return BUFFER_ACCESSOR_NAMES;
@@ -73,18 +77,50 @@ public final class TypedArrayBuiltins {
     private TypedArrayBuiltins() {
     }
 
-    public static JsNativeFunction arrayBuffer() {
-        final var ctor = new JsNativeFunction("ArrayBuffer", (_, args) -> constructArrayBuffer(args));
-        ctor.setProperty("isView", new JsNativeFunction("isView",
-                (_, args) -> JsBoolean.of(!args.isEmpty() && args.getFirst() instanceof JsTypedArray)));
+    // Every builtin here is constructor-only: reached without `new` there is no new.target.
+    private static void requireNewTarget(String name, JsValue thisArg) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
+            throw new TypeErrorException("Constructor " + name + " requires 'new'");
+        }
+    }
+
+    // GetPrototypeFromConstructor's Get(newTarget, "prototype") is observable, and every one of these
+    // constructors runs it only once its arguments have been validated, so a throwing prototype
+    // accessor must not pre-empt the TypeError or RangeError.
+    private static <T> T withObservedPrototype(T constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops != null && newTarget != null && !(newTarget instanceof JsUndefined)) {
+            ops.getMember(newTarget, new JsString("prototype"));
+        }
+        return constructed;
+    }
+
+    public static JsNativeFunction arrayBuffer(InterpreterOps ops) {
+        final var ctor = new JsNativeFunction("ArrayBuffer", (thisArg, args) -> {
+            requireNewTarget("ArrayBuffer", thisArg);
+            return withObservedPrototype(constructArrayBuffer(args, ops), ops);
+        });
+        ctor.setProperty("isView", new JsNativeFunction("isView", (_, args) -> JsBoolean.of(isView(arg(args, 0)))));
         return ctor;
     }
 
-    private static JsValue constructArrayBuffer(List<JsValue> args) {
-        final var byteLength = toIndex(arg(args, 0), "ArrayBuffer length");
+    // A [[ViewedArrayBuffer]] slot, which a subclass instance carries in its wrapped primitive.
+    private static boolean isView(JsValue value) {
+        final var target = value instanceof JsObject wrapper ? wrapper.getPrimitive() : value;
+        return target instanceof JsTypedArray || target instanceof JsDataView;
+    }
+
+    private static JsValue constructArrayBuffer(List<JsValue> args, InterpreterOps ops) {
+        final var byteLength = toIndex(arg(args, 0), "ArrayBuffer length", ops);
         JsArrayBuffer.checkAllocation(byteLength);
-        if (args.size() > 1 && args.get(1) instanceof JsObject options && options.has("maxByteLength")) {
-            final var maxByteLength = toIndex(options.get("maxByteLength"), "ArrayBuffer maxByteLength");
+        final var options = arg(args, 1);
+        if (ops != null && InterpreterUtils.isObjectLike(options)) {
+            final var requested = ops.getMember(options, new JsString("maxByteLength"));
+            if (requested instanceof JsUndefined) {
+                return new JsArrayBuffer((int) byteLength);
+            }
+            final var maxByteLength = toIndex(requested, "ArrayBuffer maxByteLength", ops);
             if (maxByteLength < byteLength) {
                 throw new RangeErrorException("ArrayBuffer maxByteLength must be >= byteLength");
             }
@@ -95,34 +131,60 @@ public final class TypedArrayBuiltins {
     }
 
     public static JsNativeFunction dataView(InterpreterOps ops) {
-        return new JsNativeFunction("DataView", (_, args) -> constructDataView(args, ops));
+        return new JsNativeFunction("DataView", (thisArg, args) -> {
+            requireNewTarget("DataView", thisArg);
+            return constructDataView(args, ops);
+        });
     }
 
     // The abstract %TypedArray% intrinsic: not directly constructable (mirrors IteratorBuiltins'
     // thisArg-based direct-vs-super-call signal), but is every concrete typed array constructor's
     // own [[Prototype]] (Object.getPrototypeOf(Int8Array) === TypedArray) and owns the shared
     // TypedArray.prototype that every concrete kind's prototype chains up to.
-    public static JsNativeFunction abstractTypedArray() {
-        return new JsNativeFunction("TypedArray", (thisArg, _) -> {
+    public static JsNativeFunction abstractTypedArray(Invoker invoker, IterableToList iterableToList,
+            InterpreterOps ops) {
+        final var ctor = new JsNativeFunction("TypedArray", (thisArg, _) -> {
             if (thisArg instanceof JsUndefined) {
                 throw new TypeErrorException("Abstract class TypedArray not directly constructable");
             }
             return thisArg;
         });
+        installStatics(ctor, invoker, iterableToList, ops);
+        return ctor;
+    }
+
+    // from/of are %TypedArray% statics the concrete constructors only inherit, but member lookup on a
+    // native function walks the realm's Function.prototype rather than its own [[Prototype]], so each
+    // concrete constructor carries its own copy instead.
+    private static void installStatics(JsNativeFunction ctor, Invoker invoker, IterableToList iterableToList,
+            InterpreterOps ops) {
+        final var from = new JsNativeFunction("from",
+                (thisArg, args) -> from(thisArg, args, invoker, iterableToList, ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var of = new JsNativeFunction("of", (thisArg, args) -> of(thisArg, args, ops));
+        of.setLength(0);
+        ctor.setProperty("of", of);
     }
 
     public static JsNativeFunction create(JsTypedArray.Kind kind, Invoker invoker, IterableToList iterableToList,
             InterpreterOps ops) {
-        final var ctor = new JsNativeFunction(kind.ctorName(),
-                (_, args) -> constructTyped(kind, args, iterableToList, ops));
+        final var ctor = new JsNativeFunction(kind.ctorName(), (thisArg, args) -> {
+            requireNewTarget(kind.ctorName(), thisArg);
+            return withObservedPrototype(constructTyped(kind, args, iterableToList, ops), ops);
+        });
+        ctor.setLength(3);
         defineBytesPerElement(ctor.ownProperties(), kind);
-        ctor.setProperty("from",
-                new JsNativeFunction("from", (_, args) -> from(kind, args, invoker, iterableToList, ops)));
-        ctor.setProperty("of", new JsNativeFunction("of", (_, args) -> fromItems(kind, args)));
+        installStatics(ctor, invoker, iterableToList, ops);
         if (kind == JsTypedArray.Kind.UINT8) {
-            ctor.setProperty("fromBase64",
-                    new JsNativeFunction("fromBase64", (_, args) -> ofBytes(decodeBase64(args))));
-            ctor.setProperty("fromHex", new JsNativeFunction("fromHex", (_, args) -> ofBytes(decodeHex(args))));
+            final var fromBase64 = new JsNativeFunction("fromBase64",
+                    (_, args) -> decodeAll(base64(args, ops, Integer.MAX_VALUE), ops));
+            fromBase64.setLength(1);
+            ctor.setProperty("fromBase64", fromBase64);
+            final var fromHex = new JsNativeFunction("fromHex",
+                    (_, args) -> decodeAll(hex(args, ops, Integer.MAX_VALUE), ops));
+            fromHex.setLength(1);
+            ctor.setProperty("fromHex", fromHex);
         }
         return ctor;
     }
@@ -147,6 +209,16 @@ public final class TypedArrayBuiltins {
         if (byteOffset > buffer.byteLength()) {
             throw new RangeErrorException("Start offset is outside the bounds of the buffer");
         }
+        // OrdinaryCreateFromConstructor sits here in the spec, between the argument checks and the
+        // slot assignment, and its Get(newTarget, "prototype") is observable: an accessor that
+        // detaches or resizes the buffer must still be caught by the re-check below.
+        withObservedPrototype(null, ops);
+        if (buffer.isDetached()) {
+            throw new TypeErrorException("Cannot construct a DataView over a detached ArrayBuffer");
+        }
+        if (byteOffset > buffer.byteLength()) {
+            throw new RangeErrorException("Start offset is outside the bounds of the buffer");
+        }
         if (!explicitLength) {
             return new JsDataView(buffer, byteOffset, buffer.byteLength() - byteOffset, buffer.isResizable());
         }
@@ -159,14 +231,14 @@ public final class TypedArrayBuiltins {
     private static JsValue constructTyped(JsTypedArray.Kind kind, List<JsValue> args, IterableToList iterableToList,
             InterpreterOps ops) {
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
-            return allocate(kind, 0);
+            return allocate(kind, 0, ops);
         }
         final var first = args.getFirst();
         if (first instanceof JsArrayBuffer buffer) {
             return viewOverBuffer(kind, buffer, args, ops);
         }
         if (!InterpreterUtils.isObjectLike(first)) {
-            return allocate(kind, toIndex(first, kind.ctorName() + " length", ops));
+            return allocate(kind, toIndex(first, kind.ctorName() + " length", ops), ops);
         }
         return fromItems(kind, sourceItems(first, iterableToList, ops), ops);
     }
@@ -190,25 +262,25 @@ public final class TypedArrayBuiltins {
             if (byteOffset > bufferLength) {
                 throw new RangeErrorException("Start offset is outside the bounds of the buffer");
             }
-            return new JsTypedArray(kind, buffer, byteOffset, (bufferLength - byteOffset) / bpe, true);
+            return new JsTypedArray(kind, buffer, byteOffset, (bufferLength - byteOffset) / bpe, true).withOps(ops);
         }
         if (!explicitLength) {
             if (bufferLength % bpe != 0 || byteOffset > bufferLength) {
                 throw new RangeErrorException("Buffer length is not a multiple of the element size");
             }
-            return new JsTypedArray(kind, buffer, byteOffset, (bufferLength - byteOffset) / bpe);
+            return new JsTypedArray(kind, buffer, byteOffset, (bufferLength - byteOffset) / bpe).withOps(ops);
         }
         if (byteOffset + requested * bpe > bufferLength) {
             throw new RangeErrorException("Invalid typed array length");
         }
-        return new JsTypedArray(kind, buffer, byteOffset, (int) requested);
+        return new JsTypedArray(kind, buffer, byteOffset, (int) requested).withOps(ops);
     }
 
-    private static JsTypedArray allocate(JsTypedArray.Kind kind, long length) {
+    private static JsTypedArray allocate(JsTypedArray.Kind kind, long length, InterpreterOps ops) {
         final var safe = Math.max(length, 0);
         final var byteLength = safe * kind.bytesPerElement();
         JsArrayBuffer.checkAllocation(byteLength);
-        return new JsTypedArray(kind, new JsArrayBuffer((int) byteLength), 0, (int) safe);
+        return new JsTypedArray(kind, new JsArrayBuffer((int) byteLength), 0, (int) safe).withOps(ops);
     }
 
     private static List<JsValue> sourceItems(JsValue source, IterableToList iterableToList, InterpreterOps ops) {
@@ -218,49 +290,110 @@ public final class TypedArrayBuiltins {
         if (source instanceof JsTypedArray typed) {
             return elements(typed);
         }
-        return InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
-    }
-
-    private static JsTypedArray fromItems(JsTypedArray.Kind kind, List<JsValue> items) {
-        return fromItems(kind, items, null);
+        if (ops == null || InterpreterUtils.isCallable(ops.getMember(source, JsSymbol.ITERATOR))) {
+            return InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
+        }
+        // An array-like whose length exceeds what can be allocated is an AllocateTypedArray failure,
+        // which the spec reports as a RangeError rather than a bad-receiver TypeError.
+        if (JsCoercion.toNumber(ops.getMember(source, new JsString("length")), ops) > Integer.MAX_VALUE) {
+            throw new RangeErrorException("Invalid typed array length");
+        }
+        return InterpreterUtils.arrayLikeElements(source, ops, false);
     }
 
     private static JsTypedArray fromItems(JsTypedArray.Kind kind, List<JsValue> items, InterpreterOps ops) {
-        final var result = allocate(kind, items.size());
+        final var result = allocate(kind, items.size(), ops);
         for (var i = 0; i < items.size(); i++) {
             result.setElement(i, items.get(i), ops);
         }
         return result;
     }
 
-    private static JsValue from(JsTypedArray.Kind kind, List<JsValue> args, Invoker invoker,
-            IterableToList iterableToList, InterpreterOps ops) {
-        final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
-        final var mapFn = args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? args.get(1) : null;
-        final var items = sourceItems(source, iterableToList, ops);
-        final var result = allocate(kind, items.size());
-        for (var i = 0; i < items.size(); i++) {
-            final var element = mapFn == null
-                    ? items.get(i)
-                    : invoker.call(mapFn, JsUndefined.getInstance(), List.of(items.get(i), new JsNumber(i)));
-            result.setElement(i, element);
+    private static JsValue from(JsValue constructor, List<JsValue> args, Invoker invoker, IterableToList iterableToList,
+            InterpreterOps ops) {
+        requireConstructor(constructor);
+        final var mapFn = arg(args, 1);
+        if (!(mapFn instanceof JsUndefined) && !InterpreterUtils.isCallable(mapFn)) {
+            throw new TypeErrorException(JsCoercion.toStr(mapFn) + " is not a function");
         }
-        return result;
+        final var items = sourceItems(arg(args, 0), iterableToList, ops);
+        final var mapThis = arg(args, 2);
+        final var created = typedArrayCreate(constructor, List.of(new JsNumber(items.size())), ops);
+        for (var i = 0; i < items.size(); i++) {
+            final var element = mapFn instanceof JsUndefined
+                    ? items.get(i)
+                    : invoker.call(mapFn, mapThis, List.of(items.get(i), new JsNumber(i)));
+            writeElement(created, i, element, ops);
+        }
+        return created;
     }
 
-    public static JsValue uint8Method(JsTypedArray receiver, String name) {
+    private static JsValue of(JsValue constructor, List<JsValue> args, InterpreterOps ops) {
+        requireConstructor(constructor);
+        final var created = typedArrayCreate(constructor, List.of(new JsNumber(args.size())), ops);
+        for (var i = 0; i < args.size(); i++) {
+            writeElement(created, i, args.get(i), ops);
+        }
+        return created;
+    }
+
+    private static boolean isTypedArrayConstructor(JsValue constructor) {
+        return constructor instanceof JsNativeFunction function && function.getProperty("BYTES_PER_ELEMENT") != null;
+    }
+
+    private static void requireConstructor(JsValue constructor) {
+        if (!InterpreterUtils.isConstructor(constructor)) {
+            throw new TypeErrorException(JsCoercion.toStr(constructor) + " is not a constructor");
+        }
+    }
+
+    // The created object may be a subclass instance wrapping the typed array, so the write goes
+    // through [[Set]] on whatever the constructor returned rather than the unwrapped storage.
+    private static void writeElement(JsValue created, int index, JsValue value, InterpreterOps ops) {
+        if (created instanceof JsTypedArray typed) {
+            typed.setElement(index, value, ops);
+            return;
+        }
+        if (ops == null) {
+            asTypedArray(created).setElement(index, value);
+            return;
+        }
+        ops.setMember(created, new JsString(Integer.toString(index)), value);
+    }
+
+    // TypedArrayCreateFromConstructor: the constructor must hand back a typed array that is in
+    // bounds and at least as long as the length it was asked for.
+    private static JsValue typedArrayCreate(JsValue constructor, List<JsValue> ctorArgs, InterpreterOps ops) {
+        if (ops == null) {
+            throw new TypeErrorException("Cannot construct a typed array without a running interpreter");
+        }
+        final var created = ops.construct(constructor, ctorArgs);
+        final var typed = asTypedArray(created);
+        if (typed == null) {
+            throw new TypeErrorException("The constructor did not return a typed array");
+        }
+        validate(typed);
+        if (ctorArgs.size() == 1 && typed.length() < JsCoercion.toNumber(ctorArgs.getFirst())) {
+            throw new TypeErrorException("The constructor returned a typed array that is too small");
+        }
+        return created;
+    }
+
+    public static JsValue uint8Method(JsTypedArray receiver, String name, InterpreterOps ops) {
         return switch (name) {
-            case "toBase64" -> new JsNativeFunction("toBase64", (_, args) -> new JsString(toBase64(receiver, args)));
+            case "toBase64" ->
+                new JsNativeFunction("toBase64", (_, args) -> new JsString(toBase64(receiver, args, ops)));
             case "toHex" -> new JsNativeFunction("toHex", (_, _) -> new JsString(toHex(receiver)));
-            case "setFromBase64" ->
-                new JsNativeFunction("setFromBase64", (_, args) -> setFrom(receiver, decodeBase64(args), 4, 3));
+            case "setFromBase64" -> new JsNativeFunction("setFromBase64",
+                    (_, args) -> setFrom(receiver, args, ops, TypedArrayBuiltins::base64));
             case "setFromHex" ->
-                new JsNativeFunction("setFromHex", (_, args) -> setFrom(receiver, decodeHex(args), 2, 1));
+                new JsNativeFunction("setFromHex", (_, args) -> setFrom(receiver, args, ops, TypedArrayBuiltins::hex));
             default -> null;
         };
     }
 
     private static byte[] bytesOf(JsTypedArray typed) {
+        validate(typed);
         final var bytes = new byte[typed.length()];
         for (var i = 0; i < bytes.length; i++) {
             bytes[i] = (byte) (int) JsCoercion.toNumber(typed.getElement(i));
@@ -268,50 +401,17 @@ public final class TypedArrayBuiltins {
         return bytes;
     }
 
-    private static JsValue ofBytes(byte[] bytes) {
-        final var result = new JsTypedArray(JsTypedArray.Kind.UINT8, new JsArrayBuffer(new byte[bytes.length]), 0,
-                bytes.length);
-        for (var i = 0; i < bytes.length; i++) {
-            result.setElement(i, new JsNumber(bytes[i] & 0xFF));
-        }
-        return result;
-    }
-
-    private static String toBase64(JsTypedArray receiver, List<JsValue> args) {
-        final var options = args.isEmpty() || !(args.getFirst() instanceof JsObject object) ? null : object;
-        var encoder = "base64url".equals(alphabetOf(options)) ? Base64.getUrlEncoder() : Base64.getEncoder();
-        if (options != null && JsCoercion.toBoolean(options.get("omitPadding"))) {
+    private static String toBase64(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
+        final var options = arg(args, 0);
+        final var alphabet = optionString(options, "alphabet", "base64", ALPHABETS, ops);
+        final var omitPadding = ops == null || !InterpreterUtils.isObjectLike(options)
+                ? JsBoolean.FALSE
+                : ops.getMember(options, new JsString("omitPadding"));
+        var encoder = "base64url".equals(alphabet) ? Base64.getUrlEncoder() : Base64.getEncoder();
+        if (JsCoercion.toBoolean(omitPadding)) {
             encoder = encoder.withoutPadding();
         }
         return encoder.encodeToString(bytesOf(receiver));
-    }
-
-    private static String alphabetOf(JsObject options) {
-        if (options == null || options.get("alphabet") instanceof JsUndefined) {
-            return "base64";
-        }
-        final var alphabet = JsCoercion.toStr(options.get("alphabet"));
-        if (!"base64".equals(alphabet) && !"base64url".equals(alphabet)) {
-            throw new TypeErrorException("Invalid base64 alphabet: " + alphabet);
-        }
-        return alphabet;
-    }
-
-    private static byte[] decodeBase64(List<JsValue> args) {
-        if (args.isEmpty() || !(args.getFirst() instanceof JsString source)) {
-            throw new TypeErrorException("Expected a string to decode");
-        }
-        final var options = args.size() > 1 && args.get(1) instanceof JsObject object ? object : null;
-        if (options != null && !(options.get("lastChunkHandling") instanceof JsUndefined)
-                && !"loose".equals(JsCoercion.toStr(options.get("lastChunkHandling")))) {
-            throw new TypeErrorException("Unsupported lastChunkHandling option");
-        }
-        final var decoder = "base64url".equals(alphabetOf(options)) ? Base64.getUrlDecoder() : Base64.getDecoder();
-        try {
-            return decoder.decode(source.getValue());
-        } catch (IllegalArgumentException error) {
-            throw new SyntaxErrorException("Invalid base64 string");
-        }
     }
 
     private static String toHex(JsTypedArray receiver) {
@@ -322,42 +422,230 @@ public final class TypedArrayBuiltins {
         return hex.toString();
     }
 
-    private static byte[] decodeHex(List<JsValue> args) {
-        if (args.isEmpty() || !(args.getFirst() instanceof JsString source)) {
-            throw new TypeErrorException("Expected a string to decode");
-        }
-        final var text = source.getValue();
-        if (text.length() % 2 != 0) {
-            throw new SyntaxErrorException("Invalid hex string length");
-        }
-        final var bytes = new byte[text.length() / 2];
-        for (var i = 0; i < bytes.length; i++) {
-            final var high = Character.digit(text.charAt(i * 2), 16);
-            final var low = Character.digit(text.charAt(i * 2 + 1), 16);
-            if (high < 0 || low < 0) {
-                throw new SyntaxErrorException("Invalid hex string");
+    // GetOption: the option is read once and, when present, must already be one of the allowed
+    // strings - a non-string is rejected without ever being coerced.
+    private static String optionString(JsValue options, String key, String fallback, List<String> allowed,
+            InterpreterOps ops) {
+        if (ops == null || !InterpreterUtils.isObjectLike(options)) {
+            if (!(options instanceof JsUndefined) && ops != null) {
+                throw new TypeErrorException("Options must be an object");
             }
-            bytes[i] = (byte) ((high << 4) | low);
+            return fallback;
         }
-        return bytes;
+        final var value = ops.getMember(options, new JsString(key));
+        if (value instanceof JsUndefined) {
+            return fallback;
+        }
+        if (!(value instanceof JsString text) || !allowed.contains(text.getValue())) {
+            throw new TypeErrorException("Invalid " + key + " option");
+        }
+        return text.getValue();
     }
 
-    private static JsValue setFrom(JsTypedArray receiver, byte[] decoded, int charsPerChunk, int bytesPerChunk) {
-        final var written = Math.min(decoded.length, receiver.length());
-        for (var i = 0; i < written; i++) {
-            receiver.setElement(i, new JsNumber(decoded[i] & 0xFF));
+    /** The outcome of a FromBase64/FromHex decode: what was consumed, what was produced, what failed. */
+    private record Decoded(int read, byte[] bytes, RuntimeException error) {
+    }
+
+    private static String requireSource(List<JsValue> args) {
+        if (!(arg(args, 0) instanceof JsString source)) {
+            throw new TypeErrorException("Expected a string to decode");
         }
-        final var read = written == decoded.length
-                ? charsPerChunk * ceilDiv(decoded.length, bytesPerChunk)
-                : charsPerChunk * (written / bytesPerChunk);
+        return source.getValue();
+    }
+
+    private interface Decoder {
+        Decoded decode(List<JsValue> args, InterpreterOps ops, int maxLength);
+    }
+
+    private static Decoded base64(List<JsValue> args, InterpreterOps ops, int maxLength) {
+        final var source = requireSource(args);
+        final var options = arg(args, 1);
+        final var alphabet = optionString(options, "alphabet", "base64", ALPHABETS, ops);
+        final var lastChunk = optionString(options, "lastChunkHandling", "loose", CHUNK_HANDLINGS, ops);
+        return fromBase64(source, alphabet, lastChunk, maxLength);
+    }
+
+    private static Decoded hex(List<JsValue> args, InterpreterOps ops, int maxLength) {
+        final var source = requireSource(args);
+        if (ops != null && !(arg(args, 1) instanceof JsUndefined) && !InterpreterUtils.isObjectLike(arg(args, 1))) {
+            throw new TypeErrorException("Options must be an object");
+        }
+        return fromHex(source, maxLength);
+    }
+
+    private static JsValue decodeAll(Decoded decoded, InterpreterOps ops) {
+        if (decoded.error() != null) {
+            throw decoded.error();
+        }
+        return new JsTypedArray(JsTypedArray.Kind.UINT8, new JsArrayBuffer(decoded.bytes()), 0,
+                decoded.bytes().length).withOps(ops);
+    }
+
+    // SetUint8ArrayBytes: whatever was decoded before the failure is written, and only then is the
+    // failure reported - a partially valid string leaves the valid prefix in the target.
+    private static JsValue setFrom(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops, Decoder decoder) {
+        validate(receiver);
+        final var decoded = decoder.decode(args, ops, receiver.length());
+        for (var i = 0; i < decoded.bytes().length && i < receiver.length(); i++) {
+            receiver.setElement(i, new JsNumber(decoded.bytes()[i] & 0xFF), ops);
+        }
+        if (decoded.error() != null) {
+            throw decoded.error();
+        }
         final var result = new JsObject();
-        result.set("read", new JsNumber(read));
-        result.set("written", new JsNumber(written));
+        result.set("read", new JsNumber(decoded.read()));
+        result.set("written", new JsNumber(decoded.bytes().length));
         return result;
     }
 
-    private static int ceilDiv(int value, int divisor) {
-        return (value + divisor - 1) / divisor;
+    private static Decoded fromBase64(String source, String alphabet, String lastChunkHandling, int maxLength) {
+        if (maxLength == 0) {
+            return new Decoded(0, new byte[0], null);
+        }
+        final var digits = "base64url".equals(alphabet) ? BASE64URL_DIGITS : BASE64_DIGITS;
+        final var bytes = new ArrayList<Byte>();
+        final var chunk = new StringBuilder();
+        var read = 0;
+        var index = 0;
+        while (true) {
+            index = skipWhitespace(source, index);
+            if (index == source.length()) {
+                return endOfBase64(source, lastChunkHandling, bytes, chunk, read);
+            }
+            final var character = source.charAt(index);
+            index++;
+            if (character == '=') {
+                return closeBase64(source, lastChunkHandling, digits, bytes, chunk, read, index);
+            }
+            if (digits.indexOf(character) < 0) {
+                return new Decoded(read, toArray(bytes), new SyntaxErrorException("Invalid base64 character"));
+            }
+            final var remaining = maxLength - bytes.size();
+            if (remaining == 1 && chunk.length() == 2 || remaining == 2 && chunk.length() == 3) {
+                return new Decoded(read, toArray(bytes), null);
+            }
+            chunk.append(character);
+            if (chunk.length() == 4) {
+                decodeChunk(digits, chunk.toString(), false, bytes);
+                chunk.setLength(0);
+                read = index;
+                if (bytes.size() == maxLength) {
+                    return new Decoded(read, toArray(bytes), null);
+                }
+            }
+        }
+    }
+
+    private static Decoded endOfBase64(String source, String lastChunkHandling, List<Byte> bytes, StringBuilder chunk,
+            int read) {
+        if (chunk.isEmpty()) {
+            return new Decoded(source.length(), toArray(bytes), null);
+        }
+        if ("stop-before-partial".equals(lastChunkHandling)) {
+            return new Decoded(read, toArray(bytes), null);
+        }
+        if ("strict".equals(lastChunkHandling) || chunk.length() == 1) {
+            return new Decoded(read, toArray(bytes), new SyntaxErrorException("Incomplete base64 chunk"));
+        }
+        decodeChunk(BASE64_DIGITS, chunk.toString(), false, bytes);
+        return new Decoded(source.length(), toArray(bytes), null);
+    }
+
+    private static Decoded closeBase64(String source, String lastChunkHandling, String digits, List<Byte> bytes,
+            StringBuilder chunk, int read, int afterPad) {
+        if (chunk.length() < 2) {
+            return new Decoded(read, toArray(bytes), new SyntaxErrorException("Unexpected base64 padding"));
+        }
+        var index = skipWhitespace(source, afterPad);
+        if (chunk.length() == 2) {
+            if (index == source.length()) {
+                return "stop-before-partial".equals(lastChunkHandling)
+                        ? new Decoded(read, toArray(bytes), null)
+                        : new Decoded(read, toArray(bytes), new SyntaxErrorException("Incomplete base64 padding"));
+            }
+            if (source.charAt(index) != '=') {
+                return new Decoded(read, toArray(bytes), new SyntaxErrorException("Invalid base64 padding"));
+            }
+            index = skipWhitespace(source, index + 1);
+        }
+        if (index != source.length()) {
+            return new Decoded(read, toArray(bytes), new SyntaxErrorException("Unexpected base64 trailing data"));
+        }
+        try {
+            decodeChunk(digits, chunk.toString(), "strict".equals(lastChunkHandling), bytes);
+        } catch (SyntaxErrorException error) {
+            return new Decoded(read, toArray(bytes), error);
+        }
+        return new Decoded(source.length(), toArray(bytes), null);
+    }
+
+    // DecodeBase64Chunk: a 2- or 3-character tail carries bits that no output byte holds, and only
+    // "strict" rejects a tail whose padding bits are non-zero.
+    private static void decodeChunk(String digits, String chunk, boolean throwOnExtraBits, List<Byte> bytes) {
+        var accumulated = 0;
+        for (var i = 0; i < chunk.length(); i++) {
+            accumulated = accumulated << 6 | digits.indexOf(chunk.charAt(i));
+        }
+        switch (chunk.length()) {
+            case 2 -> {
+                if (throwOnExtraBits && (accumulated & 0xF) != 0) {
+                    throw new SyntaxErrorException("Extra bits in base64 padding");
+                }
+                bytes.add((byte) (accumulated >> 4));
+            }
+            case 3 -> {
+                if (throwOnExtraBits && (accumulated & 0x3) != 0) {
+                    throw new SyntaxErrorException("Extra bits in base64 padding");
+                }
+                bytes.add((byte) (accumulated >> 10));
+                bytes.add((byte) (accumulated >> 2));
+            }
+            default -> {
+                bytes.add((byte) (accumulated >> 16));
+                bytes.add((byte) (accumulated >> 8));
+                bytes.add((byte) accumulated);
+            }
+        }
+    }
+
+    private static Decoded fromHex(String source, int maxLength) {
+        final var bytes = new ArrayList<Byte>();
+        // The odd-length rejection precedes the decode loop, so it fires even for a zero-capacity target.
+        if (source.length() % 2 != 0) {
+            return new Decoded(0, new byte[0], new SyntaxErrorException("Invalid hex string length"));
+        }
+        var index = 0;
+        while (index < source.length() && bytes.size() < maxLength) {
+            final var high = Character.digit(source.charAt(index), 16);
+            final var low = Character.digit(source.charAt(index + 1), 16);
+            if (high < 0 || low < 0 || isNotAsciiHex(source.charAt(index)) || isNotAsciiHex(source.charAt(index + 1))) {
+                return new Decoded(index, toArray(bytes), new SyntaxErrorException("Invalid hex string"));
+            }
+            index += 2;
+            bytes.add((byte) (high << 4 | low));
+        }
+        return new Decoded(index, toArray(bytes), null);
+    }
+
+    private static boolean isNotAsciiHex(char character) {
+        return (character < '0' || character > '9') && (character < 'a' || character > 'f')
+                && (character < 'A' || character > 'F');
+    }
+
+    private static int skipWhitespace(String source, int from) {
+        var index = from;
+        while (index < source.length() && WHITESPACE.indexOf(source.charAt(index)) >= 0) {
+            index++;
+        }
+        return index;
+    }
+
+    private static byte[] toArray(List<Byte> bytes) {
+        final var result = new byte[bytes.size()];
+        for (var i = 0; i < result.length; i++) {
+            result[i] = bytes.get(i);
+        }
+        return result;
     }
 
     public static List<JsValue> elements(JsTypedArray typed) {
@@ -378,8 +666,12 @@ public final class TypedArrayBuiltins {
             case "maxByteLength" -> new JsNumber(buffer.maxByteLength());
             case "resizable" -> JsBoolean.of(buffer.isResizable());
             case "detached" -> JsBoolean.of(buffer.isDetached());
-            case "slice" -> new JsNativeFunction("slice", (_, args) -> buffer.slice((int) intArg(args, 0, 0, ops),
-                    (int) intArg(args, 1, buffer.byteLength(), ops)));
+            case "slice" -> new JsNativeFunction("slice", (_, args) -> {
+                final var sliced = buffer.slice((int) intArg(args, 0, 0, ops),
+                        (int) intArg(args, 1, buffer.byteLength(), ops));
+                requireBufferSpecies(buffer, ops);
+                return sliced;
+            });
             case "resize" -> new JsNativeFunction("resize", (_, args) -> {
                 buffer.resize((int) toIndex(arg(args, 0), "ArrayBuffer length", ops));
                 return JsUndefined.getInstance();
@@ -390,6 +682,18 @@ public final class TypedArrayBuiltins {
                     (_, args) -> buffer.transfer(transferLength(args, ops), true));
             default -> null;
         };
+    }
+
+    // ArrayBuffer.prototype.slice runs SpeciesConstructor, which rejects a non-object, non-undefined
+    // `constructor` even though the resulting buffer is not built through it.
+    private static void requireBufferSpecies(JsArrayBuffer buffer, InterpreterOps ops) {
+        if (ops == null) {
+            return;
+        }
+        final var constructor = ops.getMember(buffer, new JsString("constructor"));
+        if (!(constructor instanceof JsUndefined) && !InterpreterUtils.isObjectLike(constructor)) {
+            throw new TypeErrorException("The constructor property is not an object");
+        }
     }
 
     public static JsValue dataViewMethod(JsDataView view, String name) {
@@ -411,8 +715,12 @@ public final class TypedArrayBuiltins {
                     view.getBigInt(name.contains("Uint"), toIndexArg(args, ops), boolArg(args, 1))));
         }
         if (name.startsWith("setBig")) {
+            // Spec order: the offset is coerced, then the value through ToBigInt, and only then is
+            // the range checked - a valueOf on either argument may legally detach the buffer.
             return new JsNativeFunction(name, (_, args) -> {
-                view.setBigInt(toIndexArg(args, ops), bigArg(args), boolArg(args, 2));
+                final var offset = toIndexArg(args, ops);
+                final var value = NumberBuiltins.toBigIntValue(arg(args, 1), ops).getValue();
+                view.setBigInt(offset, value, boolArg(args, 2));
                 return JsUndefined.getInstance();
             });
         }
@@ -478,10 +786,12 @@ public final class TypedArrayBuiltins {
             case "at" -> new JsNativeFunction("at", (_, args) -> at(validate(receiver), args, ops));
             case "toString" ->
                 new JsNativeFunction("toString", (_, _) -> new JsString(join(validate(receiver), List.of(), ops)));
-            case "keys" -> new JsNativeFunction("keys", (_, _) -> keysIterator(validate(receiver)));
+            case "keys" -> new JsNativeFunction("keys",
+                    (_, _) -> liveIterator(validate(receiver), (_, index) -> new JsNumber(index)));
             case "values" ->
-                new JsNativeFunction("values", (_, _) -> JsIterators.of(elements(validate(receiver)).iterator()));
-            case "entries" -> new JsNativeFunction("entries", (_, _) -> entriesIterator(validate(receiver)));
+                new JsNativeFunction("values", (_, _) -> liveIterator(validate(receiver), JsTypedArray::getElement));
+            case "entries" -> new JsNativeFunction("entries", (_, _) -> liveIterator(validate(receiver), (view,
+                    index) -> new JsArray(new ArrayList<>(List.of(new JsNumber(index), view.getElement(index))))));
             case "sort" -> new JsNativeFunction("sort", (_, args) -> sort(receiver, args, invoker));
             case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker, ops));
             case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(validate(receiver), ops));
@@ -547,10 +857,10 @@ public final class TypedArrayBuiltins {
         final var relative = toInteger(intArg(args, 0, 0, ops));
         final var index = relative < 0 ? length + (int) relative : (int) relative;
         final var replacement = coerceElement(receiver.kind(), arg(args, 1), ops);
-        if (index < 0 || index >= length) {
+        if (!receiver.isValidIntegerIndex(index)) {
             throw new RangeErrorException("Invalid index : " + relative);
         }
-        final var result = allocate(receiver.kind(), length);
+        final var result = allocate(receiver.kind(), length, ops);
         for (var i = 0; i < length; i++) {
             result.setElement(i, i == index ? replacement : receiver.getElement(i));
         }
@@ -712,7 +1022,9 @@ public final class TypedArrayBuiltins {
     // indexOf scans [from, len-1] ascending; lastIndexOf scans [from, 0] descending, and its default
     // `from` is the last index rather than the first.
     private static int[] searchBounds(List<JsValue> args, int length, boolean last, InterpreterOps ops) {
-        final var provided = args.size() > 1 && !(args.get(1) instanceof JsUndefined);
+        // An explicitly passed `undefined` is still a supplied fromIndex, which ToIntegerOrInfinity
+        // turns into 0 rather than the omitted-argument default.
+        final var provided = args.size() > 1;
         if (last) {
             var from = provided ? (int) toInteger(JsCoercion.toNumber(args.get(1), ops)) : length - 1;
             if (from < 0) {
@@ -751,11 +1063,12 @@ public final class TypedArrayBuiltins {
         return false;
     }
 
+    // indexOf/lastIndexOf compare strictly: a string or object search value never matches an element.
     private static boolean sameNumber(JsValue a, JsValue b) {
-        if (a instanceof JsBigInt || b instanceof JsBigInt) {
-            return a instanceof JsBigInt x && b instanceof JsBigInt y && x.getValue().equals(y.getValue());
+        if (a instanceof JsBigInt x) {
+            return b instanceof JsBigInt y && x.getValue().equals(y.getValue());
         }
-        return JsCoercion.toNumber(a) == JsCoercion.toNumber(b);
+        return a instanceof JsNumber x && b instanceof JsNumber y && x.getValue() == y.getValue();
     }
 
     private static String join(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
@@ -793,7 +1106,9 @@ public final class TypedArrayBuiltins {
         }
         final var species = ops.getMember(constructor, JsSymbol.SPECIES);
         if (species instanceof JsUndefined || species instanceof JsNull) {
-            return null;
+            // %TypedArray%[@@species] is an accessor returning `this`, so a typed array constructor
+            // that carries no own species is its own species.
+            return isTypedArrayConstructor(constructor) ? constructor : null;
         }
         if (!InterpreterUtils.isCallable(species)) {
             throw new TypeErrorException("The species constructor is not a constructor");
@@ -804,34 +1119,30 @@ public final class TypedArrayBuiltins {
     private static JsValue speciesCreate(JsTypedArray exemplar, List<JsValue> ctorArgs, InterpreterOps ops) {
         final var species = speciesConstructor(exemplar, ops);
         if (species == null) {
-            return defaultConstruct(exemplar.kind(), ctorArgs);
+            return defaultConstruct(exemplar.kind(), ctorArgs, ops);
         }
-        final var created = ops.construct(species, ctorArgs);
-        final var typed = asTypedArray(created);
-        if (typed == null) {
-            throw new TypeErrorException("The species constructor did not return a typed array");
-        }
-        validate(typed);
-        if (isBigIntKind(typed.kind()) != isBigIntKind(exemplar.kind())) {
+        final var created = typedArrayCreate(species, ctorArgs, ops);
+        if (isBigIntKind(asTypedArray(created).kind()) != isBigIntKind(exemplar.kind())) {
             throw new TypeErrorException("Cannot mix BigInt and other types in a typed array");
-        }
-        if (ctorArgs.size() == 1 && typed.length() < JsCoercion.toNumber(ctorArgs.getFirst())) {
-            throw new TypeErrorException("The species constructor returned a typed array that is too small");
         }
         return created;
     }
 
-    private static JsValue defaultConstruct(JsTypedArray.Kind kind, List<JsValue> ctorArgs) {
+    private static JsValue defaultConstruct(JsTypedArray.Kind kind, List<JsValue> ctorArgs, InterpreterOps ops) {
         if (ctorArgs.size() == 1) {
-            return allocate(kind, (long) JsCoercion.toNumber(ctorArgs.getFirst()));
+            return allocate(kind, (long) JsCoercion.toNumber(ctorArgs.getFirst()), ops);
         }
         final var buffer = (JsArrayBuffer) ctorArgs.getFirst();
+        if (buffer.isDetached()) {
+            throw new TypeErrorException("Cannot construct a typed array over a detached ArrayBuffer");
+        }
         final var byteOffset = (int) JsCoercion.toNumber(ctorArgs.get(1));
         if (ctorArgs.size() < 3 || ctorArgs.get(2) instanceof JsUndefined) {
             final var available = Math.max(buffer.byteLength() - byteOffset, 0);
-            return new JsTypedArray(kind, buffer, byteOffset, available / kind.bytesPerElement(), buffer.isResizable());
+            return new JsTypedArray(kind, buffer, byteOffset, available / kind.bytesPerElement(), buffer.isResizable())
+                    .withOps(ops);
         }
-        return new JsTypedArray(kind, buffer, byteOffset, (int) JsCoercion.toNumber(ctorArgs.get(2)));
+        return new JsTypedArray(kind, buffer, byteOffset, (int) JsCoercion.toNumber(ctorArgs.get(2))).withOps(ops);
     }
 
     public static JsTypedArray asTypedArray(JsValue value) {
@@ -893,8 +1204,10 @@ public final class TypedArrayBuiltins {
         final var end = resolveIndex(explicitEnd ? intArg(args, 1, 0, ops) : length, length);
         final var count = Math.max(end - begin, 0);
         final var byteOffset = receiver.rawByteOffset() + begin * receiver.kind().bytesPerElement();
+        // A length-tracking view with no explicit end is re-created without a length, so the new view
+        // tracks the buffer too; either way the species constructor is consulted.
         if (receiver.isLengthTracking() && !explicitEnd) {
-            return new JsTypedArray(receiver.kind(), receiver.getBuffer(), byteOffset, count, true);
+            return speciesCreate(receiver, List.of(receiver.getBuffer(), new JsNumber(byteOffset)), ops);
         }
         return speciesCreate(receiver, List.of(receiver.getBuffer(), new JsNumber(byteOffset), new JsNumber(count)),
                 ops);
@@ -970,11 +1283,12 @@ public final class TypedArrayBuiltins {
         return kind == JsTypedArray.Kind.BIGINT64 || kind == JsTypedArray.Kind.BIGUINT64;
     }
 
-    // Spec order: the fill value is coerced first, then the range arguments, then the (possibly
-    // resized) length is re-read before the write loop.
+    // Spec order: the length is captured before the fill value is coerced (so a valueOf that grows
+    // the buffer does not extend the range), then the (possibly resized) length is re-read before
+    // the write loop.
     private static JsValue fill(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops) {
-        final var value = coerceElement(receiver.kind(), arg(args, 0), ops);
         final var length = receiver.length();
+        final var value = coerceElement(receiver.kind(), arg(args, 0), ops);
         final var start = resolveIndex(intArg(args, 1, 0, ops), length);
         final var end = resolveIndex(
                 args.size() > 2 && !(args.get(2) instanceof JsUndefined) ? intArg(args, 2, 0, ops) : length, length);
@@ -1005,20 +1319,35 @@ public final class TypedArrayBuiltins {
         return receiver.getElement(index);
     }
 
-    private static org.techhouse.simplejs.values.JsObject keysIterator(JsTypedArray receiver) {
-        final var keys = new ArrayList<JsValue>();
-        for (var i = 0; i < receiver.length(); i++) {
-            keys.add(new JsNumber(i));
-        }
-        return JsIterators.of(keys.iterator());
+    private interface Step {
+        JsValue at(JsTypedArray receiver, int index);
     }
 
-    private static org.techhouse.simplejs.values.JsObject entriesIterator(JsTypedArray receiver) {
-        final var entries = new ArrayList<JsValue>();
-        for (var i = 0; i < receiver.length(); i++) {
-            entries.add(new JsArray(new ArrayList<>(List.of(new JsNumber(i), receiver.getElement(i)))));
-        }
-        return JsIterators.of(entries.iterator());
+    // A typed array iterator reads the live view one index at a time, so a resize between two next()
+    // calls is observed - but once it has reported done it stays done even if the buffer grows back.
+    private static JsObject liveIterator(JsTypedArray receiver, Step step) {
+        return JsIterators.of(new java.util.Iterator<>() {
+            private int index;
+            private boolean exhausted;
+
+            @Override
+            public boolean hasNext() {
+                // ValidateTypedArray runs on every step, so a buffer detached between two next() calls
+                // is a TypeError rather than a silently shortened walk.
+                if (!exhausted && receiver.isOutOfBounds()) {
+                    throw new TypeErrorException("Cannot iterate a typed array over a detached buffer");
+                }
+                if (!exhausted && index >= receiver.length()) {
+                    exhausted = true;
+                }
+                return !exhausted;
+            }
+
+            @Override
+            public JsValue next() {
+                return step.at(receiver, index++);
+            }
+        });
     }
 
     private static int resolveIndex(double raw, int length) {
@@ -1056,10 +1385,6 @@ public final class TypedArrayBuiltins {
     // indices this is an absolute position or allocation size, so an out-of-range request is a
     // RangeError rather than an `(int)` cast that silently saturates at Integer.MAX_VALUE - which
     // used to turn an obviously-impossible allocation into a multi-gigabyte attempt.
-    private static long toIndex(JsValue value, String label) {
-        return toIndex(value, label, null);
-    }
-
     private static long toIndex(JsValue value, String label, InterpreterOps ops) {
         if (value instanceof JsUndefined) {
             return 0;
@@ -1087,7 +1412,4 @@ public final class TypedArrayBuiltins {
         return index < args.size() && JsCoercion.toBoolean(args.get(index));
     }
 
-    private static BigInteger bigArg(List<JsValue> args) {
-        return NumberBuiltins.toBigIntValue(arg(args, 1)).getValue();
-    }
 }

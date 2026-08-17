@@ -124,13 +124,13 @@ public class PropertyDescriptorTest {
         assertThrows(TypeErrorException.class, () -> object.defineOwnProperty(new JsString("a"), descriptor));
     }
 
-    // An array reports its indices, its named properties and length, and skips holes
+    // An array reports its indices, then length (created with the array), then its named properties
     @Test
     public void test_array_own_keys_and_descriptors() {
         final var array = new JsArray(List.of(new JsNumber(1)));
         array.pushHole();
         array.defineOwnProperty(new JsString("tag"), value(new JsString("t")));
-        assertEquals(List.of("0", "tag", "length"), stringKeys(array));
+        assertEquals(List.of("0", "length", "tag"), stringKeys(array));
         final var length = array.getOwnProperty(new JsString("length"));
         assertNotNull(length);
         assertEquals(2, ((JsNumber) length.value()).getValue());

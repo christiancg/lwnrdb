@@ -30,7 +30,7 @@ public final class GlobalScope {
         constructor(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker, intrinsics),
                 intrinsics.objectProto());
         constructor(global, "Function", functionConstructor(), intrinsics.functionProto());
-        constructor(global, "Array", ArrayBuiltins.create(invoker, iterableToList, eventLoop, ops),
+        constructor(global, "Array", ArrayBuiltins.create(invoker, eventLoop, ops, intrinsics),
                 intrinsics.arrayProto());
         constructor(global, "String", StringBuiltins.create(ops), intrinsics.stringProto());
         constructor(global, "Number", NumberBuiltins.create(), intrinsics.numberProto());
@@ -41,7 +41,7 @@ public final class GlobalScope {
         constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, intrinsics),
                 intrinsics.promiseProto());
         TimerBuiltins.install(global, eventLoop, invoker);
-        constructor(global, "RegExp", RegexBuiltins.create(), intrinsics.regexpProto());
+        constructor(global, "RegExp", RegexBuiltins.create(ops), intrinsics.regexpProto());
         // Iterator/AsyncIterator wire their own dedicated [[Prototype]] internally (it's their own
         // map/filter/... helper surface, not the unrelated Generator/AsyncGenerator.prototype
         // intrinsic `constructor(...)` below would otherwise overwrite it with).
@@ -53,7 +53,7 @@ public final class GlobalScope {
         // (and the async mirror); Iterator/AsyncIterator own the middle link, so it can only be
         // stitched once both they and the intrinsics exist.
         intrinsics.linkIteratorPrototypes(iteratorCtor.getPrototype(), asyncIteratorCtor.getPrototype());
-        constructor(global, "Symbol", SymbolBuiltins.create(), intrinsics.symbolProto());
+        constructor(global, "Symbol", SymbolBuiltins.create(ops), intrinsics.symbolProto());
         constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, false), intrinsics.mapProto());
         constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true), intrinsics.weakMapProto());
         constructor(global, "Set", SetBuiltins.create(iterableToList, false), intrinsics.setProto());
@@ -68,13 +68,13 @@ public final class GlobalScope {
         final var proxyCtor = ProxyBuiltins.create();
         proxyCtor.markConstructor();
         define(global, "Proxy", proxyCtor);
-        constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(), intrinsics.arrayBufferProto());
+        constructor(global, "ArrayBuffer", TypedArrayBuiltins.arrayBuffer(ops), intrinsics.arrayBufferProto());
         constructor(global, "DataView", TypedArrayBuiltins.dataView(ops), intrinsics.dataViewProto());
         // %TypedArray% is a real spec intrinsic but - unlike Iterator - is never itself exposed as
         // a named global by a conforming host; it's only reachable via Object.getPrototypeOf(Int8Array)
         // (which testTypedArray.js's own `var TypedArray = ...` line relies on), so this wires the
         // constructor-level [[Prototype]] chain without declaring a "TypedArray" global binding.
-        final var typedArrayCtor = TypedArrayBuiltins.abstractTypedArray();
+        final var typedArrayCtor = TypedArrayBuiltins.abstractTypedArray(invoker, iterableToList, ops);
         typedArrayCtor.setPrototype(intrinsics.typedArrayProto());
         typedArrayCtor.markConstructor();
         intrinsics.typedArrayProto().defineValue("constructor", typedArrayCtor);
@@ -85,7 +85,7 @@ public final class GlobalScope {
             constructor(global, kind.ctorName(), ctor, intrinsics.typedArrayProto(kind));
         }
         final var bigInt = NumberBuiltins.bigIntFunction();
-        BigIntBuiltins.installStatics(bigInt);
+        BigIntBuiltins.installStatics(bigInt, ops);
         constructor(global, "BigInt", bigInt, intrinsics.bigintProto());
         define(global, "parseInt", NumberBuiltins.parseIntFunction());
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction());

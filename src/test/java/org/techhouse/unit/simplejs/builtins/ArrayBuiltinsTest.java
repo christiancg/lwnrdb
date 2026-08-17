@@ -499,4 +499,110 @@ public class ArrayBuiltinsTest {
         assertEquals("1bar2", str("[1, 2].join({toString: undefined, valueOf: () => 'bar'})"));
         assertEquals("102", str("[1, 2].join(0)"));
     }
+
+    // IsArray sees through a proxy to its target, recognises the intrinsic Array.prototype and rejects
+    // a revoked proxy. Array.prototype deliberately carries no own length: giving it one shadowed the
+    // wrapped array's length for `class A extends Array`, breaking six subclassing tests.
+    @Test
+    public void test_is_array_covers_proxies_and_the_intrinsic_prototype() {
+        assertTrue(bool("Array.isArray(new Proxy([], {}))"));
+        assertFalse(bool("Array.isArray(new Proxy({}, {}))"));
+        assertTrue(bool("Array.isArray(Array.prototype)"));
+        assertTrue(bool("Array.prototype.length === undefined"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const h = Proxy.revocable([], {}); h.revoke(); Array.isArray(h.proxy)"));
+    }
+
+    // Array.of/from honour a constructor `this`: the iterator path constructs with no arguments and
+    // the array-like path with the length, and both finish by setting `length` on the result
+    @Test
+    public void test_of_and_from_honour_a_constructor_receiver() {
+        assertEquals(2, num("function C(n) { this.n = n; } Array.of.call(C, 1, 2).n"));
+        assertTrue(bool("function C() {} Array.of.call(C, 1) instanceof C"));
+        assertEquals(4, num("let seen; function C(n) { seen = n; }" + " Array.from.call(C, {length: 4, 0: 1}); seen"));
+        assertEquals("undefined",
+                str("let seen = 'x'; function C(n) { seen = String(n); }" + " Array.from.call(C, [1, 2]); seen"));
+        assertEquals(1, num("let hits = 0; function C() {"
+                + " Object.defineProperty(this, 'length', {set(v) { hits++; }}); }" + " Array.of.call(C, 'a'); hits"));
+    }
+
+    // Array.from walks an iterable lazily and closes it when the map function throws
+    @Test
+    public void test_from_is_lazy_and_closes_the_iterator() {
+        assertEquals("0,1",
+                str("const a = [0, 1, 2, 3];" + " Array.from(a, v => { a.length = 2; return v; }).join(',')"));
+        assertEquals(1,
+                num("let closed = 0; const items = {};"
+                        + " items[Symbol.iterator] = () => ({next: () => ({done: false, value: 1}),"
+                        + " return: () => { closed++; return {}; }});"
+                        + " try { Array.from(items, () => { throw new Error('x'); }); } catch (e) {} closed"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.from([], null)"));
+    }
+
+    // the array-like path fills every index, so a length with no indexes yields real undefined values
+    @Test
+    public void test_from_array_like_has_no_holes() {
+        assertTrue(bool("Array.from({length: 3}).hasOwnProperty(0)"));
+        assertEquals(3, num("Array.from({length: 3}).map(() => 1).length"));
+        assertEquals("1,1,1", str("Array.from({length: 3}).map(() => 1).join(',')"));
+        assertEquals(0, num("Array.from(new ArrayBuffer(8)).length"));
+    }
+
+    // Symbol.isConcatSpreadable overrides IsArray in both directions, on an array and on any other
+    // exotic object
+    @Test
+    public void test_concat_honours_is_concat_spreadable_on_exotic_objects() {
+        assertEquals(1, num("const a = [1, 2]; a[Symbol.isConcatSpreadable] = false; [].concat(a).length"));
+        assertEquals(1, num("const a = [1, 2]; a[Symbol.isConcatSpreadable] = null; [].concat(a).length"));
+        assertEquals(3, num("const r = /x/; r[Symbol.isConcatSpreadable] = true;"
+                + " r.length = 3; r[0] = 1; r[1] = 2; r[2] = 3; [].concat(r).length"));
+        assertEquals("isConcatSpreadable",
+                str("const a = []; const calls = [];" + " Object.defineProperty(a, Symbol.isConcatSpreadable,"
+                        + " {get() { calls.push('isConcatSpreadable'); }}); a.concat(1); calls.join(',')"));
+        assertEquals(3, num("[].concat([1, 2], 3).length"));
+    }
+
+    // flat flattens a proxy whose target is an array, because it asks IsArray rather than the type
+    @Test
+    public void test_flat_flattens_through_a_proxy() {
+        assertEquals("1,2,3", str("[1, new Proxy([2, 3], {})].flat().join(',')"));
+    }
+
+    // an array iterator that has run out stays done, so an element pushed afterwards is never seen
+    @Test
+    public void test_array_iterator_stays_done() {
+        assertTrue(bool("const a = []; const it = a.values(); a.push('a');"
+                + " const first = it.next(); it.next(); a.push('b');"
+                + " first.value === 'a' && it.next().done === true"));
+    }
+
+    // toLocaleString invokes each element's toLocaleString, falling back to its toString
+    @Test
+    public void test_to_locale_string_invokes_the_element_methods() {
+        assertEquals("A,B", str("[{toLocaleString: () => 'A'}, {toLocaleString: () => 'B'}].toLocaleString()"));
+        assertEquals("boolean,boolean", str("Boolean.prototype.toString = function() { return typeof this; };"
+                + " [true, false].toLocaleString()"));
+    }
+
+    // push/pop/shift/unshift end in Set(O, "length", ...), which is a TypeError on a frozen length
+    @Test
+    public void test_length_write_rejection_throws_from_the_mutators() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const a = []; Object.defineProperty(a, 'length', {writable: false}); a.push()"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const a = []; Object.defineProperty(a, 'length', {writable: false}); a.pop()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("const a = []; Object.defineProperty(a, 'length', {writable: false}); a.shift()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("const a = []; Object.defineProperty(a, 'length', {writable: false}); a.unshift()"));
+    }
+
+    // an index write the array does not own reaches a setter its prototype owns
+    @Test
+    public void test_index_write_reaches_an_inherited_setter() {
+        assertEquals(1,
+                num("let hits = 0;"
+                        + " Object.defineProperty(Array.prototype, '0', {set(v) { hits++; }, configurable: true});"
+                        + " const a = []; try { a.push(1); } catch (e) {} delete Array.prototype[0]; hits"));
+    }
 }

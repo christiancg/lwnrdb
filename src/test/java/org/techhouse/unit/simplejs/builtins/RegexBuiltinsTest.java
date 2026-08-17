@@ -273,7 +273,7 @@ public class RegexBuiltinsTest {
     @Test
     public void test_indices_through_string_methods() {
         assertEquals(1, num("'abc'.match(/b/d).indices[0][0]"));
-        assertEquals(1, num("'abc'.matchAll(/b/dg)[0].indices[0][0]"));
+        assertEquals(1, num("[...'abc'.matchAll(/b/dg)][0].indices[0][0]"));
     }
 
     // exec() returns a real Array (not just an array-like object)
@@ -465,7 +465,7 @@ public class RegexBuiltinsTest {
     public void symbolReplaceResolvesNamedCaptureGroups() {
         assertEquals("a", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', '$<x>')"));
         assertEquals("", str(RP + "[Symbol.replace].call(/(?<x>a)(?<y>z)?b/, 'ab', '$<y>')"));
-        assertEquals("$x>", str(RP + "[Symbol.replace].call(/ab/, 'ab', '$<x>')"));
+        assertEquals("$<x>", str(RP + "[Symbol.replace].call(/ab/, 'ab', '$<x>')"));
     }
 
     // a functional replacer receives the named-groups object as one extra trailing argument
@@ -508,10 +508,153 @@ public class RegexBuiltinsTest {
         assertEquals("abc", str(RP + "[Symbol.split].call(/z/, 'abc').join(',')"));
     }
 
-    // Symbol.split is not generic: it needs a real RegExp receiver
+    // Symbol.split is generic: a plain object goes through SpeciesConstructor, so its undefined
+    // "flags" is what fails, not a receiver brand check.
     @Test
-    public void symbolSplitRejectsANonRegexpReceiver() {
-        assertEquals("TypeError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call({}, 'abc'); }"
+    public void symbolSplitOnAPlainObjectFailsOnItsFlags() {
+        assertEquals("SyntaxError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call({}, 'abc'); }"
                 + " catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("TypeError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call(1, 'abc'); }"
+                + " catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // Spec RegExpExec: match/replace/search/split/test all dispatch through the receiver's own
+    // `exec`, so a subclass that overrides it changes every one of them.
+    @Test
+    public void anOverriddenExecIsHonouredByTheWholeProtocol() {
+        final var subclass = "class R extends RegExp { exec(s) { return null; } } const r = new R('a');";
+        assertFalse(bool(subclass + " r.test('a')"));
+        assertInstanceOf(JsNull.class, Interpreter.run(subclass + " 'a'.match(r)"));
+        assertEquals(-1, num(subclass + " 'a'.search(r)"));
+        assertEquals("a", str(subclass + " 'a'.replace(r, 'X')"));
+    }
+
+    @Test
+    public void anOverriddenExecOnAPlainRegexpIsHonoured() {
+        final var overridden = "const r = /a/; r.exec = () => ['zz'];";
+        assertTrue(bool(overridden + " r.test('nope')"));
+        assertEquals("zz", str(overridden + " 'nope'.match(r)[0]"));
+    }
+
+    // lastIndex is a real own data property: writable, non-enumerable, non-configurable, and read
+    // and written through [[Get]]/[[Set]] rather than an internal slot.
+    @Test
+    public void lastIndexIsAnOwnDataProperty() {
+        assertEquals("lastIndex", str("Object.getOwnPropertyNames(/a/).join(',')"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(/a/, 'lastIndex').writable"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(/a/, 'lastIndex').enumerable"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(/a/, 'lastIndex').configurable"));
+        assertEquals(0, num("/a/.lastIndex"));
+    }
+
+    @Test
+    public void lastIndexIsStoredUncoercedAndCoercedOnlyByExec() {
+        assertEquals("1",
+                str("const r = /a/g; r.lastIndex = '1'; typeof r.lastIndex === 'string' ? r.lastIndex : 'no'"));
+        assertEquals(2, num("const r = /a/g; r.lastIndex = '1'; r.exec('aa'); r.lastIndex"));
+    }
+
+    @Test
+    public void aRefusedLastIndexWriteThrows() {
+        assertEquals("TypeError",
+                str("let caught = 'none'; const r = /a/y;"
+                        + " Object.defineProperty(r, 'lastIndex', { writable: false });"
+                        + " try { r.test('b'); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // lastIndex is non-configurable, so it can only ever be narrowed to non-writable.
+    @Test
+    public void lastIndexCannotBeRedefinedAsAnAccessor() {
+        assertEquals("TypeError",
+                str("let caught = 'none'; const r = /a/;"
+                        + " try { Object.defineProperty(r, 'lastIndex', { get() { return 0; } }); }"
+                        + " catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // RegExp.prototype.flags is derived from the individual flag getters, in dgimsuvy order.
+    @Test
+    public void flagsIsGenericAndCanonicallyOrdered() {
+        assertEquals("dgimsuy", str("new RegExp('', 'yusmigd').flags"));
+        assertEquals("dgimsuvy",
+                str("const get = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get;"
+                        + " get.call({ hasIndices: 1, global: 1, ignoreCase: 1, multiline: 1, dotAll: 1, unicode: 1,"
+                        + " unicodeSets: 1, sticky: 1 })"));
+        assertEquals("dgimsuy",
+                str("let calls = ''; const re = {"
+                        + " get hasIndices() { calls += 'd'; return 1; }, get global() { calls += 'g'; return 1; },"
+                        + " get ignoreCase() { calls += 'i'; return 1; }, get multiline() { calls += 'm'; return 1; },"
+                        + " get dotAll() { calls += 's'; return 1; }, get unicode() { calls += 'u'; return 1; },"
+                        + " get sticky() { calls += 'y'; return 1; } };"
+                        + " Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get.call(re); calls"));
+    }
+
+    // `flags` is generic all the way down, so an own flag accessor is what @@match/@@replace observe.
+    @Test
+    public void flagsReadsTheFlagPropertiesOffTheReceiver() {
+        assertEquals("i",
+                str("const r = /a/; Object.defineProperty(r, 'ignoreCase', { get() { return true; } });" + " r.flags"));
+        assertEquals("TypeError",
+                str("let caught = 'none'; const r = /a/;"
+                        + " Object.defineProperty(r, 'global', { get() { throw new TypeError('boom'); } });"
+                        + " try { r[Symbol.match](''); } catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("/a/i", str("const r = /a/; Object.defineProperty(r, 'ignoreCase', { get() { return true; } });"
+                + " r.toString()"));
+    }
+
+    // The flag accessors have no setter, but an own property shadowing one is writable.
+    @Test
+    public void assigningAFlagIsRefusedUnlessShadowed() {
+        assertEquals("TypeError", str("let caught = 'none'; const r = /a/g;"
+                + " try { r.global = false; } catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("false", str("const r = /a/g; Object.defineProperty(r, 'global', { writable: true });"
+                + " r.global = false; String(r.global)"));
+    }
+
+    // Symbol.matchAll returns a %RegExpStringIteratorPrototype% iterator, not an array.
+    @Test
+    public void symbolMatchAllReturnsAnIterator() {
+        assertEquals("function", str("typeof RegExp.prototype[Symbol.matchAll]"));
+        assertEquals("[object RegExp String Iterator]", str("Object.prototype.toString.call('ab'.matchAll(/a/g))"));
+        assertEquals("a,b", str("[...'a1b'.matchAll(/[a-z]/g)].map(m => m[0]).join(',')"));
+        assertEquals("a", str("[...'ab'.matchAll(/(?<x>a)/g)][0].groups.x"));
+        assertEquals("1", str("String([...'aa'.matchAll(/a/g)].length - 1)"));
+    }
+
+    @Test
+    public void aMatchAllIteratorIsSelfIterableAndFinishes() {
+        assertTrue(bool("const it = 'ab'.matchAll(/./g); it[Symbol.iterator]() === it"));
+        assertTrue(bool("const it = 'a'.matchAll(/a/g); it.next(); it.next().done"));
+    }
+
+    @Test
+    public void stringIteratorNextRejectsAForeignReceiver() {
+        assertEquals("TypeError", str("let caught = 'none'; const proto = Object.getPrototypeOf('a'.matchAll(/a/g));"
+                + " try { proto.next.call({}); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    @Test
+    public void matchAllRejectsANonGlobalRegexp() {
+        assertEquals("TypeError", str("let caught = 'none';"
+                + " try { 'a'.matchAll(/a/); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // Spec: the well-known symbol is read off an object argument, never off a primitive one.
+    @Test
+    public void aPrimitiveArgumentNeverExposesItsWellKnownSymbol() {
+        assertEquals("1", str("Object.defineProperty(Number.prototype, Symbol.match,"
+                + " { get() { throw new Error('read'); } }); 'a1b'.match(1)[0]"));
+    }
+
+    @Test
+    public void theSymbolMethodsAreNonEnumerableOnThePrototype() {
+        assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.match).enumerable"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.matchAll).enumerable"));
+    }
+
+    // The RegExp constructor accepts a regexp-like object, taking source/flags through [[Get]].
+    @Test
+    public void constructorAcceptsARegexpLikeObject() {
+        assertEquals("a+", str("new RegExp({ source: 'a+', flags: 'g', [Symbol.match]: true }).source"));
+        assertEquals("g", str("new RegExp({ source: 'a+', flags: 'g', [Symbol.match]: true }).flags"));
     }
 }

@@ -791,7 +791,7 @@ but is not a constructor.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **90.28%**, 33,398/36,992). The official
+Conformance is **measured, not asserted** (currently **95.45%**, 34,873/36,535). The official
 tc39/test262 corpus runs against
 `SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
 the language + built-ins surface a database script host actually exposes, and gated on a tracked

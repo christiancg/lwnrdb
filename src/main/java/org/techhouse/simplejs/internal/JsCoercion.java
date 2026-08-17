@@ -5,6 +5,7 @@ import java.util.List;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
@@ -58,6 +59,7 @@ public final class JsCoercion {
             case JsDate d -> d.getTime();
             case JsString s -> stringToNumber(s.getValue());
             case JsBigInt ignored -> throw new TypeErrorException("Cannot convert a BigInt to a number");
+            case JsSymbol ignored -> throw new TypeErrorException("Cannot convert a Symbol to a number");
             case JsObject wrapper when wrapper.getPrimitive() != null -> toNumber(wrapper.getPrimitive());
             default -> stringToNumber(toStr(value));
         };
@@ -72,6 +74,7 @@ public final class JsCoercion {
             case JsNull ignored -> "null";
             case JsUndefined ignored -> "undefined";
             case JsArray a -> arrayToString(a);
+            case JsObject wrapper when wrapper.getPrimitive() instanceof JsSymbol s -> SymbolBuiltins.describe(s);
             case JsObject wrapper when wrapper.getPrimitive() != null -> toStr(wrapper.getPrimitive());
             case JsObject ignored -> "[object Object]";
             case JsFunction f -> FunctionProtoBuiltins.sourceText(f);
@@ -95,23 +98,30 @@ public final class JsCoercion {
     }
 
     public static double toNumber(JsValue value, InterpreterOps ops) {
-        if (ops != null && value instanceof JsObject) {
+        if (ops != null && isObject(value)) {
             return toNumber(toPrimitive(value, "number", ops));
         }
         return toNumber(value);
     }
 
     public static String toStr(JsValue value, InterpreterOps ops) {
-        if (ops != null && value instanceof JsObject) {
+        if (ops != null && isObject(value)) {
             return toStr(toPrimitive(value, "string", ops));
         }
         return toStr(value);
     }
 
+    // ToNumeric: unlike ToNumber a BigInt survives as a BigInt, which is what lets the arithmetic,
+    // bitwise and relational operators decide on the *coerced* types rather than the raw operands.
+    public static JsValue toNumeric(JsValue value, InterpreterOps ops) {
+        final var primitive = toPrimitive(value, "number", ops);
+        return primitive instanceof JsBigInt ? primitive : new JsNumber(toNumber(primitive));
+    }
+
     // ToPropertyKey: a symbol stays a symbol, everything else goes through ToPrimitive(string) then
     // ToString - so an object key invokes the user's toString/valueOf rather than stringifying flatly.
     public static JsValue toPropertyKey(JsValue value, InterpreterOps ops) {
-        final var primitive = value instanceof JsObject ? toPrimitive(value, "string", ops) : value;
+        final var primitive = isObject(value) ? toPrimitive(value, "string", ops) : value;
         return primitive instanceof JsSymbol ? primitive : new JsString(toStr(primitive, ops));
     }
 
@@ -119,7 +129,7 @@ public final class JsCoercion {
         if (value instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
             return wrapper.getPrimitive();
         }
-        if (value instanceof JsObject || value instanceof JsArray) {
+        if (isObject(value)) {
             return new JsString(toStr(value));
         }
         return value;
@@ -129,7 +139,9 @@ public final class JsCoercion {
     // has to run so a script that redefines valueOf/toString on the wrapper (or on the intrinsic
     // prototype it inherits them from) wins over the boxed value.
     public static JsValue toPrimitive(JsValue value, String hint, InterpreterOps ops) {
-        if (ops == null || !(value instanceof JsObject)) {
+        // A proxy keeps the target-based coercion: routing it through OrdinaryToPrimitive would reach
+        // the intrinsic Function.prototype.toString, which rejects a proxy receiver.
+        if (ops == null || !isObject(value) || value instanceof JsProxy) {
             return toPrimitive(value);
         }
         final var exotic = ops.getMember(value, JsSymbol.TO_PRIMITIVE);
@@ -140,17 +152,30 @@ public final class JsCoercion {
             }
             throw new TypeErrorException("Cannot convert object to primitive value");
         }
+        // GetMethod: anything other than undefined/null that is not callable is an error here, it
+        // must not silently fall through to OrdinaryToPrimitive.
+        if (!(exotic instanceof JsUndefined) && !(exotic instanceof JsNull)) {
+            throw new TypeErrorException("Symbol.toPrimitive is not a function");
+        }
         final var methods = "string".equals(hint)
                 ? new String[]{"toString", "valueOf"}
                 : new String[]{"valueOf", "toString"};
+        var resolvedAny = false;
         for (final var name : methods) {
             final var method = ops.getMember(value, new JsString(name));
+            resolvedAny |= !(method instanceof JsUndefined);
             if (isCallable(method)) {
                 final var result = ops.call(method, value, List.of());
                 if (isPrimitive(result)) {
                     return result;
                 }
             }
+        }
+        // An exotic value type whose intrinsic prototype chain does not reach Object.prototype (an
+        // arguments object, globalThis) resolves neither method; its built-in string form stands in
+        // rather than becoming a spurious TypeError.
+        if (!resolvedAny && !(value instanceof JsObject)) {
+            return new JsString(toStr(value));
         }
         throw new TypeErrorException("Cannot convert object to primitive value");
     }
@@ -163,6 +188,10 @@ public final class JsCoercion {
         return value instanceof JsNumber || value instanceof JsString || value instanceof JsBoolean
                 || value instanceof JsBigInt || value instanceof JsNull || value instanceof JsUndefined
                 || value instanceof JsSymbol;
+    }
+
+    public static boolean isObject(JsValue value) {
+        return !isPrimitive(value);
     }
 
     public static String typeOf(JsValue value) {
@@ -238,16 +267,7 @@ public final class JsCoercion {
     }
 
     private static double radixLiteralToNumber(String s) {
-        if (s.length() < 3 || s.charAt(0) != '0') {
-            return Double.NaN;
-        }
-        final var marker = Character.toLowerCase(s.charAt(1));
-        final var radix = switch (marker) {
-            case 'x' -> 16;
-            case 'o' -> 8;
-            case 'b' -> 2;
-            default -> 0;
-        };
+        final var radix = nonDecimalRadix(s);
         if (radix == 0) {
             return Double.NaN;
         }
@@ -255,6 +275,33 @@ public final class JsCoercion {
             return new BigInteger(s.substring(2), radix).doubleValue();
         } catch (NumberFormatException ignored) {
             return Double.NaN;
+        }
+    }
+
+    private static int nonDecimalRadix(String s) {
+        if (s.length() < 3 || s.charAt(0) != '0') {
+            return 0;
+        }
+        return switch (Character.toLowerCase(s.charAt(1))) {
+            case 'x' -> 16;
+            case 'o' -> 8;
+            case 'b' -> 2;
+            default -> 0;
+        };
+    }
+
+    // StringToBigInt: an invalid literal is `undefined`, not NaN, and the callers must distinguish
+    // the two - `1n >= "0."` is false rather than a numeric comparison against 0.
+    public static BigInteger stringToBigInt(String raw) {
+        final var s = raw.strip();
+        if (s.isEmpty()) {
+            return BigInteger.ZERO;
+        }
+        final var radix = nonDecimalRadix(s);
+        try {
+            return radix == 0 ? new BigInteger(s) : new BigInteger(s.substring(2), radix);
+        } catch (NumberFormatException ignored) {
+            return null;
         }
     }
 

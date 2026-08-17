@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
+import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -24,6 +25,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.PropertyDescriptor;
 import org.techhouse.simplejs.values.SameValueZero;
 
 public final class ArrayBuiltins {
@@ -36,18 +38,22 @@ public final class ArrayBuiltins {
     // 2^53-1: the largest index the spec's ToLength admits, so every index walk is done in `long`.
     private static final long MAX_SAFE_INTEGER = 9007199254740991L;
     private static final JsString LENGTH = new JsString("length");
+    private static final JsString NEXT = new JsString("next");
+    private static final JsString DONE = new JsString("done");
+    private static final JsString VALUE = new JsString("value");
+    private static final JsString RETURN = new JsString("return");
+    private static final JsString TO_STRING = new JsString("toString");
 
     private ArrayBuiltins() {
     }
 
-    public static JsNativeFunction create(Invoker invoker, IterableToList iterableToList, EventLoop eventLoop,
-            InterpreterOps ops) {
+    public static JsNativeFunction create(Invoker invoker, EventLoop eventLoop,
+                                          InterpreterOps ops, Intrinsics intrinsics) {
         final var array = new JsNativeFunction("Array", (_, args) -> construct(args));
-        array.setProperty("isArray", new JsNativeFunction("isArray",
-                (_, args) -> JsBoolean.of(!args.isEmpty() && args.getFirst() instanceof JsArray)));
-        array.setProperty("from",
-                new JsNativeFunction("from", (receiver, args) -> from(receiver, args, invoker, iterableToList, ops)));
-        array.setProperty("of", new JsNativeFunction("of", (_, args) -> new JsArray(new ArrayList<>(args))));
+        array.setProperty("isArray",
+                new JsNativeFunction("isArray", (_, args) -> JsBoolean.of(isArray(arg(args, 0), intrinsics))));
+        array.setProperty("from", new JsNativeFunction("from", (receiver, args) -> from(receiver, args, invoker, ops)));
+        array.setProperty("of", new JsNativeFunction("of", (receiver, args) -> of(receiver, args, ops)));
         final var fromAsync = new JsNativeFunction("fromAsync",
                 (receiver, args) -> AsyncIteratorBuiltins.fromAsync(ops, eventLoop, receiver, args));
         fromAsync.setLength(1);
@@ -55,40 +61,128 @@ public final class ArrayBuiltins {
         return array;
     }
 
-    private static JsValue from(JsValue receiver, List<JsValue> args, Invoker invoker, IterableToList iterableToList,
-            InterpreterOps ops) {
-        final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
-        final var mapFn = args.size() > 1 && !(args.get(1) instanceof JsUndefined) ? args.get(1) : null;
-        final var mapThisArg = args.size() > 2 ? args.get(2) : JsUndefined.getInstance();
-        final List<JsValue> items;
-        if (source instanceof JsArray array) {
-            items = new ArrayList<>(array.getElements());
-        } else if (source instanceof JsString string) {
-            items = new ArrayList<>(InterpreterUtils.stringCodePoints(string.getValue()));
-        } else {
-            items = InterpreterUtils.arrayLikeOrIterableToList(source, iterableToList, ops);
+    // IsArray: a proxy answers for its target (and a revoked one is a TypeError), and the intrinsic
+    // Array.prototype is itself an array exotic object even though it is stored as a plain object.
+    static boolean isArray(JsValue value) {
+        if (value instanceof JsProxy proxy) {
+            if (proxy.isRevoked()) {
+                throw new TypeErrorException("Cannot perform 'IsArray' on a proxy that has been revoked");
+            }
+            return isArray(proxy.getTarget());
         }
-        // The iterator path constructs the target with no arguments; only the array-like fallback
-        // passes the length. `new Object(0)` boxes its argument, so the two are not interchangeable.
+        return value instanceof JsArray;
+    }
+
+    private static boolean isArray(JsValue value, Intrinsics intrinsics) {
+        return isArray(value) || (intrinsics != null && value == intrinsics.arrayProto());
+    }
+
+    private static JsValue of(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
+        final var length = args.size();
         final var result = InterpreterUtils.isConstructor(receiver)
-                ? ops.construct(receiver, usesIterator(source, ops) ? List.of() : List.of(new JsNumber(items.size())))
+                ? ops.construct(receiver, List.of(new JsNumber(length)))
+                : newArray(length);
+        for (var i = 0; i < length; i++) {
+            createDataPropertyOrThrow(result, i, args.get(i), ops);
+        }
+        setLengthOrThrow(result, length, ops);
+        return result;
+    }
+
+    private static JsValue from(JsValue receiver, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var source = arg(args, 0);
+        final var mapFn = arg(args, 1);
+        if (!(mapFn instanceof JsUndefined) && !InterpreterUtils.isCallable(mapFn)) {
+            throw new TypeErrorException("Array.from: when provided, the second argument must be a function");
+        }
+        final var mapThisArg = arg(args, 2);
+        final var iteratorMethod = ops == null ? null : ops.getMember(source, JsSymbol.ITERATOR);
+        if (InterpreterUtils.isCallable(iteratorMethod)) {
+            return fromIterator(receiver, source, iteratorMethod, mapFn, mapThisArg, invoker, ops);
+        }
+        return fromArrayLike(receiver, source, mapFn, mapThisArg, invoker, ops);
+    }
+
+    // The iterator path constructs the target with no arguments; only the array-like path passes the
+    // length. `new Object(0)` boxes its argument, so the two are not interchangeable.
+    private static JsValue fromIterator(JsValue receiver, JsValue source, JsValue iteratorMethod, JsValue mapFn,
+            JsValue mapThisArg, Invoker invoker, InterpreterOps ops) {
+        final var result = InterpreterUtils.isConstructor(receiver)
+                ? ops.construct(receiver, List.of())
                 : new JsArray();
-        for (var i = 0; i < items.size(); i++) {
-            final var element = items.get(i);
-            final var mapped = mapFn == null
+        final var iterator = ops.call(iteratorMethod, source, List.of());
+        final var next = ops.getMember(iterator, NEXT);
+        var written = 0L;
+        while (true) {
+            final var step = ops.call(next, iterator, List.of());
+            if (JsCoercion.toBoolean(ops.getMember(step, DONE))) {
+                setLengthOrThrow(result, written, ops);
+                return result;
+            }
+            var element = ops.getMember(step, VALUE);
+            try {
+                if (!(mapFn instanceof JsUndefined)) {
+                    element = invoker.call(mapFn, mapThisArg, List.of(element, new JsNumber(written)));
+                }
+                createDataPropertyOrThrow(result, written, element, ops);
+            } catch (RuntimeException error) {
+                closeIterator(iterator, ops, error);
+                throw error;
+            }
+            written++;
+        }
+    }
+
+    private static JsValue fromArrayLike(JsValue receiver, JsValue source, JsValue mapFn, JsValue mapThisArg,
+            Invoker invoker, InterpreterOps ops) {
+        final var arrayLike = new ArrayLike(requireObjectSource(source), ops);
+        final var length = arrayLike.length();
+        final var result = InterpreterUtils.isConstructor(receiver)
+                ? ops.construct(receiver, List.of(new JsNumber(length)))
+                : newArray(length);
+        for (var i = 0L; i < length; i++) {
+            final var element = arrayLike.get(i);
+            final var mapped = mapFn instanceof JsUndefined
                     ? element
                     : invoker.call(mapFn, mapThisArg, List.of(element, new JsNumber(i)));
             createDataPropertyOrThrow(result, i, mapped, ops);
         }
-        if (!(result instanceof JsArray)) {
-            ops.setMember(result, LENGTH, new JsNumber(items.size()));
-        }
+        setLengthOrThrow(result, length, ops);
         return result;
     }
 
-    private static boolean usesIterator(JsValue source, InterpreterOps ops) {
-        return source instanceof JsArray || source instanceof JsString
-                || (ops != null && InterpreterUtils.isCallable(ops.getMember(source, JsSymbol.ITERATOR)));
+    private static JsValue requireObjectSource(JsValue source) {
+        if (source instanceof JsNull || source instanceof JsUndefined) {
+            throw new TypeErrorException("Array.from requires an array-like or iterable object");
+        }
+        return source;
+    }
+
+    // IteratorClose: the pending error wins, so a throw from the iterator's own `return` is dropped.
+    private static void closeIterator(JsValue iterator, InterpreterOps ops, RuntimeException pending) {
+        if (pending instanceof ScriptAbortException) {
+            return;
+        }
+        try {
+            final var close = ops.getMember(iterator, RETURN);
+            if (InterpreterUtils.isCallable(close)) {
+                ops.call(close, iterator, List.of());
+            }
+        } catch (RuntimeException ignored) {
+            // IteratorClose swallows a failure from `return` when an error is already propagating.
+        }
+    }
+
+    private static void setLengthOrThrow(JsValue target, long length, InterpreterOps ops) {
+        if (target instanceof JsArray array) {
+            if (!array.setLength((int) length)) {
+                throw new TypeErrorException("Cannot assign to read only property 'length' of object");
+            }
+            return;
+        }
+        if (ops != null && !ops.setMember(target, LENGTH, new JsNumber(length))) {
+            throw new TypeErrorException("Cannot assign to read only property 'length' of object");
+        }
     }
 
     private static void createDataPropertyOrThrow(JsValue target, long index, JsValue value, InterpreterOps ops) {
@@ -245,6 +339,15 @@ public final class ArrayBuiltins {
         }
 
         private boolean trySet(long index, JsValue element) {
+            final var inherited = inheritedIndexAccessor(index);
+            if (inherited != null) {
+                final var setter = inherited.get("set");
+                if (!InterpreterUtils.isCallable(setter)) {
+                    return false;
+                }
+                ops.call(setter, value, List.of(element));
+                return true;
+            }
             final var dense = dense();
             if (dense != null) {
                 return index <= Integer.MAX_VALUE && dense.set((int) index, element);
@@ -258,6 +361,36 @@ public final class ArrayBuiltins {
                 return index >= string.getValue().length();
             }
             return ops.setMember(value, key(index), element);
+        }
+
+        // OrdinarySet on an index the array does not own must reach an accessor the prototype chain
+        // owns; the interpreter's array write path only ever consults the array itself.
+        private JsObject inheritedIndexAccessor(long index) {
+            if (ops == null || !(value instanceof JsArray array)) {
+                return null;
+            }
+            final var propertyKey = key(index);
+            if (!ops.has(value, propertyKey) || array.getOwnProperty(propertyKey) != null) {
+                return null;
+            }
+            return inheritedAccessor(propertyKey);
+        }
+
+        private JsObject inheritedAccessor(JsString propertyKey) {
+            JsObject accessor = null;
+            var proto = ops.getPrototypeOf(value);
+            while (accessor == null && InterpreterUtils.isObjectLike(proto)) {
+                final var descriptor = ops.getOwnPropertyDescriptor(proto, propertyKey);
+                if (descriptor instanceof JsObject fields) {
+                    // A data property found first on the chain is what an ordinary write overwrites,
+                    // so the walk stops without an accessor.
+                    accessor = fields.has("get") || fields.has("set") ? fields : null;
+                    proto = JsNull.getInstance();
+                } else {
+                    proto = ops.getPrototypeOf(proto);
+                }
+            }
+            return accessor;
         }
 
         void setLength(long length) {
@@ -344,7 +477,7 @@ public final class ArrayBuiltins {
     // ArraySpeciesCreate: only an array receiver consults its constructor, and the intrinsic Array
     // carries no @@species, so the common case still lands on a plain array.
     private static JsValue speciesCreate(ArrayLike target, long length, InterpreterOps ops) {
-        if (ops == null || !(target.value instanceof JsArray)) {
+        if (ops == null || !isArray(target.value)) {
             return newArray(length);
         }
         var constructor = ops.getMember(target.value, new JsString("constructor"));
@@ -387,6 +520,13 @@ public final class ArrayBuiltins {
                     : ops.getMember(element, new JsString("toLocaleString"));
             if (InterpreterUtils.isCallable(method)) {
                 sb.append(JsCoercion.toStr(invoker.call(method, element, List.of()), ops));
+                continue;
+            }
+            // Object.prototype.toLocaleString is `this.toString()`, so an element that inherits no
+            // toLocaleString of its own still has to route through whatever toString it resolves to.
+            final var toString = ops == null ? JsUndefined.getInstance() : ops.getMember(element, TO_STRING);
+            if (InterpreterUtils.isCallable(toString)) {
+                sb.append(JsCoercion.toStr(invoker.call(toString, element, List.of()), ops));
             } else {
                 sb.append(JsCoercion.toStr(element, ops));
             }
@@ -711,12 +851,33 @@ public final class ArrayBuiltins {
             return false;
         }
         if (ops != null) {
-            final var flag = ops.getMember(value, JsSymbol.IS_CONCAT_SPREADABLE);
+            final var flag = concatSpreadableFlag(value, ops);
             if (!(flag instanceof JsUndefined)) {
                 return JsCoercion.toBoolean(flag);
             }
         }
-        return value instanceof JsArray;
+        return isArray(value);
+    }
+
+    // Get(O, @@isConcatSpreadable). The interpreter's symbol dispatch resolves an own symbol key only
+    // on a plain object, so for every other exotic receiver the ordinary lookup is done here.
+    private static JsValue concatSpreadableFlag(JsValue value, InterpreterOps ops) {
+        if (value instanceof JsObject || value instanceof JsProxy) {
+            return ops.getMember(value, JsSymbol.IS_CONCAT_SPREADABLE);
+        }
+        PropertyDescriptor found = null;
+        for (var link = value; found == null && InterpreterUtils.isObjectLike(link); link = ops.getPrototypeOf(link)) {
+            found = link.getOwnProperty(JsSymbol.IS_CONCAT_SPREADABLE);
+        }
+        if (found == null) {
+            return JsUndefined.getInstance();
+        }
+        if (!found.isAccessorDescriptor()) {
+            return found.value();
+        }
+        return InterpreterUtils.isCallable(found.getter())
+                ? ops.call(found.getter(), value, List.of())
+                : JsUndefined.getInstance();
     }
 
     private static String join(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
@@ -814,15 +975,17 @@ public final class ArrayBuiltins {
             final var lowerValue = lowerExists ? target.get(lower) : null;
             final var upperExists = target.has(upper);
             final var upperValue = upperExists ? target.get(upper) : null;
-            if (upperExists) {
+            // Two indices that are both absent are left alone: only a present one is moved, and the
+            // slot it vacates is deleted rather than filled with undefined.
+            if (lowerExists && upperExists) {
                 target.set(lower, upperValue);
-            } else {
-                target.delete(lower);
-            }
-            if (lowerExists) {
                 target.set(upper, lowerValue);
-            } else {
+            } else if (upperExists) {
+                target.set(lower, upperValue);
                 target.delete(upper);
+            } else if (lowerExists) {
+                target.delete(lower);
+                target.set(upper, lowerValue);
             }
         }
         return target.value;
@@ -875,8 +1038,12 @@ public final class ArrayBuiltins {
     }
 
     private static JsValue indexIterator(ArrayLike target, String kind) {
+        // Once exhausted the iterator drops its receiver, so an element appended afterwards is never
+        // visited even though the walk is otherwise live.
+        final var exhausted = new boolean[1];
         return JsIterators.lazy(index -> {
-            if (index >= target.length()) {
+            if (exhausted[0] || index >= target.length()) {
+                exhausted[0] = true;
                 return null;
             }
             return switch (kind) {
@@ -985,11 +1152,12 @@ public final class ArrayBuiltins {
     }
 
     private static JsValue flat(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
+        final var length = target.length();
         final var depth = args.isEmpty() || args.getFirst() instanceof JsUndefined
                 ? 1
                 : toIntegerOrInfinity(args.getFirst(), ops);
         final var result = speciesCreate(target, 0, ops);
-        flattenInto(result, target, target.length(), 0, depth, null, null, null, ops);
+        flattenInto(result, target, length, 0, depth, null, null, null, ops);
         return result;
     }
 
@@ -1013,7 +1181,7 @@ public final class ArrayBuiltins {
             if (mapper != null) {
                 element = invoker.call(mapper, self, List.of(element, new JsNumber(i), source.value));
             }
-            if (depth > 0 && element instanceof JsArray) {
+            if (depth > 0 && isArray(element)) {
                 final var nested = new ArrayLike(element, ops);
                 written = flattenInto(result, nested, nested.length(), written, depth - 1, null, null, null, ops);
             } else {

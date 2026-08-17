@@ -125,7 +125,7 @@ public final class Intrinsics {
                 (receiver, name) -> SymbolBuiltins.getMethod(requireSymbol(receiver, name), name));
         installSymbolAccessors(symbolProto);
         regexpProto = prototypeOf(RegexBuiltins.NAMES, "RegExp.prototype",
-                (receiver, name) -> RegexBuiltins.getMethod(requireRegExp(receiver, name), name));
+                (receiver, name) -> RegexBuiltins.getMethod(requireRegExp(receiver, name), name, ops));
         installRegExpSymbolMethods(regexpProto);
         installRegExpAccessors(regexpProto);
         mapProto = prototypeOf(MapBuiltins.NAMES, "Map.prototype",
@@ -250,6 +250,9 @@ public final class Intrinsics {
     private JsObject regexpStringIteratorPrototype() {
         final var proto = new JsObject();
         proto.setProto(objectProto);
+        final var next = new JsNativeFunction("next", (thisArg, _) -> RegexBuiltins.stringIteratorNext(thisArg, ops));
+        next.setLength(0);
+        define(proto, "next", next);
         defineToStringTag(proto, "RegExp String Iterator");
         return proto;
     }
@@ -749,7 +752,7 @@ public final class Intrinsics {
     private void installRegExpAccessors(JsObject proto) {
         for (final var name : RegexBuiltins.PROTO_ACCESSORS) {
             final var getter = new JsNativeFunction("get " + name,
-                    (thisArg, _) -> RegexBuiltins.protoAccessor(regExpReceiver(thisArg), name, proto));
+                    (thisArg, _) -> RegexBuiltins.protoAccessor(regExpReceiver(thisArg), name, proto, ops));
             proto.defineAccessor(name, getter, null);
             proto.setFlags(name, HIDDEN);
         }
@@ -784,9 +787,17 @@ public final class Intrinsics {
         replace.setLength(2);
         proto.setSymbol(JsSymbol.REPLACE, replace);
         final var split = new JsNativeFunction("[Symbol.split]", (thisArg, args) -> RegexBuiltins.symbolSplit(thisArg,
-                argStr(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), ops));
+                argStr(args), args.size() > 1 ? args.get(1) : JsUndefined.getInstance(), proto, ops));
         split.setLength(2);
         proto.setSymbol(JsSymbol.SPLIT, split);
+        final var matchAll = new JsNativeFunction("[Symbol.matchAll]", (thisArg, args) -> RegexBuiltins
+                .symbolMatchAll(thisArg, argStr(args), regexpStringIteratorProto, proto, ops));
+        matchAll.setLength(1);
+        proto.setSymbol(JsSymbol.MATCH_ALL, matchAll);
+        for (final var symbol : List.of(JsSymbol.MATCH, JsSymbol.SEARCH, JsSymbol.REPLACE, JsSymbol.SPLIT,
+                JsSymbol.MATCH_ALL)) {
+            proto.setSymbolFlags(symbol, HIDDEN);
+        }
     }
 
     private String argStr(List<JsValue> args) {

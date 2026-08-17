@@ -24,7 +24,11 @@ import org.techhouse.simplejs.host.SimpleHostBindings;
 public final class Test262Worker {
     // maxDepth must stay at or below 1000: at 2000 a deeply recursive test blows the JVM stack on the
     // engine's virtual thread before the depth guard fires and SimpleJs.run never returns.
-    private static final ResourceLimits LIMITS = new ResourceLimits(50_000_000L, 5_000L, 1_000);
+    // The wall-clock deadline is deliberately disabled: it made a test near the limit pass or fail
+    // depending on machine load, so the same commit gated differently run to run. The instruction
+    // budget bounds a runaway script deterministically (tick() runs at every loop back-edge and call),
+    // and test_utils/test262.py's own per-test process timeout is the backstop for a real hang.
+    private static final ResourceLimits LIMITS = new ResourceLimits(50_000_000L, -1, 1_000);
     private static final String ASYNC_PASS = "Test262:AsyncTestComplete";
     private static final String ASYNC_FAIL_PREFIX = "Test262:AsyncTestFailure:";
     private static final List<String> PRELUDE_SHIMS = List.of("print.js", "host262.js");

@@ -42,10 +42,11 @@ public class RegexTranslatorVFlagTest {
         assertFalse(find("[\\q{a|b}]", "c"));
     }
 
-    // a multi-character \q{} string literal is not supported and throws
+    // a multi-character \q{} string literal becomes an alternation branch
     @Test
-    public void test_string_literal_multi_char_rejected() {
-        assertThrows(SyntaxErrorException.class, () -> RegexTranslator.compile("[\\q{ab}]", "v"));
+    public void test_string_literal_multi_char_matches() {
+        assertTrue(find("[\\q{ab}]", "ab"));
+        assertFalse(find("^[\\q{ab}]$", "a"));
     }
 
     // property escapes are still translated inside v-mode classes

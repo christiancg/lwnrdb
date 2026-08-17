@@ -361,7 +361,8 @@ public final class ProxyDispatch {
     }
 
     // IsCompatiblePropertyDescriptor, i.e. ValidateAndApplyPropertyDescriptor reduced to its verdict.
-    private static boolean isNotCompatible(boolean extensible, PropertyDescriptor descriptor, PropertyDescriptor current) {
+    private static boolean isNotCompatible(boolean extensible, PropertyDescriptor descriptor,
+            PropertyDescriptor current) {
         if (current == null) {
             return !extensible;
         }

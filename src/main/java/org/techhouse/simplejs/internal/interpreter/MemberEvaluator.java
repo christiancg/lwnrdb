@@ -552,32 +552,26 @@ public final class MemberEvaluator {
                 }
             }
         }
-        return receiver == object ? object.set(key, value) : setOnReceiver(receiver, key, value);
+        // A proxy receiver would need its own [[DefineOwnProperty]] here; routing there turns a
+        // rejected define into a thrown TypeError where OrdinarySet owes the caller a false, so the
+        // write stays on the object it resolved against.
+        return receiver == object || receiver instanceof JsProxy
+                ? object.set(key, value)
+                : setOnReceiver(receiver, key, value);
     }
 
     // OrdinarySet lands the write on the receiver, not on the object whose chain answered the lookup:
     // reached when a proxy or Reflect.set supplies a receiver other than the target.
     private boolean setOnReceiver(JsValue receiver, String key, JsValue value) {
         final var keyValue = new JsString(key);
-        if (receiver instanceof JsProxy proxy) {
-            return proxies.defineProperty(proxy, keyValue, dataDescriptorObject(value));
-        }
         final var existing = receiver.getOwnProperty(keyValue);
         if (existing != null && (existing.isAccessorDescriptor() || !existing.writableOr(false))) {
             return false;
         }
-        return receiver.defineOwnProperty(keyValue, existing == null
-                ? PropertyDescriptor.data(value, JsObject.PropertyFlags.DEFAULT)
-                : new PropertyDescriptor(value, null, null, null, null, null));
-    }
-
-    private static JsObject dataDescriptorObject(JsValue value) {
-        final var descriptor = new JsObject();
-        descriptor.set("value", value);
-        descriptor.set("writable", JsBoolean.TRUE);
-        descriptor.set("enumerable", JsBoolean.TRUE);
-        descriptor.set("configurable", JsBoolean.TRUE);
-        return descriptor;
+        return receiver.defineOwnProperty(keyValue,
+                existing == null
+                        ? PropertyDescriptor.data(value, JsObject.PropertyFlags.DEFAULT)
+                        : new PropertyDescriptor(value, null, null, null, null, null));
     }
 
     public boolean setMember(JsValue target, String key, JsValue value) {
@@ -612,16 +606,11 @@ public final class MemberEvaluator {
             // PerformPromiseThen invokes the receiver's own `then`, and SpeciesConstructor reads its
             // own `constructor`, so an assignment to either has to land as an ordinary own property.
             case JsPromise promise -> promise.ownProperties().set(key, value);
-            case JsRegExp regexp -> {
-                if ("lastIndex".equals(key)) {
-                    final var next = JsCoercion.toNumber(value);
-                    regexp.setLastIndex(Double.isNaN(next) ? 0 : (int) next);
-                    yield true;
-                }
-                // Anything else is an ordinary own property: RegExpExec calls the receiver's own
-                // `exec`, which a script can only override if the assignment actually lands.
-                yield regexp.ownProperties().set(key, value);
-            }
+            // lastIndex is an ordinary own data property, and every other key is one too: RegExpExec
+            // calls the receiver's own `exec`, which a script can only override if the assignment
+            // lands. A setterless inherited accessor (the flag getters) still refuses the write.
+            case JsRegExp regexp -> (regexp.ownProperties().has(key) || !RegexBuiltins.isSetterless(key))
+                    && regexp.ownProperties().set(key, value);
             case JsNull ignored -> throw new TypeErrorException(
                     "Cannot set properties of " + JsCoercion.toStr(target) + " (setting '" + key + "')");
             case JsUndefined ignored -> throw new TypeErrorException(
@@ -892,15 +881,19 @@ public final class MemberEvaluator {
     }
 
     private JsValue regExpMember(JsRegExp regexp, String key) {
-        if (RegexBuiltins.isAccessor(key)) {
-            return orUndefined(RegexBuiltins.getMethod(regexp, key));
-        }
         final var table = regexp.ownProperties();
         if (table.hasAccessor(key)) {
             final var getter = table.getAccessorGetter(key);
             return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, regexp, List.of());
         }
-        return table.has(key) ? table.get(key) : intrinsicMember(regexp, key);
+        // An own property shadows the inherited flag accessor, so defineProperty(re, 'flags', …) wins.
+        if (table.has(key)) {
+            return table.get(key);
+        }
+        if (RegexBuiltins.isAccessor(key)) {
+            return orUndefined(RegexBuiltins.getMethod(regexp, key));
+        }
+        return intrinsicMember(regexp, key);
     }
 
     private JsValue promiseMethod(JsPromise promise, String key) {

@@ -555,7 +555,7 @@ public class IntrinsicsTest {
     @Test
     public void regExpOwnPropertyAssignmentLands() {
         assertEquals(1, num("const r = /b/; r.exec = () => 1; r.exec()"));
-        assertEquals("exec", run("const r = /b/; r.exec = () => 1; Object.getOwnPropertyNames(r).join(',')"));
+        assertEquals("lastIndex,exec", run("const r = /b/; r.exec = () => 1; Object.getOwnPropertyNames(r).join(',')"));
         assertTrue(bool("const r = /b/; r.exec = () => 1; typeof /c/.exec === 'function'"));
     }
 }

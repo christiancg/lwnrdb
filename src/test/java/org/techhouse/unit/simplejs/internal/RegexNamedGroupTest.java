@@ -27,7 +27,7 @@ public class RegexNamedGroupTest {
         final var regexp = RegexTranslator.compile("(?<y>a)|(?<y>b)", "");
         assertEquals("(?<y>a)|(?<y>b)", regexp.getSource());
         assertEquals(2, regexp.getGroupAliases().get("y").size());
-        assertEquals("y", regexp.getGroupAliases().get("y").getFirst());
+        assertEquals(2, regexp.getGroupAliases().get("y").stream().distinct().count());
     }
 
     // Whichever alternative participates supplies the group value

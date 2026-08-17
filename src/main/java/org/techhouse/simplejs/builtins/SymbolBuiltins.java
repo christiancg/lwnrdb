@@ -3,8 +3,10 @@ package org.techhouse.simplejs.builtins;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -14,35 +16,47 @@ public final class SymbolBuiltins {
     public static final List<String> NAMES = List.of("toString", "valueOf");
     public static final List<String> PROTO_ACCESSORS = List.of("description");
 
+    private static final JsObject.PropertyFlags FROZEN = new JsObject.PropertyFlags(false, false, false);
+
     private SymbolBuiltins() {
     }
 
-    public static JsNativeFunction create() {
+    public static JsNativeFunction create(InterpreterOps ops) {
         // The Symbol.for registry is per-realm (one instance per Symbol namespace, i.e. per
         // Interpreter run) rather than JVM-global: a static map would grow unbounded across
         // script runs and would leak symbol identities between different users' scripts.
         final Map<String, JsSymbol> registry = new ConcurrentHashMap<>();
-        final var symbol = new JsNativeFunction("Symbol", (_, args) -> new JsSymbol(
-                args.isEmpty() || args.getFirst() instanceof JsUndefined ? null : JsCoercion.toStr(args.getFirst())));
-        symbol.setProperty("dispose", JsSymbol.DISPOSE);
-        symbol.setProperty("asyncDispose", JsSymbol.ASYNC_DISPOSE);
-        symbol.setProperty("iterator", JsSymbol.ITERATOR);
-        symbol.setProperty("asyncIterator", JsSymbol.ASYNC_ITERATOR);
-        symbol.setProperty("toPrimitive", JsSymbol.TO_PRIMITIVE);
-        symbol.setProperty("hasInstance", JsSymbol.HAS_INSTANCE);
-        symbol.setProperty("toStringTag", JsSymbol.TO_STRING_TAG);
-        symbol.setProperty("match", JsSymbol.MATCH);
-        symbol.setProperty("replace", JsSymbol.REPLACE);
-        symbol.setProperty("search", JsSymbol.SEARCH);
-        symbol.setProperty("split", JsSymbol.SPLIT);
-        symbol.setProperty("matchAll", JsSymbol.MATCH_ALL);
-        symbol.setProperty("isConcatSpreadable", JsSymbol.IS_CONCAT_SPREADABLE);
-        symbol.setProperty("unscopables", JsSymbol.UNSCOPABLES);
-        symbol.setProperty("species", JsSymbol.SPECIES);
+        final var symbol = new JsNativeFunction("Symbol",
+                (_, args) -> new JsSymbol(args.isEmpty() || args.getFirst() instanceof JsUndefined
+                        ? null
+                        : JsCoercion.toStr(args.getFirst(), ops)));
+        wellKnown(symbol, "dispose", JsSymbol.DISPOSE);
+        wellKnown(symbol, "asyncDispose", JsSymbol.ASYNC_DISPOSE);
+        wellKnown(symbol, "iterator", JsSymbol.ITERATOR);
+        wellKnown(symbol, "asyncIterator", JsSymbol.ASYNC_ITERATOR);
+        wellKnown(symbol, "toPrimitive", JsSymbol.TO_PRIMITIVE);
+        wellKnown(symbol, "hasInstance", JsSymbol.HAS_INSTANCE);
+        wellKnown(symbol, "toStringTag", JsSymbol.TO_STRING_TAG);
+        wellKnown(symbol, "match", JsSymbol.MATCH);
+        wellKnown(symbol, "replace", JsSymbol.REPLACE);
+        wellKnown(symbol, "search", JsSymbol.SEARCH);
+        wellKnown(symbol, "split", JsSymbol.SPLIT);
+        wellKnown(symbol, "matchAll", JsSymbol.MATCH_ALL);
+        wellKnown(symbol, "isConcatSpreadable", JsSymbol.IS_CONCAT_SPREADABLE);
+        wellKnown(symbol, "unscopables", JsSymbol.UNSCOPABLES);
+        wellKnown(symbol, "species", JsSymbol.SPECIES);
         symbol.setProperty("for",
-                new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args), JsSymbol::new)));
+                new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args, ops), JsSymbol::new)));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));
         return symbol;
+    }
+
+    // A well-known symbol is { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false },
+    // unlike every other own property of a builtin constructor.
+    private static void wellKnown(JsNativeFunction symbol, String name, JsSymbol value) {
+        final var table = symbol.ownProperties();
+        table.defineValue(name, value);
+        table.setFlags(name, FROZEN);
     }
 
     public static JsNativeFunction getMethod(JsSymbol receiver, String name) {
@@ -64,17 +78,17 @@ public final class SymbolBuiltins {
         return receiver.getDescription() == null ? JsUndefined.getInstance() : new JsString(receiver.getDescription());
     }
 
-    static String describe(JsSymbol symbol) {
+    public static String describe(JsSymbol symbol) {
         return "Symbol(" + (symbol.getDescription() == null ? "" : symbol.getDescription()) + ")";
     }
 
-    private static String key(List<JsValue> args) {
-        return args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst());
+    private static String key(List<JsValue> args, InterpreterOps ops) {
+        return args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
     }
 
     private static JsValue keyFor(Map<String, JsSymbol> registry, List<JsValue> args) {
         if (args.isEmpty() || !(args.getFirst() instanceof JsSymbol symbol)) {
-            return JsUndefined.getInstance();
+            throw new TypeErrorException("Symbol.keyFor requires a symbol argument");
         }
         for (final var entry : registry.entrySet()) {
             if (entry.getValue() == symbol) {

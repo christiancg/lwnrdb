@@ -1,17 +1,14 @@
 package org.techhouse.simplejs.internal;
 
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
-import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
-import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -64,16 +61,21 @@ public final class JsOperators {
         if (leftNullish || rightNullish) {
             return leftNullish && rightNullish;
         }
+        // Two objects of different internal shapes are still both Objects to the spec, so identity
+        // decides and neither side is coerced.
+        if (JsCoercion.isObject(left) && JsCoercion.isObject(right)) {
+            return left == right;
+        }
         if (left instanceof JsBoolean) {
             return looseEquals(new JsNumber(JsCoercion.toNumber(left)), right, ops);
         }
         if (right instanceof JsBoolean) {
             return looseEquals(left, new JsNumber(JsCoercion.toNumber(right)), ops);
         }
-        if (left instanceof JsObject || left instanceof JsArray) {
+        if (JsCoercion.isObject(left)) {
             return looseEquals(JsCoercion.toPrimitive(left, "default", ops), right, ops);
         }
-        if (right instanceof JsObject || right instanceof JsArray) {
+        if (JsCoercion.isObject(right)) {
             return looseEquals(left, JsCoercion.toPrimitive(right, "default", ops), ops);
         }
         return looseEqualsPrimitive(left, right);
@@ -122,26 +124,29 @@ public final class JsOperators {
     }
 
     public static JsValue delta(JsValue operand, boolean increment, InterpreterOps ops) {
-        if (operand instanceof JsBigInt b) {
+        final var numeric = JsCoercion.toNumeric(operand, ops);
+        if (numeric instanceof JsBigInt b) {
             final var one = BigInteger.ONE;
             return new JsBigInt(increment ? b.getValue().add(one) : b.getValue().subtract(one));
         }
-        final var current = JsCoercion.toNumber(operand, ops);
+        final var current = ((JsNumber) numeric).getValue();
         return new JsNumber(increment ? current + 1 : current - 1);
     }
 
     private static JsValue negate(JsValue operand, InterpreterOps ops) {
-        if (operand instanceof JsBigInt b) {
+        final var numeric = JsCoercion.toNumeric(operand, ops);
+        if (numeric instanceof JsBigInt b) {
             return new JsBigInt(b.getValue().negate());
         }
-        return new JsNumber(-JsCoercion.toNumber(operand, ops));
+        return new JsNumber(-((JsNumber) numeric).getValue());
     }
 
     private static JsValue bitwiseNot(JsValue operand, InterpreterOps ops) {
-        if (operand instanceof JsBigInt b) {
+        final var numeric = JsCoercion.toNumeric(operand, ops);
+        if (numeric instanceof JsBigInt b) {
             return new JsBigInt(b.getValue().not());
         }
-        return new JsNumber(~toInt32(operand, ops));
+        return new JsNumber(~NumberFormatter.toInt32(((JsNumber) numeric).getValue()));
     }
 
     private static JsValue add(JsValue left, JsValue right, InterpreterOps ops) {
@@ -158,12 +163,15 @@ public final class JsOperators {
     }
 
     private static JsValue arithmetic(String operator, JsValue left, JsValue right, InterpreterOps ops) {
-        if (left instanceof JsBigInt && right instanceof JsBigInt) {
-            return bigIntArithmetic(operator, ((JsBigInt) left).getValue(), ((JsBigInt) right).getValue());
+        final var lnum = JsCoercion.toNumeric(left, ops);
+        final var rnum = JsCoercion.toNumeric(right, ops);
+        if (lnum instanceof JsBigInt x && rnum instanceof JsBigInt y) {
+            return bigIntArithmetic(operator, x.getValue(), y.getValue());
         }
-        requireNoMixedBigInt(left, right);
-        final var a = JsCoercion.toNumber(left, ops);
-        final var b = JsCoercion.toNumber(right, ops);
+        requireNoMixedBigInt(lnum, rnum);
+        assert lnum instanceof JsNumber;
+        final var a = ((JsNumber) lnum).getValue();
+        final var b = ((JsNumber) rnum).getValue();
         return new JsNumber(switch (operator) {
             case "-" -> a - b;
             case "*" -> a * b;
@@ -200,16 +208,18 @@ public final class JsOperators {
     }
 
     private static JsValue bitwise(String operator, JsValue left, JsValue right, InterpreterOps ops) {
-        if (left instanceof JsBigInt && right instanceof JsBigInt) {
-            return bigIntBitwise(operator, ((JsBigInt) left).getValue(), ((JsBigInt) right).getValue());
+        final var lnum = JsCoercion.toNumeric(left, ops);
+        final var rnum = JsCoercion.toNumeric(right, ops);
+        if (lnum instanceof JsBigInt x && rnum instanceof JsBigInt y) {
+            return bigIntBitwise(operator, x.getValue(), y.getValue());
         }
-        requireNoMixedBigInt(left, right);
+        requireNoMixedBigInt(lnum, rnum);
         if (">>>".equals(operator)) {
-            final var result = toUint32(left, ops) >>> (toUint32(right, ops) & 0x1f);
+            final var result = toUint32(lnum) >>> (toUint32(rnum) & 0x1f);
             return new JsNumber(result);
         }
-        final var a = toInt32(left, ops);
-        final var b = toInt32(right, ops);
+        final var a = toInt32(lnum);
+        final var b = toInt32(rnum);
         return new JsNumber(switch (operator) {
             case "&" -> a & b;
             case "|" -> a | b;
@@ -234,12 +244,7 @@ public final class JsOperators {
     private static boolean relational(String operator, JsValue left, JsValue right, InterpreterOps ops) {
         final var leftPrim = JsCoercion.toPrimitive(left, "number", ops);
         final var rightPrim = JsCoercion.toPrimitive(right, "number", ops);
-        final int sign;
-        if (leftPrim instanceof JsString && rightPrim instanceof JsString) {
-            sign = Integer.signum(((JsString) leftPrim).getValue().compareTo(((JsString) rightPrim).getValue()));
-        } else {
-            sign = compareNumeric(leftPrim, rightPrim);
-        }
+        final var sign = compare(leftPrim, rightPrim);
         if (sign == UNORDERED) {
             return false;
         }
@@ -252,50 +257,87 @@ public final class JsOperators {
         };
     }
 
+    // IsLessThan: a BigInt against a String is decided by StringToBigInt, never by a numeric
+    // round-trip, so an unparseable string leaves the pair unordered instead of comparing as 0.
+    private static int compare(JsValue left, JsValue right) {
+        if (left instanceof JsString a && right instanceof JsString b) {
+            return Integer.signum(a.getValue().compareTo(b.getValue()));
+        }
+        if (left instanceof JsBigInt a && right instanceof JsString b) {
+            final var parsed = JsCoercion.stringToBigInt(b.getValue());
+            return parsed == null ? UNORDERED : Integer.signum(a.getValue().compareTo(parsed));
+        }
+        if (left instanceof JsString a && right instanceof JsBigInt b) {
+            final var parsed = JsCoercion.stringToBigInt(a.getValue());
+            return parsed == null ? UNORDERED : Integer.signum(parsed.compareTo(b.getValue()));
+        }
+        return compareNumeric(left, right);
+    }
+
     private static int compareNumeric(JsValue left, JsValue right) {
-        if (left instanceof JsBigInt && right instanceof JsBigInt) {
-            return Integer.signum(((JsBigInt) left).getValue().compareTo(((JsBigInt) right).getValue()));
+        final var a = JsCoercion.toNumeric(left, null);
+        final var b = JsCoercion.toNumeric(right, null);
+        if (a instanceof JsBigInt x && b instanceof JsBigInt y) {
+            return Integer.signum(x.getValue().compareTo(y.getValue()));
         }
-        if (left instanceof JsBigInt || right instanceof JsBigInt) {
-            final var a = toDecimal(left);
-            final var b = toDecimal(right);
-            if (a == null || b == null) {
-                return UNORDERED;
-            }
-            return Integer.signum(a.compareTo(b));
+        if (a instanceof JsBigInt x) {
+            return bigCompareNumber(x.getValue(), ((JsNumber) b).getValue());
         }
-        final var a = JsCoercion.toNumber(left);
-        final var b = JsCoercion.toNumber(right);
+        if (b instanceof JsBigInt y) {
+            final var flipped = bigCompareNumber(y.getValue(), ((JsNumber) a).getValue());
+            return flipped == UNORDERED ? UNORDERED : -flipped;
+        }
+        return compareDoubles(((JsNumber) a).getValue(), ((JsNumber) b).getValue());
+    }
+
+    private static int compareDoubles(double a, double b) {
         if (Double.isNaN(a) || Double.isNaN(b)) {
             return UNORDERED;
         }
-        return Integer.signum(Double.compare(a, b));
+        if (a < b) {
+            return -1;
+        }
+        return a > b ? 1 : 0;
     }
 
-    private static BigDecimal toDecimal(JsValue value) {
-        if (value instanceof JsBigInt b) {
-            return new BigDecimal(b.getValue());
+    // A finite double is exactly mantissa x 2^exponent, so scaling whichever side has the smaller
+    // exponent compares the two mathematical values without ever rounding through a decimal form -
+    // which is what makes 2^53+1 and Number.MAX_VALUE compare against a BigInt correctly.
+    private static int bigCompareNumber(BigInteger big, double number) {
+        if (Double.isNaN(number)) {
+            return UNORDERED;
         }
-        final var d = JsCoercion.toNumber(value);
-        if (Double.isNaN(d) || Double.isInfinite(d)) {
-            return null;
+        if (number == Double.POSITIVE_INFINITY) {
+            return -1;
         }
-        return BigDecimal.valueOf(d);
+        if (number == Double.NEGATIVE_INFINITY) {
+            return 1;
+        }
+        final var bits = Double.doubleToLongBits(number);
+        final var rawExponent = (int) ((bits >> 52) & 0x7ff);
+        var mantissa = BigInteger.valueOf(bits & 0x000fffffffffffffL);
+        if (rawExponent != 0) {
+            mantissa = mantissa.add(BigInteger.ONE.shiftLeft(52));
+        }
+        if (bits < 0) {
+            mantissa = mantissa.negate();
+        }
+        final var exponent = (rawExponent == 0 ? 1 : rawExponent) - 1075;
+        final var scaledNumber = exponent >= 0 ? mantissa.shiftLeft(exponent) : mantissa;
+        final var scaledBig = exponent >= 0 ? big : big.shiftLeft(-exponent);
+        return Integer.signum(scaledBig.compareTo(scaledNumber));
     }
 
     private static boolean bigEqualsNumber(JsBigInt big, double number) {
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)) {
             return false;
         }
-        return new BigDecimal(big.getValue()).compareTo(BigDecimal.valueOf(number)) == 0;
+        return bigCompareNumber(big.getValue(), number) == 0;
     }
 
     private static boolean bigEqualsString(JsBigInt big, String raw) {
-        try {
-            return big.getValue().equals(new BigInteger(raw.strip()));
-        } catch (NumberFormatException ignored) {
-            return false;
-        }
+        final var parsed = JsCoercion.stringToBigInt(raw);
+        return parsed != null && parsed.equals(big.getValue());
     }
 
     private static void requireNoMixedBigInt(JsValue left, JsValue right) {
@@ -304,11 +346,11 @@ public final class JsOperators {
         }
     }
 
-    private static int toInt32(JsValue value, InterpreterOps ops) {
-        return NumberFormatter.toInt32(JsCoercion.toNumber(value, ops));
+    private static int toInt32(JsValue numeric) {
+        return NumberFormatter.toInt32(((JsNumber) numeric).getValue());
     }
 
-    private static long toUint32(JsValue value, InterpreterOps ops) {
-        return toInt32(value, ops) & 0xffffffffL;
+    private static long toUint32(JsValue numeric) {
+        return toInt32(numeric) & 0xffffffffL;
     }
 }

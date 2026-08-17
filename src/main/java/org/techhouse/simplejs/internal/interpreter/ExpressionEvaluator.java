@@ -349,7 +349,9 @@ public final class ExpressionEvaluator {
                 }
                 yield JsBoolean.TRUE;
             }
-            default -> JsBoolean.TRUE;
+            // Every other exotic object keeps its symbol keys in the ordinary table an assignment
+            // writes to, so the deletion has to reach the same place.
+            default -> JsBoolean.of(target.deleteOwnProperty(symbol));
         };
     }
 
