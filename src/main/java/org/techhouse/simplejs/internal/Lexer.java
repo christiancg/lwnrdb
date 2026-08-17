@@ -109,30 +109,7 @@ public final class Lexer {
                 }
                 continue;
             }
-            final Lexed lexed;
-            if (c == '"' || c == '\'') {
-                lexed = lexString(sourceCode, pos);
-            } else if (c == '`') {
-                lexed = lexTemplate(sourceCode, pos);
-            } else if (Character.isDigit(c)
-                    || (c == '.' && pos + 1 < n && Character.isDigit(sourceCode.charAt(pos + 1)))) {
-                lexed = lexNumber(sourceCode, pos);
-            } else if (isIdentifierStart(sourceCode, pos)) {
-                lexed = lexWord(sourceCode, pos);
-            } else if (c == '#' && pos + 1 < n && isIdentifierStart(sourceCode, pos + 1)) {
-                lexed = lexPrivateIdentifier(sourceCode, pos);
-            } else if (c == '/' && startsRegex(last, braces)) {
-                lexed = lexRegex(sourceCode, pos);
-            } else {
-                final var op = lexOperator(sourceCode, pos);
-                if (op != null) {
-                    lexed = op;
-                } else if (SEPARATORS.contains(c)) {
-                    lexed = new Lexed(new JsSeparator(c), pos + 1);
-                } else {
-                    throw new UnexpectedCharacterException(c, pos);
-                }
-            }
+            final var lexed = scanToken(sourceCode, pos, last, braces);
             braces.observe(lexed.token(), last);
             tokens.add(lexed.token());
             positions.add(positionOf(pos, lexed.next() - pos, lineStarts));
@@ -145,6 +122,39 @@ public final class Lexer {
         positions.add(positionOf(n, 0, lineStarts));
         newlineBefore.add(sawNewline);
         return new LexResult(sourceCode, tokens, positions, newlineBefore);
+    }
+
+    // The one token scanner: both the top level and a template substitution go through it, so the
+    // regex-versus-division decision (and every other lexical rule) cannot diverge between the two.
+    private static Lexed scanToken(String src, int pos, JsBaseElement last, BraceContext braces) {
+        final var n = src.length();
+        final var c = src.charAt(pos);
+        if (c == '"' || c == '\'') {
+            return lexString(src, pos);
+        }
+        if (c == '`') {
+            return lexTemplate(src, pos);
+        }
+        if (Character.isDigit(c) || (c == '.' && pos + 1 < n && Character.isDigit(src.charAt(pos + 1)))) {
+            return lexNumber(src, pos);
+        }
+        if (isIdentifierStart(src, pos)) {
+            return lexWord(src, pos);
+        }
+        if (c == '#' && pos + 1 < n && isIdentifierStart(src, pos + 1)) {
+            return lexPrivateIdentifier(src, pos);
+        }
+        if (c == '/' && startsRegex(last, braces)) {
+            return lexRegex(src, pos);
+        }
+        final var op = lexOperator(src, pos);
+        if (op != null) {
+            return op;
+        }
+        if (SEPARATORS.contains(c)) {
+            return new Lexed(new JsSeparator(c), pos + 1);
+        }
+        throw new UnexpectedCharacterException(c, pos);
     }
 
     private static boolean isLineTerminator(char c) {
@@ -660,9 +670,9 @@ public final class Lexer {
                 quasis.add(builder.toString());
                 rawQuasis.add(normalizeLineTerminators(src.substring(rawStart, i)));
                 builder.setLength(0);
-                final var close = scanBalancedBraces(src, i + 2, start);
-                expressions.add(lex(src.substring(i + 2, close)));
-                i = close + 1;
+                final var substitution = lexSubstitution(src, i + 2, start);
+                expressions.add(substitution.tokens());
+                i = substitution.close() + 1;
                 rawStart = i;
             } else if (c == '\r') {
                 builder.append('\n');
@@ -683,63 +693,44 @@ public final class Lexer {
         return raw.replace("\r\n", "\n").replace('\r', '\n');
     }
 
-    // Finds the closing brace of a `${ ... }` interpolation, skipping over string and
-    // nested template literals so their braces are not miscounted.
-    private static int scanBalancedBraces(String src, int from, int templateStart) {
+    private record Substitution(int close, List<JsBaseElement> tokens) {
+    }
+
+    // Lexes a `${ ... }` interpolation with the main token scanner and stops at the brace that closes
+    // it: a string, comment, regex or nested template inside the substitution is consumed as one
+    // token, so its braces are never miscounted.
+    private static Substitution lexSubstitution(String src, int from, int templateStart) {
         final var n = src.length();
+        final var tokens = new ArrayList<JsBaseElement>();
+        final var braces = new BraceContext();
+        JsBaseElement last = null;
         var depth = 1;
         var j = from;
         while (j < n) {
             final var c = src.charAt(j);
-            switch (c) {
-                case '{' -> depth++;
-                case '}' -> {
-                    depth--;
-                    if (depth == 0) {
-                        return j;
-                    }
+            if (isWhiteSpace(c)) {
+                j++;
+                continue;
+            }
+            if (c == '/' && j + 1 < n && (src.charAt(j + 1) == '/' || src.charAt(j + 1) == '*')) {
+                j = skipComment(src, j);
+                continue;
+            }
+            final var lexed = scanToken(src, j, last, braces);
+            final var token = lexed.token();
+            if (token.getType() == JsType.SEPARATOR) {
+                final var separator = ((JsSeparator) token).getValue();
+                if (separator == '{') {
+                    depth++;
+                } else if (separator == '}' && --depth == 0) {
+                    tokens.add(JsEOF.getInstance());
+                    return new Substitution(j, tokens);
                 }
-                case '\'', '"' -> j = skipStringLiteral(src, j);
-                case '`' -> j = skipTemplateLiteral(src, j, templateStart);
-                default -> {
-                }
             }
-            j++;
-        }
-        throw new UnterminatedTemplateException(templateStart);
-    }
-
-    private static int skipStringLiteral(String src, int start) {
-        final var quote = src.charAt(start);
-        final var n = src.length();
-        var i = start + 1;
-        while (i < n) {
-            final var c = src.charAt(i);
-            if (c == '\\') {
-                i += 2;
-            } else if (c == quote) {
-                return i;
-            } else {
-                i++;
-            }
-        }
-        throw new UnterminatedStringException(start);
-    }
-
-    private static int skipTemplateLiteral(String src, int start, int templateStart) {
-        final var n = src.length();
-        var i = start + 1;
-        while (i < n) {
-            final var c = src.charAt(i);
-            if (c == '\\') {
-                i += 2;
-            } else if (c == '`') {
-                return i;
-            } else if (c == '$' && i + 1 < n && src.charAt(i + 1) == '{') {
-                i = scanBalancedBraces(src, i + 2, templateStart) + 1;
-            } else {
-                i++;
-            }
+            braces.observe(token, last);
+            tokens.add(token);
+            last = token;
+            j = lexed.next();
         }
         throw new UnterminatedTemplateException(templateStart);
     }

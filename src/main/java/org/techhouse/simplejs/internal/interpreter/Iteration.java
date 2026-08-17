@@ -6,6 +6,8 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObj
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.iterableElements;
 
 import java.util.List;
+import java.util.function.Consumer;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -24,7 +26,10 @@ import org.techhouse.simplejs.values.JsValue;
 // object driven through the Symbol.iterator protocol. Re-entry into the interpreter (opening the
 // iterator, calling next/return) routes through the Interpreter seam.
 public final class Iteration {
+    // Exactly one of the two is set: the evaluators hold the interpreter, while a builtin reaches the
+    // protocol through the InterpreterOps seam and so only ever takes the external-iterator path.
     private final Interpreter interp;
+    private final InterpreterOps ops;
     private final JsGenerator generator;
     private final List<JsValue> buffer;
     private final JsValue indexed;
@@ -34,8 +39,19 @@ public final class Iteration {
     private final JsValue nextMethod;
     private int index;
 
+    public Iteration(InterpreterOps ops, JsValue iterable) {
+        this.interp = null;
+        this.ops = ops;
+        this.generator = null;
+        this.buffer = null;
+        this.indexed = null;
+        this.iterator = openIterator(iterable);
+        this.nextMethod = read(iterator, "next");
+    }
+
     public Iteration(Interpreter interp, JsValue iterable) {
         this.interp = interp;
+        this.ops = null;
         if (iterable instanceof JsGenerator gen) {
             this.generator = gen;
             this.buffer = null;
@@ -54,7 +70,15 @@ public final class Iteration {
             this.indexed = null;
             this.iterator = openIterator(iterable);
         }
-        this.nextMethod = iterator == null ? null : interp.getMember(iterator, "next");
+        this.nextMethod = iterator == null ? null : read(iterator, "next");
+    }
+
+    private JsValue read(JsValue target, String key) {
+        return interp == null ? ops.getMember(target, new JsString(key)) : interp.getMember(target, key);
+    }
+
+    private JsValue invoke(JsValue fn, JsValue thisArg) {
+        return interp == null ? ops.call(fn, thisArg, List.of()) : interp.callValue(fn, thisArg, List.of());
     }
 
     public JsValue next() {
@@ -66,11 +90,11 @@ public final class Iteration {
             if (!isCallable(nextMethod)) {
                 throw new TypeErrorException("iterator.next is not a function");
             }
-            final var step = interp.callValue(nextMethod, iterator, List.of());
+            final var step = invoke(nextMethod, iterator);
             if (!isObjectLike(step)) {
                 throw new TypeErrorException("Iterator result is not an object");
             }
-            return JsCoercion.toBoolean(interp.getMember(step, "done")) ? null : interp.getMember(step, "value");
+            return JsCoercion.toBoolean(read(step, "done")) ? null : read(step, "value");
         }
         if (indexed != null) {
             // ValidateTypedArray runs on every step, so a buffer detached mid-iteration is a TypeError
@@ -104,16 +128,32 @@ public final class Iteration {
         if (iterator == null) {
             return;
         }
-        final var returnFn = interp.getMember(iterator, "return");
+        final var returnFn = read(iterator, "return");
         if (isNullish(returnFn)) {
             return;
         }
         if (!isCallable(returnFn)) {
             throw new TypeErrorException("iterator.return is not a function");
         }
-        final var result = interp.callValue(returnFn, iterator, List.of());
+        final var result = invoke(returnFn, iterator);
         if (!isObjectLike(result)) {
             throw new TypeErrorException("Iterator result is not an object");
+        }
+    }
+
+    // The step loop of AddEntriesFromIterable and Math.sumPrecise. An abrupt completion from the body
+    // is an IfAbruptCloseIterator, while one from `next` itself only marks the record done — the spec
+    // never closes an iterator whose own step threw.
+    public void forEach(Consumer<JsValue> body) {
+        for (var element = next(); element != null; element = next()) {
+            try {
+                body.accept(element);
+            } catch (ScriptAbortException abort) {
+                throw abort;
+            } catch (RuntimeException error) {
+                closeAfterThrow();
+                throw error;
+            }
         }
     }
 
@@ -141,11 +181,13 @@ public final class Iteration {
     }
 
     private JsValue openIterator(JsValue iterable) {
-        final var iterFn = interp.getMemberByKey(iterable, JsSymbol.ITERATOR);
+        final var iterFn = interp == null
+                ? ops.getMember(iterable, JsSymbol.ITERATOR)
+                : interp.getMemberByKey(iterable, JsSymbol.ITERATOR);
         if (!isCallable(iterFn)) {
             throw new TypeErrorException(JsCoercion.toStr(iterable) + " is not iterable");
         }
-        final var iter = interp.callValue(iterFn, iterable, List.of());
+        final var iter = invoke(iterFn, iterable);
         if (!isObjectLike(iter)) {
             throw new TypeErrorException("Result of Symbol.iterator method is not an object");
         }

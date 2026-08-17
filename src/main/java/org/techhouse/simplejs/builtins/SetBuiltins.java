@@ -6,6 +6,7 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.internal.interpreter.Iteration;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -27,17 +28,24 @@ public final class SetBuiltins {
     private SetBuiltins() {
     }
 
-    public static JsNativeFunction create(IterableToList iterableToList, boolean weak) {
-        return new JsNativeFunction(weak ? "WeakSet" : "Set", (_, args) -> construct(args, iterableToList, weak));
+    public static JsNativeFunction create(InterpreterOps ops, boolean weak) {
+        return new JsNativeFunction(weak ? "WeakSet" : "Set", (_, args) -> construct(args, ops, weak));
     }
 
-    private static JsValue construct(List<JsValue> args, IterableToList iterableToList, boolean weak) {
+    // The values are pulled one at a time (the iterable may be endless), the adder is read off the
+    // receiver so a patched `add` is honoured, and an abrupt completion from it closes the iterator
+    // before it propagates.
+    private static JsValue construct(List<JsValue> args, InterpreterOps ops, boolean weak) {
         final var set = new JsSet(weak);
-        if (!args.isEmpty() && !(args.getFirst() instanceof JsUndefined) && !(args.getFirst() instanceof JsNull)) {
-            for (final var value : iterableToList.drain(args.getFirst())) {
-                add(set, value);
-            }
+        final var iterable = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        if (iterable instanceof JsUndefined || iterable instanceof JsNull) {
+            return set;
         }
+        final var adder = ops.getMember(set, new JsString("add"));
+        if (!InterpreterUtils.isCallable(adder)) {
+            throw new TypeErrorException((weak ? "WeakSet" : "Set") + ".prototype.add is not a function");
+        }
+        new Iteration(ops, iterable).forEach(value -> ops.call(adder, set, List.of(value)));
         return set;
     }
 

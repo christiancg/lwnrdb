@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.LOGIC
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.baseOperator;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.deleteArrayElement;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.numericOld;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.shouldNotApplyLogical;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.spreadObject;
@@ -328,7 +329,18 @@ public final class ExpressionEvaluator {
                 }
                 yield JsBoolean.of(callable.deleteProperty(key));
             }
-            default -> JsBoolean.TRUE;
+            // Every remaining object-like type answers through its own [[Delete]] - notably the
+            // global object, whose own string keys live in the Environment, so `delete globalThis.x`
+            // has to remove the binding rather than report a success it never performed.
+            default -> {
+                if (!isObjectLike(target)) {
+                    yield JsBoolean.TRUE;
+                }
+                if (!target.deleteOwnProperty(new JsString(key))) {
+                    throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
+                }
+                yield JsBoolean.TRUE;
+            }
         };
     }
 

@@ -29,6 +29,7 @@ public final class JsArray extends JsValue {
     private Map<Integer, JsValue> indexSetters;
     // Spec: Array "length" is always non-enumerable, non-configurable; only writable is mutable.
     private JsObject.PropertyFlags lengthFlags = new JsObject.PropertyFlags(true, false, false);
+    private JsValue proto;
 
     public JsArray() {
     }
@@ -36,6 +37,18 @@ public final class JsArray extends JsValue {
     @Override
     public PropertyTable ownProperties() {
         return table;
+    }
+
+    // An array is an ordinary object apart from its indices and length, so it owns a [[Prototype]]
+    // slot: Object.setPrototypeOf(arr, o) has to redirect inherited reads and index-write setters.
+    @Override
+    public JsValue getProto() {
+        return proto;
+    }
+
+    @Override
+    public void setProto(JsValue proto) {
+        this.proto = proto;
     }
 
     public JsArray(List<JsValue> initial) {

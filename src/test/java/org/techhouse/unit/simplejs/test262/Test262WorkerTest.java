@@ -9,10 +9,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -175,6 +177,18 @@ public class Test262WorkerTest {
     @Test
     public void test_missing_file_is_a_failure() {
         assertEquals("FAIL", status(result("does-not-exist.js", List.of(), List.of(), "")));
+    }
+
+    // The worker runs with the strict Script goal, so the forms the host contract relaxes are the
+    // parse-phase SyntaxErrors the corpus expects
+    @Test
+    public void test_worker_uses_the_strict_script_goal(@TempDir Path dir) throws IOException {
+        for (final var source : List.of("return;", "export default null;", "import.meta;", "using x = null;")) {
+            final var path = Files.writeString(dir.resolve("goal.js"), source);
+            final var job = job("goal.js", List.of(), List.of("raw"), "SyntaxError");
+            job.addProperty("path", path.toString());
+            assertEquals("PASS", status(drive(List.of(job)).getFirst()), source);
+        }
     }
 
     // One worker answers a whole batch, one result line per job, in order

@@ -32,7 +32,7 @@ import org.techhouse.simplejs.values.JsValue;
 public final class SimpleJs {
     public ScriptResult run(String source, HostBindings host) {
         try {
-            final var program = Parser.parse(Lexer.lexWithPositions(source));
+            final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal(host));
             final var outcome = Interpreter.run(program, host);
             final var value = EJsonInterop.toEjson(contractResult(outcome));
             return ScriptResult.value(value == null ? JsonNull.INSTANCE : value);
@@ -57,6 +57,11 @@ public final class SimpleJs {
         } catch (SimpleJsRuntimeException error) {
             return ScriptResult.error("InternalError", error.getMessage());
         }
+    }
+
+    private boolean strictScriptGoal(HostBindings host) {
+        final var limits = host.limits();
+        return limits != null && limits.strictScriptGoal();
     }
 
     private JsValue contractResult(Interpreter.ProgramOutcome outcome) {

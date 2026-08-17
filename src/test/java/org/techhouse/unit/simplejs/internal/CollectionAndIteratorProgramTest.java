@@ -23,7 +23,8 @@ public class CollectionAndIteratorProgramTest {
 
     // reads the accumulator array reference after the event loop has drained
     private static String joined() {
-        final var array = (JsArray) Interpreter.run("let out = [];\nconst it = {\n    i: 0,\n    async next() { this.i++; return { value: this.i, done: this.i > 2 }; },\n    [Symbol.asyncIterator]() { return this; }\n};\nasync function main() { out.push(...(await it.toArray())); }\nmain();\nout\n");
+        final var array = (JsArray) Interpreter.run(
+                "let out = [];\nconst it = {\n    i: 0,\n    async next() { this.i++; return { value: this.i, done: this.i > 2 }; },\n    [Symbol.asyncIterator]() { return this; }\n};\nasync function main() { out.push(...(await it.toArray())); }\nmain();\nout\n");
         final var sb = new StringBuilder();
         for (var i = 0; i < array.length(); i++) {
             if (i > 0) {

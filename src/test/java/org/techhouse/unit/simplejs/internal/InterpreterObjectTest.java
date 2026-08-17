@@ -347,7 +347,11 @@ public class InterpreterObjectTest {
                 () -> Interpreter.run("const a = Object.preventExtensions([1]); a[1] = 9"));
         assertTrue(flag("Object.isSealed(Object.seal([1]))"));
         assertTrue(flag("!Object.isFrozen(Object.seal([1]))"));
-        assertTrue(flag("Object.isFrozen(Object.preventExtensions([]))"));
+        // An empty non-extensible *object* has nothing left to mutate, so it is both sealed and
+        // frozen; an array is not, because its writable `length` is still an own property.
+        assertTrue(flag("Object.isFrozen(Object.preventExtensions({}))"));
+        assertTrue(flag("!Object.isFrozen(Object.preventExtensions([]))"));
+        assertTrue(flag("Object.isFrozen(Object.freeze([]))"));
     }
 
     // An invalid length is rejected

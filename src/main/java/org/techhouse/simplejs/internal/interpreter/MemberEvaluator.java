@@ -49,6 +49,7 @@ import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.simplejs.values.PropertyDescriptor;
+import org.techhouse.simplejs.values.PropertyTable;
 
 // Property access dispatch: string- and symbol-keyed member reads/writes across every runtime
 // value type, plus the lazily-built method objects for promises, generators and async generators.
@@ -340,7 +341,12 @@ public final class MemberEvaluator {
 
     private JsValue getGlobalMember(JsGlobalObject global, String key) {
         final var value = global.getEnv().tryGet(key);
-        return value == null ? JsUndefined.getInstance() : value;
+        if (value != null) {
+            return value;
+        }
+        // A global accessor property cannot live in an Environment binding, so it sits in the
+        // ordinary table and is read through the generic descriptor path.
+        return orUndefined(fromDescriptor(global.getOwnProperty(new JsString(key)), global));
     }
 
     private JsValue getArgumentsMember(JsArguments arguments, String key) {
@@ -371,6 +377,19 @@ public final class MemberEvaluator {
     // The last dispatch step for every value type: walk the realm's intrinsic prototype chain, so a
     // monkey-patched or user-added member on e.g. Array.prototype is what a receiver resolves to.
     private JsValue intrinsicMember(JsValue target, String key) {
+        // Every caller reaches here only after its own exotic slots have missed, so an ordinary own
+        // entry still has to be answered before the prototype chain - a Date or Map carries a
+        // PropertyTable that nothing else on its read path looks at.
+        final var table = target.ownProperties();
+        if (table != null) {
+            if (table.hasAccessor(key)) {
+                final var getter = table.getAccessorGetter(key);
+                return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, target, List.of());
+            }
+            if (table.has(key)) {
+                return table.get(key);
+            }
+        }
         return orUndefined(chainMember(interp.intrinsics().protoFor(target), key, target));
     }
 
@@ -399,6 +418,15 @@ public final class MemberEvaluator {
         final var metadata = FunctionProtoBuiltins.metadata(function, key);
         if (metadata != null) {
             return metadata;
+        }
+        // A native constructor with a real spec-level [[Prototype]] (each NativeError's is %Error%,
+        // each concrete typed array's is %TypedArray%) inherits that constructor's statics before
+        // falling through to Function.prototype.
+        if (function instanceof JsNativeFunction nf && nf.getOwnProto() != null) {
+            final var inherited = chainMember(nf.getOwnProto(), key, function);
+            if (inherited != null) {
+                return inherited;
+            }
         }
         return intrinsicMember(function, key);
     }
@@ -508,7 +536,9 @@ public final class MemberEvaluator {
         if (array.hasProperty(key)) {
             return array.getProperty(key);
         }
-        return intrinsicMember(array, key);
+        return array.getProto() == null
+                ? intrinsicMember(array, key)
+                : orUndefined(chainMember(array.getProto(), key, array));
     }
 
     private JsValue getStringMember(JsString string, String key) {
@@ -635,8 +665,65 @@ public final class MemberEvaluator {
                 }
                 yield true;
             }
-            default -> true;
+            // Date, Map, Set, buffers, views and generators are ordinary objects apart from their
+            // internal slot, so an assignment lands in the same table their descriptors are read
+            // from; a primitive receiver has no table and discards the write.
+            default -> {
+                final var table = target.ownProperties();
+                yield table == null || setTableMember(target, table, key, value);
+            }
         };
+    }
+
+    private boolean setTableMember(JsValue target, PropertyTable table, String key, JsValue value) {
+        if (table.hasAccessor(key)) {
+            final var setter = table.getAccessorSetter(key);
+            if (setter == null) {
+                return false;
+            }
+            interp.callValue(setter, target, List.of(value));
+            return true;
+        }
+        if (!table.has(key)) {
+            final var accessor = inheritedAccessor(target, key);
+            if (accessor != null) {
+                return writeThroughAccessor(target, accessor, value);
+            }
+        }
+        return table.set(key, value);
+    }
+
+    // OrdinarySet's prototype step: the nearest accessor the receiver inherits for the key, or null
+    // when the chain holds none and the write should create an own property instead.
+    private PropertyDescriptor inheritedAccessor(JsValue target, String key) {
+        return chainAccessor(protoChainStart(target), key);
+    }
+
+    // An inherited accessor takes the write; a getter-only one rejects it.
+    private boolean writeThroughAccessor(JsValue target, PropertyDescriptor accessor, JsValue value) {
+        if (!isCallable(accessor.setter())) {
+            return false;
+        }
+        interp.callValue(accessor.setter(), target, List.of(value));
+        return true;
+    }
+
+    // The nearest inherited accessor for the key, or null when the chain holds none.
+    private PropertyDescriptor chainAccessor(JsValue start, String key) {
+        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
+            final var accessor = protoAccessor(chain.link(), key);
+            if (accessor != null) {
+                return accessor;
+            }
+        }
+        return null;
+    }
+
+    // An explicit [[Prototype]] wins; without one the value inherits from the realm's intrinsic
+    // prototype for its type.
+    private JsValue protoChainStart(JsValue target) {
+        final var proto = target.getProto();
+        return proto == null ? interp.intrinsics().protoFor(target) : proto;
     }
 
     private static boolean isNonWritableMetadata(JsCallableProperties callable, String key) {
@@ -682,7 +769,17 @@ public final class MemberEvaluator {
             }
             return true;
         }
+        if (!arrayOwnsKey(array, key, index)) {
+            final var accessor = inheritedAccessor(array, key);
+            if (accessor != null) {
+                return writeThroughAccessor(array, accessor, value);
+            }
+        }
         return index == null ? array.setProperty(key, value) : array.set(index, value);
+    }
+
+    private static boolean arrayOwnsKey(JsArray array, String key, Integer index) {
+        return index == null ? array.hasProperty(key) : index < array.length() && !array.isHole(index);
     }
 
     private static int requireLength(JsValue value) {

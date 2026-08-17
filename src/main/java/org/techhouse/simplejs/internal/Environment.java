@@ -264,6 +264,22 @@ public final class Environment {
         assign(name, value);
     }
 
+    // Object.defineProperty(globalThis, …) on a name the global scope does not hold yet: the
+    // property becomes a real binding with the descriptor's own attributes, so a delete-then-restore
+    // round-trip ends up where it started instead of in a shadow table nothing else reads.
+    public void defineGlobal(String name, JsValue value, JsObject.PropertyFlags flags) {
+        bindings.put(name, new Binding(value, "var", true, flags.enumerable(), flags.writable(), flags.configurable()));
+    }
+
+    public void setGlobalFlags(String name, JsObject.PropertyFlags flags, JsValue value) {
+        final var binding = bindings.get(name);
+        if (binding == null) {
+            return;
+        }
+        bindings.put(name, new Binding(value == null ? binding.value : value, binding.kind, true, flags.enumerable(),
+                flags.writable(), flags.configurable()));
+    }
+
     public JsObject.PropertyFlags globalFlags(String name) {
         final var binding = resolve(name);
         return binding == null

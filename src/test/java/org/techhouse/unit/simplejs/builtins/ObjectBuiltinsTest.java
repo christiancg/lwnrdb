@@ -1168,8 +1168,11 @@ public class ObjectBuiltinsTest {
                 + " Object.getOwnPropertyDescriptor(globalThis, 'gDefined').value"));
         assertEquals(7, num("globalThis.gAssigned = 1;"
                 + " Object.defineProperty(globalThis, 'gAssigned', { value: 7 }); gAssigned"));
+        // A top-level `var` is a non-configurable but *writable* global property, so redefining its
+        // value is legal; only a non-writable one rejects.
+        assertEquals(7, num("var gVar = 1;" + " Object.defineProperty(globalThis, 'gVar', { value: 7 }); gVar"));
         assertThrows(TypeErrorException.class,
-                () -> Interpreter.run("var gVar = 1; Object.defineProperty(globalThis, 'gVar', { value: 7 })"));
+                () -> Interpreter.run("Object.defineProperty(globalThis, 'NaN', { value: 7 })"));
         assertEquals("undefined", str("typeof Object.getOwnPropertyDescriptor(globalThis, Symbol('never'))"));
     }
 
@@ -1387,5 +1390,242 @@ public class ObjectBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperty({}, 'x', { get: 1 })"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("Object.defineProperty({}, 'x', { get() {}, value: 1 })"));
+    }
+
+    // ToPropertyKey(P) runs before the descriptor is inspected, so a poisoned key coercion is what
+    // escapes even when the descriptor is not an object at all.
+    @Test
+    public void definePropertyCoercesTheKeyBeforeReadingTheDescriptor() {
+        assertEquals("key", str("""
+                let order = [];
+                const key = { toString() { order.push('key'); return 'k'; } };
+                try { Object.defineProperty({}, key, 1); } catch (e) { order.push('desc'); }
+                order.join(',')
+                """).split(",")[0]);
+        assertEquals("key,desc", str("""
+                let order = [];
+                const key = { toString() { order.push('key'); return 'k'; } };
+                try { Object.defineProperty({}, key, 1); } catch (e) { order.push('desc'); }
+                order.join(',')
+                """));
+    }
+
+    // ToPropertyDescriptor reads its fields in the normative order, so a poisoned accessor on the
+    // descriptor object is observed at exactly the right point.
+    @Test
+    public void definePropertyObservesDescriptorFieldsInSpecOrder() {
+        assertEquals("enumerable,configurable,value,writable,get,set", str("""
+                let order = [];
+                const desc = {
+                  get writable() { order.push('writable'); return true; },
+                  get set() { order.push('set'); return undefined; },
+                  get enumerable() { order.push('enumerable'); return true; },
+                  get value() { order.push('value'); return 1; },
+                  get get() { order.push('get'); return undefined; },
+                  get configurable() { order.push('configurable'); return true; }
+                };
+                try { Object.defineProperty({}, 'x', desc); } catch (e) {}
+                order.join(',')
+                """));
+        // The first poisoned field aborts, so nothing after `enumerable` is ever read.
+        assertEquals("enumerable", str("""
+                let order = [];
+                const desc = {
+                  get enumerable() { order.push('enumerable'); throw new RangeError(); },
+                  get value() { order.push('value'); return 1; }
+                };
+                try { Object.defineProperty({}, 'x', desc); } catch (e) {}
+                order.join(',')
+                """));
+    }
+
+    // A redefinition that clears writability has to take effect, not be dropped.
+    @Test
+    public void definePropertyAppliesAWritabilityChange() {
+        assertTrue(flag("""
+                const o = { x: 1 };
+                Object.defineProperty(o, 'x', { writable: false });
+                Object.getOwnPropertyDescriptor(o, 'x').writable === false
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("const o = { x: 1 }; Object.defineProperty(o, 'x', { writable: false }); o.x = 2"));
+        assertTrue(flag("""
+                const o = {};
+                Object.defineProperty(o, 'x', { value: 1, writable: false, configurable: true });
+                Object.defineProperty(o, 'x', { writable: true });
+                o.x = 5;
+                o.x === 5
+                """));
+    }
+
+    // A Date or Map receiver carries a PropertyTable, so a definition on it must land and read back
+    // rather than being silently discarded.
+    @Test
+    public void definePropertiesReachesExoticReceivers() {
+        assertEquals("dateData", str("""
+                const d = new Date(0);
+                Object.defineProperties(d, { tag: { value: 'dateData', enumerable: true } });
+                d.tag
+                """));
+        assertEquals("mapData", str("""
+                const m = new Map();
+                Object.defineProperty(m, 'tag', { value: 'mapData' });
+                m.tag
+                """));
+        assertEquals("setData", str("const s = new Set(); s.tag = 'setData'; s.tag"));
+        assertEquals("bufferData", str("const b = new ArrayBuffer(1); b.tag = 'bufferData'; b.tag"));
+        // The internal slot still wins: a Map's `size` is not shadowed by the table.
+        assertEquals(1, num("const m = new Map([[1, 2]]); m.tag = 'x'; m.size"));
+    }
+
+    // ArraySetLength: an out-of-range length is a RangeError (it fails the numeric conversion), while
+    // a length write refused by a non-writable `length` is a TypeError.
+    @Test
+    public void arraySetLengthDistinguishesRangeErrorFromTypeError() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = [1]; a.length = -1"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = [1]; a.length = 1.5"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = [1]; a.length = 4294967296"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [1, 2, 3];
+                Object.defineProperty(a, 'length', { writable: false });
+                a.length = 2
+                """));
+        // The range check precedes the writability check, so an invalid value still reports RangeError.
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("""
+                const a = [1, 2, 3];
+                Object.defineProperty(a, 'length', { writable: false });
+                a.length = -1
+                """));
+    }
+
+    // Truncation deletes indices top-down and stops at the first non-configurable one, leaving
+    // `length` just above it.
+    @Test
+    public void arraySetLengthTruncationStopsAtANonConfigurableIndex() {
+        assertEquals(3, num("""
+                const a = [0, 1, 2, 3];
+                Object.defineProperty(a, '2', { configurable: false });
+                try { a.length = 0; } catch (e) {}
+                a.length
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const a = [0, 1, 2, 3];
+                Object.defineProperty(a, '2', { configurable: false });
+                a.length = 0
+                """));
+        assertEquals(1, num("const a = [0, 1, 2, 3]; a.length = 1; a.length"));
+    }
+
+    // An index write with no own property consults the prototype chain's setter instead of creating
+    // one, and a getter-only inherited accessor refuses the write.
+    @Test
+    public void arrayIndexWriteConsultsAnInheritedSetter() {
+        assertEquals("42", str("""
+                let seen = [];
+                const proto = {};
+                Object.defineProperty(proto, '0', { set(v) { seen.push(v); }, get() { return 'G'; } });
+                const a = [];
+                Object.setPrototypeOf(a, proto);
+                a[0] = 42;
+                seen.join(',')
+                """));
+        assertEquals(0, num("""
+                const proto = {};
+                Object.defineProperty(proto, '0', { set(v) {}, get() { return 'G'; } });
+                const a = [];
+                Object.setPrototypeOf(a, proto);
+                a[0] = 42;
+                a.length
+                """));
+        assertEquals("7", str("""
+                let seen = [];
+                const proto = {};
+                Object.defineProperty(proto, 'x', { set(v) { seen.push(v); } });
+                const a = [];
+                Object.setPrototypeOf(a, proto);
+                a.x = 7;
+                seen.join(',')
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                const proto = {};
+                Object.defineProperty(proto, '0', { get() { return 'G'; } });
+                const a = [];
+                Object.setPrototypeOf(a, proto);
+                a[0] = 1
+                """));
+        // An own index still wins over the inherited accessor.
+        assertEquals(9, num("""
+                const proto = {};
+                Object.defineProperty(proto, '0', { set(v) {}, get() { return 'G'; } });
+                const a = [5];
+                Object.setPrototypeOf(a, proto);
+                a[0] = 9;
+                a[0]
+                """));
+    }
+
+    // Redirecting an array's [[Prototype]] redirects its inherited reads too, so the Array.prototype
+    // method surface is genuinely gone rather than resolved behind the new link.
+    @Test
+    public void settingAnArrayPrototypeRedirectsInheritedReads() {
+        assertEquals("inherited", str("const a = []; Object.setPrototypeOf(a, { tag: 'inherited' }); a.tag"));
+        assertEquals("undefined", str("""
+                const a = [];
+                Object.setPrototypeOf(a, {});
+                typeof a.map
+                """));
+        assertTrue(flag("const a = [1]; Object.getPrototypeOf(a) === Array.prototype"));
+    }
+
+    // delete on the global object removes the binding, so hasOwnProperty agrees afterwards and a
+    // descriptor round-trip restores it.
+    @Test
+    public void deleteOnTheGlobalObjectRemovesTheBinding() {
+        assertTrue(flag("""
+                const had = Object.prototype.hasOwnProperty.call(globalThis, 'JSON');
+                const gone = delete globalThis.JSON;
+                had && gone && !Object.prototype.hasOwnProperty.call(globalThis, 'JSON')
+                    && typeof JSON === 'undefined'
+                """));
+        assertTrue(flag("""
+                const desc = Object.getOwnPropertyDescriptor(globalThis, 'Math');
+                delete globalThis.Math;
+                Object.defineProperty(globalThis, 'Math', desc);
+                Object.prototype.hasOwnProperty.call(globalThis, 'Math') && typeof Math.max === 'function'
+                """));
+        // A non-configurable global refuses the delete.
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("delete globalThis.NaN"));
+        assertTrue(flag("Object.getOwnPropertyDescriptor(globalThis, 'JSON').configurable === true"));
+    }
+
+    // hasOwnProperty/propertyIsEnumerable answer for symbol keys, and coerce their argument through
+    // ToPropertyKey (so a @@toPrimitive wrapper yielding a symbol keys by that symbol).
+    @Test
+    public void objectPrototypeHelpersAnswerForSymbolKeys() {
+        assertTrue(flag("""
+                const o = {};
+                const s = Symbol();
+                o[s] = 0;
+                const wrapper = {};
+                wrapper[Symbol.toPrimitive] = () => s;
+                o.hasOwnProperty(wrapper) && o.hasOwnProperty(s)
+                """));
+        assertTrue(flag("""
+                const o = {};
+                const enumerableSymbol = Symbol();
+                const hiddenSymbol = Symbol();
+                o[enumerableSymbol] = 1;
+                Object.defineProperty(o, hiddenSymbol, { value: 1, enumerable: false });
+                o.propertyIsEnumerable(enumerableSymbol) && !o.propertyIsEnumerable(hiddenSymbol)
+                """));
+        // ToPropertyKey precedes ToObject, so the key coercion is what escapes - the null receiver's
+        // own TypeError is never reached.
+        assertEquals("RangeError", str("""
+                let caught = 'no throw';
+                try {
+                  Object.prototype.hasOwnProperty.call(null, { toString() { throw new RangeError('k'); } });
+                } catch (e) { caught = e.name; }
+                caught
+                """));
     }
 }

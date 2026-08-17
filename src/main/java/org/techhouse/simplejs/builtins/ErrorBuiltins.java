@@ -16,6 +16,7 @@ import org.techhouse.simplejs.values.JsValue;
 public final class ErrorBuiltins {
     private static final List<String> NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError", "URIError",
             "ReferenceError", "EvalError");
+    private static final JsObject.PropertyFlags ERROR_PROPERTY = new JsObject.PropertyFlags(true, false, true);
 
     private ErrorBuiltins() {
     }
@@ -24,19 +25,26 @@ public final class ErrorBuiltins {
         return makeError(name, message, null);
     }
 
+    // An error instance's own message/name/cause are {w:true, e:false, c:true}, so Object.keys(err)
+    // and JSON.stringify(err) report nothing while the values stay readable and replaceable.
     public static JsObject makeError(String name, String message, JsObject proto) {
         final var error = new JsObject();
-        error.set("name", new JsString(name));
-        error.set("message", new JsString(message));
+        defineErrorProperty(error, "name", new JsString(name));
+        defineErrorProperty(error, "message", new JsString(message));
         error.markErrorData();
         error.setProto(proto);
         return error;
     }
 
+    public static void defineErrorProperty(JsObject error, String key, JsValue value) {
+        error.defineValue(key, value);
+        error.setFlags(key, ERROR_PROPERTY);
+    }
+
     public static JsObject makeSuppressedError(JsValue error, JsValue suppressed, String message) {
         final var result = makeError("SuppressedError", message);
-        result.set("error", error);
-        result.set("suppressed", suppressed);
+        defineErrorProperty(result, "error", error);
+        defineErrorProperty(result, "suppressed", suppressed);
         return result;
     }
 
@@ -46,7 +54,7 @@ public final class ErrorBuiltins {
         for (final var error : errors) {
             array.push(error);
         }
-        result.set("errors", array);
+        defineErrorProperty(result, "errors", array);
         return result;
     }
 
@@ -103,18 +111,26 @@ public final class ErrorBuiltins {
     }
 
     public static void install(Environment global, Intrinsics intrinsics) {
+        JsNativeFunction errorConstructor = null;
         for (final var name : NAMES) {
             final var constructor = new JsNativeFunction(name, (_, args) -> construct(intrinsics, name, args));
             if ("Error".equals(name)) {
                 constructor.setProperty("isError",
                         new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
+                errorConstructor = constructor;
+            } else {
+                // Each NativeError constructor's [[Prototype]] is %Error%, not %Function.prototype%.
+                constructor.setOwnProto(errorConstructor);
             }
+            constructor.setLength(1);
             link(constructor, intrinsics, name);
             global.declareBuiltin(name, constructor);
         }
         final var suppressed = new JsNativeFunction("SuppressedError", (_, args) -> link(
                 makeSuppressedError(arg(args, 0), arg(args, 1), args.size() > 2 ? message(List.of(args.get(2))) : ""),
                 intrinsics, "SuppressedError"));
+        suppressed.setLength(3);
+        suppressed.setOwnProto(errorConstructor);
         link(suppressed, intrinsics, "SuppressedError");
         global.declareBuiltin("SuppressedError", suppressed);
         final var aggregate = new JsNativeFunction("AggregateError", (_, args) -> {
@@ -122,6 +138,8 @@ public final class ErrorBuiltins {
             return link(makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : ""), intrinsics,
                     "AggregateError");
         });
+        aggregate.setLength(2);
+        aggregate.setOwnProto(errorConstructor);
         link(aggregate, intrinsics, "AggregateError");
         global.declareBuiltin("AggregateError", aggregate);
     }
@@ -129,7 +147,7 @@ public final class ErrorBuiltins {
     private static JsObject construct(Intrinsics intrinsics, String name, List<JsValue> args) {
         final var error = intrinsics.makeError(name, message(args));
         if (args.size() > 1 && args.get(1) instanceof JsObject options && options.has("cause")) {
-            error.set("cause", options.get("cause"));
+            defineErrorProperty(error, "cause", options.get("cause"));
         }
         return error;
     }

@@ -110,11 +110,18 @@ public final class Parser {
     }
 
     public static Program parse(List<JsBaseElement> tokens) {
-        return new State(tokens, null, null).parseProgram();
+        return new State(tokens, null, null, false).parseProgram();
     }
 
     public static Program parse(Lexer.LexResult lexed) {
-        return new State(lexed.tokens(), lexed.positions(), lexed.newlineBefore()).parseProgram();
+        return parse(lexed, false);
+    }
+
+    // strictScriptGoal raises the early errors the ECMAScript Script goal imposes and the host
+    // contract deliberately relaxes: a top-level `return`, `new.target` or `super` outside function
+    // code, `import`/`export`, `import.meta`, and a top-level `using` declaration.
+    public static Program parse(Lexer.LexResult lexed, boolean strictScriptGoal) {
+        return new State(lexed.tokens(), lexed.positions(), lexed.newlineBefore(), strictScriptGoal).parseProgram();
     }
 
     // The recursive-descent walk is inherently stateful (a moving cursor over the token stream),
@@ -136,9 +143,17 @@ public final class Parser {
         private boolean inAsync = true;
         private boolean superCallAllowed;
         private boolean classHasHeritage;
+        private final boolean strictScriptGoal;
+        // Any function-like body, an arrow's included: where a `return` is allowed.
+        private boolean inFunctionBody;
+        // Function or class-member code only. An arrow inherits it, because the Script goal's
+        // Contains looks through an arrow for `new.target` and `super` but not through a function.
+        private boolean inNonArrowFunction;
 
-        private State(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore) {
+        private State(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore,
+                boolean strictScriptGoal) {
             super(tokens, positions, newlineBefore);
+            this.strictScriptGoal = strictScriptGoal;
         }
 
         private <T> T inScope(Supplier<T> production) {
@@ -175,8 +190,12 @@ public final class Parser {
             final var wasInGenerator = inGenerator;
             final var wasInAsync = inAsync;
             final var wasSuperCallAllowed = superCallAllowed;
+            final var wasInFunctionBody = inFunctionBody;
+            final var wasInNonArrowFunction = inNonArrowFunction;
             inStaticBlock = false;
             superCallAllowed = superCall;
+            inFunctionBody = true;
+            inNonArrowFunction = true;
             try {
                 final var params = outsideGenerator(this::parseParams);
                 setFunctionKind(generator, async);
@@ -188,6 +207,8 @@ public final class Parser {
                 inGenerator = wasInGenerator;
                 inAsync = wasInAsync;
                 superCallAllowed = wasSuperCallAllowed;
+                inFunctionBody = wasInFunctionBody;
+                inNonArrowFunction = wasInNonArrowFunction;
             }
         }
 
@@ -377,14 +398,38 @@ public final class Parser {
         }
 
         private VariableDeclaration parseUsingDeclaration() {
+            rejectTopLevelUsing("using");
             expectContextualKeyword("using");
             return new VariableDeclaration("using", parseUsingDeclarators());
         }
 
         private VariableDeclaration parseAwaitUsingDeclaration() {
+            rejectTopLevelUsing("await using");
             expectKeyword("await");
             expectContextualKeyword("using");
             return new VariableDeclaration("await using", parseUsingDeclarators());
+        }
+
+        // In the Script goal a using declaration has to sit inside a block, a loop, a function body,
+        // a class body or a static block - never directly in the script's own statement list. The
+        // root declaration scope is the only one with no parent, so it identifies that position.
+        private void rejectTopLevelUsing(String kind) {
+            if (strictScriptGoal && scope.getParent() == null) {
+                throw new SyntaxErrorException(
+                        "A " + kind + " declaration is not allowed at the top level of a script");
+            }
+        }
+
+        private void rejectOutsideFunctionCode(String construct) {
+            if (strictScriptGoal && !inNonArrowFunction) {
+                throw new SyntaxErrorException("'" + construct + "' is only allowed in function code");
+            }
+        }
+
+        private void rejectInScriptGoal(String construct) {
+            if (strictScriptGoal) {
+                throw new SyntaxErrorException(construct + " may only appear in a module");
+            }
         }
 
         // A using declaration binds only plain identifiers and requires an initializer on each.
@@ -753,6 +798,9 @@ public final class Parser {
         }
 
         private ReturnStatement parseReturn() {
+            if (strictScriptGoal && !inFunctionBody) {
+                throw new SyntaxErrorException("Illegal return statement");
+            }
             expectKeyword("return");
             Expression argument = null;
             if (!isSeparator(';') && !isSeparator('}') && !atEnd() && !newlineBeforeCurrent()) {
@@ -810,6 +858,7 @@ public final class Parser {
 
         private ImportDeclaration parseImportDeclaration() {
             // `import` is a keyword, so import(...) dynamic imports and import.meta are not parsed here.
+            rejectInScriptGoal("An import declaration");
             expectKeyword("import");
             if (current().getType() == JsType.STRING) {
                 final var source = parseModuleSource();
@@ -884,6 +933,7 @@ public final class Parser {
         }
 
         private Statement parseExportDeclaration() {
+            rejectInScriptGoal("An export declaration");
             expectKeyword("export");
             if (matchKeyword("default")) {
                 final var declaration = parseAssignment();
@@ -1461,6 +1511,7 @@ public final class Parser {
                 if (!isContextualKeyword("target")) {
                     throw error();
                 }
+                rejectOutsideFunctionCode("new.target");
                 advance();
                 return new MetaProperty("new", "target");
             }
@@ -1611,6 +1662,7 @@ public final class Parser {
                 case "async" -> parseAsyncPrimary();
                 case "class" -> parseClassExpression();
                 case "super" -> {
+                    rejectOutsideFunctionCode("super");
                     advance();
                     if (isSeparator('(') && !superCallAllowed) {
                         throw new SyntaxErrorException(
@@ -1632,6 +1684,7 @@ public final class Parser {
                 if (!isContextualKeyword("meta")) {
                     throw error();
                 }
+                rejectInScriptGoal("import.meta");
                 advance();
                 return new MetaProperty("import", "meta");
             }
@@ -1749,7 +1802,11 @@ public final class Parser {
 
         private ClassBody parseClassBodyMembers(boolean hasHeritage) {
             final var wasClassHasHeritage = classHasHeritage;
+            final var wasInNonArrowFunction = inNonArrowFunction;
             classHasHeritage = hasHeritage;
+            // A field initializer and a static block are function-like code too, so `super` and
+            // `new.target` reach them.
+            inNonArrowFunction = true;
             expectSeparator('{');
             final var members = new ArrayList<JsNode>();
             final Map<String, Set<String>> privateNames = new HashMap<>();
@@ -1770,6 +1827,7 @@ public final class Parser {
                 }
             } finally {
                 classHasHeritage = wasClassHasHeritage;
+                inNonArrowFunction = wasInNonArrowFunction;
             }
             expectSeparator('}');
             return new ClassBody(members);
@@ -2076,14 +2134,20 @@ public final class Parser {
         }
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
-            return inFunctionKind(async, () -> inBreakableBoundary(() -> {
-                if (isSeparator('{')) {
-                    final var body = inFunctionScope(params, this::parseBlockBody);
-                    checkUseStrictWithSimpleParams(params, body);
-                    return new ArrowFunctionExpression(params, body, false, async);
-                }
-                return new ArrowFunctionExpression(params, parseAssignment(), true, async);
-            }));
+            final var wasInFunctionBody = inFunctionBody;
+            inFunctionBody = true;
+            try {
+                return inFunctionKind(async, () -> inBreakableBoundary(() -> {
+                    if (isSeparator('{')) {
+                        final var body = inFunctionScope(params, this::parseBlockBody);
+                        checkUseStrictWithSimpleParams(params, body);
+                        return new ArrowFunctionExpression(params, body, false, async);
+                    }
+                    return new ArrowFunctionExpression(params, parseAssignment(), true, async);
+                }));
+            } finally {
+                inFunctionBody = wasInFunctionBody;
+            }
         }
 
         private ArrayExpression parseArray() {
@@ -2225,13 +2289,15 @@ public final class Parser {
         // A template's substitutions are lexed into their own token lists, so the nested parser has to
         // inherit the grammar context the template itself sits in.
         private State forTemplateExpression(List<JsBaseElement> tokens) {
-            final var nested = new State(tokens, null, null);
+            final var nested = new State(tokens, null, null, strictScriptGoal);
             nested.inGenerator = inGenerator;
             nested.inAsync = inAsync;
             nested.superCallAllowed = superCallAllowed;
             nested.inStaticBlock = inStaticBlock;
             nested.classHasHeritage = classHasHeritage;
             nested.privateScope = privateScope;
+            nested.inFunctionBody = inFunctionBody;
+            nested.inNonArrowFunction = inNonArrowFunction;
             return nested;
         }
 

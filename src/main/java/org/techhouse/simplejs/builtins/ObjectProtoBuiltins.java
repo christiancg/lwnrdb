@@ -47,11 +47,11 @@ public final class ObjectProtoBuiltins {
     public static JsNativeFunction getMethod(JsValue receiver, String name, InterpreterOps ops, Intrinsics intrinsics) {
         return switch (name) {
             case "hasOwnProperty" ->
-                new JsNativeFunction("hasOwnProperty", (_, args) -> JsBoolean.of(hasOwnProperty(receiver, args)));
+                new JsNativeFunction("hasOwnProperty", (_, args) -> JsBoolean.of(hasOwnProperty(receiver, args, ops)));
             case "isPrototypeOf" -> new JsNativeFunction("isPrototypeOf",
                     (_, args) -> JsBoolean.of(isPrototypeOf(receiver, args, intrinsics)));
-            case "propertyIsEnumerable" ->
-                new JsNativeFunction("propertyIsEnumerable", (_, args) -> JsBoolean.of(isEnumerable(receiver, args)));
+            case "propertyIsEnumerable" -> new JsNativeFunction("propertyIsEnumerable",
+                    (_, args) -> JsBoolean.of(isEnumerable(receiver, args, ops)));
             case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(objectToString(receiver, ops)));
             case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> toLocaleString(receiver, ops));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> requireCoercible(receiver, "valueOf"));
@@ -192,26 +192,25 @@ public final class ObjectProtoBuiltins {
         };
     }
 
-    private static boolean hasOwnProperty(JsValue receiver, List<JsValue> args) {
+    // ToPropertyKey(V) runs before ToObject(this value), so a poisoned key coercion is observed even
+    // when the receiver is null - and a wrapper whose @@toPrimitive yields a symbol keys by symbol.
+    private static boolean hasOwnProperty(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
+        final var key = JsCoercion.toPropertyKey(arg(args), ops);
         requireCoercible(receiver, "hasOwnProperty");
-        if (args.isEmpty()) {
-            return false;
-        }
-        if (args.getFirst() instanceof JsSymbol symbol) {
+        if (key instanceof JsSymbol symbol) {
             return ObjectBuiltins.hasOwnSymbol(receiver, symbol);
         }
-        return ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(args.getFirst()));
+        return ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(key));
     }
 
-    private static boolean isEnumerable(JsValue receiver, List<JsValue> args) {
+    private static boolean isEnumerable(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
+        final var propertyKey = JsCoercion.toPropertyKey(arg(args), ops);
         requireCoercible(receiver, "propertyIsEnumerable");
-        if (args.isEmpty()) {
-            return false;
+        if (propertyKey instanceof JsSymbol symbol) {
+            return ObjectBuiltins.hasOwnSymbol(receiver, symbol)
+                    && ObjectBuiltins.isEnumerableOwnSymbol(receiver, symbol);
         }
-        if (args.getFirst() instanceof JsSymbol symbol) {
-            return ObjectBuiltins.hasOwnSymbol(receiver, symbol);
-        }
-        final var key = JsCoercion.toStr(args.getFirst());
+        final var key = JsCoercion.toStr(propertyKey);
         if (!ObjectBuiltins.hasOwnKey(receiver, key)) {
             return false;
         }

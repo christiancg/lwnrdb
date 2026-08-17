@@ -52,8 +52,7 @@ public final class AsyncIteratorBuiltins {
         prototype.setSymbol(JsSymbol.ASYNC_ITERATOR,
                 new JsNativeFunction("[Symbol.asyncIterator]", (thisArg, _) -> thisArg));
         prototype.setSymbolFlags(JsSymbol.ASYNC_ITERATOR, new JsObject.PropertyFlags(true, false, true));
-        prototype.setSymbol(JsSymbol.TO_STRING_TAG, new JsString("AsyncIterator"));
-        prototype.setSymbolFlags(JsSymbol.TO_STRING_TAG, new JsObject.PropertyFlags(true, false, true));
+        Intrinsics.installTag(prototype, "AsyncIterator");
         final var asyncDispose = new JsNativeFunction("[Symbol.asyncDispose]",
                 (thisArg, _) -> asyncDispose(ops, loop, thisArg));
         asyncDispose.setLength(0);

@@ -35,9 +35,10 @@ public final class GlobalScope {
         constructor(global, "String", StringBuiltins.create(ops), intrinsics.stringProto());
         constructor(global, "Number", NumberBuiltins.create(), intrinsics.numberProto());
         constructor(global, "Boolean", booleanFunction(), intrinsics.booleanProto());
-        define(global, "Math", MathBuiltins.create(iterableToList));
-        define(global, "JSON", JsonBuiltins.create(ops, invoker));
-        define(global, "console", consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink));
+        namespace(global, "Math", MathBuiltins.create(ops), intrinsics);
+        namespace(global, "JSON", JsonBuiltins.create(ops, invoker), intrinsics);
+        namespace(global, "console",
+                consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink), intrinsics);
         constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, intrinsics),
                 intrinsics.promiseProto());
         TimerBuiltins.install(global, eventLoop, invoker);
@@ -54,17 +55,18 @@ public final class GlobalScope {
         // stitched once both they and the intrinsics exist.
         intrinsics.linkIteratorPrototypes(iteratorCtor.getPrototype(), asyncIteratorCtor.getPrototype());
         constructor(global, "Symbol", SymbolBuiltins.create(ops), intrinsics.symbolProto());
-        constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, false), intrinsics.mapProto());
-        constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, true), intrinsics.weakMapProto());
-        constructor(global, "Set", SetBuiltins.create(iterableToList, false), intrinsics.setProto());
-        constructor(global, "WeakSet", SetBuiltins.create(iterableToList, true), intrinsics.weakSetProto());
+        constructor(global, "Map", MapBuiltins.create(iterableToList, invoker, ops, false), intrinsics.mapProto());
+        constructor(global, "WeakMap", MapBuiltins.create(iterableToList, invoker, ops, true),
+                intrinsics.weakMapProto());
+        constructor(global, "Set", SetBuiltins.create(ops, false), intrinsics.setProto());
+        constructor(global, "WeakSet", SetBuiltins.create(ops, true), intrinsics.weakSetProto());
         constructor(global, "Date", DateBuiltins.create(), intrinsics.dateProto());
         constructor(global, "DisposableStack", DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false),
                 intrinsics.disposableStackProto());
         constructor(global, "AsyncDisposableStack",
                 DisposableStackBuiltins.create(intrinsics.asyncDisposableStackProto(), true),
                 intrinsics.asyncDisposableStackProto());
-        define(global, "Reflect", ReflectBuiltins.create(ops));
+        namespace(global, "Reflect", ReflectBuiltins.create(ops), intrinsics);
         final var proxyCtor = ProxyBuiltins.create();
         proxyCtor.markConstructor();
         define(global, "Proxy", proxyCtor);
@@ -80,7 +82,7 @@ public final class GlobalScope {
         intrinsics.typedArrayProto().defineValue("constructor", typedArrayCtor);
         intrinsics.typedArrayProto().setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
         for (final var kind : JsTypedArray.Kind.values()) {
-            final var ctor = TypedArrayBuiltins.create(kind, invoker, iterableToList, ops);
+            final var ctor = TypedArrayBuiltins.create(kind, iterableToList, ops);
             ctor.setOwnProto(typedArrayCtor);
             constructor(global, kind.ctorName(), ctor, intrinsics.typedArrayProto(kind));
         }
@@ -153,6 +155,13 @@ public final class GlobalScope {
     }
 
     private static void define(Environment global, String name, JsValue value) {
+        global.declareBuiltin(name, value);
+    }
+
+    // A namespace object (Math, JSON, Reflect, console) is an ordinary object, so its [[Prototype]]
+    // is Object.prototype - without the link Object.getPrototypeOf(Math) answers null.
+    private static void namespace(Environment global, String name, JsObject value, Intrinsics intrinsics) {
+        value.setProto(intrinsics.objectProto());
         global.declareBuiltin(name, value);
     }
 }

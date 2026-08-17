@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.internal.interpreter.Iteration;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsMap;
@@ -11,6 +12,7 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -23,9 +25,9 @@ public final class MapBuiltins {
     private MapBuiltins() {
     }
 
-    public static JsNativeFunction create(IterableToList iterableToList, Invoker invoker, boolean weak) {
-        final var constructor = new JsNativeFunction(weak ? "WeakMap" : "Map",
-                (_, args) -> construct(args, iterableToList, weak));
+    public static JsNativeFunction create(IterableToList iterableToList, Invoker invoker, InterpreterOps ops,
+            boolean weak) {
+        final var constructor = new JsNativeFunction(weak ? "WeakMap" : "Map", (_, args) -> construct(args, ops, weak));
         if (!weak) {
             constructor.setProperty("groupBy",
                     new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
@@ -52,15 +54,27 @@ public final class MapBuiltins {
         return map;
     }
 
-    private static JsValue construct(List<JsValue> args, IterableToList iterableToList, boolean weak) {
+    // AddEntriesFromIterable: the entries are pulled one at a time (the iterable may be endless), the
+    // adder is read off the receiver so a patched `set` is honoured, and every abrupt completion after
+    // the step closes the iterator before it propagates.
+    private static JsValue construct(List<JsValue> args, InterpreterOps ops, boolean weak) {
         final var map = new JsMap(weak);
-        if (!args.isEmpty() && !(args.getFirst() instanceof JsUndefined) && !(args.getFirst() instanceof JsNull)) {
-            for (final var entry : iterableToList.drain(args.getFirst())) {
-                final var pair = iterableToList.drain(entry);
-                set(map, pair.isEmpty() ? JsUndefined.getInstance() : pair.getFirst(),
-                        pair.size() < 2 ? JsUndefined.getInstance() : pair.get(1));
-            }
+        final var iterable = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        if (iterable instanceof JsUndefined || iterable instanceof JsNull) {
+            return map;
         }
+        final var adder = ops.getMember(map, new JsString("set"));
+        if (!InterpreterUtils.isCallable(adder)) {
+            throw new TypeErrorException((weak ? "WeakMap" : "Map") + ".prototype.set is not a function");
+        }
+        new Iteration(ops, iterable).forEach(entry -> {
+            if (!InterpreterUtils.isObjectLike(entry)) {
+                throw new TypeErrorException("Iterator value is not an entry object");
+            }
+            final var key = ops.getMember(entry, new JsString("0"));
+            final var value = ops.getMember(entry, new JsString("1"));
+            ops.call(adder, map, List.of(key, value));
+        });
         return map;
     }
 
@@ -167,7 +181,7 @@ public final class MapBuiltins {
     private static boolean isNotObjectKey(JsValue value) {
         return !switch (value) {
             case JsNumber ignored -> false;
-            case org.techhouse.simplejs.values.JsString ignored -> false;
+            case JsString ignored -> false;
             case JsBoolean ignored -> false;
             case org.techhouse.simplejs.values.JsBigInt ignored -> false;
             case JsNull ignored -> false;

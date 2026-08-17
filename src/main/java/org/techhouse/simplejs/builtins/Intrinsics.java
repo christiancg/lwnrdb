@@ -138,7 +138,9 @@ public final class Intrinsics {
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, true), name, invoker, ops));
         dateProto = prototypeOf(DateBuiltins.NAMES, "Date.prototype",
                 (receiver, name) -> DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
-        defineSymbol(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops));
+        // Date.prototype[@@toPrimitive] is the one non-writable well-known-symbol method.
+        installSymbolValue(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops),
+                new PropertyFlags(false, false, true));
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -541,6 +543,27 @@ public final class Intrinsics {
     static void defineHidden(JsObject target, String key, JsValue value) {
         target.defineValue(key, value);
         target.setFlags(key, HIDDEN);
+    }
+
+    // The four install helpers every builtin surface goes through, so a spec attribute set is chosen
+    // once per shape instead of at each call site: a method/symbol-keyed method is
+    // {w:true, e:false, c:true}, a @@toStringTag is {w:false, e:false, c:true}.
+    public static void installMethod(JsObject target, String key, JsValue fn) {
+        defineHidden(target, key, fn);
+    }
+
+    public static void installSymbolMethod(JsObject target, JsSymbol key, JsValue fn) {
+        target.setSymbol(key, fn);
+        target.setSymbolFlags(key, HIDDEN);
+    }
+
+    public static void installSymbolValue(JsObject target, JsSymbol key, JsValue value, PropertyFlags flags) {
+        target.ownProperties().defineSymbolValue(key, value);
+        target.setSymbolFlags(key, flags);
+    }
+
+    public static void installTag(JsObject target, String tag) {
+        defineToStringTag(target, tag);
     }
 
     static void defineFrozen(JsObject target, String key, JsValue value) {

@@ -22,7 +22,9 @@ public class JsArrayLengthTest {
     }
 
     private static boolean bool() {
-        return ((JsBoolean) Interpreter.run("const a = [1, 2]; Object.defineProperty(a, 'length', {writable: false}); let threw = false; try { a.length = 2; } catch (e) { threw = e instanceof TypeError; } threw")).getValue();
+        return ((JsBoolean) Interpreter.run(
+                "const a = [1, 2]; Object.defineProperty(a, 'length', {writable: false}); let threw = false; try { a.length = 2; } catch (e) { threw = e instanceof TypeError; } threw"))
+                .getValue();
     }
 
     private static JsArray array(int elements) {

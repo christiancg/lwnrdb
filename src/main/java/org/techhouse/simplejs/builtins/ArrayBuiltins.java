@@ -47,8 +47,8 @@ public final class ArrayBuiltins {
     private ArrayBuiltins() {
     }
 
-    public static JsNativeFunction create(Invoker invoker, EventLoop eventLoop,
-                                          InterpreterOps ops, Intrinsics intrinsics) {
+    public static JsNativeFunction create(Invoker invoker, EventLoop eventLoop, InterpreterOps ops,
+            Intrinsics intrinsics) {
         final var array = new JsNativeFunction("Array", (_, args) -> construct(args));
         array.setProperty("isArray",
                 new JsNativeFunction("isArray", (_, args) -> JsBoolean.of(isArray(arg(args, 0), intrinsics))));

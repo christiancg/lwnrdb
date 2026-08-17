@@ -429,6 +429,53 @@ public class LexerTest {
         assertInstanceOf(JsTemplateString.class, template.getExpressions().getFirst().getFirst());
     }
 
+    // A regex literal inside an interpolation keeps its quotes: the substitution is lexed, not
+    // character-scanned, so the quote in /'/ never opens a string
+    @Test
+    public void test_lex_template_interpolation_with_regex_quote() {
+        final var template = (JsTemplateString) Lexer.lex("`${k.replace(/'/g, \"x\")}`").getFirst();
+        assertEquals(List.of("", ""), template.getQuasis());
+        final var expression = template.getExpressions().getFirst();
+        final var regex = (JsRegex) expression.get(4);
+        assertEquals("'", regex.getPattern());
+        assertEquals("g", regex.getFlags());
+    }
+
+    // A regex literal inside an interpolation may contain a backtick
+    @Test
+    public void test_lex_template_interpolation_with_regex_backtick() {
+        final var template = (JsTemplateString) Lexer.lex("`${/`/.test(s)}`").getFirst();
+        final var regex = (JsRegex) template.getExpressions().getFirst().getFirst();
+        assertEquals("`", regex.getPattern());
+    }
+
+    // A brace inside a regex inside a nested template does not close the outer interpolation
+    @Test
+    public void test_lex_template_nested_template_with_regex() {
+        final var template = (JsTemplateString) Lexer.lex("`${`a${/}/.source}b`}`").getFirst();
+        final var nested = (JsTemplateString) template.getExpressions().getFirst().getFirst();
+        assertEquals(List.of("a", "b"), nested.getQuasis());
+        assertEquals("}", ((JsRegex) nested.getExpressions().getFirst().getFirst()).getPattern());
+    }
+
+    // Inside an interpolation a slash after `)`, `]` or an identifier is still division
+    @Test
+    public void test_lex_template_interpolation_division_not_regex() {
+        for (final var source : List.of("`${(a)/b/c}`", "`${x[0]/2}`", "`${a/b}`")) {
+            final var template = (JsTemplateString) Lexer.lex(source).getFirst();
+            final var expression = template.getExpressions().getFirst();
+            assertTrue(expression.stream().noneMatch(JsRegex.class::isInstance), source);
+            assertTrue(expression.stream().anyMatch(
+                    token -> token instanceof JsOperator operator && "/".equals(operator.getValue())), source);
+        }
+    }
+
+    // An unterminated string inside an interpolation is reported as such
+    @Test
+    public void test_lex_template_interpolation_unterminated_string_throws() {
+        assertThrows(UnterminatedStringException.class, () -> Lexer.lex("`${'abc}`"));
+    }
+
     // Unterminated template throws
     @Test
     public void test_lex_unterminated_template_throws() {

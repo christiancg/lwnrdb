@@ -13,7 +13,8 @@ import org.techhouse.simplejs.values.JsString;
 
 public class GenericReceiverProgramTest {
     private static double num() {
-        return ((JsNumber) Interpreter.run("ArrayBuffer.prototype.slice.call(new ArrayBuffer(4), 1).byteLength")).getValue();
+        return ((JsNumber) Interpreter.run("ArrayBuffer.prototype.slice.call(new ArrayBuffer(4), 1).byteLength"))
+                .getValue();
     }
 
     private static String str(String source) {

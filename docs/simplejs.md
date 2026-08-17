@@ -791,7 +791,10 @@ but is not a constructor.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **95.45%**, 34,873/36,535). The official
+Conformance is **measured, not asserted** (currently **96.44%**, 35,191/36,490). The denominator
+shrank from 36,535 when the restriction-bound tests below were filtered out — that step moved the
+rate without changing the passing count, so the two figures are only comparable through the ledger in
+`plans/simplejs-test262-100-percent-progress.md`. The official
 tc39/test262 corpus runs against
 `SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
 the language + built-ins surface a database script host actually exposes, and gated on a tracked
@@ -804,7 +807,18 @@ python3 test_utils/test262.py --self-test         # check the harness itself; no
 python3 test_utils/test262.py --gate baseline     # what CI runs
 python3 test_utils/test262.py --update-baseline   # after fixing a gap
 python3 test_utils/test262.py --self-check        # assert the known divergences still fail
+python3 test_utils/test262.py --dump-failures     # re-run the baseline, write the failure inventory
 ```
+
+`--dump-failures` re-runs **only** the tests currently listed in `config/test262-baseline.txt` and
+writes `test_log/test262-failures.tsv` (`status`, `id`, `errorName`, `message`) — the same worker and
+the same collection path as a full run, restricted to the baselined ids, so it needs no extra worker
+mode and costs ~80s against the full run's several minutes. It exists because the driver otherwise prints a message only
+for a *regression*: the messages for the known failures — the set you actually work from when closing
+a gap — were invisible. A baselined test that now passes is reported as a count, not written to the
+file; drop it with `--update-baseline`. The crash-loop guard counts only a **dead worker**, so a
+filtered run whose batch is mostly known hangs is not mistaken for a broken classpath
+(`--max-crashes` tunes the limit, default 5).
 
 The report lands in `test_log/test262-report.md` (per-area pass rates, a totals line and the
 exclusion/skip breakdown). The pieces:
@@ -841,7 +855,7 @@ commands above; the limitations below are the ones that need an explanation rath
 |---|---|---|
 | 1 | **`\k<name>` on a duplicated group name resolves to the first alias** | A duplicated name (`/(?<y>a)\|(?<y>b)/`) compiles by renaming the repeats and resolving `groups.y`/`$<y>` to whichever alias participated, but `java.util.regex` cannot express "whichever alias participated" in a *backreference*, so `\k<y>` always refers to the first one. |
 | 2 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
-| 3 | **An array index does not resolve an inherited *setter*, and only a `JsObject` owns a `[[Prototype]]` slot** | `Array.prototype` itself is fully generic (see *Intrinsic prototypes*), and any object-like value may now *be* a `[[Prototype]]` (`foo.prototype = [1, 2, 3]` and `Object.create([1, 2, 3])` both inherit the array's indices and, past them, `Array.prototype`). Two array-shaped holes remain below that: a write to an index with no own property goes straight to the backing list instead of consulting a setter installed on the prototype chain, and only `JsObject` *stores* a prototype link, so `Object.setPrototypeOf(someArray, p)` is a no-op. |
+| 3 | **An array's `length` is capped at 2^24, not 2^32-1** | `JsArray` stores one slot per index (`MAX_DENSE_LENGTH` = 2^24), so a `length` at or near the spec's 2^32-1 limit cannot be represented. `ArraySetLength` is otherwise implemented (invalid length → `RangeError`, a blocked write → `TypeError`, truncation deleting top-down and stopping at the first non-configurable index), and `Array.prototype` is fully generic, but the boundary tests (`built-ins/Object/defineProperty/15.2.3.6-4-*`, `harness/propertyhelper-verifywritable-array-length`) need a sparse/virtual-length representation. Closing this is a storage change, not a fix. |
 | 4 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
 | 5 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. `toString` emits the spec's `NativeFunction` form for user functions too, which is legal precisely because no source is retained (`HostHasSourceTextAvailable` is false), so the output is conformant while the underlying gap remains. |
 | 6 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
@@ -852,6 +866,13 @@ commands above; the limitations below are the ones that need an explanation rath
 - **A promise returned at top level is awaited.** `return f()` for an `async f` resolves the script
   to the fulfilment value; a rejection becomes the script error (name/message), and a still-pending
   promise resolves to JSON `null`. The same applies to `export default`.
+- **`strictScriptGoal` (`host/ResourceLimits`) selects the spec's Script goal.** It defaults to
+  `false`, which is what the database host uses: `SimpleJs.run`'s result contract deliberately allows
+  a top-level `return`, and `import.meta`, `new.target`/`super` in global code and a top-level
+  `using` are tolerated rather than rejected. Set to `true` (only `Test262Worker` does) each of those
+  becomes an early `SyntaxError`, as the spec requires of a Script. The flag arrives through
+  `HostBindings.limits()`; `SimpleJs.run` keeps its signature, and `SimpleHostBindings` /
+  `EnforcingDatabaseAccess` leave it off.
 - **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet.
 
 ### Numbers
@@ -959,15 +980,39 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   `Object.getPrototypeOf(function*(){}).constructor`, so the call form is filtered by the same kind of
   source pattern. Only the call is excluded: the tests that merely inspect those intrinsics — their
   `name`, `length`, prototype chain — stay measured and pass.
+- **The `Function` constructor reached without naming it** — three more spellings of the same
+  restriction, each pinned to the exact form the corpus uses rather than a broad `Function` scan:
+  `Function.call(this, "…body…")` (`built-ins/Function/S15.3_A2*`/`S15.3_A3*`,
+  `language/statements/function/S13.2.2_A8_T3.js` — the body has to be *parsed*, so the disabled
+  constructor is the only reachable outcome, whether the test expects a new function or a
+  `SyntaxError` from a malformed body); the derived constructor of a *live* function object
+  (`Object.seal(new (Object.getPrototypeOf(async () => {}).constructor)())` in
+  `built-ins/Object/seal/seal-*function.js`); and an alias of the generator constructors
+  (`var Generator = function*(){}.constructor; Generator("…")` in
+  `built-ins/Function/prototype/toString/AsyncGenerator.js` and the two
+  `language/expressions/import.meta/syntax/goal-*-params-or-body.js` tests, which can only observe
+  their expected `SyntaxError` if the alias compiles source).
+- **Subclassing the function constructors** —
+  `language/statements/class/subclass/builtin-objects/{Function,GeneratorFunction}/` derive a class
+  from a constructor that deliberately throws, so `super()` can never return an instance. Excluded as
+  two directories; the sibling `builtin-objects/` subtrees stay measured.
 - **Harness helpers that need code generation** — `resizableArrayBufferUtils.js` builds every
   subclass fixture with `new Function('return class My… extends … {}')()` and swallows the failure,
   so its `ctors` array is full of `undefined` before an assertion ever runs. The `include:` exclusion
   kind exists for exactly this: a test that never mentions `Function` itself but cannot survive its
   own helper. This is a measurement decision (the tests are unrunnable here), not a claim that
   resizable buffers are unimplemented — they are, including length-tracking views.
+  `fnGlobalObject.js` is the second such helper: it returns `Function("return this;")()`, so its own
+  `harness/` self-test cannot run.
 - **Indirect `eval`** — `(0, eval)("…")` and `var e = eval; e("…")` are the same code generation by
   another spelling, so `language/eval-code/indirect/` is excluded as a directory: no source pattern
   can recognise an alias, and the direct form's pattern does not fire on it.
+- **`eval` referenced as a value** — outside that directory, 18 tests never call `eval`: they alias
+  it (`var s = eval;`), compare against it (`this === eval`), pass it as a convenient built-in
+  function (`[11].every(cb, eval)`, `new Proxy(eval, {})`) or use the comma form. All of them fail on
+  the missing *global*, not on anything the test is about, so four narrow `pattern:` lines cover the
+  exact spellings. A bare `\beval\b` is deliberately **not** used: it would also swallow the several
+  dozen *passing* tests that use `eval` as a binding name in a strict-mode early error.
 - **The `eval` global's own descriptor surface** — `built-ins/eval/` asserts the attributes,
   `length` and `name` of a global function that deliberately does not exist.
 - **`ShadowRealm`** — `ShadowRealm.prototype.evaluate(sourceText)` is runtime code generation from a

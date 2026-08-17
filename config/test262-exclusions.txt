@@ -35,6 +35,8 @@ dir:     built-ins/RegExp/property-escapes/generated/  # exhaustive per-code-poi
 keep:    built-ins/RegExp/property-escapes/generated/strings/  # properties of strings: our own gap, not the JDK's
 dir:     language/eval-code/indirect/  # indirect eval — written (0, eval)(…) or through an alias, so no source pattern catches it
 dir:     built-ins/eval/               # the descriptor surface of a global eval that deliberately does not exist
+dir:     language/statements/class/subclass/builtin-objects/Function/  # subclassing a constructor that deliberately throws: no runtime code generation
+dir:     language/statements/class/subclass/builtin-objects/GeneratorFunction/  # subclassing the derived generator constructor, which deliberately throws
 #
 # The property-escapes pair is not a feature gap. With no ICU dependency our Unicode data is
 # whatever the JDK ships, and the project builds on both 25 (Unicode 16.0) and 26 (Unicode 17.0),
@@ -74,6 +76,7 @@ feature: decorators                  # deliberate: not in the ES2026 snapshot
 
 include: resizableArrayBufferUtils.js  # its subClass() helper builds every fixture with new Function, so the
                                        # ctors array is full of holes before an assertion ever runs
+include: fnGlobalObject.js             # the helper returns Function("return this;")(), so it is runtime code generation
 
 pattern: \beval\s*\(                 # eval absent by design (sandbox boundary)
 pattern: \bFunction\s*\(             # Function constructor disabled by design (called or newed)
@@ -84,3 +87,22 @@ pattern: \b(?:AsyncFunction|GeneratorFunction|AsyncGeneratorFunction)\s*\(  # th
                                      # Function constructor is, reached through the derived constructors. Only the
                                      # call form is excluded, so the tests that merely inspect the intrinsics run
 pattern: \$262\.(createRealm|evalScript|agent|gc|IsHTMLDDA)  # host APIs the shim does not provide
+#
+# The four lines below reach the missing global by *reference* rather than by call, which is the one
+# spelling `\beval\s*\(` cannot see: an alias (`var s = eval; s(src)`), the comma form, an identity
+# comparison against it, or handing it to a Proxy as a callable that is not a constructor. Each is
+# pinned to the exact spelling the corpus uses instead of a bare `\beval\b`, which would also swallow
+# the several dozen *passing* tests that use `eval` as a binding name in a strict-mode early error.
+pattern: =\s*eval\s*;               # indirect eval through an alias: the global is absent by design
+pattern: \(\s*0\s*,\s*eval\s*\)     # indirect eval through an alias: the global is absent by design
+pattern: (?:===|!==)\s*eval\b|\beval\s*(?:===|!==)  # indirect eval through an alias: the global is absent by design
+pattern: new Proxy\(eval,           # indirect eval through an alias: the global is absent by design
+#
+# ... and the same for the Function constructor family reached without naming it: through
+# Function.prototype.call/apply (S15.3_A2/A3, S13.2.2_A8_T3 — a body that must be parsed, so the
+# disabled constructor is the only possible outcome), through the derived constructor of a live
+# function object (`Object.getPrototypeOf(async () => {}).constructor`, `f.constructor`), or through
+# an alias of the generator constructors.
+pattern: \bFunction\.(?:call|apply|bind)\s*\(  # the Function constructor through Function.prototype.call: no runtime code generation
+pattern: Object\.seal\(new \(Object\.getPrototypeOf  # the derived constructor of a live function object: no runtime code generation
+pattern: \b(?:Async)?Generator\s*\(\s*["']  # an alias of the (Async)Generator constructor: no runtime code generation

@@ -27,6 +27,7 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.simplejs.values.OrdinaryProperties;
 import org.techhouse.simplejs.values.PropertyDescriptor;
+import org.techhouse.simplejs.values.PropertyTable;
 
 public final class ObjectBuiltins {
     private ObjectBuiltins() {
@@ -42,12 +43,16 @@ public final class ObjectBuiltins {
         object.setProperty("entries",
                 new JsNativeFunction("entries", (_, args) -> entries(boxed(args, intrinsics), ops)));
         object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args, ops)));
-        object.setProperty("freeze", new JsNativeFunction("freeze", (_, args) -> freeze(args)));
-        object.setProperty("isFrozen", new JsNativeFunction("isFrozen", (_, args) -> isFrozen(args)));
-        object.setProperty("seal", new JsNativeFunction("seal", (_, args) -> seal(args)));
-        object.setProperty("isSealed", new JsNativeFunction("isSealed", (_, args) -> isSealed(args)));
+        object.setProperty("freeze", new JsNativeFunction("freeze", (_, args) -> setIntegrityLevel(args, ops, true)));
+        object.setProperty("isFrozen",
+                new JsNativeFunction("isFrozen", (_, args) -> testIntegrityLevel(args, ops, true)));
+        object.setProperty("seal", new JsNativeFunction("seal", (_, args) -> setIntegrityLevel(args, ops, false)));
+        object.setProperty("isSealed",
+                new JsNativeFunction("isSealed", (_, args) -> testIntegrityLevel(args, ops, false)));
         object.setProperty("preventExtensions", new JsNativeFunction("preventExtensions", (_, args) -> {
-            ops.preventExtensions(first(args));
+            if (InterpreterUtils.isObjectLike(first(args)) && !ops.preventExtensions(first(args))) {
+                throw new TypeErrorException("Cannot prevent extensions");
+            }
             return first(args);
         }));
         object.setProperty("isExtensible",
@@ -135,7 +140,7 @@ public final class ObjectBuiltins {
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
             case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
-            case JsGlobalObject global -> global.getEnv().isDeclared(key);
+            case JsGlobalObject global -> global.getEnv().isDeclared(key) || global.ownProperties().hasAccessor(key);
             case JsArguments arguments -> arguments.hasOwnKey(new JsString(key));
             case JsCallableProperties callable ->
                 callable.hasProperty(key) || OrdinaryProperties.metadataKey(callable, key);
@@ -144,10 +149,17 @@ public final class ObjectBuiltins {
     }
 
     static boolean hasOwnSymbol(JsValue target, JsSymbol key) {
-        if (target instanceof JsClass cls) {
-            return cls.getStaticOwner().hasSymbol(key);
-        }
-        return target instanceof JsObject object && object.hasSymbol(key);
+        final var table = symbolTableOf(target);
+        return table != null && (table.hasSymbol(key) || table.hasSymbolAccessor(key));
+    }
+
+    static boolean isEnumerableOwnSymbol(JsValue target, JsSymbol key) {
+        final var table = symbolTableOf(target);
+        return table != null && table.getSymbolFlags(key).enumerable();
+    }
+
+    private static PropertyTable symbolTableOf(JsValue target) {
+        return target instanceof JsClass cls ? cls.getStaticOwner().ownProperties() : target.ownProperties();
     }
 
     private static boolean arrayHasIndex(JsArray array, String key) {
@@ -166,24 +178,26 @@ public final class ObjectBuiltins {
     // the descriptor object is honoured) and an ill-formed descriptor is rejected here, before any
     // [[DefineOwnProperty]] work can half-apply it.
     private static PropertyDescriptor toPropertyDescriptor(JsValue descriptor, InterpreterOps ops) {
-        final var getter = descHas(descriptor, "get", ops) ? descGet(descriptor, "get", ops) : null;
-        final var setter = descHas(descriptor, "set", ops) ? descGet(descriptor, "set", ops) : null;
-        final var hasValue = descHas(descriptor, "value", ops);
-        final var hasWritable = descHas(descriptor, "writable", ops);
-        if ((getter != null || setter != null) && (hasValue || hasWritable)) {
-            throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
-                    + "and a value or writable attribute");
-        }
-        requireAccessorField(getter, "Getter");
-        requireAccessorField(setter, "Setter");
-        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
-        final Boolean writable = hasWritable ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops)) : null;
+        // Field order is normative: a poisoned accessor on the descriptor object must be observed in
+        // enumerable, configurable, value, writable, get, set order.
         final Boolean enumerable = descHas(descriptor, "enumerable", ops)
                 ? JsCoercion.toBoolean(descGet(descriptor, "enumerable", ops))
                 : null;
         final Boolean configurable = descHas(descriptor, "configurable", ops)
                 ? JsCoercion.toBoolean(descGet(descriptor, "configurable", ops))
                 : null;
+        final var hasValue = descHas(descriptor, "value", ops);
+        final var value = hasValue ? descGet(descriptor, "value", ops) : null;
+        final var hasWritable = descHas(descriptor, "writable", ops);
+        final Boolean writable = hasWritable ? JsCoercion.toBoolean(descGet(descriptor, "writable", ops)) : null;
+        final var getter = descHas(descriptor, "get", ops) ? descGet(descriptor, "get", ops) : null;
+        requireAccessorField(getter, "Getter");
+        final var setter = descHas(descriptor, "set", ops) ? descGet(descriptor, "set", ops) : null;
+        requireAccessorField(setter, "Setter");
+        if ((getter != null || setter != null) && (hasValue || hasWritable)) {
+            throw new TypeErrorException("Invalid property descriptor. Cannot both specify accessors "
+                    + "and a value or writable attribute");
+        }
         return new PropertyDescriptor(value, getter, setter, writable, enumerable, configurable);
     }
 
@@ -400,42 +414,62 @@ public final class ObjectBuiltins {
         return target;
     }
 
-    private static JsValue freeze(List<JsValue> args) {
+    // SetIntegrityLevel: extensibility is dropped first, then every own property is redefined
+    // through [[DefineOwnProperty]] - so an exotic key set (an array's indices, a native function's
+    // statics) and a proxy's traps are covered by the same walk.
+    private static JsValue setIntegrityLevel(List<JsValue> args, InterpreterOps ops, boolean frozen) {
         final var target = first(args);
-        switch (target) {
-            case JsObject object -> object.freeze();
-            case JsArray array -> array.freeze();
-            default -> {
+        if (!InterpreterUtils.isObjectLike(target)) {
+            return target;
+        }
+        if (!ops.preventExtensions(target)) {
+            throw new TypeErrorException("Cannot prevent extensions");
+        }
+        for (final var key : ops.ownKeys(target)) {
+            final var current = ops.getOwnPropertyDescriptor(target, key);
+            if (!(current instanceof JsObject descriptor)) {
+                continue;
+            }
+            if (!ops.defineProperty(target, key, integrityDescriptor(descriptor, frozen))) {
+                throw new TypeErrorException("Cannot redefine property: " + JsCoercion.toStr(key));
             }
         }
         return target;
     }
 
-    private static JsValue isFrozen(List<JsValue> args) {
-        return JsBoolean.of(switch (first(args)) {
-            case JsObject object -> object.isFrozen();
-            case JsArray array -> array.isFrozen();
-            default -> true;
-        });
+    // A data property loses [[Writable]] too; an accessor has none to lose, and asking for
+    // writable:false on one would be rejected as an incompatible redefinition.
+    private static JsValue integrityDescriptor(JsObject current, boolean frozen) {
+        final var descriptor = new JsObject();
+        descriptor.set("configurable", JsBoolean.FALSE);
+        if (frozen && !current.has("get") && !current.has("set")) {
+            descriptor.set("writable", JsBoolean.FALSE);
+        }
+        return descriptor;
     }
 
-    private static JsValue seal(List<JsValue> args) {
+    // TestIntegrityLevel: an extensible object is never sealed or frozen, whatever its properties
+    // say - so the extensibility check comes before the property walk, not after it.
+    private static JsValue testIntegrityLevel(List<JsValue> args, InterpreterOps ops, boolean frozen) {
         final var target = first(args);
-        switch (target) {
-            case JsObject object -> object.seal();
-            case JsArray array -> array.seal();
-            default -> {
+        if (!InterpreterUtils.isObjectLike(target)) {
+            return JsBoolean.TRUE;
+        }
+        if (ops.isExtensible(target)) {
+            return JsBoolean.FALSE;
+        }
+        for (final var key : ops.ownKeys(target)) {
+            if (!(ops.getOwnPropertyDescriptor(target, key) instanceof JsObject descriptor)) {
+                continue;
+            }
+            if (JsCoercion.toBoolean(descriptor.get("configurable"))) {
+                return JsBoolean.FALSE;
+            }
+            if (frozen && descriptor.has("writable") && JsCoercion.toBoolean(descriptor.get("writable"))) {
+                return JsBoolean.FALSE;
             }
         }
-        return target;
-    }
-
-    private static JsValue isSealed(List<JsValue> args) {
-        return JsBoolean.of(switch (first(args)) {
-            case JsObject object -> object.isSealed();
-            case JsArray array -> array.isSealed();
-            default -> true;
-        });
+        return JsBoolean.TRUE;
     }
 
     public static JsValue preventExtensions(List<JsValue> args) {
@@ -486,15 +520,15 @@ public final class ObjectBuiltins {
 
     public static JsValue setPrototypeOf(List<JsValue> args) {
         final var target = first(args);
-        if (target instanceof JsObject object) {
+        if (InterpreterUtils.isObjectLike(target)) {
             final var proto = args.size() > 1 && InterpreterUtils.isObjectLike(args.get(1)) ? args.get(1) : null;
             // OrdinarySetPrototypeOf step 8: a cycle would make every later chain walk unbounded.
             for (var walk = proto; walk != null; walk = walk.getProto()) {
-                if (walk == object) {
+                if (walk == target) {
                     throw new TypeErrorException("Cyclic __proto__ value");
                 }
             }
-            object.setProto(proto);
+            target.setProto(proto);
         }
         return target;
     }
@@ -504,10 +538,12 @@ public final class ObjectBuiltins {
         if (!InterpreterUtils.isObjectLike(target)) {
             throw new TypeErrorException("Object.defineProperty called on non-object");
         }
+        // ToPropertyKey runs before the descriptor is even looked at, so a poisoned key coercion is
+        // observed first and a non-object descriptor is only rejected afterwards.
+        final var propertyKey = toPropertyKey(args.get(1), ops);
         if (args.size() < 3 || !InterpreterUtils.isObjectLike(args.get(2))) {
             throw new TypeErrorException("Property description must be an object");
         }
-        final var propertyKey = toPropertyKey(args.get(1), ops);
         // The boolean answers only whether the target owns a definition at all (a proxy reaches here
         // through Object.defineProperties); a rejected definition is raised as a TypeError instead.
         target.defineOwnProperty(propertyKey, toPropertyDescriptor(args.get(2), ops));

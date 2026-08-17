@@ -13,6 +13,7 @@ why the frontmatter parser below is hand-rolled.
     python3 test_utils/test262.py --gate baseline      # the CI run
     python3 test_utils/test262.py --update-baseline    # after fixing a gap
     python3 test_utils/test262.py --self-check         # assert the known divergences still fail
+    python3 test_utils/test262.py --dump-failures      # re-run the baseline and write the failure inventory
 """
 
 import argparse
@@ -42,6 +43,7 @@ CORPUS = ROOT / "test262"
 SHIMS = ROOT / "test_utils" / "test262_shims"
 FIXTURES = ROOT / "test_utils" / "test262_fixtures"
 REPORT = ROOT / "test_log" / "test262-report.md"
+FAILURES = ROOT / "test_log" / "test262-failures.tsv"
 CLASSPATH = os.pathsep.join([str(ROOT / "target" / "test-classes"), str(ROOT / "target" / "classes")])
 WORKER_CLASS = "org.techhouse.unit.simplejs.test262.Test262Worker"
 
@@ -70,6 +72,9 @@ DIVERGENCES = [
     ("tagged template strings array not per-site cached", ["language/expressions/tagged-template/"]),
     ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
 ]
+# A row is deleted in the same commit that closes its divergence, naming the test id that now passes.
+# When the last row goes, self_check inverts and asserts the baseline is empty instead: at that point
+# "all green" is the expected state, not the alarm.
 # Rows are removed from the list above as their divergence is closed. A row only asserts that *some*
 # test under its prefix still fails, so a stale one keeps passing on an unrelated failure and quietly
 # becomes a false claim about the engine - the five dropped so far (String(symbol) throwing,
@@ -487,8 +492,13 @@ def worker_command():
     return ["java", "-XX:+UseSerialGC", "-Xss8m", "-cp", CLASSPATH, WORKER_CLASS]
 
 
-def run_batch(jobs, timeout, command):
-    """Run one batch on a reused worker, respawning it whenever a test hangs or crashes it."""
+def run_batch(jobs, timeout, command, max_consecutive_crashes=MAX_CONSECUTIVE_CRASHES):
+    """Run one batch on a reused worker, respawning it whenever a test hangs or crashes it.
+
+    Only a dead worker counts toward the crash-loop abort: a timeout is a result about the engine,
+    and a batch made mostly of known hangs (a filtered or baseline-only run) is not a broken
+    classpath.
+    """
     results = {}
     worker = Worker(command)
     consecutive_crashes = 0
@@ -496,6 +506,7 @@ def run_batch(jobs, timeout, command):
         for job in jobs:
             outcome = None
             note = ""
+            crashed = False
             try:
                 worker.send(job)
                 line = worker.read_line(timeout)
@@ -504,13 +515,14 @@ def run_batch(jobs, timeout, command):
                 else:
                     outcome = json.loads(line)
             except (WorkerDied, json.JSONDecodeError) as died:
-                note = f"crash: {died}" if isinstance(died, WorkerDied) else f"unparseable result: {died}"
+                crashed = isinstance(died, WorkerDied)
+                note = f"crash: {died}" if crashed else f"unparseable result: {died}"
             if outcome is None:
                 results[job["id"]] = {"status": "HANG", "errorName": "", "message": note}
                 worker.kill()
                 worker = Worker(command)
-                consecutive_crashes += 1
-                if consecutive_crashes >= MAX_CONSECUTIVE_CRASHES:
+                consecutive_crashes = consecutive_crashes + 1 if crashed else 0
+                if consecutive_crashes >= max_consecutive_crashes:
                     raise HarnessError(
                         f"{consecutive_crashes} workers died in a row (last: {job['id']}, {note}). "
                         "Aborting instead of spinning — check the classpath with `mvn test-compile`."
@@ -527,7 +539,7 @@ def run_batch(jobs, timeout, command):
     return results
 
 
-def run_jobs(jobs, timeout, parallelism):
+def run_jobs(jobs, timeout, parallelism, max_consecutive_crashes=MAX_CONSECUTIVE_CRASHES):
     from concurrent.futures import ThreadPoolExecutor
 
     command = worker_command()
@@ -537,7 +549,9 @@ def run_jobs(jobs, timeout, parallelism):
     started = time.monotonic()
     try:
         with ThreadPoolExecutor(max_workers=parallelism) as pool:
-            for batch in pool.map(lambda group: run_batch(group, timeout, command), batches):
+            for batch in pool.map(
+                lambda group: run_batch(group, timeout, command, max_consecutive_crashes), batches
+            ):
                 results.update(batch)
                 done += len(batch)
                 elapsed = time.monotonic() - started
@@ -726,7 +740,15 @@ def rate(passed, total):
 
 
 def self_check(results):
-    """Assert every confirmed divergence still shows up as a FAIL/HANG somewhere in its area."""
+    """Assert the harness is still measuring what it claims to measure.
+
+    While DIVERGENCES is non-empty, every row must still show up as a FAIL/HANG somewhere in its
+    area — an all-green row means the filter, the prelude or the verdict logic broke, not that the
+    engine improved. Once the last row is deleted (a row goes when its divergence closes), the check
+    inverts: the expected state is an empty baseline, so a non-empty one is the alarm.
+    """
+    if not DIVERGENCES:
+        return self_check_empty_baseline()
     failures = {
         test_id for test_id, outcome in results.items() if outcome["status"] in ("FAIL", "HANG")
     }
@@ -745,6 +767,51 @@ def self_check(results):
             "A near-100% run means the harness is broken: check the prelude and the verdict logic."
         )
     return not all_green
+
+
+def self_check_empty_baseline():
+    """The end state: no divergences left, so the baseline itself must be empty."""
+    entries, _ = load_baseline()
+    print("\nself-check — no divergences left, so the baseline must be empty:")
+    if entries:
+        print(f"  [{FAIL_COLOUR}{len(entries)} entries{RESET}] {BASELINE.relative_to(ROOT)}")
+        print(
+            f"\n{FAIL_COLOUR}the baseline still lists {len(entries)} known failure(s).{RESET} "
+            "Either a divergence row was deleted before its area was green, or the gate regressed."
+        )
+        return False
+    print(f"  [{PASS_COLOUR}empty{RESET}] {BASELINE.relative_to(ROOT)}")
+    return True
+
+
+def dump_failures(jobs, results):
+    """Write the failure inventory every later phase mines for its next target."""
+    rows = sorted(
+        (test_id, outcome)
+        for test_id, outcome in results.items()
+        if outcome["status"] in ("FAIL", "HANG")
+    )
+    FAILURES.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["\t".join(("status", "id", "errorName", "message"))]
+    lines.extend(
+        "\t".join(
+            (
+                outcome["status"],
+                test_id,
+                outcome["errorName"],
+                " ".join(outcome["message"].split()),
+            )
+        )
+        for test_id, outcome in rows
+    )
+    FAILURES.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    passing = sorted(test_id for test_id, outcome in results.items() if outcome["status"] == "PASS")
+    missing = sorted(job["id"] for job in jobs if job["id"] not in results)
+    print(f"wrote {FAILURES.relative_to(ROOT)} with {len(rows)} failing entries")
+    if passing:
+        print(f"  {len(passing)} baselined test(s) now pass — drop them with --update-baseline")
+    if missing:
+        print(f"  {WARN_COLOUR}{len(missing)} baselined test(s) produced no result{RESET}")
 
 
 # ---------------------------------------------------------------------------
@@ -970,6 +1037,17 @@ def parse_args(argv):
     parser.add_argument("--gate", choices=["baseline", "none"], default="none", help="fail on new failures")
     parser.add_argument("--self-test", action="store_true", help="check the harness itself against its fixtures")
     parser.add_argument("--self-check", action="store_true", help="assert the known divergences still fail")
+    parser.add_argument(
+        "--dump-failures",
+        action="store_true",
+        help="run only the baselined tests and write test_log/test262-failures.tsv",
+    )
+    parser.add_argument(
+        "--max-crashes",
+        type=int,
+        default=MAX_CONSECUTIVE_CRASHES,
+        help="abort after this many workers die in a row (timeouts do not count)",
+    )
     parser.add_argument("--require-corpus", action="store_true", help="fail instead of skipping when absent")
     return parser.parse_args(argv)
 
@@ -1012,8 +1090,10 @@ def run(args, commit):
         f"  {len(collected['jobs'])} to run, {len(collected['skipped'])} skipped, "
         f"{len(collected['excluded'])} excluded"
     )
+    if args.dump_failures:
+        return run_dump_failures(collected, args)
     started = time.monotonic()
-    results = run_jobs(collected["jobs"], args.timeout, args.jobs)
+    results = run_jobs(collected["jobs"], args.timeout, args.jobs, args.max_crashes)
     elapsed = time.monotonic() - started
     filtered = {test_id: "SKIP" for test_id, _ in collected["skipped"]}
     filtered.update({test_id: "EXCLUDED" for test_id, _ in collected["excluded"]})
@@ -1033,6 +1113,19 @@ def run(args, commit):
     if not gate_ok:
         print(f"\n{FAIL_COLOUR}gate failed: {len(gate_messages)} problem(s) above{RESET}")
     return 0 if gate_ok and check_ok else 1
+
+
+def run_dump_failures(collected, args):
+    baseline, _ = load_baseline()
+    if not baseline:
+        raise HarnessError(f"{BASELINE.relative_to(ROOT)} has no entries — nothing to dump")
+    jobs = [job for job in collected["jobs"] if job["id"] in baseline]
+    if not jobs:
+        raise HarnessError("no baselined test survived the filter")
+    print(f"re-running {len(jobs)} baselined test(s) of {len(baseline)}")
+    results = run_jobs(jobs, args.timeout, args.jobs, args.max_crashes)
+    dump_failures(jobs, results)
+    return 0
 
 
 def summary_block(report):

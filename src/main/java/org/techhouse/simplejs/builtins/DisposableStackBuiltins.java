@@ -61,7 +61,7 @@ public final class DisposableStackBuiltins {
                         .of(!(thisArg instanceof JsObject stack) || !(stack.getSymbol(ENTRIES) instanceof JsArray))),
                 null);
         proto.setFlags("disposed", new JsObject.PropertyFlags(true, false, true));
-        proto.setSymbol(async ? JsSymbol.ASYNC_DISPOSE : JsSymbol.DISPOSE,
+        Intrinsics.installSymbolMethod(proto, async ? JsSymbol.ASYNC_DISPOSE : JsSymbol.DISPOSE,
                 new JsNativeFunction(async ? "[Symbol.asyncDispose]" : "[Symbol.dispose]",
                         (thisArg, _) -> proto.get(async ? "disposeAsync" : "dispose") instanceof JsNativeFunction fn
                                 ? fn.invoke(thisArg, List.of())
@@ -71,7 +71,9 @@ public final class DisposableStackBuiltins {
     private static JsObject newStack(JsObject proto) {
         final var stack = new JsObject();
         stack.setProto(proto);
+        // ENTRIES stands in for the [[DisposableState]] internal slot, so it must not enumerate.
         stack.setSymbol(ENTRIES, new JsArray());
+        stack.setSymbolFlags(ENTRIES, new JsObject.PropertyFlags(true, false, false));
         return stack;
     }
 

@@ -153,9 +153,8 @@ public final class TypedArrayBuiltins {
         return ctor;
     }
 
-    // from/of are %TypedArray% statics the concrete constructors only inherit, but member lookup on a
-    // native function walks the realm's Function.prototype rather than its own [[Prototype]], so each
-    // concrete constructor carries its own copy instead.
+    // from/of are %TypedArray% statics only; a concrete constructor inherits them through its own
+    // [[Prototype]] link to %TypedArray% rather than carrying a copy.
     private static void installStatics(JsNativeFunction ctor, Invoker invoker, IterableToList iterableToList,
             InterpreterOps ops) {
         final var from = new JsNativeFunction("from",
@@ -167,15 +166,14 @@ public final class TypedArrayBuiltins {
         ctor.setProperty("of", of);
     }
 
-    public static JsNativeFunction create(JsTypedArray.Kind kind, Invoker invoker, IterableToList iterableToList,
-            InterpreterOps ops) {
+    public static JsNativeFunction create(JsTypedArray.Kind kind, IterableToList iterableToList,
+                                          InterpreterOps ops) {
         final var ctor = new JsNativeFunction(kind.ctorName(), (thisArg, args) -> {
             requireNewTarget(kind.ctorName(), thisArg);
             return withObservedPrototype(constructTyped(kind, args, iterableToList, ops), ops);
         });
         ctor.setLength(3);
         defineBytesPerElement(ctor.ownProperties(), kind);
-        installStatics(ctor, invoker, iterableToList, ops);
         if (kind == JsTypedArray.Kind.UINT8) {
             final var fromBase64 = new JsNativeFunction("fromBase64",
                     (_, args) -> decodeAll(base64(args, ops, Integer.MAX_VALUE), ops));
@@ -477,8 +475,8 @@ public final class TypedArrayBuiltins {
         if (decoded.error() != null) {
             throw decoded.error();
         }
-        return new JsTypedArray(JsTypedArray.Kind.UINT8, new JsArrayBuffer(decoded.bytes()), 0,
-                decoded.bytes().length).withOps(ops);
+        return new JsTypedArray(JsTypedArray.Kind.UINT8, new JsArrayBuffer(decoded.bytes()), 0, decoded.bytes().length)
+                .withOps(ops);
     }
 
     // SetUint8ArrayBytes: whatever was decoded before the failure is written, and only then is the

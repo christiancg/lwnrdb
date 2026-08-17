@@ -256,4 +256,25 @@ public class SimpleJsTest {
         assertTrue(messages.stream().noneMatch(m -> m.contains("UnhandledPromiseRejection")), messages::toString);
     }
 
+    // The strict Script goal turns the relaxed host contract's top-level forms into SyntaxErrors
+    @Test
+    public void test_strict_script_goal_rejects_the_relaxed_contract() {
+        final var limits = new ResourceLimits(-1, -1, -1, true, true);
+        final var host = new SimpleHostBindings(new JsonObject(), null, null, limits);
+        for (final var source : new String[]{"return 1;", "export default 1;", "import args from 'args';",
+                "import.meta;", "new.target;", "using x = null;"}) {
+            final var result = engine.run(source, host);
+            assertTrue(result.isError(), source);
+            assertEquals("SyntaxError", result.getErrorName(), source);
+        }
+    }
+
+    // The default goal keeps the host contract: the same sources run
+    @Test
+    public void test_default_goal_keeps_the_relaxed_contract() {
+        assertEquals(1, run("return 1;").getValue().asJsonNumber().asInteger());
+        assertFalse(run("export default 1;").isError());
+        assertFalse(run("import args from 'args'; return 1;").isError());
+    }
+
 }

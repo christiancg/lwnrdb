@@ -6,6 +6,7 @@ import java.util.function.DoubleUnaryOperator;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.Iteration;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -19,7 +20,7 @@ public final class MathBuiltins {
     private static final double LN2 = Math.log(2);
     private static final double LN10 = Math.log(10);
 
-    public static JsObject create(IterableToList iterableToList) {
+    public static JsObject create(InterpreterOps ops) {
         final var math = new JsObject();
         Intrinsics.defineFrozen(math, "PI", new JsNumber(Math.PI));
         Intrinsics.defineFrozen(math, "E", new JsNumber(Math.E));
@@ -66,7 +67,7 @@ public final class MathBuiltins {
         Intrinsics.defineHidden(math, "hypot", new JsNativeFunction("hypot", (_, args) -> hypot(args)));
         Intrinsics.defineHidden(math, "random", new JsNativeFunction("random", (_, _) -> new JsNumber(Math.random())));
         Intrinsics.defineHidden(math, "sumPrecise",
-                new JsNativeFunction("sumPrecise", (_, args) -> new JsNumber(sumPrecise(args, iterableToList))));
+                new JsNativeFunction("sumPrecise", (_, args) -> new JsNumber(sumPrecise(args, ops))));
         Intrinsics.defineHidden(math, "min",
                 new JsNativeFunction("min", (_, args) -> reduce(args, Double.POSITIVE_INFINITY, true)));
         Intrinsics.defineHidden(math, "max",
@@ -84,22 +85,29 @@ public final class MathBuiltins {
                 : -Math.log(-value + Math.sqrt(value * value + 1));
     }
 
+    // The elements are pulled one at a time (the iterable may be endless) and a non-number closes the
+    // iterator before its TypeError propagates.
+    private static double sumPrecise(List<JsValue> args, InterpreterOps ops) {
+        final var sum = new PreciseSum();
+        new Iteration(ops, args.isEmpty() ? JsUndefined.getInstance() : args.getFirst()).forEach(sum::add);
+        return sum.result();
+    }
+
     // BigDecimal accumulation is exact for finite doubles, so the sum rounds to a double exactly once.
     // The double constructor is the exact one here; BigDecimal.valueOf would round through toString.
-    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
-    private static double sumPrecise(List<JsValue> args, IterableToList iterableToList) {
-        final var elements = iterableToList.drain(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst());
-        if (elements.isEmpty()) {
-            return -0.0;
-        }
-        var total = BigDecimal.ZERO;
-        var positiveInfinity = false;
-        var negativeInfinity = false;
-        var nan = false;
-        for (final var element : elements) {
+    private static final class PreciseSum {
+        private BigDecimal total = BigDecimal.ZERO;
+        private boolean empty = true;
+        private boolean positiveInfinity;
+        private boolean negativeInfinity;
+        private boolean nan;
+
+        @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
+        private void add(JsValue element) {
             if (!(element instanceof JsNumber number)) {
                 throw new TypeErrorException("Math.sumPrecise argument is not a number");
             }
+            empty = false;
             final var value = number.getValue();
             if (Double.isNaN(value)) {
                 nan = true;
@@ -110,13 +118,19 @@ public final class MathBuiltins {
                 total = total.add(new BigDecimal(value));
             }
         }
-        if (nan || (positiveInfinity && negativeInfinity)) {
-            return Double.NaN;
+
+        private double result() {
+            if (empty) {
+                return -0.0;
+            }
+            if (nan || (positiveInfinity && negativeInfinity)) {
+                return Double.NaN;
+            }
+            if (positiveInfinity || negativeInfinity) {
+                return positiveInfinity ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+            }
+            return total.doubleValue();
         }
-        if (positiveInfinity || negativeInfinity) {
-            return positiveInfinity ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
-        }
-        return total.doubleValue();
     }
 
     private static double imul(List<JsValue> args) {
