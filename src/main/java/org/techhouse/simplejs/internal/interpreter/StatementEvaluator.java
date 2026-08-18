@@ -3,6 +3,7 @@ package org.techhouse.simplejs.internal.interpreter;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.LEXICAL_KINDS;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.USING_KINDS;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.collectBoundNames;
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.matchesLabel;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
@@ -130,7 +131,12 @@ public final class StatementEvaluator {
         for (var i = entries.size() - 1; i >= 0; i--) {
             final var entry = entries.get(i);
             try {
-                final var outcome = interp.callValue(entry.method(), entry.resource(), List.of());
+                // Dispose(V, hint, method): a nullish `using`/`await using` resource still occupies
+                // a disposal slot with method == undefined - no call happens, but an `await using`
+                // slot still performs the implied Await(undefined), a real microtask tick.
+                final var outcome = isCallable(entry.method())
+                        ? interp.callValue(entry.method(), entry.resource(), List.of())
+                        : JsUndefined.getInstance();
                 if (entry.async()) {
                     interp.currentCoroutine().await(interp.toPromise(outcome));
                 }

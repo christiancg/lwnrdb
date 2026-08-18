@@ -125,7 +125,7 @@ public final class TypedArrayBuiltins {
     public static JsNativeFunction arrayBuffer(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("ArrayBuffer", (thisArg, args) -> {
             requireNewTarget("ArrayBuffer", thisArg);
-            return withNewTargetPrototype(constructArrayBuffer(args, ops), ops);
+            return constructArrayBuffer(args, ops);
         });
         ctor.setProperty("isView", new JsNativeFunction("isView", (_, args) -> JsBoolean.of(isView(arg(args, 0)))));
         return ctor;
@@ -137,23 +137,33 @@ public final class TypedArrayBuiltins {
         return target instanceof JsTypedArray || target instanceof JsDataView;
     }
 
+    // Spec order for ArrayBuffer(length[, options]) / AllocateArrayBuffer: the byteLength-vs-
+    // maxByteLength comparison is a plain numeric check that runs *before* OrdinaryCreateFromConstructor
+    // (observing new.target's "prototype", which a getter can make throw), but the actual
+    // CreateByteDataBlock allocation - what turns an absurdly large length into a RangeError - runs
+    // *after* it. So a maxByteLength violation wins over a throwing prototype getter, while a
+    // throwing prototype getter wins over an allocation-size RangeError.
     private static JsValue constructArrayBuffer(List<JsValue> args, InterpreterOps ops) {
         final var byteLength = toIndex(arg(args, 0), "ArrayBuffer length", ops);
-        JsArrayBuffer.checkAllocation(byteLength);
         final var options = arg(args, 1);
-        if (ops != null && InterpreterUtils.isObjectLike(options)) {
-            final var requested = ops.getMember(options, new JsString("maxByteLength"));
-            if (requested instanceof JsUndefined) {
-                return new JsArrayBuffer((int) byteLength);
-            }
-            final var maxByteLength = toIndex(requested, "ArrayBuffer maxByteLength", ops);
-            if (maxByteLength < byteLength) {
-                throw new RangeErrorException("ArrayBuffer maxByteLength must be >= byteLength");
-            }
-            JsArrayBuffer.checkAllocation(maxByteLength);
-            return new JsArrayBuffer((int) byteLength, (int) maxByteLength, true);
+        final var requestedMax = ops != null && InterpreterUtils.isObjectLike(options)
+                ? ops.getMember(options, new JsString("maxByteLength"))
+                : JsUndefined.getInstance();
+        final var hasMaxByteLength = !(requestedMax instanceof JsUndefined);
+        final var maxByteLength = hasMaxByteLength ? toIndex(requestedMax, "ArrayBuffer maxByteLength", ops) : 0;
+        if (hasMaxByteLength && maxByteLength < byteLength) {
+            throw new RangeErrorException("ArrayBuffer maxByteLength must be >= byteLength");
         }
-        return new JsArrayBuffer((int) byteLength);
+        final var observedProto = observePrototype(ops);
+        JsArrayBuffer.checkAllocation(byteLength);
+        final JsValue buffer;
+        if (hasMaxByteLength) {
+            JsArrayBuffer.checkAllocation(maxByteLength);
+            buffer = new JsArrayBuffer((int) byteLength, (int) maxByteLength, true);
+        } else {
+            buffer = new JsArrayBuffer((int) byteLength);
+        }
+        return wrapWithObservedPrototype(buffer, observedProto, ops);
     }
 
     public static JsNativeFunction dataView(InterpreterOps ops) {
@@ -314,9 +324,12 @@ public final class TypedArrayBuiltins {
     }
 
     private static List<JsValue> sourceItems(JsValue source, IterableToList iterableToList, InterpreterOps ops) {
-        if (source instanceof JsArray array) {
-            return new ArrayList<>(array.getElements());
-        }
+        // A plain array does NOT get a raw-elements shortcut: per spec (InitializeTypedArrayFromList /
+        // the object-argument path) construction from an Array still goes through GetMethod(@@iterator),
+        // observably calling whatever `next` the current ArrayIteratorPrototype (or the array's own
+        // overridden @@iterator) resolves to, rather than reading the array's own storage directly.
+        // A typed array source is different: InitializeTypedArrayFromTypedArray is its own spec
+        // algorithm that never consults the iterator protocol, so that shortcut stays.
         if (source instanceof JsTypedArray typed) {
             return elements(typed);
         }
@@ -516,6 +529,10 @@ public final class TypedArrayBuiltins {
     private static JsValue setFrom(JsTypedArray receiver, List<JsValue> args, InterpreterOps ops, Decoder decoder) {
         validate(receiver);
         final var decoded = decoder.decode(args, ops, receiver.length());
+        // The options bag's `alphabet`/`lastChunkHandling` getters run inside decode() and can detach
+        // (or otherwise invalidate) the receiver's buffer; the detached check must be re-run before
+        // any byte is written, not just once up front.
+        validate(receiver);
         for (var i = 0; i < decoded.bytes().length && i < receiver.length(); i++) {
             receiver.setElement(i, new JsNumber(decoded.bytes()[i] & 0xFF), ops);
         }

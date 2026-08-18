@@ -10,6 +10,7 @@ import org.techhouse.simplejs.internal.interpreter.Iteration;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -43,7 +44,12 @@ public final class MathBuiltins {
         unary(math, ops, "sin", Math::sin);
         unary(math, ops, "cos", Math::cos);
         unary(math, ops, "tan", Math::tan);
-        unary(math, ops, "f16round", value -> (double) Float.float16ToFloat(Float.floatToFloat16((float) value)));
+        // Narrowing straight through `(float) value` before `floatToFloat16` rounds twice: a double a
+        // hair above the float16 halfway point can round down at the float32 step and then round the
+        // "wrong" way again at the float16 step. JsTypedArray.toFloat16 already carries the
+        // round-to-odd fix for exactly this (shared with Float16Array element writes / DataView
+        // setFloat16), so reuse it here instead of duplicating a naive double-rounding conversion.
+        unary(math, ops, "f16round", value -> (double) Float.float16ToFloat(JsTypedArray.toFloat16(value)));
         unary(math, ops, "log2", value -> Math.log(value) / LN2);
         unary(math, ops, "log10", Math::log10);
         unary(math, ops, "log1p", Math::log1p);

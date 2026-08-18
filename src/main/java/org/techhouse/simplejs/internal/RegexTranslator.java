@@ -449,12 +449,21 @@ public final class RegexTranslator {
             };
         }
 
-        // Without u or v, `.` is one *code unit*, which java.util.regex cannot express: it always
-        // consumes a whole code point and can never match, or even look ahead at, half of a
-        // well-formed surrogate pair. Restricting the dotAll spelling to the BMP at least stops a
-        // supplementary code point being matched as a single character. The non-dotAll spelling
-        // keeps java's behaviour, because restricting it would stop `/c./` matching at all where
-        // the code-unit semantics matches the leading surrogate.
+        // Without u or v, `.` is one *code unit*, which java.util.regex cannot express: whether it
+        // treats a surrogate half as its own unit or combines it with a following low surrogate into
+        // one supplementary code point depends on the *input text* at match time, not on how the
+        // pattern's class is written (verified directly: `[^\n\r  ]` and an explicit
+        // `[[^...]&&[\x{0}-\x{ffff}]]` BMP-only intersection both still combine a well-formed pair in
+        // the subject string into one code point for the class test - the intersection only manages
+        // to reject the combined result, it does not fall back to trying just the leading half).
+        // Restricting to BMP fixes the anchored `^.$` case (a lone supplementary character correctly
+        // fails to match) but breaks the far more common case of `.` landing on the *first* half of a
+        // well-formed pair mid-string (e.g. a search/match position after other text), where it must
+        // still consume something - the intersection matches nothing there instead of one code unit,
+        // which is worse. So the unrestricted spelling (matching the whole code point, i.e. the wrong
+        // length but the right position) stays: it wrongly overshoots but rarely disagrees with a
+        // find()-style caller that mostly cares about *where* a match starts, unlike the fully-
+        // restricted spelling.
         private String dot() {
             if (dotAll) {
                 return unicode ? "(?s:.)" : "[" + CODE_UNIT_BODY + "]";
@@ -493,8 +502,13 @@ public final class RegexTranslator {
             if (startsWith("(?")) {
                 return parseModifierGroup();
             }
+            // openedGroups is incremented only after the body is fully parsed (mirroring the named-group
+            // `opened` set below), so a backreference from inside the group's own body — direct or
+            // through nested groups — correctly sees itself as not-yet-participated (a forward
+            // reference matching the empty string) rather than already available.
+            final var names = parseWrapped("(");
             openedGroups++;
-            return parseWrapped("(");
+            return names;
         }
 
         private Set<String> parseWrapped(String opener) {
@@ -515,7 +529,6 @@ public final class RegexTranslator {
             validateGroupName(name);
             final var java = aliases.get(name).get(occurrenceOf(name));
             namedSeen++;
-            openedGroups++;
             out.append("(?<").append(java).append('>');
             pos = close + 1;
             final var names = parseDisjunction();
@@ -523,6 +536,7 @@ public final class RegexTranslator {
             out.append(')');
             // Only after the body: a reference to the group from inside itself cannot have
             // participated, so it is a forward reference matching the empty string.
+            openedGroups++;
             opened.add(java);
             final var declared = new LinkedHashSet<String>();
             declared.add(name);

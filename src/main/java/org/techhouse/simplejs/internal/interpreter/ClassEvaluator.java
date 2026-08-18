@@ -678,7 +678,7 @@ public final class ClassEvaluator {
 
     private JsValue superProtoRead(JsValue start, String key, JsValue thisArg) {
         if (start == null) {
-            return JsUndefined.getInstance();
+            throw new TypeErrorException("Cannot read properties of null (reading '" + key + "')");
         }
         final var found = interp.members().chainMember(start, key, thisArg);
         return found == null ? JsUndefined.getInstance() : found;
@@ -686,8 +686,11 @@ public final class ClassEvaluator {
 
     // GetSuperBase: the home object's [[Prototype]]. A base class or a plain object literal has none
     // of its own, so the chain starts at Object.prototype; `extends null` genuinely has no base, which
-    // RequireObjectCoercible rejects outright (unlike a plain object whose own [[Prototype]] happens to
-    // be unset, which this representation cannot distinguish from an explicit null proto).
+    // RequireObjectCoercible rejects outright. A plain object literal/method whose own [[Prototype]]
+    // was explicitly nulled (Object.setPrototypeOf(obj, null)) is the same case: GetSuperBase() is
+    // null, not the synthesised Object.prototype - JsObject.isProtoExplicitlyNull distinguishes that
+    // from "never set", mirroring the fix MemberEvaluator.getObjectMember applies for plain member
+    // reads.
     private JsValue superProtoStart(Environment env) {
         return superProtoStart(env, true);
     }
@@ -698,6 +701,12 @@ public final class ClassEvaluator {
     private JsValue superProtoStart(Environment env, boolean throwOnNullHeritage) {
         final var home = env.resolveHomeClass();
         if (home instanceof JsObject object) {
+            if (object.isProtoExplicitlyNull()) {
+                if (throwOnNullHeritage) {
+                    throw new TypeErrorException("Cannot read properties of null (reading '" + "')");
+                }
+                return null;
+            }
             final var proto = object.getProto();
             return proto == null ? interp.intrinsics().objectProto() : proto;
         }
@@ -755,7 +764,7 @@ public final class ClassEvaluator {
         if (right instanceof JsNativeFunction bound && bound.isBound()) {
             return evalInstanceof(left, bound.getBoundTarget());
         }
-        if (!(right instanceof JsClass) && !(right instanceof JsFunction) && !(right instanceof JsNativeFunction)) {
+        if (!isSpecCallable(right)) {
             throw new TypeErrorException("Right-hand side of 'instanceof' is not callable");
         }
         // OrdinaryHasInstance rejects a non-object left operand before it reads the prototype, so a
@@ -771,17 +780,47 @@ public final class ClassEvaluator {
         };
     }
 
+    // OrdinaryHasInstance's default behavior is reached only when IsCallable(C) is true; the spec
+    // notion of "callable" is broader than InterpreterUtils.isCallable (which excludes JsClass, since
+    // a class is never callable via a plain call) and also covers %Function.prototype% itself - a
+    // plain JsObject that Interpreter.callValue special-cases as callable (see the comment there) so
+    // it can stay exposed as a JsObject rather than a JsFunction/JsNativeFunction. Without this,
+    // `0 instanceof Function.prototype` and friends hit the "not callable" TypeError instead of
+    // OrdinaryHasInstance's own `Type(O) is not Object -> false` / prototype-getter semantics.
+    private boolean isSpecCallable(JsValue value) {
+        return value instanceof JsClass || isCallable(value)
+                || (value instanceof JsObject object && object == interp.intrinsics().functionProto());
+    }
+
     // OrdinaryHasInstance's own prototype-chain walk (step 6): [[GetPrototypeOf]] on a proxy runs
     // its trap (and enforces the extensible-target invariant), which a raw JsValue.getProto() read
     // can never see, so a proxy anywhere in the chain - including as `left` itself - has to be
     // dereferenced through the InterpreterOps seam rather than InterpreterUtils.hasInPrototypeChain.
     private boolean hasInPrototypeChain(JsValue left, JsValue prototype) {
-        for (var proto = protoOf(left); proto != null; proto = protoOf(proto)) {
+        var link = left;
+        for (var proto = protoOf(link); proto != null; proto = protoOf(link)) {
             if (proto == prototype) {
                 return true;
             }
+            link = proto;
         }
-        return false;
+        return endsInIntrinsicDefault(link, prototype);
+    }
+
+    // A JsObject whose own [[Prototype]] was never resolved (e.g. JsFunction.getPrototype's lazily
+    // created `prototype` object, which has no reason to know about the realm's Object.prototype) is
+    // the same "never set" vs. "deliberately null" ambiguity MemberEvaluator.getObjectMember resolves
+    // for property reads - it implicitly inherits the realm's type-default, so the raw walk above
+    // must not treat a merely-unset terminus as the true end of the chain. `Object.create(null)`
+    // remains a genuine dead end (isProtoExplicitlyNull is true there). One hop is enough: protoFor
+    // already answers objectProto for objectProto itself, so a second hop would never terminate -
+    // guarded by `fallback != link` rather than looping through protoOf again.
+    private boolean endsInIntrinsicDefault(JsValue link, JsValue prototype) {
+        if (!(link instanceof JsObject object) || object.isProtoExplicitlyNull()) {
+            return false;
+        }
+        final var fallback = interp.intrinsics().protoFor(object);
+        return fallback != object && (fallback == prototype || hasInPrototypeChain(fallback, prototype));
     }
 
     private JsValue protoOf(JsValue value) {

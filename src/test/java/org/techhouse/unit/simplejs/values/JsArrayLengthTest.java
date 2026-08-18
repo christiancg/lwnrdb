@@ -11,9 +11,11 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.PropertyDescriptor;
 
 public class JsArrayLengthTest {
@@ -95,5 +97,56 @@ public class JsArrayLengthTest {
         assertEquals(3,
                 num("const a = [1, 2, 3, 4];" + " Object.defineProperty(a, '2', {value: 3, configurable: false});"
                         + " try { a.length = 0; } catch (e) {} a.length"));
+    }
+
+    // ArrayDefineOwnProperty step 4.d: an index at or past the current length can't be added while
+    // "length" is non-writable, even though the same index redefinition would be fine on its own.
+    @Test
+    public void test_define_new_index_past_length_rejected_when_length_not_writable() {
+        final var array = array(3);
+        array.setLengthWritable(false);
+        assertThrows(TypeErrorException.class, () -> array.defineOwnProperty(new JsString("3"),
+                new PropertyDescriptor(new JsNumber(9), null, null, null, null, null)));
+        assertEquals(3, array.length());
+    }
+
+    // A redefine of an existing non-configurable accessor index is compatible (and so allowed) when
+    // it only repeats the current getter/setter identity, matching OrdinaryProperties' shared
+    // ValidateAndApplyPropertyDescriptor - the array-index path used to reject this unconditionally.
+    @Test
+    public void test_redefine_non_configurable_accessor_index_with_same_identity_is_allowed() {
+        final var array = array(1);
+        final var getter = new JsNativeFunction("getter", (_, _) -> JsUndefined.getInstance());
+        array.defineOwnProperty(new JsString("0"), new PropertyDescriptor(null, getter, null, null, false, false));
+        array.defineOwnProperty(new JsString("0"), new PropertyDescriptor(null, getter, null, null, null, null));
+        assertTrue(array.hasIndexAccessor(0));
+        assertEquals(getter, array.getIndexAccessorGetter(0));
+    }
+
+    // A generic descriptor (only enumerable/configurable, no get/set/value/writable) over an existing
+    // accessor index must not clobber the accessor - it only ever touches the flags.
+    @Test
+    public void test_generic_redefine_over_accessor_index_preserves_the_accessor() {
+        final var array = array(1);
+        final var getter = new JsNativeFunction("getter", (_, _) -> JsUndefined.getInstance());
+        array.defineOwnProperty(new JsString("0"), new PropertyDescriptor(null, getter, null, null, true, true));
+        array.defineOwnProperty(new JsString("0"), new PropertyDescriptor(null, null, null, null, false, null));
+        assertTrue(array.hasIndexAccessor(0));
+        assertEquals(getter, array.getIndexAccessorGetter(0));
+        assertFalse(array.getIndexFlags(0).enumerable());
+    }
+
+    // Documented boundary decision (see Hard blocker on 100%, plans/simplejs-test262-100-percent.md):
+    // JsArray stores one dense slot per index and refuses to represent the spec-legal length range up
+    // to 2^32-1, since a length that large is otherwise legal without ever allocating a matching
+    // number of real elements. Closing this needs a sparse/virtual-length representation that spans
+    // call sites outside JsArray (ArrayBuiltins' own int-capped newArray/createDataPropertyOrThrow,
+    // and InterpreterUtils.arrayIndex's Integer-typed index parsing consumed by MemberEvaluator/
+    // StatementEvaluator/Interpreter) - deliberately not attempted this pass. This test pins the
+    // current, intentional restriction so a future change is a conscious decision, not silent drift.
+    @Test
+    public void test_length_beyond_dense_capacity_is_a_documented_range_error() {
+        final var array = new JsArray();
+        assertThrows(RangeErrorException.class, () -> array.setLength(Integer.MAX_VALUE));
     }
 }

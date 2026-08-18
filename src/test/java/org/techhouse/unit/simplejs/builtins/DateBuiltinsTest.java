@@ -244,4 +244,26 @@ public class DateBuiltinsTest {
                 + " try { new Date(0)[Symbol.toPrimitive]('bogus'); } catch (e) { threw = e instanceof TypeError }"
                 + " threw"));
     }
+
+    // Reflect.construct(Date, args, newTarget) must link the new instance's prototype to
+    // newTarget.prototype (OrdinaryCreateFromConstructor), not always to the intrinsic
+    // Date.prototype - this is what makes `class X extends Date {}` and manual subclassing via
+    // Reflect.construct observe the right prototype chain and internal [[DateValue]] slot.
+    @Test
+    public void reflectConstructLinksNewTargetPrototype() {
+        assertTrue(bool("""
+                var callCount = 0;
+                var Ctor = function() { callCount += 1; };
+                var instance = Reflect.construct(Date, [64], Ctor);
+                Object.getPrototypeOf(instance) === Ctor.prototype
+                    && callCount === 0
+                    && Date.prototype.getTime.call(instance) === 64
+                """));
+    }
+
+    // A plain `new Date(...)` (no custom newTarget) still gets the ordinary Date.prototype.
+    @Test
+    public void plainNewKeepsDatePrototype() {
+        assertTrue(bool("Object.getPrototypeOf(new Date(0)) === Date.prototype"));
+    }
 }

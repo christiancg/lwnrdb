@@ -5,11 +5,9 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.USING
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.collectBoundNames;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.ownValue;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
@@ -153,6 +151,13 @@ public final class BindingEvaluator {
             }
         }
         if (isNullish(value)) {
+            // AddDisposableResource's null/undefined short-circuit is sync-dispose only; an
+            // `await using` of a nullish value still occupies a disposal slot (method undefined)
+            // so disposal performs the implied Await(undefined) - a real microtask tick - at scope
+            // exit.
+            if (async) {
+                env.registerDisposable(value, JsUndefined.getInstance(), true);
+            }
             return;
         }
         final var method = disposeMethod(value, async);
@@ -325,59 +330,69 @@ public final class BindingEvaluator {
             throw new TypeErrorException(
                     "Cannot destructure '" + JsCoercion.toStr(value) + "' as it is " + JsCoercion.toStr(value) + ".");
         }
-        final var taken = new HashSet<String>();
+        final var taken = new ArrayList<JsValue>();
         for (final var member : pattern.getProperties()) {
             if (member instanceof RestElement rest) {
                 final var restObject = new JsObject();
                 restObject.setProto(interp.intrinsics().objectProto());
-                if (value instanceof JsObject object) {
-                    for (final var key : object.keys()) {
-                        if (!taken.contains(key) && object.isEnumerable(key)) {
-                            restObject.set(key, ownValue(object, key, interp.ops()));
-                        }
-                    }
-                    for (final var symbol : object.symbolKeys()) {
-                        if (object.ownProperties().getSymbolFlags(symbol).enumerable()) {
-                            restObject.setSymbol(symbol, ownSymbolValue(object, symbol));
-                        }
-                    }
-                } else if (value instanceof JsString string) {
-                    // CopyDataProperties(target, ToObject(source), excluded): a string's exotic own
-                    // keys are its (enumerable) character indices - `length` is not enumerable, so it
-                    // is deliberately excluded here.
-                    final var text = string.getValue();
-                    for (var i = 0; i < text.length(); i++) {
-                        final var key = Integer.toString(i);
-                        if (!taken.contains(key)) {
-                            restObject.set(key, new JsString(String.valueOf(text.charAt(i))));
-                        }
-                    }
-                }
+                copyDataProperties(restObject, value, taken);
                 destructure(rest.getArgument(), restObject, env, leaf);
                 return;
             }
             final var property = (Property) member;
-            final var key = property.isComputed()
-                    ? JsCoercion.toStr(interp.eval(property.getKey(), env), interp.ops())
-                    : staticKeyName(property.getKey());
-            taken.add(key);
+            final var keyValue = property.isComputed()
+                    ? JsCoercion.toPropertyKey(interp.eval(property.getKey(), env), interp.ops())
+                    : new JsString(staticKeyName(property.getKey()));
+            taken.add(keyValue);
             // KeyedDestructuringAssignmentEvaluation resolves the target reference (lref) before
             // reading the source property's value: a leaf target (identifier/member expression) must
             // be prepared first, so a getter on the source object is never observed to run before the
             // target's own base/key expressions (e.g. `this` in a derived constructor's TDZ).
             final var target = prepareTarget(property.getValue(), env, leaf);
-            target.put(members.getMember(value, key));
+            target.put(interp.getMemberByKey(value, keyValue));
         }
     }
 
-    // An object-rest's copied symbol-keyed accessor must be read through its getter, mirroring
-    // ownValue's treatment of string-keyed accessors - JsObject cannot invoke its own accessors.
-    private JsValue ownSymbolValue(JsObject object, JsSymbol symbol) {
-        if (object.hasSymbolAccessor(symbol)) {
-            final var getter = object.getSymbolAccessorGetter(symbol);
-            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, object, List.of());
+    // CopyDataProperties(target, source, excludedNames): walks the source's real
+    // [[OwnPropertyKeys]]/[[GetOwnProperty]]/[[Get]] through the ops seam rather than enumerating
+    // its stored keys directly, so a Proxy source's trap order/values (including a getOwnKeys-only
+    // trap that never reaches "get" for an excluded or non-enumerable key) and a symbol-keyed
+    // accessor's getter are observed exactly like a conformant engine - the same shape as
+    // Object.assign's source walk.
+    private void copyDataProperties(JsObject target, JsValue source, List<JsValue> excludedNames) {
+        final var ops = interp.ops();
+        final var from = interp.intrinsics().toObject(source);
+        for (final var key : ops.ownKeys(from)) {
+            if (isExcludedKey(excludedNames, key)) {
+                continue;
+            }
+            if (!(ops.getOwnPropertyDescriptor(from, key) instanceof JsObject descriptor)
+                    || !JsCoercion.toBoolean(descriptor.get("enumerable"))) {
+                continue;
+            }
+            final var propValue = ops.getMember(from, key);
+            if (key instanceof JsSymbol symbol) {
+                target.setSymbol(symbol, propValue);
+            } else {
+                target.set(((JsString) key).getValue(), propValue);
+            }
         }
-        return object.getSymbol(symbol);
+    }
+
+    private boolean isExcludedKey(List<JsValue> excludedNames, JsValue key) {
+        for (final var excluded : excludedNames) {
+            if (sameKey(excluded, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean sameKey(JsValue a, JsValue b) {
+        if (a instanceof JsString sa && b instanceof JsString sb) {
+            return sa.getValue().equals(sb.getValue());
+        }
+        return a == b;
     }
 
     private LeafBinder declarationLeaf(String kind) {

@@ -16,6 +16,7 @@ import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -61,12 +62,32 @@ public final class DateBuiltins {
                 (thisArg,
                         args) -> JsNativeFunction.currentNewTarget() == null && !InterpreterUtils.isObjectLike(thisArg)
                                 ? new JsString(toDateString(System.currentTimeMillis()))
-                                : new JsDate(construct(args, ops)));
+                                : withNewTargetPrototype(new JsDate(construct(args, ops)), ops));
         date.setProperty("now", new JsNativeFunction("now", (_, _) -> new JsNumber(System.currentTimeMillis())));
         date.setProperty("parse", new JsNativeFunction("parse", (_, args) -> new JsNumber(parse(str(args, ops)))));
         date.setProperty("UTC",
                 new JsNativeFunction("UTC", (_, args) -> new JsNumber(timeClip(fromComponents(args, ops)))));
         return date;
+    }
+
+    // OrdinaryCreateFromConstructor: Reflect.construct(Date, args, Ctor) must link the new instance's
+    // [[Prototype]] to Ctor.prototype rather than always to the intrinsic Date.prototype (mirrors the
+    // same idiom TypedArrayBuiltins/JsArrayBuffer use for their own constructors). A `class X extends
+    // Date` super-call reaches this constructor with no new.target (see the branch above), so this
+    // path is exercised only by a direct/reflective `new`.
+    private static JsValue withNewTargetPrototype(JsDate constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return constructed;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
+            return constructed;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(constructed);
+        wrapper.setProto(requested);
+        return wrapper;
     }
 
     private static double construct(List<JsValue> args, InterpreterOps ops) {

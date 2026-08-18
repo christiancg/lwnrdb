@@ -175,4 +175,27 @@ public class InOperatorProgramTest {
     public void test_own_symbol_on_an_exotic_receiver() {
         assertTrue(bool("const s = Symbol('own'); const a = []; a[s] = 1; s in a"));
     }
+
+    // The left operand is evaluated before the right operand, so a side effect in the left operand
+    // (here, an assignment inside a sequence expression) is observable when the right operand is
+    // evaluated.
+    @Test
+    public void test_left_operand_evaluated_before_right_operand() {
+        final var source = """
+                var target = 0;
+                (target = Number, 'MAX_VALUE') in target
+                """;
+        assertTrue(bool(source));
+    }
+
+    // The same evaluation order the other way around: the right operand only sees the left
+    // operand's side effect, never a value captured before it ran.
+    @Test
+    public void test_right_operand_sees_left_operand_side_effect() {
+        final var source = """
+                var key = 'MAX_VALUE';
+                key in (key = 'none', Number)
+                """;
+        assertTrue(bool(source));
+    }
 }

@@ -55,6 +55,27 @@ public class InterpreterObjectTest {
         assertEquals(2, num("let a = {x: 1}; let b = {...a, y: 2}; b.y"));
     }
 
+    // CopyDataProperties must copy Symbol-keyed own properties too, invoking an accessor's getter
+    // (JsObject cannot invoke its own accessors, so spreadObject has to route through the ops seam)
+    // rather than reading the absent stored data value, and it must skip a non-enumerable one.
+    @Test
+    public void test_object_spread_copies_symbol_keyed_accessor() {
+        assertTrue(flag("""
+                var s = Symbol('k');
+                var o = {};
+                Object.defineProperty(o, s, { get: function() { return 'v'; }, enumerable: true });
+                let copy = {...o};
+                copy[s] === 'v'
+                """));
+        assertTrue(flag("""
+                var s = Symbol('k');
+                var o = {};
+                Object.defineProperty(o, s, { value: 'v', enumerable: false });
+                let copy = {...o};
+                copy[s] === undefined
+                """));
+    }
+
     // Spread expands arguments into a call
     @Test
     public void test_call_spread() {
@@ -522,5 +543,58 @@ public class InterpreterObjectTest {
         assertEquals("[\"f\",\"o\",\"o\"]",
                 str("var rest; ({...rest} = 'foo'); JSON.stringify([rest['0'], rest['1'], rest['2']])"));
         assertTrue(flag("var rest; ({...rest} = 51); rest instanceof Object"));
+    }
+
+    // Object spread's CopyDataProperties calls a Proxy source's traps in [[OwnPropertyKeys]] order,
+    // skips "get" for a non-enumerable key (per its "getOwnPropertyDescriptor" trap answer), and
+    // invokes a symbol-keyed accessor's getter rather than copying it unread.
+    @Test
+    public void test_object_spread_proxy_trap_order_and_symbol_getter() {
+        final var source = """
+                var calls = [];
+                var sym = Symbol('s');
+                var proxy = new Proxy({}, {
+                    ownKeys: function() { return ['a', 'b', sym]; },
+                    getOwnPropertyDescriptor: function(t, key) {
+                        calls.push('gopd:' + String(key));
+                        return { value: 1, enumerable: key !== 'b', configurable: true };
+                    },
+                    get: function(t, key) { calls.push('get:' + String(key)); return 42; },
+                });
+                var copy = { ...proxy };
+                JSON.stringify([calls, copy.a, copy.b, copy[sym]])
+                """;
+        assertEquals("[[\"gopd:a\",\"get:a\",\"gopd:b\",\"gopd:Symbol(s)\",\"get:Symbol(s)\"],42,null,42]",
+                str(source));
+    }
+
+    // Object rest destructuring never calls a Proxy's "getOwnPropertyDescriptor" trap for an
+    // excluded key (one already consumed by an earlier pattern property), matching
+    // object-rest-proxy-gopd-not-called-on-excluded-keys.js.
+    @Test
+    public void test_object_rest_proxy_skips_excluded_keys() {
+        final var source = """
+                var gopdKeys = [];
+                var proxy = new Proxy({}, {
+                    ownKeys: function() { return ['excluded', 'included']; },
+                    getOwnPropertyDescriptor: function(t, key) {
+                        gopdKeys.push(key);
+                        return { value: 1, enumerable: true, configurable: true };
+                    },
+                });
+                var { excluded, ...rest } = proxy;
+                JSON.stringify(gopdKeys)
+                """;
+        assertEquals("[\"included\"]", str(source));
+    }
+
+    // The __proto__-setting special case applies only to the plain colon form
+    // (`{__proto__: value}`); shorthand and method forms create an ordinary own property instead.
+    @Test
+    public void test_proto_special_case_excludes_shorthand_and_method() {
+        assertTrue(flag("var __proto__ = 2; var o = {__proto__, __proto__}; o.hasOwnProperty('__proto__')"));
+        assertEquals(2, num("var __proto__ = 2; var o = {__proto__}; o.__proto__"));
+        assertTrue(flag("var o = { __proto__() { return 1; } }; o.hasOwnProperty('__proto__')"));
+        assertFalse(flag("var p = {}; var o = {__proto__: p}; o.hasOwnProperty('__proto__')"));
     }
 }

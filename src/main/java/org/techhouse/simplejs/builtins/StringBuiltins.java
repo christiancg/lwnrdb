@@ -459,7 +459,13 @@ public final class StringBuiltins {
     }
 
     private static int localeCompare(String value, List<JsValue> args, InterpreterOps ops) {
-        return Integer.signum(java.text.Collator.getInstance(Locale.getDefault()).compare(value, str(args, 0, ops)));
+        // Spec requirement: strings that are canonically equivalent (per Unicode normalization) must
+        // compare as 0. `Collator.getInstance()` defaults to NO_DECOMPOSITION, which treats two
+        // differently-ordered combining-mark sequences for the same canonical text as unequal;
+        // CANONICAL_DECOMPOSITION is what makes the comparison normalization-aware.
+        final var collator = java.text.Collator.getInstance(Locale.getDefault());
+        collator.setDecomposition(java.text.Collator.CANONICAL_DECOMPOSITION);
+        return Integer.signum(collator.compare(value, str(args, 0, ops)));
     }
 
     private static String concat(String value, List<JsValue> args, InterpreterOps ops) {

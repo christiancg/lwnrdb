@@ -190,6 +190,30 @@ public class InterpreterClassTest {
         assertEquals("true,false", str(source));
     }
 
+    // A plain function's instances reach Object.prototype through the function's own (lazily
+    // created) `prototype` object, which never gets its own [[Prototype]] wired to Object.prototype
+    // at creation - the walk itself must still resolve it as the realm type-default, not stop short.
+    @Test
+    public void test_instanceof_plain_function_instance_reaches_object_prototype() {
+        assertTrue(bool("function F(){}; new F() instanceof Object"));
+        assertFalse(bool("function F(){}; new F() instanceof Function"));
+    }
+
+    // %Function.prototype% is itself callable per spec (IsCallable is true, though calling it is a
+    // no-op) even though it is a plain JsObject, not a JsFunction/JsNativeFunction - so it must not
+    // hit the generic "not callable" TypeError; OrdinaryHasInstance's own steps take over from there.
+    @Test
+    public void test_instanceof_function_prototype_as_rhs() {
+        assertFalse(bool("0 instanceof Function.prototype"));
+        assertTrue(bool("""
+                var getterCalled = false;
+                Object.defineProperty(Function.prototype, 'prototype', {
+                    get: function() { getterCalled = true; return Array.prototype; }
+                });
+                ([] instanceof Function.prototype) && getterCalled
+                """));
+    }
+
     // instanceof walks the class heritage chain
     @Test
     public void test_instanceof() {
@@ -288,6 +312,44 @@ public class InterpreterClassTest {
                 }
                 Sub.viaRead()
                 """));
+    }
+
+    // GetSuperBase() is the home object's own [[Prototype]]: when that has been explicitly nulled
+    // (Object.setPrototypeOf(obj, null)), RequireObjectCoercible must throw a TypeError rather than
+    // falling back to Object.prototype (which would happen if "never set" and "deliberately null"
+    // proto were conflated) or silently answering undefined.
+    @Test
+    public void test_super_property_read_on_null_proto_home_throws() {
+        final var dotRead = """
+                var obj = { method() { return super.x; } };
+                Object.setPrototypeOf(obj, null);
+                obj.method()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(dotRead));
+        final var bracketRead = """
+                var obj = { method() { return super['x']; } };
+                Object.setPrototypeOf(obj, null);
+                obj.method()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(bracketRead));
+    }
+
+    // A spread argument to super(...) must CopyDataProperties in [[OwnPropertyKeys]] order,
+    // including Symbol-keyed accessor properties - a Symbol key's getter has to actually run, not
+    // just be skipped because JsObject cannot invoke its own accessors without the ops seam.
+    @Test
+    public void test_super_call_spread_copies_symbol_keyed_accessor() {
+        final var source = """
+                var s = Symbol('foo');
+                var o = {};
+                var called = false;
+                Object.defineProperty(o, s, { get: function() { called = true; return 'bar'; }, enumerable: true });
+                class Base { constructor(obj) { this.gotSymbol = obj[s] === 'bar'; } }
+                class Sub extends Base { constructor() { super({...o}); } }
+                var result = new Sub();
+                (result.gotSymbol && called)
+                """;
+        assertTrue(bool(source));
     }
 
     // Extending a non-constructor throws a TypeError
@@ -802,6 +864,24 @@ public class InterpreterClassTest {
                 JSON.stringify([result, object._x, Object.getPrototypeOf(object)._x])
                 """;
         assertEquals("[1,1,0]", str(source));
+    }
+
+    // `delete super[expr]` resolves GetThisBinding (the base of the super reference) before
+    // evaluating the computed key expression: in a derived constructor whose `this` is still
+    // uninitialised, that resolution throws immediately, so a `super()` call nested inside the key
+    // expression never gets a chance to run (and so never initialises `this`).
+    @Test
+    public void test_delete_super_computed_checks_this_before_evaluating_key() {
+        final var source = """
+                class Base {
+                    constructor() { throw new Error('base constructor called'); }
+                }
+                class Derived extends Base {
+                    constructor() { delete super[(super(), 0)]; }
+                }
+                new Derived();
+                """;
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run(source));
     }
 
     // GetSuperBase() is captured before a computed super-member key is coerced/evaluated, so a

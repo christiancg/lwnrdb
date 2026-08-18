@@ -208,4 +208,22 @@ public class MathBuiltinsTest {
     public void test_sum_precise_generator() {
         assertEquals(6, num("function* g() { yield 1; yield 2; yield 3; } Math.sumPrecise(g())"));
     }
+
+    // f16round must not double-round through an intermediate float32: a double one ULP above the
+    // exact float16 halfway point (2^-25) has to round up to the smallest float16 subnormal (2^-24),
+    // not collapse to 0 the way a naive (float) cast followed by Float.floatToFloat16 would.
+    @Test
+    public void test_f16round_avoids_double_rounding() {
+        assertEquals(0, num("Math.f16round(2.9802322387695312e-8)"), "exact half rounds down to 0 (ties to even)");
+        assertEquals(5.960464477539063e-8, num("Math.f16round(2.980232238769532e-8)"),
+                "one ULP above the tie rounds up to the smallest subnormal");
+    }
+
+    // ordinary values still round the same as before
+    @Test
+    public void test_f16round_basic() {
+        assertEquals(1, num("Math.f16round(1)"));
+        assertEquals(0.5, num("Math.f16round(0.5)"));
+        assertTrue(bool("Number.isNaN(Math.f16round(NaN))"));
+    }
 }

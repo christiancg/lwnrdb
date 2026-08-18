@@ -400,6 +400,54 @@ public class InterpreterProgramTest {
         assertEquals("a\\n1b", str("String.raw`a\\n${1}b`"));
     }
 
+    // GetTemplateObject caches the strings array by call-site (parse node) identity: evaluating the
+    // same tagged template twice - even across different invocations of the enclosing function -
+    // yields the very same array object both times.
+    @Test
+    public void test_tagged_template_same_site_is_cached() {
+        final var source = """
+                let first = null;
+                let second = null;
+                function t(s) { return s; }
+                function run(sink) { sink(t`x${1}y`); }
+                run(v => first = v);
+                run(v => second = v);
+                first === second ? 'true' : 'false'
+                """;
+        assertEquals("true", str(source));
+    }
+
+    // A textually different call site never shares the cached array, even when its cooked/raw
+    // content happens to coincide with another site's.
+    @Test
+    public void test_tagged_template_different_site_is_not_cached() {
+        final var source = """
+                function t(s) { return s; }
+                const a = t`x`;
+                const b = t`x`;
+                a === b ? 'true' : 'false'
+                """;
+        assertEquals("false", str(source));
+    }
+
+    // The "raw" companion is a non-enumerable, non-writable, non-configurable own property, so it
+    // is absent from Object.keys/JSON.stringify and a plain write to it is silently rejected.
+    @Test
+    public void test_tagged_template_raw_is_non_enumerable() {
+        final var source = """
+                function t(s) { return s; }
+                const strings = t`a${1}b`;
+                const descriptor = Object.getOwnPropertyDescriptor(strings, 'raw');
+                JSON.stringify([
+                    Object.keys(strings).includes('raw'),
+                    descriptor.enumerable,
+                    descriptor.writable,
+                    descriptor.configurable,
+                ])
+                """;
+        assertEquals("[false,false,false,false]", str(source));
+    }
+
     // classic for (let ...) closures capture a fresh per-iteration binding
     @Test
     public void test_classic_for_let_per_iteration_binding() {
@@ -475,5 +523,61 @@ public class InterpreterProgramTest {
         assertEquals(1, num("switch (0) { case 1: var d = 2; } d === undefined ? 1 : 0"));
         assertEquals(1, num("try { } finally { } l: { var e = 2; } e === 2 ? 1 : 0"));
         assertEquals(1, num("function f() { if (false) { var g = 2; } return g === undefined ? 1 : 0; } f()"));
+    }
+
+    // `typeof` only suppresses ReferenceError for a truly unresolvable reference (GetValue is never
+    // reached). A `let`/`const` binding that exists but is still in its TDZ is resolvable, so
+    // GetValue runs and its ReferenceError is not swallowed - unlike a name that was never declared.
+    @Test
+    public void test_typeof_throws_for_tdz_binding_but_not_for_undeclared_name() {
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run("(function() { typeof x; let x; })()"));
+        assertEquals("undefined", str("typeof neverDeclaredAnywhere"));
+    }
+
+    // ForIn/OfHeadEvaluation creates the lexical binding for a ForDeclaration's name(s) - still
+    // uninitialised - before evaluating the source expression, so a closure created while
+    // evaluating that expression captures the head's TDZ binding rather than an outer same-named
+    // variable; `typeof` on that captured binding still throws (it is resolvable, just
+    // uninitialised) rather than resolving to the outer value or silently reporting "undefined".
+    @Test
+    public void test_for_in_head_expression_sees_uninitialized_loop_binding() {
+        final var source = """
+                let x = 'outside';
+                let probeExpr;
+                for (let [x] in { i: probeExpr = function() { typeof x; } }) {}
+                let threw = false;
+                try { probeExpr(); } catch (e) { threw = e instanceof ReferenceError; }
+                threw ? 'true' : 'false'
+                """;
+        assertEquals("true", str(source));
+    }
+
+    // ResolveBinding for a plain identifier assignment target runs before the right-hand side is
+    // evaluated: an assignment that becomes resolvable only because the right-hand side just
+    // created the same-named global (`this.undeclared = 5`) still throws, since PutValue acts on
+    // the resolution captured before that side effect ran.
+    @Test
+    public void test_assignment_target_resolved_before_right_hand_side_creates_it() {
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run("undeclared = (this.undeclared = 5);"));
+    }
+
+    // An `await using` of a nullish resource still implies an Await when the declaration's scope
+    // exits (CreateDisposableResource/Dispose keep a no-op resource on the stack for the
+    // async-dispose hint even though no dispose method is ever called), so statements after the
+    // block run in a later microtask rather than synchronously.
+    @Test
+    public void test_await_using_nullish_still_implies_a_microtask_tick() {
+        final var source = """
+                let sameMicrotask = true;
+                let observedAfterBlock = null;
+                async function f() {
+                    { await using _ = null; }
+                    observedAfterBlock = sameMicrotask;
+                }
+                f();
+                sameMicrotask = false;
+                observedAfterBlock ? 'true' : 'false'
+                """;
+        assertEquals("false", str(source));
     }
 }

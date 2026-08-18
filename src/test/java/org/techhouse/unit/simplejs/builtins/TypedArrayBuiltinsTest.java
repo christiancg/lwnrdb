@@ -38,6 +38,40 @@ public class TypedArrayBuiltinsTest {
         assertEquals("RangeError", caught("new ArrayBuffer(0).transfer(9007199254740992)"));
     }
 
+    // AllocateArrayBuffer order: OrdinaryCreateFromConstructor (observing new.target's "prototype",
+    // which a getter can make throw) runs before CreateByteDataBlock, so a length that would
+    // otherwise RangeError loses to a throwing prototype getter.
+    @Test
+    public void test_array_buffer_prototype_getter_wins_over_allocation_range_error() {
+        assertEquals("DummyError", str("""
+                function DummyError() {}
+                var newTarget = Object.defineProperty(function(){}.bind(null), 'prototype', {
+                    get: function() { throw new DummyError(); }
+                });
+                let caught = 'none';
+                try { Reflect.construct(ArrayBuffer, [7 * 1125899906842624], newTarget); }
+                catch (e) { caught = e.constructor.name; }
+                caught
+                """));
+    }
+
+    // But the byteLength-vs-maxByteLength comparison is a plain numeric check that runs *before*
+    // OrdinaryCreateFromConstructor, so it wins over a throwing prototype getter.
+    @Test
+    public void test_array_buffer_max_byte_length_check_precedes_prototype_observation() {
+        assertEquals("RangeError,0", str("""
+                let getterCalls = 0;
+                let newTarget = Object.defineProperty(function(){}.bind(null), 'prototype', {
+                    get: function() { getterCalls += 1; throw new Test262LikeError(); }
+                });
+                function Test262LikeError() {}
+                let caught = 'none';
+                try { Reflect.construct(ArrayBuffer, [10, { maxByteLength: 0 }], newTarget); }
+                catch (e) { caught = e instanceof RangeError ? 'RangeError' : 'other'; }
+                [caught, getterCalls].join(',')
+                """));
+    }
+
     // an in-range allocation still works, and an absent/undefined length is zero
     @Test
     public void test_ordinary_lengths_still_allocate() {
@@ -402,6 +436,28 @@ public class TypedArrayBuiltinsTest {
         assertEquals("0,0", str(
                 "const ta = new Uint8Array(0); const r = ta.setFromBase64('#');" + "[r.read, r.written].join(',')"));
         assertEquals("TypeError", caught(DETACHED + "new Uint8Array(new ArrayBuffer(0)).setFromBase64(1)"));
+    }
+
+    // The receiver's buffer can be detached mid-call by an options getter (`alphabet`); the detached
+    // check has to be re-run right before writing bytes, not just once up front, else the write loop
+    // would silently no-op instead of throwing.
+    @Test
+    public void test_set_from_base64_rechecks_detach_after_options_getter() {
+        assertEquals("TypeError,1", str("""
+                var target = new Uint8Array([255, 255, 255]);
+                var getterCalls = 0;
+                var options = {};
+                Object.defineProperty(options, 'alphabet', {
+                    get: function() {
+                        getterCalls += 1;
+                        target.buffer.transfer();
+                        return 'base64';
+                    }
+                });
+                let caught = 'none';
+                try { target.setFromBase64('Zg==', options); } catch (e) { caught = e.name; }
+                [caught, getterCalls].join(',')
+                """));
     }
 
     // toBase64/toHex read their options once and reject a detached receiver

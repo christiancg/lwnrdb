@@ -7,12 +7,13 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNul
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.numericOld;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.shouldNotApplyLogical;
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.spreadObject;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stringCodePoints;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
@@ -53,6 +54,7 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.PropertyDescriptor;
 
 // Expression evaluation for the operator, assignment and literal-construction grammar: templates
 // and tagged templates, array/object literals with spread and accessors, unary/binary/logical/
@@ -63,6 +65,12 @@ public final class ExpressionEvaluator {
     private final Interpreter interp;
     private final ClassEvaluator classes;
     private final ProxyDispatch proxies;
+
+    // GetTemplateObject's realm-scoped [[TemplateMap]]: one ExpressionEvaluator lives per
+    // Interpreter (one per script run/realm), so keying by the TemplateLiteral parse node's
+    // identity here reproduces "same Parse Node as templateLiteral" without needing state on the
+    // node itself or on Interpreter.
+    private final Map<TemplateLiteral, JsArray> templateCache = new IdentityHashMap<>();
 
     public ExpressionEvaluator(Interpreter interp, ClassEvaluator classes, ProxyDispatch proxies) {
         this.interp = interp;
@@ -100,6 +108,19 @@ public final class ExpressionEvaluator {
             function = interp.eval(tag, env);
         }
         final var quasi = tagged.getQuasi();
+        final var strings = templateCache.computeIfAbsent(quasi, this::buildTemplateStrings);
+        final var args = new ArrayList<JsValue>();
+        args.add(strings);
+        for (final var expression : quasi.getExpressions()) {
+            args.add(interp.eval(expression, env));
+        }
+        return interp.callValue(function, thisArg, args);
+    }
+
+    // GetTemplateObject's array construction: the "raw" companion is a non-enumerable,
+    // non-writable, non-configurable own property (distinct from the cooked elements, which stay
+    // enumerable per CreateArrayFromList before the whole object is frozen).
+    private JsArray buildTemplateStrings(TemplateLiteral quasi) {
         final var strings = new JsArray();
         final var raw = new JsArray();
         for (final var cooked : quasi.getQuasis()) {
@@ -109,14 +130,10 @@ public final class ExpressionEvaluator {
             raw.push(new JsString(rawQuasi));
         }
         raw.freeze();
-        strings.setProperty("raw", raw);
+        strings.defineOwnProperty(new JsString("raw"),
+                PropertyDescriptor.data(raw, new JsObject.PropertyFlags(false, false, false)));
         strings.freeze();
-        final var args = new ArrayList<JsValue>();
-        args.add(strings);
-        for (final var expression : quasi.getExpressions()) {
-            args.add(interp.eval(expression, env));
-        }
-        return interp.callValue(function, thisArg, args);
+        return strings;
     }
 
     public JsValue evalArray(ArrayExpression array, Environment env) {
@@ -160,7 +177,7 @@ public final class ExpressionEvaluator {
         homeScope.defineHomeClass(result);
         for (final var member : object.getProperties()) {
             if (member instanceof SpreadElement spread) {
-                spreadObject(result, interp.eval(spread.getArgument(), env), interp.ops());
+                copySpreadProperties(result, interp.eval(spread.getArgument(), env));
                 continue;
             }
             if (!(member instanceof Property property)) {
@@ -199,9 +216,13 @@ public final class ExpressionEvaluator {
             }
             final var name = staticKeyName(property.getKey());
             final var evaluated = markIfMethod(interp.eval(value, scope), concise);
-            // PropertyDefinitionEvaluation skips NamedEvaluation for the proto setter, so an
+            // The __proto__-setting special case is defined only for
+            // `PropertyDefinition : PropertyName : AssignmentExpression` (the plain colon form) -
+            // the shorthand (`{__proto__}`) and method (`{__proto__(){}}`) productions create an
+            // ordinary own property named "__proto__" instead, so both are excluded here.
+            // PropertyDefinitionEvaluation also skips NamedEvaluation for the proto setter, so an
             // anonymous function assigned to `__proto__` is not named after the key.
-            if (!accessor && "__proto__".equals(name)) {
+            if (!accessor && "__proto__".equals(name) && "init".equals(property.getKind()) && !property.isShorthand()) {
                 setLiteralProto(result, evaluated);
                 continue;
             }
@@ -231,6 +252,31 @@ public final class ExpressionEvaluator {
             function.markMethod();
         }
         return value;
+    }
+
+    // CopyDataProperties(target, source, []) - the property source for `...expr` in an object
+    // literal: walk the source's real [[OwnPropertyKeys]]/[[GetOwnProperty]]/[[Get]] through the
+    // ops seam (the same shape as Object.assign's source walk) instead of enumerating the source's
+    // stored keys directly, so a Proxy source's trap order/values and a symbol-keyed accessor's
+    // getter are observed exactly like a conformant engine. `undefined`/`null` is a documented no-op.
+    private void copySpreadProperties(JsObject target, JsValue source) {
+        if (isNullish(source)) {
+            return;
+        }
+        final var ops = interp.ops();
+        final var from = interp.intrinsics().toObject(source);
+        for (final var key : ops.ownKeys(from)) {
+            if (!(ops.getOwnPropertyDescriptor(from, key) instanceof JsObject descriptor)
+                    || !JsCoercion.toBoolean(descriptor.get("enumerable"))) {
+                continue;
+            }
+            final var value = ops.getMember(from, key);
+            if (key instanceof JsSymbol symbol) {
+                target.setSymbol(symbol, value);
+            } else {
+                target.set(((JsString) key).getValue(), value);
+            }
+        }
     }
 
     // A non-computed `__proto__` in an object literal sets the prototype instead of creating a
@@ -278,13 +324,15 @@ public final class ExpressionEvaluator {
         return JsOperators.unary(operator, interp.eval(unary.getArgument(), env), interp.ops());
     }
 
+    // typeof only suppresses ReferenceError for an unresolvable reference (GetValue is never
+    // called); a binding that exists but is still in its TDZ is resolvable, so GetValue - and its
+    // ReferenceError - runs as normal.
     private JsValue evalTypeof(Expression argument, Environment env) {
         if (argument instanceof Identifier id) {
-            try {
-                return new JsString(JsCoercion.typeOf(env.get(id.getName())));
-            } catch (ReferenceErrorException ignored) {
+            if (!env.isDeclared(id.getName())) {
                 return new JsString("undefined");
             }
+            return new JsString(JsCoercion.typeOf(env.get(id.getName())));
         }
         return new JsString(JsCoercion.typeOf(interp.eval(argument, env)));
     }
@@ -296,8 +344,12 @@ public final class ExpressionEvaluator {
             return JsBoolean.TRUE;
         }
         // `delete super.x` is a super reference, and deleting one is a ReferenceError at runtime
-        // rather than an early error, so the base and the key are evaluated first.
+        // rather than an early error, so the base and the key are evaluated first - but the base
+        // (GetThisBinding) resolves before the key, so a still-uninitialised `this` in a derived
+        // constructor throws before the key expression's side effects (e.g. the super() call that
+        // would have initialised it) ever run.
         if (member.getObject() instanceof SuperExpression) {
+            env.resolveThis();
             interp.memberKeyValue(member, env);
             throw new ReferenceErrorException("Unsupported reference to 'super'");
         }
@@ -435,8 +487,12 @@ public final class ExpressionEvaluator {
                 interp.ops());
     }
 
+    // RelationalExpression: lref/lval are resolved before rref/rval, so the left operand's side
+    // effects (an assignment, a sequence expression) are observable in the right operand.
     private JsValue evalIn(BinaryExpression binary, Environment env) {
-        return JsBoolean.of(interp.hasMember(interp.eval(binary.getRight(), env), interp.eval(binary.getLeft(), env)));
+        final var key = interp.eval(binary.getLeft(), env);
+        final var target = interp.eval(binary.getRight(), env);
+        return JsBoolean.of(interp.hasMember(target, key));
     }
 
     public JsValue evalLogical(LogicalExpression logical, Environment env) {
@@ -475,8 +531,16 @@ public final class ExpressionEvaluator {
     private JsValue assignToIdentifier(String name, AssignmentExpression assignment, Environment env) {
         final var operator = assignment.getOperator();
         if ("=".equals(operator)) {
+            // The target reference is resolved (ResolveBinding) before the right-hand side is
+            // evaluated, so an assignment that becomes resolvable only as a side effect of
+            // evaluating the right-hand side (`undeclared = (this.undeclared = 5)`) still throws:
+            // PutValue acts on the resolution captured up front, not a re-resolution afterwards.
+            final var resolvable = env.isDeclared(name);
             final var value = interp.eval(assignment.getValue(), env);
             InterpreterUtils.applyInferredName(assignment.getValue(), value, name);
+            if (!resolvable) {
+                throw new ReferenceErrorException(name + " is not defined");
+            }
             env.assign(name, value);
             return value;
         }

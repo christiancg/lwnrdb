@@ -269,6 +269,17 @@ public class StringBuiltinsTest {
         assertTrue(num("'a'.localeCompare('á')") < 0);
     }
 
+    // Spec requirement: strings that are canonically equivalent per Unicode normalization must
+    // compare as 0, even when the underlying combining-mark order differs. Collator.getInstance()
+    // defaults to NO_DECOMPOSITION, which would treat these as unequal without explicitly requesting
+    // CANONICAL_DECOMPOSITION.
+    @Test
+    public void test_locale_compare_canonical_equivalence() {
+        assertEquals(0, num("'\\u00E4\\u0323'.localeCompare('a\\u0323\\u0308')"),
+                "a-with-diaeresis + dot-below == a + dot-below + diaeresis");
+        assertEquals(0, num("'\\u00C7'.localeCompare('C\\u0327')"), "C-with-cedilla == C + combining cedilla");
+    }
+
     // String.fromCharCode and fromCodePoint build strings from code units/points
     @Test
     public void test_fromcharcode_fromcodepoint() {

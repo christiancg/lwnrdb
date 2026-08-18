@@ -201,6 +201,18 @@ public final class InterpreterUtils {
         return object.get(key);
     }
 
+    // Symbol-keyed counterpart to ownValue: a symbol-keyed accessor (installed e.g. via
+    // Object.defineProperty(obj, aSymbol, {get(){...}})) must be read through its getter too, mirrored
+    // from BindingEvaluator's private ownSymbolValue so CopyDataProperties call sites outside that
+    // class (object-literal/call-argument spread) invoke it as well instead of reading the (absent)
+    // stored data value.
+    public static JsValue ownSymbolValue(JsObject object, JsSymbol symbol, InterpreterOps ops) {
+        if (ops != null && object.hasSymbolAccessor(symbol)) {
+            return ops.getMember(object, symbol);
+        }
+        return object.getSymbol(symbol);
+    }
+
     public static void spreadObject(JsObject target, JsValue source, InterpreterOps ops) {
         switch (source) {
             case JsObject object -> {
@@ -210,7 +222,9 @@ public final class InterpreterUtils {
                     }
                 }
                 for (final var symbol : object.symbolKeys()) {
-                    target.setSymbol(symbol, object.getSymbol(symbol));
+                    if (object.ownProperties().getSymbolFlags(symbol).enumerable()) {
+                        target.setSymbol(symbol, ownSymbolValue(object, symbol, ops));
+                    }
                 }
             }
             case JsArray array -> {
@@ -346,23 +360,6 @@ public final class InterpreterUtils {
         }
     }
 
-    public static List<JsValue> objectOwnKeys(JsObject object) {
-        final var keys = new ArrayList<JsValue>();
-        for (final var key : object.keys()) {
-            keys.add(new JsString(key));
-        }
-        return keys;
-    }
-
-    public static List<JsValue> arrayOwnKeys(JsArray array) {
-        final var keys = new ArrayList<JsValue>();
-        for (var i = 0; i < array.length(); i++) {
-            keys.add(new JsString(Integer.toString(i)));
-        }
-        keys.add(new JsString("length"));
-        return keys;
-    }
-
     public static boolean arrayHasMember(JsArray array, String key) {
         if ("length".equals(key)) {
             return true;
@@ -373,15 +370,6 @@ public final class InterpreterUtils {
 
     public static boolean deleteArrayElement(JsArray array, String key) {
         return array.deleteOwnProperty(new JsString(key));
-    }
-
-    public static boolean hasInPrototypeChain(JsValue left, JsValue prototype) {
-        for (var proto = left.getProto(); proto != null; proto = proto.getProto()) {
-            if (proto == prototype) {
-                return true;
-            }
-        }
-        return false;
     }
 
     // HasProperty's per-link test. A [[Prototype]] may be any object-like value, so only a plain

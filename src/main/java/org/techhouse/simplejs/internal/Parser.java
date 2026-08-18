@@ -1485,6 +1485,9 @@ public final class Parser {
             while (op != null && ParserTables.BINARY_PRECEDENCE.get(op) >= minPrec) {
                 final int prec = ParserTables.BINARY_PRECEDENCE.get(op);
                 advance();
+                if ("in".equals(op) && left instanceof PrivateIdentifier) {
+                    rejectPrivateInRhs();
+                }
                 final int nextMinPrec = "**".equals(op) ? prec : prec + 1;
                 final var right = parseBinary(nextMinPrec);
                 if (ParserTables.LOGICAL_OPERATORS.contains(op)) {
@@ -1508,6 +1511,23 @@ public final class Parser {
             final var inner = logical.getOperator();
             if ("??".equals(op) != "??".equals(inner)) {
                 throw new SyntaxErrorException("Cannot chain '" + inner + "' with '" + op + "' without parentheses");
+            }
+        }
+
+        // RelationalExpression : PrivateIdentifier in ShiftExpression restricts the right operand to
+        // ShiftExpression grade - a production PrivateIdentifier itself is never part of (it is only
+        // ever valid as this very production's own left operand), and an unparenthesised arrow
+        // function is AssignmentExpression grade, likewise excluded. Both slip past the ordinary
+        // precedence ladder because parsePrimary's fallback chain recognises a bare private name (when
+        // immediately followed by `in`) and an arrow head at any precedence level, not just when
+        // grammatically valid there - so the two malformed shapes are rejected explicitly, up front,
+        // before attempting to parse a right operand that would otherwise wrongly succeed.
+        private void rejectPrivateInRhs() {
+            if (current().getType() == JsType.PRIVATE_IDENTIFIER) {
+                throw new SyntaxErrorException("Unexpected private field in right-hand side of 'in'");
+            }
+            if (startsArrowFunction()) {
+                throw new SyntaxErrorException("Unexpected arrow function in right-hand side of 'in'");
             }
         }
 

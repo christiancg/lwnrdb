@@ -41,6 +41,24 @@ public class ParserEarlyErrorTest {
         assertThrows(SyntaxErrorException.class, () -> parse("class C extends (this.#x) { #x; }"));
     }
 
+    // RelationalExpression : PrivateIdentifier in ShiftExpression - the right operand is restricted
+    // to ShiftExpression grade. A bare (unparenthesised) private name is never itself a valid
+    // ShiftExpression, so it cannot recur as the right operand of another `in`, and an arrow function
+    // is AssignmentExpression grade so it cannot appear there unparenthesised either. Both shapes must
+    // fail at parse time, not surface as a runtime error once the declared #field is otherwise valid.
+    @Test
+    public void test_private_in_restricts_right_operand_to_shift_expression() {
+        assertThrows(SyntaxErrorException.class,
+                () -> parse("class C { #field; constructor() { #field in #field in this; } }"));
+        assertThrows(SyntaxErrorException.class,
+                () -> parse("class C { #field; constructor() { #field in () => {}; } }"));
+        // Parenthesising either restricted shape falls back to ordinary expression grammar, which is
+        // fine: a parenthesised RelationalExpression/ArrowFunction is a valid PrimaryExpression.
+        assertEquals(Program.class,
+                parse("class C { #field; constructor() { #field in (#field in this); } }").getClass());
+        assertEquals(Program.class, parse("class C { #field; constructor() { #field in (() => {}); } }").getClass());
+    }
+
     // Every name a class body declares is in scope for the whole body, nested classes included
     @Test
     public void test_declared_private_name_parses() {

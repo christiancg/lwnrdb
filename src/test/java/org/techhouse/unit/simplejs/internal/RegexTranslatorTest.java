@@ -246,6 +246,23 @@ public class RegexTranslatorTest {
         assertTrue(matches("\\1(A)", "", "AA"));
     }
 
+    // A numbered backreference *inside its own group's body* (a self-reference before the group has
+    // closed) is a forward reference too and must match the empty string, exactly like a
+    // backreference lexically before the group. This tracks groups closed so far by incrementing the
+    // "opened" count only *after* a group's body is parsed (mirroring the named-group `opened` set)
+    // rather than as soon as the group is entered - the latter would incorrectly treat the group as
+    // already available to itself.
+    @Test
+    public void treatsASelfReferentialBackreferenceInsideItsOwnGroupAsTheEmptyString() {
+        assertTrue(fullMatch("(abc\\1)", "", "abc"));
+        assertFalse(fullMatch("(abc\\1)", "", "abcabc"));
+        // A sibling group that closed earlier is available to a numbered backreference nested deeper.
+        assertTrue(fullMatch("(a)(b\\1)", "", "aba"));
+        // A backreference to an outer group from inside its own nested child is still a forward
+        // reference (the outer group has not closed yet either).
+        assertTrue(fullMatch("(a(b\\1))", "", "ab"));
+    }
+
     @Test
     public void rejectsAReferenceToAnUndeclaredGroupName() {
         rejects("(?<a>x)\\k<b>", "");

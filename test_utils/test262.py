@@ -63,8 +63,6 @@ IGNORED_FLAGS = {"generated", "CanBlockIsFalse", "CanBlockIsTrue", "non-determin
 # filter, the prelude or the verdict logic is wrong — not that the engine improved.
 DIVERGENCES = [
     ("descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor)", ["built-ins/Object/defineProperty/"]),
-    ("instanceof survives F.prototype reassignment", ["language/expressions/instanceof/"]),
-    ("tagged template strings array not per-site cached", ["language/expressions/tagged-template/"]),
     ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
 ]
 # A row is deleted in the same commit that closes its divergence, naming the test id that now passes.
@@ -72,10 +70,13 @@ DIVERGENCES = [
 # "all green" is the expected state, not the alarm.
 # Rows are removed from the list above as their divergence is closed. A row only asserts that *some*
 # test under its prefix still fails, so a stale one keeps passing on an unrelated failure and quietly
-# becomes a false claim about the engine - the six dropped so far (String(symbol) throwing,
+# becomes a false claim about the engine - the eight dropped so far (String(symbol) throwing,
 # Reflect.ownKeys omitting symbols, shallow primitive wrappers, typed arrays lacking the
-# integer-indexed internals, regex named-group limitations, Object.assign bypassing a setter) were
-# each verified fixed by probe first.
+# integer-indexed internals, regex named-group limitations, Object.assign bypassing a setter,
+# instanceof surviving F.prototype reassignment - closed by primitive-prototype-with-primitive.js
+# passing, and tagged template strings now cached per call site - closed by
+# cache-same-site.js/cache-different-functions-same-site.js/cache-same-site-top-level.js passing)
+# were each verified fixed by probe first.
 
 
 class HarnessError(RuntimeError):

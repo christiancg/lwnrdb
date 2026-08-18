@@ -392,12 +392,95 @@ public final class JsArray extends JsValue {
         if (index == null) {
             return super.defineOwnProperty(key, descriptor);
         }
-        if (descriptor.isAccessorDescriptor()) {
-            defineIndexAccessorFrom(index, descriptor);
-        } else {
-            defineIndexFrom(index, name, descriptor);
+        // ArrayDefineOwnProperty step 4.d: an index at or past the current length can't be added
+        // (growing the array) while "length" itself is non-writable.
+        if (index >= elements.size() && !lengthFlags.writable()) {
+            throw new TypeErrorException("Cannot define property " + name + ", length is not writable");
         }
+        OrdinaryProperties.validateAndApply(indexSlot(index), table.isExtensible(), name, descriptor);
         return true;
+    }
+
+    // Array indices go through the same ValidateAndApplyPropertyDescriptor the ordinary string/symbol
+    // properties use (OrdinaryProperties), instead of a bespoke duplicate: the array's own copy had
+    // drifted (missing the accessor-identity compatibility check entirely, and never handling a
+    // generic descriptor that only touches enumerable/configurable on an existing accessor).
+    private OrdinaryProperties.Slot indexSlot(int index) {
+        return new OrdinaryProperties.Slot() {
+            @Override
+            public boolean exists() {
+                return ownsIndex(index);
+            }
+
+            @Override
+            public boolean hasAccessor() {
+                return hasIndexAccessor(index);
+            }
+
+            @Override
+            public JsObject.PropertyFlags flags() {
+                return getIndexFlags(index);
+            }
+
+            @Override
+            public void setFlags(JsObject.PropertyFlags flags) {
+                setIndexFlags(index, flags);
+            }
+
+            @Override
+            public JsValue value() {
+                return get(index);
+            }
+
+            @Override
+            public boolean hasValue() {
+                return index < elements.size() && !isHole(index) && !hasIndexAccessor(index);
+            }
+
+            @Override
+            public void defineValue(JsValue value) {
+                defineIndexValue(index, value);
+            }
+
+            @Override
+            public void removeValue() {
+                defineIndexValue(index, JsUndefined.getInstance());
+            }
+
+            @Override
+            public JsValue getter() {
+                return getIndexAccessorGetter(index);
+            }
+
+            @Override
+            public JsValue setter() {
+                return getIndexAccessorSetter(index);
+            }
+
+            @Override
+            public void defineAccessor(JsValue getter, JsValue setter) {
+                defineIndexAccessor(index, getter, setter);
+            }
+
+            @Override
+            public void clearGetter() {
+                if (indexGetters != null) {
+                    indexGetters.remove(index);
+                }
+            }
+
+            @Override
+            public void clearSetter() {
+                if (indexSetters != null) {
+                    indexSetters.remove(index);
+                }
+            }
+
+            @Override
+            public void clearAccessor() {
+                clearIndexAccessor(index);
+            }
+        };
     }
 
     // ArraySetLength: the value is applied before the writable attribute, so a length redefine that
@@ -429,65 +512,6 @@ public final class JsArray extends JsValue {
         if (!truncated) {
             throw new TypeErrorException("Cannot redefine property: length");
         }
-    }
-
-    private void defineIndexFrom(int index, String key, PropertyDescriptor descriptor) {
-        final var exists = ownsIndex(index);
-        final var currentFlags = exists ? getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
-        if (!exists && !table.isExtensible()) {
-            throw new TypeErrorException("Cannot define property " + key + ", object is not extensible");
-        }
-        if (exists && !currentFlags.configurable()) {
-            checkIndexRedefine(index, key, descriptor, currentFlags);
-        }
-        final var flags = new JsObject.PropertyFlags(descriptor.writableOr(currentFlags.writable()),
-                descriptor.enumerableOr(currentFlags.enumerable()),
-                descriptor.configurableOr(currentFlags.configurable()));
-        clearIndexAccessor(index);
-        defineIndexValue(index,
-                descriptor.value() != null ? descriptor.value() : exists ? get(index) : JsUndefined.getInstance());
-        setIndexFlags(index, flags);
-    }
-
-    private void checkIndexRedefine(int index, String key, PropertyDescriptor descriptor,
-            JsObject.PropertyFlags currentFlags) {
-        if (Boolean.TRUE.equals(descriptor.configurable())) {
-            throw OrdinaryProperties.redefineError(key);
-        }
-        if (descriptor.enumerable() != null && descriptor.enumerable() != currentFlags.enumerable()) {
-            throw OrdinaryProperties.redefineError(key);
-        }
-        if (currentFlags.writable()) {
-            return;
-        }
-        if (Boolean.TRUE.equals(descriptor.writable())) {
-            throw OrdinaryProperties.redefineError(key);
-        }
-        if (descriptor.value() != null && OrdinaryProperties.isNotSameValue(descriptor.value(), get(index))) {
-            throw OrdinaryProperties.redefineError(key);
-        }
-    }
-
-    private void defineIndexAccessorFrom(int index, PropertyDescriptor descriptor) {
-        final var exists = ownsIndex(index);
-        final var currentFlags = exists ? getIndexFlags(index) : new JsObject.PropertyFlags(false, false, false);
-        if (!exists && !table.isExtensible()) {
-            throw new TypeErrorException("Cannot define property " + index + ", object is not extensible");
-        }
-        if (exists && !currentFlags.configurable()) {
-            throw OrdinaryProperties.redefineError(String.valueOf(index));
-        }
-        final var flags = new JsObject.PropertyFlags(currentFlags.writable(),
-                descriptor.enumerableOr(currentFlags.enumerable()),
-                descriptor.configurableOr(currentFlags.configurable()));
-        defineIndexValue(index, JsUndefined.getInstance());
-        clearIndexAccessor(index);
-        defineIndexAccessor(index, callableOrNull(descriptor.getter()), callableOrNull(descriptor.setter()));
-        setIndexFlags(index, flags);
-    }
-
-    private static JsValue callableOrNull(JsValue value) {
-        return OrdinaryProperties.isCallable(value) ? value : null;
     }
 
     private boolean ownsIndex(int index) {

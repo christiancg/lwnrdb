@@ -791,7 +791,7 @@ but is not a constructor.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **99.39%**, 36,257/36,481). The denominator
+Conformance is **measured, not asserted** (currently **99.55%**, 36,317/36,481). The denominator
 shrank from 36,535 when the restriction-bound tests below were filtered out — that step moved the
 rate without changing the passing count, so the two figures are only comparable through the ledger in
 `plans/simplejs-test262-100-percent-progress.md`. The official
