@@ -455,6 +455,66 @@ public class TypedArrayBuiltinsTest {
         assertFalse(typed.isValidIntegerIndex(-0.0));
     }
 
+    // IntegerIndexedElementSet coerces the value before it decides which slot, if any, receives it:
+    // an index the view cannot hold still runs the valueOf that names it.
+    @Test
+    public void test_index_write_coerces_before_validating_the_index() {
+        final var thrower = "const t = { valueOf: function () { throw new RangeError('coerced'); } }; "
+                + "const s = new Int8Array([1]); ";
+        assertEquals("RangeError", caught(thrower + "s['5'] = t"));
+        assertEquals("RangeError", caught(thrower + "s['1.1'] = t"));
+        assertEquals("RangeError", caught(thrower + "s['-0'] = t"));
+        assertEquals("RangeError", caught(thrower + "s['0'] = t"));
+    }
+
+    // ...and a CanonicalNumericIndexString naming no slot is discarded rather than stored, while an
+    // ordinary key keeps running its accessor.
+    @Test
+    public void test_index_write_never_becomes_an_ordinary_property() {
+        assertEquals("2undefined",
+                str("const s = new Int8Array([1, 2]); s['1.1'] = 9; " + "String(s[1]) + String(s['1.1'])"));
+        assertEquals("RangeError",
+                caught("const s = new Int8Array([1]);"
+                        + "Object.defineProperty(s, 'tag', { set: function () { throw new RangeError('setter'); } });"
+                        + "s.tag = 1"));
+    }
+
+    // A valueOf that grows a resizable buffer makes the index it was called for valid, and the
+    // write then lands.
+    @Test
+    public void test_index_write_sees_a_buffer_resized_by_the_coercion() {
+        assertEquals("1|100",
+                str("const rab = new ArrayBuffer(0, { maxByteLength: 1 });" + "const ta = new Int8Array(rab);"
+                        + "ta[0] = { valueOf: function () { rab.resize(1); return 100; } };"
+                        + "String(ta.length) + '|' + String(ta[0])"));
+    }
+
+    // OrdinaryCreateFromConstructor: a foreign new.target's prototype is honoured, and a non-object
+    // one falls back to the kind's own intrinsic.
+    @Test
+    public void test_new_target_prototype_is_honoured() {
+        assertEquals("true", str("function nt() {} nt.prototype = { tag: 1 };"
+                + "String(Object.getPrototypeOf(Reflect.construct(Int8Array, [], nt)) === nt.prototype)"));
+        assertEquals("true", str("function nt() {} nt.prototype = { tag: 1 };"
+                + "String(Reflect.construct(Int8Array, [], nt).constructor === Object)"));
+        assertEquals("true", str("function nt() {} nt.prototype = null;"
+                + "String(Object.getPrototypeOf(Reflect.construct(Int8Array, [], nt)) === Int8Array.prototype)"));
+        assertEquals("true", str("String(Object.getPrototypeOf(new Int8Array(1)) === Int8Array.prototype)"));
+        assertEquals("4", str("class M extends Uint8Array {} String(new M(4).length)"));
+    }
+
+    // [[Set]] with an explicit receiver: the view answers a write addressed to itself (coercing,
+    // then dropping an index it cannot hold) and declines a valid index meant for a foreign one.
+    @Test
+    public void test_receiver_aware_index_write() {
+        assertEquals("true", str("const s = new Int8Array([1]); String(Reflect.set(s, '5', 9, s))"));
+        assertEquals("RangeError", caught("const s = new Int8Array([1]);"
+                + "Reflect.set(s, '5', { valueOf: function () { throw new RangeError('coerced'); } }, s)"));
+        assertEquals("true", str("const s = new Int8Array([1]); String(Reflect.set(s, '5', 9, {}))"));
+        assertEquals("1|9", str("const s = new Int8Array([1]); const r = {};"
+                + "Reflect.set(s, '0', 9, r); String(s[0]) + '|' + String(r[0])"));
+    }
+
     // setBigInt64 coerces the value through ToBigInt before the range is checked
     @Test
     public void test_set_big_int_coerces_the_value_first() {

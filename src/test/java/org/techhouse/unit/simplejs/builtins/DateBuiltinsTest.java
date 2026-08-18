@@ -118,31 +118,32 @@ public class DateBuiltinsTest {
         assertEquals(1999, num("let d = new Date('2020-06-15T00:00:00Z'); d.setUTCFullYear(1999); d.getUTCFullYear()"));
     }
 
-    // local (non-UTC) getters mirror the UTC ones in this sandbox
+    // local (non-UTC) getters read the same instant through the JVM default zone
     @Test
     public void test_local_getters() {
         assertEquals(2020, num("new Date('2020-01-02T03:04:05.006Z').getFullYear()"));
         assertEquals(0, num("new Date('2020-01-02T03:04:05.006Z').getMonth()"));
-        assertEquals(2, num("new Date('2020-01-02T03:04:05.006Z').getDate()"));
-        assertEquals(4, num("new Date('2020-01-02T00:00:00Z').getDay()"));
-        assertEquals(3, num("new Date('2020-01-02T03:04:05.006Z').getHours()"));
+        assertTrue(bool("var d = new Date('2020-01-02T03:04:05.006Z');"
+                + "d.getHours() === new Date(d.getTime() - d.getTimezoneOffset() * 60000).getUTCHours()"));
         assertEquals(4, num("new Date('2020-01-02T03:04:05.006Z').getMinutes()"));
         assertEquals(5, num("new Date('2020-01-02T03:04:05.006Z').getSeconds()"));
         assertEquals(6, num("new Date('2020-01-02T03:04:05.006Z').getMilliseconds()"));
     }
 
-    // toString / toUTCString produce a readable UTC string; getTimezoneOffset is 0
+    // toString follows the spec's ToDateString grammar and toUTCString the RFC form
     @Test
     public void test_to_string_and_offset() {
-        assertEquals("Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)", str("new Date(0).toString()"));
-        assertTrue(bool("new Date(0).toUTCString().indexOf('1970') >= 0"));
-        assertEquals(0, num("new Date(0).getTimezoneOffset()"));
+        assertTrue(bool("/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
+                + " [0-9]{2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} GMT[+-][0-9]{4}( \\(.+\\))?$/"
+                + ".test(new Date(0).toString())"));
+        assertEquals("Thu, 01 Jan 1970 00:00:00 GMT", str("new Date(0).toUTCString()"));
+        assertTrue(bool("Number.isFinite(new Date(0).getTimezoneOffset())"));
     }
 
     // string coercion of a date uses toString
     @Test
     public void test_string_coercion() {
-        assertEquals("Thu Jan 01 1970 00:00:00 GMT+0000 (Coordinated Universal Time)", str("'' + new Date(0)"));
+        assertEquals(str("new Date(0).toString()"), str("'' + new Date(0)"));
         assertEquals("Invalid Date", str("'' + new Date('nope')"));
     }
 

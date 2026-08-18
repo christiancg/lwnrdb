@@ -30,48 +30,46 @@ public final class MathBuiltins {
         Intrinsics.defineFrozen(math, "LOG10E", new JsNumber(1 / LN10));
         Intrinsics.defineFrozen(math, "SQRT2", new JsNumber(Math.sqrt(2)));
         Intrinsics.defineFrozen(math, "SQRT1_2", new JsNumber(Math.sqrt(0.5)));
-        unary(math, "abs", Math::abs);
-        unary(math, "floor", Math::floor);
-        unary(math, "ceil", Math::ceil);
-        unary(math, "round", value -> Math.floor(value + 0.5));
-        unary(math, "trunc", value -> value < 0 ? Math.ceil(value) : Math.floor(value));
-        unary(math, "sqrt", Math::sqrt);
-        unary(math, "cbrt", Math::cbrt);
-        unary(math, "sign", Math::signum);
-        unary(math, "log", Math::log);
-        unary(math, "exp", Math::exp);
-        unary(math, "sin", Math::sin);
-        unary(math, "cos", Math::cos);
-        unary(math, "tan", Math::tan);
-        unary(math, "f16round", value -> (double) Float.float16ToFloat(Float.floatToFloat16((float) value)));
-        unary(math, "log2", value -> Math.log(value) / LN2);
-        unary(math, "log10", Math::log10);
-        unary(math, "log1p", Math::log1p);
-        unary(math, "expm1", Math::expm1);
-        unary(math, "asin", Math::asin);
-        unary(math, "acos", Math::acos);
-        unary(math, "atan", Math::atan);
-        unary(math, "sinh", Math::sinh);
-        unary(math, "cosh", Math::cosh);
-        unary(math, "tanh", Math::tanh);
-        unary(math, "asinh", MathBuiltins::asinh);
-        unary(math, "acosh", value -> Math.log(value + Math.sqrt(value * value - 1)));
-        unary(math, "atanh", value -> 0.5 * Math.log((1 + value) / (1 - value)));
-        unary(math, "clz32", MathBuiltins::clz32);
-        unary(math, "fround", value -> (double) (float) value);
+        unary(math, ops, "abs", Math::abs);
+        unary(math, ops, "floor", Math::floor);
+        unary(math, ops, "ceil", Math::ceil);
+        unary(math, ops, "round", MathBuiltins::round);
+        unary(math, ops, "trunc", value -> value < 0 ? Math.ceil(value) : Math.floor(value));
+        unary(math, ops, "sqrt", Math::sqrt);
+        unary(math, ops, "cbrt", Math::cbrt);
+        unary(math, ops, "sign", Math::signum);
+        unary(math, ops, "log", Math::log);
+        unary(math, ops, "exp", Math::exp);
+        unary(math, ops, "sin", Math::sin);
+        unary(math, ops, "cos", Math::cos);
+        unary(math, ops, "tan", Math::tan);
+        unary(math, ops, "f16round", value -> (double) Float.float16ToFloat(Float.floatToFloat16((float) value)));
+        unary(math, ops, "log2", value -> Math.log(value) / LN2);
+        unary(math, ops, "log10", Math::log10);
+        unary(math, ops, "log1p", Math::log1p);
+        unary(math, ops, "expm1", Math::expm1);
+        unary(math, ops, "asin", Math::asin);
+        unary(math, ops, "acos", Math::acos);
+        unary(math, ops, "atan", Math::atan);
+        unary(math, ops, "sinh", Math::sinh);
+        unary(math, ops, "cosh", Math::cosh);
+        unary(math, ops, "tanh", Math::tanh);
+        unary(math, ops, "asinh", MathBuiltins::asinh);
+        unary(math, ops, "acosh", value -> Math.log(value + Math.sqrt(value * value - 1)));
+        unary(math, ops, "atanh", MathBuiltins::atanh);
+        unary(math, ops, "clz32", MathBuiltins::clz32);
+        unary(math, ops, "fround", value -> (double) (float) value);
         Intrinsics.defineHidden(math, "pow",
-                new JsNativeFunction("pow", (_, args) -> new JsNumber(Math.pow(arg(args, 0), arg(args, 1)))));
-        Intrinsics.defineHidden(math, "imul", new JsNativeFunction("imul", (_, args) -> new JsNumber(imul(args))));
-        Intrinsics.defineHidden(math, "atan2",
-                new JsNativeFunction("atan2", (_, args) -> new JsNumber(Math.atan2(arg(args, 0), arg(args, 1)))));
-        Intrinsics.defineHidden(math, "hypot", new JsNativeFunction("hypot", (_, args) -> hypot(args)));
+                new JsNativeFunction("pow", (_, args) -> new JsNumber(Math.pow(arg(args, 0, ops), arg(args, 1, ops)))));
+        Intrinsics.defineHidden(math, "imul", new JsNativeFunction("imul", (_, args) -> new JsNumber(imul(args, ops))));
+        Intrinsics.defineHidden(math, "atan2", new JsNativeFunction("atan2",
+                (_, args) -> new JsNumber(Math.atan2(arg(args, 0, ops), arg(args, 1, ops)))));
+        Intrinsics.defineHidden(math, "hypot", new JsNativeFunction("hypot", (_, args) -> hypot(args, ops)));
         Intrinsics.defineHidden(math, "random", new JsNativeFunction("random", (_, _) -> new JsNumber(Math.random())));
         Intrinsics.defineHidden(math, "sumPrecise",
                 new JsNativeFunction("sumPrecise", (_, args) -> new JsNumber(sumPrecise(args, ops))));
-        Intrinsics.defineHidden(math, "min",
-                new JsNativeFunction("min", (_, args) -> reduce(args, Double.POSITIVE_INFINITY, true)));
-        Intrinsics.defineHidden(math, "max",
-                new JsNativeFunction("max", (_, args) -> reduce(args, Double.NEGATIVE_INFINITY, false)));
+        Intrinsics.defineHidden(math, "min", new JsNativeFunction("min", (_, args) -> reduce(args, ops, true)));
+        Intrinsics.defineHidden(math, "max", new JsNativeFunction("max", (_, args) -> reduce(args, ops, false)));
         Intrinsics.defineNamespaceTag(math, "Math");
         return math;
     }
@@ -98,6 +96,7 @@ public final class MathBuiltins {
     private static final class PreciseSum {
         private BigDecimal total = BigDecimal.ZERO;
         private boolean empty = true;
+        private boolean anyPositiveZero;
         private boolean positiveInfinity;
         private boolean negativeInfinity;
         private boolean nan;
@@ -115,6 +114,7 @@ public final class MathBuiltins {
                 positiveInfinity |= value > 0;
                 negativeInfinity |= value < 0;
             } else {
+                anyPositiveZero |= value != 0 || Double.doubleToRawLongBits(value) == 0L;
                 total = total.add(new BigDecimal(value));
             }
         }
@@ -129,12 +129,39 @@ public final class MathBuiltins {
             if (positiveInfinity || negativeInfinity) {
                 return positiveInfinity ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
             }
-            return total.doubleValue();
+            // BigDecimal has no signed zero: a run of -0 sums to -0, anything else to +0.
+            final var sum = total.doubleValue();
+            return sum == 0 && !anyPositiveZero ? -0.0 : sum;
         }
     }
 
-    private static double imul(List<JsValue> args) {
-        return NumberFormatter.toInt32(arg(args, 0)) * NumberFormatter.toInt32(arg(args, 1));
+    private static double imul(List<JsValue> args, InterpreterOps ops) {
+        return NumberFormatter.toInt32(arg(args, 0, ops)) * NumberFormatter.toInt32(arg(args, 1, ops));
+    }
+
+    // floor(x + 0.5) alone reports +0 for every x in [-0.5, 0) and loses a bit above 2^52.
+    private static double round(double value) {
+        if (Double.isNaN(value) || Double.isInfinite(value) || value == 0 || Math.abs(value) >= 4.503599627370496e15) {
+            return value;
+        }
+        if (value < 0 && value >= -0.5) {
+            return -0.0;
+        }
+        if (value > 0 && value < 0.5) {
+            return 0.0;
+        }
+        final var floor = Math.floor(value);
+        return value - floor >= 0.5 ? floor + 1 : floor;
+    }
+
+    private static double atanh(double value) {
+        if (Double.isNaN(value) || value == 0) {
+            return value;
+        }
+        if (Math.abs(value) > 1) {
+            return Double.NaN;
+        }
+        return 0.5 * Math.log((1 + value) / (1 - value));
     }
 
     private static double clz32(double value) {
@@ -144,12 +171,12 @@ public final class MathBuiltins {
         return Integer.numberOfLeadingZeros((int) NumberFormatter.toUint32(value));
     }
 
-    private static JsValue hypot(List<JsValue> args) {
+    private static JsValue hypot(List<JsValue> args, InterpreterOps ops) {
         var sum = 0d;
         var infinite = false;
         var nan = false;
         for (final var arg : args) {
-            final var value = JsCoercion.toNumber(arg);
+            final var value = JsCoercion.toNumber(arg, ops);
             if (Double.isInfinite(value)) {
                 infinite = true;
             } else if (Double.isNaN(value)) {
@@ -164,24 +191,28 @@ public final class MathBuiltins {
         return new JsNumber(nan ? Double.NaN : Math.sqrt(sum));
     }
 
-    private static void unary(JsObject math, String name, DoubleUnaryOperator op) {
+    private static void unary(JsObject math, InterpreterOps ops, String name, DoubleUnaryOperator op) {
         Intrinsics.defineHidden(math, name,
-                new JsNativeFunction(name, (_, args) -> new JsNumber(op.applyAsDouble(arg(args, 0)))));
+                new JsNativeFunction(name, (_, args) -> new JsNumber(op.applyAsDouble(arg(args, 0, ops)))));
     }
 
-    private static JsValue reduce(List<JsValue> args, double seed, boolean min) {
-        var result = seed;
-        for (final var arg : args) {
-            final var value = JsCoercion.toNumber(arg);
-            if (Double.isNaN(value)) {
-                return new JsNumber(Double.NaN);
-            }
+    // Every argument is coerced before any of them is compared, so a NaN early in the list still
+    // lets a later argument's valueOf run.
+    private static JsValue reduce(List<JsValue> args, InterpreterOps ops, boolean min) {
+        final var values = new double[args.size()];
+        for (var i = 0; i < args.size(); i++) {
+            values[i] = JsCoercion.toNumber(args.get(i), ops);
+        }
+        var result = min ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
+        var nan = false;
+        for (final var value : values) {
+            nan |= Double.isNaN(value);
             result = min ? Math.min(result, value) : Math.max(result, value);
         }
-        return new JsNumber(result);
+        return new JsNumber(nan ? Double.NaN : result);
     }
 
-    private static double arg(List<JsValue> args, int index) {
-        return index < args.size() ? JsCoercion.toNumber(args.get(index)) : Double.NaN;
+    private static double arg(List<JsValue> args, int index, InterpreterOps ops) {
+        return index < args.size() ? JsCoercion.toNumber(args.get(index), ops) : Double.NaN;
     }
 }

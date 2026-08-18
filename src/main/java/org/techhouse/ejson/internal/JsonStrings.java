@@ -13,7 +13,7 @@ public final class JsonStrings {
         }
         final var length = value.length();
         var start = 0;
-        while (start < length && !needsEscaping(value.charAt(start))) {
+        while (start < length && !needsEscaping(value, start)) {
             start++;
         }
         if (start == length) {
@@ -31,21 +31,34 @@ public final class JsonStrings {
                 case '\n' -> builder.append("\\n");
                 case '\r' -> builder.append("\\r");
                 case '\t' -> builder.append("\\t");
-                default -> appendOther(builder, c);
+                default -> appendOther(builder, value, i);
             }
         }
         return builder.toString();
     }
 
-    private static void appendOther(final StringBuilder builder, final char c) {
-        if (c < LAST_CONTROL_CHARACTER) {
-            builder.append("\\u00").append(HEX[(c >> 4) & 0xF]).append(HEX[c & 0xF]);
+    private static void appendOther(final StringBuilder builder, final String value, final int index) {
+        final var c = value.charAt(index);
+        if (c < LAST_CONTROL_CHARACTER || isLoneSurrogate(value, index)) {
+            builder.append("\\u").append(HEX[(c >> 12) & 0xF]).append(HEX[(c >> 8) & 0xF]).append(HEX[(c >> 4) & 0xF])
+                    .append(HEX[c & 0xF]);
         } else {
             builder.append(c);
         }
     }
 
-    private static boolean needsEscaping(final char c) {
-        return c == '"' || c == '\\' || c < LAST_CONTROL_CHARACTER;
+    // An unpaired surrogate cannot be encoded as UTF-8, so emitting it raw would corrupt the output;
+    // the escaped form round-trips through the lexer unchanged.
+    private static boolean isLoneSurrogate(final String value, final int index) {
+        final var c = value.charAt(index);
+        if (Character.isHighSurrogate(c)) {
+            return index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1));
+        }
+        return Character.isLowSurrogate(c) && (index == 0 || !Character.isHighSurrogate(value.charAt(index - 1)));
+    }
+
+    private static boolean needsEscaping(final String value, final int index) {
+        final var c = value.charAt(index);
+        return c == '"' || c == '\\' || c < LAST_CONTROL_CHARACTER || isLoneSurrogate(value, index);
     }
 }

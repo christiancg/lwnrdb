@@ -48,16 +48,6 @@ public final class ErrorBuiltins {
         return result;
     }
 
-    public static JsObject makeAggregateError(List<JsValue> errors, String message) {
-        final var result = makeError("AggregateError", message);
-        final var array = new JsArray();
-        for (final var error : errors) {
-            array.push(error);
-        }
-        defineErrorProperty(result, "errors", array);
-        return result;
-    }
-
     // `stack` is an accessor pair on Error.prototype, not an own data property of each instance: the
     // getter is brand-checked on [[ErrorData]] and the setter installs an own property on whatever
     // receiver it is handed (SetterThatIgnoresPrototypeProperties).
@@ -91,7 +81,12 @@ public final class ErrorBuiltins {
         if (!(value instanceof JsString)) {
             throw new TypeErrorException("Error.prototype.stack setter requires a string");
         }
-        if (thisArg == home || ops == null) {
+        // SetterThatIgnoresPrototypeProperties: assigning through the home object itself is the
+        // spec's stand-in for writing a non-writable data property in strict code.
+        if (thisArg == home) {
+            throw new TypeErrorException("Cannot assign to read only property 'stack' of Error.prototype");
+        }
+        if (ops == null) {
             return JsUndefined.getInstance();
         }
         final var key = new JsString("stack");
@@ -111,9 +106,14 @@ public final class ErrorBuiltins {
     }
 
     public static void install(Environment global, Intrinsics intrinsics) {
+        install(global, intrinsics, null, null);
+    }
+
+    public static void install(Environment global, Intrinsics intrinsics, InterpreterOps ops,
+            IterableToList iterableToList) {
         JsNativeFunction errorConstructor = null;
         for (final var name : NAMES) {
-            final var constructor = new JsNativeFunction(name, (_, args) -> construct(intrinsics, name, args));
+            final var constructor = new JsNativeFunction(name, (_, args) -> construct(intrinsics, name, args, ops));
             if ("Error".equals(name)) {
                 constructor.setProperty("isError",
                         new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
@@ -126,35 +126,89 @@ public final class ErrorBuiltins {
             link(constructor, intrinsics, name);
             global.declareBuiltin(name, constructor);
         }
-        final var suppressed = new JsNativeFunction("SuppressedError", (_, args) -> link(
-                makeSuppressedError(arg(args, 0), arg(args, 1), args.size() > 2 ? message(List.of(args.get(2))) : ""),
-                intrinsics, "SuppressedError"));
+        final var suppressed = new JsNativeFunction("SuppressedError",
+                (_, args) -> constructSuppressed(intrinsics, args, ops));
         suppressed.setLength(3);
         suppressed.setOwnProto(errorConstructor);
         link(suppressed, intrinsics, "SuppressedError");
         global.declareBuiltin("SuppressedError", suppressed);
-        final var aggregate = new JsNativeFunction("AggregateError", (_, args) -> {
-            final var errors = arg(args, 0) instanceof JsArray array ? array.getElements() : List.<JsValue>of();
-            return link(makeAggregateError(errors, args.size() > 1 ? message(List.of(args.get(1))) : ""), intrinsics,
-                    "AggregateError");
-        });
+        final var aggregate = new JsNativeFunction("AggregateError",
+                (_, args) -> constructAggregate(intrinsics, args, ops, iterableToList));
         aggregate.setLength(2);
         aggregate.setOwnProto(errorConstructor);
         link(aggregate, intrinsics, "AggregateError");
         global.declareBuiltin("AggregateError", aggregate);
     }
 
-    private static JsObject construct(Intrinsics intrinsics, String name, List<JsValue> args) {
-        final var error = intrinsics.makeError(name, message(args));
-        if (args.size() > 1 && args.get(1) instanceof JsObject options && options.has("cause")) {
-            defineErrorProperty(error, "cause", options.get("cause"));
+    private static JsObject construct(Intrinsics intrinsics, String name, List<JsValue> args, InterpreterOps ops) {
+        final var error = newError(intrinsics, name, arg(args, 0), ops);
+        installErrorCause(error, arg(args, 1), ops);
+        return error;
+    }
+
+    private static JsObject constructSuppressed(Intrinsics intrinsics, List<JsValue> args, InterpreterOps ops) {
+        final var error = newError(intrinsics, "SuppressedError", arg(args, 2), ops);
+        defineErrorProperty(error, "error", arg(args, 0));
+        defineErrorProperty(error, "suppressed", arg(args, 1));
+        return error;
+    }
+
+    private static JsObject constructAggregate(Intrinsics intrinsics, List<JsValue> args, InterpreterOps ops,
+            IterableToList iterableToList) {
+        final var error = newError(intrinsics, "AggregateError", arg(args, 1), ops);
+        installErrorCause(error, arg(args, 2), ops);
+        final var array = new JsArray();
+        for (final var element : errorsList(arg(args, 0), iterableToList)) {
+            array.push(element);
+        }
+        defineErrorProperty(error, "errors", array);
+        return error;
+    }
+
+    private static List<JsValue> errorsList(JsValue errors, IterableToList iterableToList) {
+        if (iterableToList != null) {
+            return iterableToList.drain(errors);
+        }
+        return errors instanceof JsArray array ? array.getElements() : List.of();
+    }
+
+    // The message own property exists only when the argument is not undefined; the prototype's
+    // inherited empty string stands in otherwise.
+    private static JsObject newError(Intrinsics intrinsics, String name, JsValue message, InterpreterOps ops) {
+        final var error = new JsObject();
+        error.markErrorData();
+        error.setProto(newTargetProto(intrinsics, name, ops));
+        if (!(message instanceof JsUndefined)) {
+            defineErrorProperty(error, "message", new JsString(JsCoercion.toStr(message, ops)));
         }
         return error;
     }
 
-    private static JsObject link(JsObject error, Intrinsics intrinsics, String name) {
-        error.setProto(intrinsics.errorProto(name));
-        return error;
+    // OrdinaryCreateFromConstructor: Reflect.construct(Error, [], Other) links the instance to
+    // Other.prototype rather than to the intrinsic error prototype.
+    private static JsObject newTargetProto(Intrinsics intrinsics, String name, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (newTarget != null && ops != null
+                && ops.getMember(newTarget, new JsString("prototype")) instanceof JsObject proto) {
+            return proto;
+        }
+        return intrinsics.errorProto(name);
+    }
+
+    private static void installErrorCause(JsObject error, JsValue options, InterpreterOps ops) {
+        if (!InterpreterUtils.isObjectLike(options)) {
+            return;
+        }
+        final var key = new JsString("cause");
+        if (ops == null) {
+            if (options instanceof JsObject object && object.has(key.getValue())) {
+                defineErrorProperty(error, "cause", object.get(key.getValue()));
+            }
+            return;
+        }
+        if (ops.has(options, key)) {
+            defineErrorProperty(error, "cause", ops.getMember(options, key));
+        }
     }
 
     private static void link(JsNativeFunction constructor, Intrinsics intrinsics, String name) {
@@ -171,9 +225,5 @@ public final class ErrorBuiltins {
 
     private static JsValue arg(List<JsValue> args, int index) {
         return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
-
-    private static String message(List<JsValue> args) {
-        return args.isEmpty() ? "" : JsCoercion.toStr(args.getFirst());
     }
 }

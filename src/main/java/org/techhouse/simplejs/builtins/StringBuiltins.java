@@ -3,6 +3,7 @@ package org.techhouse.simplejs.builtins;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
@@ -106,7 +107,7 @@ public final class StringBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var string = new JsNativeFunction("String", (_, args) -> new JsString(stringify(args, ops)));
-        final var raw = new JsNativeFunction("raw", (_, args) -> new JsString(raw(args)));
+        final var raw = new JsNativeFunction("raw", (_, args) -> new JsString(raw(args, ops)));
         raw.setLength(1);
         string.setProperty("raw", raw);
         final var fromCharCode = new JsNativeFunction("fromCharCode",
@@ -135,8 +136,8 @@ public final class StringBuiltins {
     private static String fromCharCode(List<JsValue> args, InterpreterOps ops) {
         final var sb = new StringBuilder();
         for (final var arg : args) {
-            final var code = (int) JsCoercion.toNumber(arg, ops);
-            sb.append((char) (code & 0xFFFF));
+            // ToUint16, so an infinite or out-of-int argument wraps rather than saturating.
+            sb.append((char) (NumberFormatter.toUint32(JsCoercion.toNumber(arg, ops)) & 0xFFFFL));
         }
         return sb.toString();
     }
@@ -156,34 +157,64 @@ public final class StringBuiltins {
         return sb.toString();
     }
 
-    private static String raw(List<JsValue> args) {
-        if (args.isEmpty()) {
-            return "";
-        }
-        final var raw = rawSegments(args.getFirst());
-        if (raw == null || raw.length() == 0) {
+    // Fully generic: the template and its `raw` are only required to be array-*like*, so a plain
+    // object with a numeric `length` drives the same walk a real tagged-template strings array does.
+    private static String raw(List<JsValue> args, InterpreterOps ops) {
+        final var template = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        requireObject(template);
+        final var literals = ops == null ? rawSegments(template) : ops.getMember(template, new JsString("raw"));
+        requireObject(literals);
+        final var count = lengthOfArrayLike(literals, ops);
+        if (count <= 0) {
             return "";
         }
         final var result = new StringBuilder();
-        for (var i = 0; i < raw.length(); i++) {
-            result.append(JsCoercion.toStr(raw.get(i)));
-            if (i + 1 < raw.length() && i + 1 < args.size()) {
-                result.append(JsCoercion.toStr(args.get(i + 1)));
+        for (var i = 0; i < count; i++) {
+            final var segment = ops == null
+                    ? elementOf(literals, i)
+                    : ops.getMember(literals, new JsString(Integer.toString(i)));
+            result.append(JsCoercion.toStr(segment, ops));
+            if (i + 1 == count) {
+                break;
+            }
+            if (i + 1 < args.size()) {
+                result.append(JsCoercion.toStr(args.get(i + 1), ops));
             }
         }
         return result.toString();
     }
 
-    private static JsArray rawSegments(JsValue strings) {
-        final JsValue raw;
-        if (strings instanceof JsArray array) {
-            raw = array.getProperty("raw");
-        } else if (strings instanceof JsObject object) {
-            raw = object.get("raw");
-        } else {
-            raw = null;
+    private static void requireObject(JsValue value) {
+        if (!InterpreterUtils.isObjectLike(value)) {
+            throw new TypeErrorException("Cannot convert undefined or null to object");
         }
-        return raw instanceof JsArray array ? array : null;
+    }
+
+    private static long lengthOfArrayLike(JsValue target, InterpreterOps ops) {
+        final var raw = ops == null ? elementLength(target) : ops.getMember(target, new JsString("length"));
+        final var length = JsCoercion.toNumber(raw, ops);
+        if (Double.isNaN(length) || length <= 0) {
+            return 0;
+        }
+        return (long) Math.min(length, 9007199254740991d);
+    }
+
+    private static JsValue elementLength(JsValue target) {
+        return target instanceof JsArray array ? new JsNumber(array.length()) : JsUndefined.getInstance();
+    }
+
+    private static JsValue elementOf(JsValue target, int index) {
+        return target instanceof JsArray array && index < array.length() ? array.get(index) : JsUndefined.getInstance();
+    }
+
+    private static JsValue rawSegments(JsValue strings) {
+        if (strings instanceof JsArray array) {
+            return array.getProperty("raw") == null ? JsUndefined.getInstance() : array.getProperty("raw");
+        }
+        if (strings instanceof JsObject object) {
+            return object.has("raw") ? object.get("raw") : JsUndefined.getInstance();
+        }
+        return JsUndefined.getInstance();
     }
 
     public static JsNativeFunction getMethod(JsString receiver, String name, Invoker invoker, InterpreterOps ops) {
@@ -411,17 +442,27 @@ public final class StringBuiltins {
         return value.substring(start, end);
     }
 
+    // ToUint32(limit) runs before ToString(separator), and an undefined limit is 2^32-1 rather than
+    // "unbounded" - a limit of 0 yields an empty array even for an undefined separator.
     private static JsValue split(String value, List<JsValue> args, InterpreterOps ops) {
-        return limited(splitAll(value, args, ops), intArg(args, 1, -1, ops));
+        final var limit = args.size() < 2 || args.get(1) instanceof JsUndefined
+                ? 0xFFFFFFFFL
+                : NumberFormatter.toUint32(JsCoercion.toNumber(args.get(1), ops));
+        final var undefinedSeparator = args.isEmpty() || args.getFirst() instanceof JsUndefined;
+        final var separator = undefinedSeparator ? "" : str(args, 0, ops);
+        if (limit == 0) {
+            return new JsArray();
+        }
+        if (undefinedSeparator) {
+            final var single = new JsArray();
+            single.push(new JsString(value));
+            return single;
+        }
+        return limited(splitAll(value, separator), limit);
     }
 
-    private static JsArray splitAll(String value, List<JsValue> args, InterpreterOps ops) {
+    private static JsArray splitAll(String value, String separator) {
         final var result = new JsArray();
-        if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
-            result.push(new JsString(value));
-            return result;
-        }
-        final var separator = str(args, 0, ops);
         if (separator.isEmpty()) {
             for (var i = 0; i < value.length(); i++) {
                 result.push(new JsString(String.valueOf(value.charAt(i))));
@@ -439,11 +480,11 @@ public final class StringBuiltins {
         return result;
     }
 
-    private static JsValue limited(JsArray array, int limit) {
-        if (limit < 0 || limit >= array.length()) {
+    private static JsValue limited(JsArray array, long limit) {
+        if (limit >= array.length()) {
             return array;
         }
-        return new JsArray(List.copyOf(array.getElements().subList(0, limit)));
+        return new JsArray(List.copyOf(array.getElements().subList(0, (int) limit)));
     }
 
     private static JsValue replace(String value, List<JsValue> args, Invoker invoker, boolean all, InterpreterOps ops) {
@@ -534,11 +575,13 @@ public final class StringBuiltins {
     }
 
     private static String repeat(String value, List<JsValue> args, InterpreterOps ops) {
-        final var count = intArg(args, 0, 0, ops);
-        if (count < 0) {
-            throw new org.techhouse.simplejs.exceptions.RangeErrorException("Invalid count value: " + count);
+        final var requested = args.isEmpty() || args.getFirst() instanceof JsUndefined
+                ? 0
+                : JsCoercion.toNumber(args.getFirst(), ops);
+        if (requested < 0 || Double.isInfinite(requested)) {
+            throw new org.techhouse.simplejs.exceptions.RangeErrorException("Invalid count value: " + requested);
         }
-        return value.repeat(count);
+        return value.repeat(Double.isNaN(requested) ? 0 : (int) requested);
     }
 
     private static String charAt(String value, List<JsValue> args, InterpreterOps ops) {

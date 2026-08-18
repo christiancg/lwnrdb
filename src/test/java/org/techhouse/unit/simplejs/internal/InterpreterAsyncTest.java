@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNumber;
@@ -108,11 +109,24 @@ public class InterpreterAsyncTest {
         assertEquals(7, first(arr(source)));
     }
 
-    // await outside an async function is a runtime syntax error
+    // await outside an async function is a parse error: `await` there is an ordinary identifier, so
+    // the operand that follows it has no place in the grammar
     @Test
     public void test_await_outside_async_is_syntax_error() {
-        assertThrows(SyntaxErrorException.class,
+        assertThrows(UnexpectedTokenException.class,
                 () -> Interpreter.run("function f() { return await Promise.resolve(1); } f()"));
+    }
+
+    // await stays the operator at the top level of a script, where the host contract allows it
+    @Test
+    public void test_top_level_await_is_still_the_operator() {
+        assertEquals(5, ((JsNumber) Interpreter.run("await 5")).getValue());
+    }
+
+    // outside async code `await` is an identifier, so it can be declared and called
+    @Test
+    public void test_await_is_an_identifier_outside_async_code() {
+        assertEquals(3, ((JsNumber) Interpreter.run("function f(await) { return await; } f(3)")).getValue());
     }
 
     // chained awaits accumulate results in order
@@ -168,10 +182,10 @@ public class InterpreterAsyncTest {
         assertThrows(JsThrowException.class, () -> Interpreter.run("await Promise.reject('bad')"));
     }
 
-    // await inside a plain (non-async) arrow called from an async context is still a syntax error
+    // await inside a plain (non-async) arrow called from an async context is still a parse error
     @Test
     public void test_await_inside_plain_arrow_is_syntax_error() {
-        assertThrows(SyntaxErrorException.class,
+        assertThrows(UnexpectedTokenException.class,
                 () -> Interpreter.run("const f = () => await Promise.resolve(1); f()"));
     }
 
@@ -181,10 +195,10 @@ public class InterpreterAsyncTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("yield 1;"));
     }
 
-    // await inside a plain (sync) generator is a syntax error, surfaced when the body runs
+    // await inside a plain (sync) generator is a parse error: `await` there is an identifier
     @Test
     public void test_await_inside_sync_generator_is_syntax_error() {
-        assertThrows(SyntaxErrorException.class,
+        assertThrows(UnexpectedTokenException.class,
                 () -> Interpreter.run("function* g() { await Promise.resolve(1); } g().next()"));
     }
 

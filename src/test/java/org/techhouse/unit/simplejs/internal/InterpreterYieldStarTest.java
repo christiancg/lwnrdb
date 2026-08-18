@@ -134,4 +134,65 @@ public class InterpreterYieldStarTest {
                 """;
         assertEquals("return|true", str(source));
     }
+
+    // AsyncFromSyncIteratorContinuation: when the awaited `value` of a not-done step rejects, the
+    // wrapped synchronous iterator is closed exactly once before the rejection propagates.
+    @Test
+    @org.junit.jupiter.api.Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    public void asyncDelegationClosesTheSyncIteratorWhenAValueRejects() {
+        final var source = """
+                let log = [];
+                const iterable = {
+                  [Symbol.iterator]() {
+                    return {
+                      next() { return { value: Promise.reject('boom'), done: false }; },
+                      return() { log.push('return'); return {}; }
+                    };
+                  }
+                };
+                async function* g() { yield* iterable; }
+                g().next().then(
+                  function() { log.push('fulfilled'); },
+                  function(e) { log.push('rejected:' + e); }
+                );
+                log
+                """;
+        assertEquals("return|rejected:boom", joinedLog(source));
+    }
+
+    // A done step's value rejecting is the delegation's own completion, so the iterator is not closed
+    @Test
+    @org.junit.jupiter.api.Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
+    public void asyncDelegationDoesNotCloseOnADoneStep() {
+        final var source = """
+                let log = [];
+                const iterable = {
+                  [Symbol.iterator]() {
+                    return {
+                      next() { return { value: Promise.reject('boom'), done: true }; },
+                      return() { log.push('return'); return {}; }
+                    };
+                  }
+                };
+                async function* g() { yield* iterable; }
+                g().next().then(
+                  function() { log.push('fulfilled'); },
+                  function(e) { log.push('rejected:' + e); }
+                );
+                log
+                """;
+        assertEquals("rejected:boom", joinedLog(source));
+    }
+
+    private static String joinedLog(String source) {
+        final var array = (org.techhouse.simplejs.values.JsArray) Interpreter.run(source);
+        final var sb = new StringBuilder();
+        for (var i = 0; i < array.length(); i++) {
+            if (i > 0) {
+                sb.append('|');
+            }
+            sb.append(org.techhouse.simplejs.internal.JsCoercion.toStr(array.get(i)));
+        }
+        return sb.toString();
+    }
 }

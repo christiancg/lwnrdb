@@ -222,8 +222,8 @@ public class StringBuiltinsTest {
     @Test
     public void test_string_raw_empty() {
         assertEquals("", str("String.raw({ raw: [] })"));
-        assertEquals("", str("String.raw({})"));
-        assertEquals("", str("String.raw()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.raw({})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("String.raw()"));
     }
 
     // charCodeAt/codePointAt return unit values or NaN/undefined out of range

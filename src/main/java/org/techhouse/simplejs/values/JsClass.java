@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.values;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,19 +17,22 @@ public final class JsClass extends JsValue {
     private JsFunction constructor;
     private final JsObject prototype = new JsObject();
     private final JsObject staticOwner = new JsObject();
-    private final List<FieldDefinition> instanceFields = new ArrayList<>();
-    private final Map<String, JsFunction> privateInstanceMethods = new LinkedHashMap<>();
-    private final Map<String, JsFunction> privateInstanceGetters = new LinkedHashMap<>();
-    private final Map<String, JsFunction> privateInstanceSetters = new LinkedHashMap<>();
-    private final Map<String, JsFunction> privateStaticMethods = new LinkedHashMap<>();
-    private final Map<String, JsFunction> privateStaticGetters = new LinkedHashMap<>();
-    private final Map<String, JsFunction> privateStaticSetters = new LinkedHashMap<>();
-    private final Map<String, JsValue> privateStaticFields = new LinkedHashMap<>();
+    private final List<InstanceField> instanceFields = new ArrayList<>();
+    // One Private Name per name this class body declares, created when the class is evaluated.
+    private final Map<String, PrivateName> privateNames = new LinkedHashMap<>();
+    private final Map<PrivateName, JsFunction> privateInstanceMethods = new IdentityHashMap<>();
+    private final Map<PrivateName, JsFunction> privateInstanceGetters = new IdentityHashMap<>();
+    private final Map<PrivateName, JsFunction> privateInstanceSetters = new IdentityHashMap<>();
+    private final Map<PrivateName, JsFunction> privateStaticMethods = new IdentityHashMap<>();
+    private final Map<PrivateName, JsFunction> privateStaticGetters = new IdentityHashMap<>();
+    private final Map<PrivateName, JsFunction> privateStaticSetters = new IdentityHashMap<>();
+    private final Map<PrivateName, JsValue> privateStaticFields = new IdentityHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolMethods = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolGetters = new LinkedHashMap<>();
     private final Map<JsSymbol, JsFunction> instanceSymbolSetters = new LinkedHashMap<>();
     private final Environment methodScope;
-    private JsNativeFunction nativeSuperClass;
+    private JsValue superConstructor;
+    private boolean nullHeritage;
 
     public JsClass(String name, JsClass superClass, Environment methodScope) {
         this.name = name;
@@ -39,6 +43,10 @@ public final class JsClass extends JsValue {
         }
         prototype.defineValue("constructor", this);
         prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
+        // A class constructor's `prototype` is a real own property, so it is reachable through
+        // hasOwnProperty/getOwnPropertyDescriptor and not only through the internal slot.
+        staticOwner.defineValue("prototype", prototype);
+        staticOwner.setFlags("prototype", new JsObject.PropertyFlags(false, false, false));
     }
 
     public JsObject getPrototype() {
@@ -57,20 +65,40 @@ public final class JsClass extends JsValue {
     }
 
     public JsNativeFunction getNativeSuperClass() {
-        return nativeSuperClass;
+        return superConstructor instanceof JsNativeFunction nativeSuper ? nativeSuper : null;
     }
 
-    public void setNativeSuperClass(JsNativeFunction nativeSuperClass) {
-        this.nativeSuperClass = nativeSuperClass;
-        if (nativeSuperClass != null && superClass == null) {
-            prototype.setProto(nativeSuperClass.getPrototype());
+    // A heritage that is not a class: any constructor (a plain function, a builtin, a proxy) may sit
+    // there, and the class's prototype chains onto that constructor's own `prototype`.
+    public JsValue getSuperConstructor() {
+        return superConstructor;
+    }
+
+    public void setSuperConstructor(JsValue superConstructor, JsValue parentPrototype) {
+        this.superConstructor = superConstructor;
+        if (superConstructor != null && superClass == null && parentPrototype != null) {
+            prototype.setProto(parentPrototype);
         }
+    }
+
+    // `class X extends null` is still a derived class - its `this` is in TDZ and its super() call
+    // fails - but its prototype has no parent at all.
+    public void markNullHeritage() {
+        this.nullHeritage = true;
+    }
+
+    public boolean hasNullHeritage() {
+        return nullHeritage;
+    }
+
+    public boolean isDerived() {
+        return superClass != null || superConstructor != null || nullHeritage;
     }
 
     public JsNativeFunction findNativeSuperClass() {
         for (var cls = this; cls != null; cls = cls.superClass) {
-            if (cls.nativeSuperClass != null) {
-                return cls.nativeSuperClass;
+            if (cls.getNativeSuperClass() != null) {
+                return cls.getNativeSuperClass();
             }
         }
         return null;
@@ -124,39 +152,58 @@ public final class JsClass extends JsValue {
         staticOwner.setFlags(key, HIDDEN);
     }
 
-    public void addPrivateInstanceMethod(String key, String kind, JsFunction fn) {
+    // Every private name a class body declares is created up front, before any member (or computed
+    // key) is evaluated, because the class's PrivateEnvironment already covers the whole body.
+    public PrivateName declarePrivateName(String name) {
+        return privateNames.computeIfAbsent(name, key -> new PrivateName("#" + key));
+    }
+
+    public PrivateName privateNameFor(String name) {
+        return privateNames.get(name);
+    }
+
+    public void addPrivateInstanceMethod(PrivateName key, String kind, JsFunction fn) {
         selectAccessor(privateInstanceMethods, privateInstanceGetters, privateInstanceSetters, kind).put(key, fn);
     }
 
-    public void addPrivateStaticMethod(String key, String kind, JsFunction fn) {
+    public void addPrivateStaticMethod(PrivateName key, String kind, JsFunction fn) {
         selectAccessor(privateStaticMethods, privateStaticGetters, privateStaticSetters, kind).put(key, fn);
     }
 
-    public JsFunction getPrivateStaticMethod(String key) {
+    public JsFunction getPrivateStaticMethod(PrivateName key) {
         return privateStaticMethods.get(key);
     }
 
-    public JsFunction getPrivateStaticGetter(String key) {
+    public JsFunction getPrivateStaticGetter(PrivateName key) {
         return privateStaticGetters.get(key);
     }
 
-    public JsFunction getPrivateStaticSetter(String key) {
+    public JsFunction getPrivateStaticSetter(PrivateName key) {
         return privateStaticSetters.get(key);
     }
 
-    public void setPrivateStaticField(String key, JsValue value) {
+    // PrivateFieldAdd: the name must not already be present and the receiver must be extensible.
+    public boolean addPrivateStaticField(PrivateName key, JsValue value) {
+        if (privateStaticFields.containsKey(key) || !staticOwner.isExtensible()) {
+            return false;
+        }
+        privateStaticFields.put(key, value);
+        return true;
+    }
+
+    public void setPrivateStaticField(PrivateName key, JsValue value) {
         privateStaticFields.put(key, value);
     }
 
-    public JsValue getPrivateStaticField(String key) {
+    public JsValue getPrivateStaticField(PrivateName key) {
         return privateStaticFields.get(key);
     }
 
-    public boolean hasPrivateStaticField(String key) {
+    public boolean hasPrivateStaticField(PrivateName key) {
         return privateStaticFields.containsKey(key);
     }
 
-    public boolean declaresStaticPrivate(String key) {
+    public boolean declaresStaticPrivate(PrivateName key) {
         return privateStaticMethods.containsKey(key) || privateStaticGetters.containsKey(key)
                 || privateStaticSetters.containsKey(key) || privateStaticFields.containsKey(key);
     }
@@ -235,11 +282,16 @@ public final class JsClass extends JsValue {
         return staticOwner.hasSymbol(key);
     }
 
-    public void addInstanceField(FieldDefinition field) {
-        instanceFields.add(field);
+    // A computed field key is evaluated once, when the class is defined, so the resolved key travels
+    // with the definition rather than being recomputed for every instance.
+    public record InstanceField(FieldDefinition definition, JsValue key) {
     }
 
-    public List<FieldDefinition> getInstanceFields() {
+    public void addInstanceField(FieldDefinition field, JsValue key) {
+        instanceFields.add(new InstanceField(field, key));
+    }
+
+    public List<InstanceField> getInstanceFields() {
         return instanceFields;
     }
 
@@ -292,21 +344,28 @@ public final class JsClass extends JsValue {
         return null;
     }
 
-    public JsFunction getPrivateInstanceMethod(String key) {
+    public JsFunction getPrivateInstanceMethod(PrivateName key) {
         return privateInstanceMethods.get(key);
     }
 
-    public JsFunction getPrivateInstanceGetter(String key) {
+    public JsFunction getPrivateInstanceGetter(PrivateName key) {
         return privateInstanceGetters.get(key);
     }
 
-    public JsFunction getPrivateInstanceSetter(String key) {
+    public JsFunction getPrivateInstanceSetter(PrivateName key) {
         return privateInstanceSetters.get(key);
     }
 
-    public boolean declaresPrivate(String key) {
+    public boolean declaresPrivate(PrivateName key) {
         return privateInstanceMethods.containsKey(key) || privateInstanceGetters.containsKey(key)
                 || privateInstanceSetters.containsKey(key);
+    }
+
+    // A brand only exists when there is a private method or accessor to reach through it; a class with
+    // only private fields adds nothing to the object beyond the fields themselves.
+    public boolean hasPrivateInstanceBrand() {
+        return !privateInstanceMethods.isEmpty() || !privateInstanceGetters.isEmpty()
+                || !privateInstanceSetters.isEmpty();
     }
 
     public boolean isSubclassOf(JsClass other) {

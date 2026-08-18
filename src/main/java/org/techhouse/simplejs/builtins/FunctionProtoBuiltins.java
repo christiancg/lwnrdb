@@ -70,9 +70,9 @@ public final class FunctionProtoBuiltins {
         return null;
     }
 
-    private static int declaredLength(JsValue target) {
+    private static double declaredLength(JsValue target) {
         if (target instanceof JsNativeFunction nf && nf.hasExplicitLength()) {
-            return nf.getExplicitLength();
+            return nf.getExplicitLengthValue();
         }
         if (!(target instanceof JsFunction fn)) {
             return 0;
@@ -131,7 +131,7 @@ public final class FunctionProtoBuiltins {
             combined.addAll(callArgs);
             return invoker.call(target, boundThis, combined);
         });
-        bound.setLength(Math.max(0, targetLength(target, ops) - boundArgs.size()));
+        bound.setLength(boundLength(target, boundArgs.size(), ops));
         bound.setBound(target, boundArgs);
         if (InterpreterUtils.isConstructor(target)) {
             bound.markConstructor();
@@ -149,15 +149,27 @@ public final class FunctionProtoBuiltins {
         return name instanceof JsString string ? string.getValue() : "";
     }
 
-    private static int targetLength(JsValue target, InterpreterOps ops) {
+    // BoundFunctionLength: an absent or non-Number own `length` on the target gives 0 without any
+    // coercion, and +Infinity survives the subtraction rather than saturating.
+    private static double boundLength(JsValue target, int argCount, InterpreterOps ops) {
         if (ops == null) {
-            return declaredLength(target);
+            return Math.max(0, declaredLength(target) - (double) argCount);
         }
-        final var length = JsCoercion.toNumber(ops.getMember(target, new JsString("length")), ops);
-        if (Double.isNaN(length) || length <= 0) {
+        if (!InterpreterUtils.isObjectLike(ops.getOwnPropertyDescriptor(target, new JsString("length")))) {
             return 0;
         }
-        return (int) Math.min(length, Integer.MAX_VALUE);
+        if (!(ops.getMember(target, new JsString("length")) instanceof JsNumber number)) {
+            return 0;
+        }
+        final var length = number.getValue();
+        if (Double.isNaN(length) || length == Double.NEGATIVE_INFINITY) {
+            return 0;
+        }
+        if (length == Double.POSITIVE_INFINITY) {
+            return length;
+        }
+        final var truncated = length < 0 ? Math.ceil(length) : Math.floor(length);
+        return Math.max(0, truncated - argCount);
     }
 
     // OrdinaryHasInstance, reached through Function.prototype[Symbol.hasInstance]. The prototype

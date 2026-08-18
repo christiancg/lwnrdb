@@ -9,6 +9,11 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
 
+// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code
+// points (U+FE0F variation selector, U+20E3 combining keycap, U+017F long s, U+212A Kelvin sign,
+// which renders identically to ASCII K). Spelling them as characters would make the assertions
+// unreadable and let an editor or a merge silently normalise them.
+@SuppressWarnings("UnnecessaryUnicodeEscape")
 public class RegexTranslatorTest {
     private static boolean matches(String source, String flags, String input) {
         return RegexTranslator.compile(source, flags).getPattern().matcher(input).find();
@@ -94,9 +99,9 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void keepsThrowingForPropertiesOfStrings() {
-        rejects("[\\p{RGI_Emoji}]", "v");
-        rejects("[\\p{Emoji_Keycap_Sequence}]", "v");
+    public void acceptsPropertiesOfStringsInsideAClass() {
+        assertTrue(fullMatch("[\\p{RGI_Emoji}]", "v", new String(new int[]{0x1F600}, 0, 1)));
+        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}]", "v", "9️⃣"));
     }
 
     // Modifier groups translate to java inline flag groups; the early errors are ours to raise.
@@ -405,6 +410,115 @@ public class RegexTranslatorTest {
         final var regexp = RegexTranslator.compile("(?<a\\u0062>x)", "");
         assertTrue(regexp.getGroupAliases().containsKey("ab"));
         assertTrue(matches("(?<a\\u200C>x)", "", "x"));
+    }
+
+    // The seven properties of strings are sets of sequences, so each renders as an alternation
+    // (ordered longest-first) rather than a character class, and only under the v flag.
+    @Test
+    public void translatesEachPropertyOfStringsToAnAlternation() {
+        assertTrue(fullMatch("\\p{Emoji_Keycap_Sequence}", "v", "9\ufe0f\u20e3"));
+        assertFalse(matches("^\\p{Emoji_Keycap_Sequence}$", "v", "9\ufe0f"));
+        assertTrue(fullMatch("\\p{Basic_Emoji}", "v", "\u231a"));
+        assertTrue(fullMatch("\\p{Basic_Emoji}", "v", "\u00a9\ufe0f"));
+        assertFalse(matches("^\\p{Basic_Emoji}$", "v", "\u00a9"));
+        assertTrue(fullMatch("\\p{RGI_Emoji_Flag_Sequence}", "v", new String(new int[]{0x1F1E6, 0x1F1E9}, 0, 2)));
+        assertTrue(fullMatch("\\p{RGI_Emoji_Tag_Sequence}", "v",
+                new String(new int[]{0x1F3F4, 0xE0067, 0xE0062, 0xE0065, 0xE006E, 0xE0067, 0xE007F}, 0, 7)));
+        assertTrue(fullMatch("\\p{RGI_Emoji_Modifier_Sequence}", "v", new String(new int[]{0x1F44D, 0x1F3FD}, 0, 2)));
+        assertTrue(fullMatch("\\p{RGI_Emoji_ZWJ_Sequence}", "v",
+                new String(new int[]{0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F466}, 0, 5)));
+        assertTrue(fullMatch("\\p{RGI_Emoji}", "v", "9\ufe0f\u20e3"));
+        assertTrue(fullMatch("\\p{RGI_Emoji}", "v", new String(new int[]{0x1F600}, 0, 1)));
+        assertFalse(matches("^\\p{RGI_Emoji}$", "v", "a"));
+    }
+
+    // Longest-first: the keycap sequence must win over its own leading digit, which the same set
+    // also contains through Basic_Emoji.
+    @Test
+    public void prefersTheLongestPropertyOfStringsAlternative() {
+        assertTrue(fullMatch("^\\p{RGI_Emoji}$", "v", "9\ufe0f\u20e3"));
+    }
+
+    @Test
+    public void rejectsAPropertyOfStringsOutsideItsAllowedPositions() {
+        rejects("\\p{RGI_Emoji}", "u");
+        rejects("\\p{Basic_Emoji}", "u");
+        rejects("\\P{Basic_Emoji}", "v");
+        rejects("[^\\p{Basic_Emoji}]", "v");
+        rejects("[\\P{Basic_Emoji}]", "v");
+        rejects("[\\p{Basic_Emoji}]", "u");
+        rejects("[\\p{Basic_Emoji}-a]", "v");
+    }
+
+    @Test
+    public void combinesAPropertyOfStringsWithTheOtherSetOperands() {
+        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}a]", "v", "a"));
+        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}a]", "v", "9\ufe0f\u20e3"));
+        assertFalse(matches("^[\\p{RGI_Emoji}--\\p{Emoji_Keycap_Sequence}]$", "v", "9\ufe0f\u20e3"));
+        assertTrue(fullMatch("[[\\p{Emoji_Keycap_Sequence}]]", "v", "9\ufe0f\u20e3"));
+        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}\\q{ab}]", "v", "ab"));
+    }
+
+    // ECMA-262 forbids UAX #44 loose matching: a property name differing by whitespace or case is
+    // not the same property, it is an early error.
+    @Test
+    public void rejectsLooselyMatchedPropertyNames() {
+        rejects("\\p{ General_Category=Uppercase_Letter }", "u");
+        rejects("\\p{General_Category = Uppercase_Letter}", "u");
+        rejects("\\P{ General_Category=Uppercase_Letter }", "u");
+        rejects("\\p{script=Greek}", "u");
+        assertTrue(matches("\\p{Hex}", "u", "f"));
+        assertTrue(matches("[\\p{Hex}\\P{Hex}]", "u", "\u2603"));
+    }
+
+    // An empty remove list is legal: RegularExpressionFlags may be empty on either side of the dash.
+    @Test
+    public void translatesModifierGroupsWithAnEmptyRemoveList() {
+        assertTrue(matches("(?i-:a)", "", "A"));
+        assertTrue(matches("(?m:^b)", "", "a\nb"));
+    }
+
+    // GetWordCharacters: under ignoreCase in unicode mode the two code points that case-fold into
+    // the ASCII word set join it, which java's own \w and \b never do.
+    @Test
+    public void widensTheWordCharacterSetUnderIgnoreCase() {
+        assertTrue(matches("(?i:\\w)", "u", "\u017f"));
+        assertTrue(matches("(?i:\\w)", "u", "\u212a"));
+        assertTrue(matches("(?i:\\w)", "u", "A"));
+        assertFalse(matches("(?i:\\W)", "u", "\u017f"));
+        assertTrue(matches("(?i:\\b)", "u", "\u017f"));
+        assertTrue(matches("(?i:\\B)", "u", "Z\u017f"));
+        assertFalse(matches("\\w", "u", "\u017f"));
+        assertFalse(matches("(?i:\\w)", "", "\u017f"));
+    }
+
+    // Without u or v a pattern matches code units, so a supplementary code point is two of them and
+    // a dotAll `.` may not swallow it whole.
+    @Test
+    public void matchesCodeUnitsWithoutUnicodeMode() {
+        final var astral = new String(new int[]{0x10300}, 0, 1);
+        assertFalse(fullMatch(".", "s", astral));
+        assertFalse(fullMatch("(?s:.)", "", astral));
+        assertTrue(fullMatch(".", "su", astral));
+        assertTrue(fullMatch(".", "s", "a"));
+        assertTrue(fullMatch(".", "s", "\n"));
+        assertFalse(fullMatch(".", "", "\n"));
+        assertTrue(fullMatch(".", "s", "\ud800"));
+    }
+
+    @Test
+    public void rejectsADashIdentityEscapeOutsideAClassInUnicodeMode() {
+        rejects("\\-", "u");
+        assertTrue(fullMatch("[\\-]", "u", "-"));
+        assertTrue(fullMatch("\\-", "", "-"));
+    }
+
+    // A reference to the group it sits inside cannot have participated, so it matches the empty
+    // string rather than failing the whole alternative.
+    @Test
+    public void treatsASelfReferenceAsAForwardReference() {
+        assertTrue(matches("(?<a>\\k<a>\\w)..", "", "bab"));
+        assertTrue(matches("\\k<a>(?<a>b)\\w\\k<a>", "", "bab"));
     }
 
     @Test

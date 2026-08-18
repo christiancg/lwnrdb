@@ -50,7 +50,11 @@ public final class JsCoercion {
         };
     }
 
-    public static double toNumber(JsValue value) {
+    // The data-only pair below never runs user code: no Symbol.toPrimitive, no valueOf/toString. It
+    // exists for EJsonInterop and the console sink, which run after the event loop has drained and
+    // therefore cannot re-enter the interpreter. Everything reachable from a script must use the
+    // ops-aware overloads instead, so a poisoned valueOf is observed and a Symbol throws.
+    public static double toNumberDataOnly(JsValue value) {
         return switch (value) {
             case JsNumber n -> n.getValue();
             case JsBoolean b -> b.getValue() ? 1 : 0;
@@ -60,12 +64,20 @@ public final class JsCoercion {
             case JsString s -> stringToNumber(s.getValue());
             case JsBigInt ignored -> throw new TypeErrorException("Cannot convert a BigInt to a number");
             case JsSymbol ignored -> throw new TypeErrorException("Cannot convert a Symbol to a number");
-            case JsObject wrapper when wrapper.getPrimitive() != null -> toNumber(wrapper.getPrimitive());
-            default -> stringToNumber(toStr(value));
+            case JsObject wrapper when wrapper.getPrimitive() != null -> toNumberDataOnly(wrapper.getPrimitive());
+            default -> stringToNumber(toStrDataOnly(value));
         };
     }
 
+    public static double toNumber(JsValue value) {
+        return toNumberDataOnly(value);
+    }
+
     public static String toStr(JsValue value) {
+        return toStrDataOnly(value);
+    }
+
+    public static String toStrDataOnly(JsValue value) {
         return switch (value) {
             case JsString s -> s.getValue();
             case JsNumber n -> numberToString(n.getValue());
@@ -75,7 +87,7 @@ public final class JsCoercion {
             case JsUndefined ignored -> "undefined";
             case JsArray a -> arrayToString(a);
             case JsObject wrapper when wrapper.getPrimitive() instanceof JsSymbol s -> SymbolBuiltins.describe(s);
-            case JsObject wrapper when wrapper.getPrimitive() != null -> toStr(wrapper.getPrimitive());
+            case JsObject wrapper when wrapper.getPrimitive() != null -> toStrDataOnly(wrapper.getPrimitive());
             case JsObject ignored -> "[object Object]";
             case JsFunction f -> FunctionProtoBuiltins.sourceText(f);
             case JsNativeFunction f -> FunctionProtoBuiltins.sourceText(f);
@@ -87,7 +99,7 @@ public final class JsCoercion {
             case JsMap ignored -> "[object Map]";
             case JsSet ignored -> "[object Set]";
             case JsDate d -> d.toDateString();
-            case JsProxy proxy -> toStr(proxy.getTarget());
+            case JsProxy proxy -> toStrDataOnly(proxy.getTarget());
             case JsArguments ignored -> "[object Arguments]";
             case JsGlobalObject ignored -> "[object global]";
             case JsTypedArray typed -> typedArrayToString(typed);
@@ -99,23 +111,23 @@ public final class JsCoercion {
 
     public static double toNumber(JsValue value, InterpreterOps ops) {
         if (ops != null && isObject(value)) {
-            return toNumber(toPrimitive(value, "number", ops));
+            return toNumberDataOnly(toPrimitive(value, "number", ops));
         }
-        return toNumber(value);
+        return toNumberDataOnly(value);
     }
 
     public static String toStr(JsValue value, InterpreterOps ops) {
         if (ops != null && isObject(value)) {
-            return toStr(toPrimitive(value, "string", ops));
+            return toStrDataOnly(toPrimitive(value, "string", ops));
         }
-        return toStr(value);
+        return toStrDataOnly(value);
     }
 
     // ToNumeric: unlike ToNumber a BigInt survives as a BigInt, which is what lets the arithmetic,
     // bitwise and relational operators decide on the *coerced* types rather than the raw operands.
     public static JsValue toNumeric(JsValue value, InterpreterOps ops) {
         final var primitive = toPrimitive(value, "number", ops);
-        return primitive instanceof JsBigInt ? primitive : new JsNumber(toNumber(primitive));
+        return primitive instanceof JsBigInt ? primitive : new JsNumber(toNumberDataOnly(primitive));
     }
 
     // ToPropertyKey: a symbol stays a symbol, everything else goes through ToPrimitive(string) then
@@ -130,7 +142,7 @@ public final class JsCoercion {
             return wrapper.getPrimitive();
         }
         if (isObject(value)) {
-            return new JsString(toStr(value));
+            return new JsString(toStrDataOnly(value));
         }
         return value;
     }
@@ -175,7 +187,7 @@ public final class JsCoercion {
         // arguments object, globalThis) resolves neither method; its built-in string form stands in
         // rather than becoming a spurious TypeError.
         if (!resolvedAny && !(value instanceof JsObject)) {
-            return new JsString(toStr(value));
+            return new JsString(toStrDataOnly(value));
         }
         throw new TypeErrorException("Cannot convert object to primitive value");
     }
@@ -216,7 +228,7 @@ public final class JsCoercion {
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append(toStr(typed.getElement(i)));
+            sb.append(toStrDataOnly(typed.getElement(i)));
         }
         return sb.toString();
     }
@@ -230,14 +242,33 @@ public final class JsCoercion {
             }
             final var element = elements.get(i);
             if (!(element instanceof JsNull) && !(element instanceof JsUndefined)) {
-                sb.append(toStr(element));
+                sb.append(toStrDataOnly(element));
             }
         }
         return sb.toString();
     }
 
+    // StrWhiteSpace is not Character.isWhitespace: it additionally covers NBSP and ZWNBSP (which Java
+    // does not treat as whitespace) and excludes the ASCII separators Java folds in.
+    public static boolean isJsWhitespace(char c) {
+        return c == '\t' || c == '\n' || c == 0x0B || c == '\f' || c == '\r' || c == ' ' || c == 0x00A0 || c == 0x2028
+                || c == 0x2029 || c == 0xFEFF || Character.getType(c) == Character.SPACE_SEPARATOR;
+    }
+
+    public static String stripJs(String raw) {
+        var start = 0;
+        var end = raw.length();
+        while (start < end && isJsWhitespace(raw.charAt(start))) {
+            start++;
+        }
+        while (end > start && isJsWhitespace(raw.charAt(end - 1))) {
+            end--;
+        }
+        return raw.substring(start, end);
+    }
+
     private static double stringToNumber(String raw) {
-        final var s = raw.strip();
+        final var s = stripJs(raw);
         switch (s) {
             case "" -> {
                 return 0;
@@ -293,7 +324,7 @@ public final class JsCoercion {
     // StringToBigInt: an invalid literal is `undefined`, not NaN, and the callers must distinguish
     // the two - `1n >= "0."` is false rather than a numeric comparison against 0.
     public static BigInteger stringToBigInt(String raw) {
-        final var s = raw.strip();
+        final var s = stripJs(raw);
         if (s.isEmpty()) {
             return BigInteger.ZERO;
         }

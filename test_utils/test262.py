@@ -62,13 +62,9 @@ IGNORED_FLAGS = {"generated", "CanBlockIsFalse", "CanBlockIsTrue", "non-determin
 # The confirmed divergences the first run has to reproduce. A row that comes back all-green means the
 # filter, the prelude or the verdict logic is wrong — not that the engine improved.
 DIVERGENCES = [
-    ("for-in skips the prototype chain", ["language/statements/for-in/"]),
-    ("super.x = v is a SyntaxError", ["language/expressions/super/", "language/statements/class/"]),
-    ("Date component accessors are UTC, not local", ["built-ins/Date/"]),
     ("descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor)", ["built-ins/Object/defineProperty/"]),
     ("Object.assign bypasses the target's setter", ["built-ins/Object/assign/"]),
     ("instanceof survives F.prototype reassignment", ["language/expressions/instanceof/"]),
-    ("Math.round(-0.5) yields +0", ["built-ins/Math/"]),
     ("tagged template strings array not per-site cached", ["language/expressions/tagged-template/"]),
     ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
 ]

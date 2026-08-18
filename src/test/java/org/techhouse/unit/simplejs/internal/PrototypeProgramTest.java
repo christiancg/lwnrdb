@@ -92,11 +92,11 @@ public class PrototypeProgramTest {
                         + " e.toString().indexOf('TypeError: ') === 0] }"));
     }
 
-    // super.m() against a builtin superclass is refused with an explicit error
+    // super.m() against a builtin superclass now resolves through the intrinsic prototype chain
     @Test
-    public void test_super_method_on_native_super_throws() {
-        assertEquals("TypeError", run("class E extends Error { m() { return super.toString() } }"
-                + " try { new E('x').m() } catch (e) { return e.name }").replace("\"", ""));
+    public void test_super_method_on_native_super_resolves() {
+        assertEquals("true", run("class E extends Error { m() { return super.toString() } }"
+                + " return new E('x').m().indexOf('Error') === 0"));
     }
 
     // Primitive wrapper objects and new Object()
@@ -251,11 +251,13 @@ public class PrototypeProgramTest {
                 + " return [typeof m.get, typeof Object.create(new Date(0)).getTime]"));
     }
 
-    // A primitive assigned to `prototype` is not a link, so `new` falls back to Object.prototype
+    // An ordinary function's `prototype` is writable, so a primitive assignment is stored and
+    // observable - but it is not a link, so `new` falls back to Object.prototype
     @Test
-    public void test_primitive_prototype_assignment_is_ignored() {
-        assertEquals("[\"object\",true]", run("function foo() {} foo.prototype = 5;"
-                + " return [typeof new foo(), Object.getPrototypeOf(new foo()) === foo.prototype]"));
+    public void test_primitive_prototype_assignment_is_stored_but_not_linked() {
+        assertEquals("[\"object\",5,true]",
+                run("function foo() {} foo.prototype = 5;" + " return [typeof new foo(), foo.prototype,"
+                        + " Object.getPrototypeOf(new foo()) === Object.prototype]"));
     }
 
     // Mutating an intrinsic prototype's own link to a non-object value must not loop forever

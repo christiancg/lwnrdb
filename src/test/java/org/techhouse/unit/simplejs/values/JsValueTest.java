@@ -157,10 +157,11 @@ public class JsValueTest {
         final var object = new JsObject();
         object.setKlass(cls);
         assertSame(cls, object.getKlass());
-        assertFalse(object.hasPrivate("x"));
-        object.setPrivate("x", new JsNumber(7));
-        assertTrue(object.hasPrivate("x"));
-        assertEquals(7, ((JsNumber) Objects.requireNonNull(object.getPrivate("x"))).getValue());
+        final var x = cls.declarePrivateName("x");
+        assertFalse(object.hasPrivate(x));
+        object.setPrivate(x, new JsNumber(7));
+        assertTrue(object.hasPrivate(x));
+        assertEquals(7, ((JsNumber) Objects.requireNonNull(object.getPrivate(x))).getValue());
     }
 
     // Function values expose their name and native functions invoke their implementation

@@ -22,7 +22,6 @@ import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.Identifier;
-import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.PrivateIdentifier;
@@ -65,13 +64,16 @@ public final class ClassEvaluator {
 
     private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env) {
         JsClass superClass = null;
-        JsNativeFunction nativeSuperClass = null;
+        JsValue superConstructor = null;
+        var nullHeritage = false;
         if (superClassExpr != null) {
             final var resolved = interp.eval(superClassExpr, env);
             if (resolved instanceof JsClass sc) {
                 superClass = sc;
-            } else if (resolved instanceof JsNativeFunction nf && nf.getPrototype() != null) {
-                nativeSuperClass = nf;
+            } else if (resolved instanceof JsNull) {
+                nullHeritage = true;
+            } else if (InterpreterUtils.isConstructor(resolved)) {
+                superConstructor = resolved;
             } else {
                 throw new TypeErrorException(
                         "Class extends value " + JsCoercion.toStr(resolved) + " is not a constructor or null");
@@ -81,29 +83,84 @@ public final class ClassEvaluator {
         final var methodScope = classScope.child();
         final var name = id == null ? null : id.getName();
         final var cls = new JsClass(name, superClass, methodScope);
-        cls.setNativeSuperClass(nativeSuperClass);
+        if (nullHeritage) {
+            cls.markNullHeritage();
+        }
+        if (superConstructor != null) {
+            // ClassDefinitionEvaluation reads Get(superclass, "prototype"), so an accessor-valued or
+            // assigned `prototype` on the heritage is observed here; anything that is neither an
+            // object nor null is a TypeError before the body is evaluated.
+            final var parentPrototype = interp.getMember(superConstructor, "prototype");
+            if (!isObjectLike(parentPrototype) && !(parentPrototype instanceof JsNull)) {
+                throw new TypeErrorException("Class extends value does not have valid prototype property "
+                        + JsCoercion.toStr(parentPrototype));
+            }
+            cls.setSuperConstructor(superConstructor, parentPrototype instanceof JsNull ? null : parentPrototype);
+        }
         methodScope.defineHomeClass(cls);
+        declarePrivateNames(cls, body);
+        classScope.definePrivateEnvironment(cls);
         if (name != null) {
             classScope.declareLexical(name, "const");
             classScope.initialize(name, cls);
         }
-        final var staticInit = new ArrayList<JsNode>();
+        final var staticInit = new ArrayList<StaticEntry>();
         for (final var member : body.getMembers()) {
             switch (member) {
                 case MethodDefinition method -> installMethod(cls, method, classScope);
                 case FieldDefinition field -> {
+                    // ClassFieldDefinitionEvaluation runs ToPropertyKey once, at class definition
+                    // time and in source order, so an abrupt completion escapes before the member
+                    // is installed and a later instantiation never re-evaluates the key.
+                    final var key = fieldKey(field, classScope);
                     if (field.isStatic()) {
-                        staticInit.add(field);
+                        staticInit.add(new StaticEntry(field, null, key));
                     } else {
-                        cls.addInstanceField(field);
+                        cls.addInstanceField(field, key);
                     }
                 }
-                case StaticBlock block -> staticInit.add(block);
+                case StaticBlock block -> staticInit.add(new StaticEntry(null, block, null));
                 default -> throw new UnsupportedNodeException(member.getType().name());
             }
         }
         runStaticInit(cls, staticInit);
         return cls;
+    }
+
+    private record StaticEntry(FieldDefinition field, StaticBlock block, JsValue key) {
+    }
+
+    private JsValue fieldKey(FieldDefinition field, Environment classScope) {
+        if (!field.isComputed()) {
+            return null;
+        }
+        final var key = JsCoercion.toPropertyKey(interp.eval(field.getKey(), classScope), interp.ops());
+        if (field.isStatic() && isNamed(key, "prototype")) {
+            throw new TypeErrorException("Classes may not have a static field named 'prototype'");
+        }
+        if (!field.isStatic() && isNamed(key, "constructor")) {
+            throw new TypeErrorException("Classes may not have a field named 'constructor'");
+        }
+        return key;
+    }
+
+    private static boolean isNamed(JsValue key, String name) {
+        return key instanceof JsString string && name.equals(string.getValue());
+    }
+
+    // PrivateBoundIdentifiers of a ClassBody: the private-named members' keys, all created before the
+    // first member (or computed key) is evaluated.
+    private static void declarePrivateNames(JsClass cls, ClassBody body) {
+        for (final var member : body.getMembers()) {
+            final var key = switch (member) {
+                case MethodDefinition method -> method.getKey();
+                case FieldDefinition field -> field.getKey();
+                default -> null;
+            };
+            if (key instanceof PrivateIdentifier priv) {
+                cls.declarePrivateName(priv.getName());
+            }
+        }
     }
 
     private void installMethod(JsClass cls, MethodDefinition method, Environment classScope) {
@@ -112,7 +169,7 @@ public final class ClassEvaluator {
                 value.isGenerator(), cls.getMethodScope());
         final var kind = method.getKind();
         if ("constructor".equals(kind)) {
-            if (cls.getSuperClass() != null || cls.getNativeSuperClass() != null) {
+            if (cls.isDerived()) {
                 fn.markDerivedConstructor();
             }
             cls.setConstructor(fn);
@@ -122,16 +179,20 @@ public final class ClassEvaluator {
             fn.markMethod();
         }
         if (method.getKey() instanceof PrivateIdentifier priv) {
+            final var privateName = cls.declarePrivateName(priv.getName());
             fn.setInferredName(accessorName(kind, "#" + priv.getName()));
             if (method.isStatic()) {
-                cls.addPrivateStaticMethod(priv.getName(), kind, fn);
+                cls.addPrivateStaticMethod(privateName, kind, fn);
             } else {
-                cls.addPrivateInstanceMethod(priv.getName(), kind, fn);
+                cls.addPrivateInstanceMethod(privateName, kind, fn);
             }
             return;
         }
         if (method.isComputed()) {
-            final var keyValue = interp.eval(method.getKey(), classScope);
+            final var keyValue = JsCoercion.toPropertyKey(interp.eval(method.getKey(), classScope), interp.ops());
+            if (method.isStatic() && isNamed(keyValue, "prototype")) {
+                throw new TypeErrorException("Classes may not have a static method named 'prototype'");
+            }
             if (keyValue instanceof JsSymbol symbol) {
                 fn.setInferredName(accessorName(kind, symbolMethodName(symbol)));
                 if (method.isStatic()) {
@@ -186,43 +247,44 @@ public final class ClassEvaluator {
         }
     }
 
-    private void runStaticInit(JsClass cls, List<JsNode> staticInit) {
+    private void runStaticInit(JsClass cls, List<StaticEntry> staticInit) {
         final var staticScope = cls.getMethodScope().child();
         staticScope.defineThis(cls);
-        for (final var node : staticInit) {
-            if (node instanceof FieldDefinition field) {
-                final var value = field.getValue() == null
-                        ? JsUndefined.getInstance()
-                        : interp.eval(field.getValue(), staticScope);
-                if (field.getKey() instanceof PrivateIdentifier priv) {
-                    nameField(field, value, "#" + priv.getName());
-                    cls.setPrivateStaticField(priv.getName(), value);
-                } else if (field.isComputed()) {
-                    final var keyValue = interp.eval(field.getKey(), staticScope);
-                    if (keyValue instanceof JsSymbol symbol) {
-                        nameField(field, value, symbolMethodName(symbol));
-                        cls.setStaticSymbolProp(symbol, value);
-                    } else {
-                        final var key = JsCoercion.toStr(keyValue);
-                        nameField(field, value, key);
-                        cls.setStaticProp(key, value);
-                    }
-                } else {
-                    final var key = staticKeyName(field.getKey());
-                    nameField(field, value, key);
-                    cls.setStaticProp(key, value);
-                }
+        for (final var entry : staticInit) {
+            if (entry.field() != null) {
+                runStaticField(cls, entry, staticScope);
             } else {
-                final var block = (StaticBlock) node;
                 final var blockEnv = staticScope.child();
-                interp.hoist(block.getBody(), blockEnv);
-                for (final var statement : block.getBody()) {
+                interp.hoist(entry.block().getBody(), blockEnv);
+                for (final var statement : entry.block().getBody()) {
                     if (!interp.evalStatement(statement, blockEnv).isNormal()) {
                         break;
                     }
                 }
             }
         }
+    }
+
+    private void runStaticField(JsClass cls, StaticEntry entry, Environment staticScope) {
+        final var field = entry.field();
+        final var value = field.getValue() == null
+                ? JsUndefined.getInstance()
+                : interp.eval(field.getValue(), staticScope);
+        if (field.getKey() instanceof PrivateIdentifier priv) {
+            nameField(field, value, "#" + priv.getName());
+            if (!cls.addPrivateStaticField(cls.declarePrivateName(priv.getName()), value)) {
+                throw new TypeErrorException("Cannot add private field #" + priv.getName() + " to this class object");
+            }
+            return;
+        }
+        if (entry.key() instanceof JsSymbol symbol) {
+            nameField(field, value, symbolMethodName(symbol));
+            cls.setStaticSymbolProp(symbol, value);
+            return;
+        }
+        final var key = entry.key() == null ? staticKeyName(field.getKey()) : ((JsString) entry.key()).getValue();
+        nameField(field, value, key);
+        cls.setStaticProp(key, value);
     }
 
     public JsValue construct(JsClass cls, List<JsValue> args, JsValue newTarget) {
@@ -232,27 +294,48 @@ public final class ClassEvaluator {
         // accessor-valued or throwing `prototype` behaves like any other property read.
         final var declared = interp.getMemberByKey(newTarget, new JsString("prototype"));
         instance.setProto(isObjectLike(declared) ? declared : cls.getPrototype());
-        callConstructorChain(cls, instance, args, newTarget);
-        return instance;
+        return callConstructorChain(cls, instance, args, newTarget);
     }
 
-    private void callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args, JsValue newTarget) {
+    // The chain returns the effective `this`: a constructor that returns an object overrides the
+    // instance, and a derived class then initialises its own fields on that object instead.
+    private JsValue callConstructorChain(JsClass cls, JsObject instance, List<JsValue> args, JsValue newTarget) {
         final var constructor = cls.getConstructor();
-        final var nativeSuper = cls.getSuperClass() == null ? cls.getNativeSuperClass() : null;
+        final var superCtor = cls.getSuperClass() == null ? cls.getSuperConstructor() : null;
         // A derived class with its own constructor reaches its heritage through that constructor's
-        // super() call, so running the native super here too would construct the base twice.
-        if (constructor != null && (cls.getSuperClass() != null || nativeSuper != null)) {
-            interp.callFunction(constructor, instance, args, newTarget);
-            return;
+        // super() call, so running the super here too would construct the base twice.
+        if (constructor != null && cls.isDerived()) {
+            return overrideOrInstance(interp.callFunction(constructor, instance, args, newTarget), instance);
         }
-        if (nativeSuper != null) {
-            applyNativeSuper(nativeSuper, instance, args);
+        var self = (JsValue) instance;
+        if (superCtor != null) {
+            applySuperConstructor(superCtor, instance, args, newTarget);
+        } else if (cls.hasNullHeritage()) {
+            throw new TypeErrorException("Super constructor null of " + cls.getName() + " is not a constructor");
         } else if (cls.getSuperClass() != null) {
-            callConstructorChain(cls.getSuperClass(), instance, args, newTarget);
+            self = callConstructorChain(cls.getSuperClass(), instance, args, newTarget);
         }
-        initFields(cls, instance);
+        if (self instanceof JsObject target) {
+            initFields(cls, target);
+        }
         if (constructor != null) {
-            interp.callFunction(constructor, instance, args, newTarget);
+            return overrideOrInstance(interp.callFunction(constructor, self, args, newTarget), self);
+        }
+        return self;
+    }
+
+    private static JsValue overrideOrInstance(JsValue returned, JsValue instance) {
+        return isObjectLike(returned) ? returned : instance;
+    }
+
+    // A non-class heritage: a user function runs directly on the instance under construction (its body
+    // writes through `this`), a builtin goes through the copy path that keeps its internal state, and
+    // anything else constructible is constructed and its own state adopted.
+    private void applySuperConstructor(JsValue superCtor, JsObject instance, List<JsValue> args, JsValue newTarget) {
+        switch (superCtor) {
+            case JsNativeFunction nativeSuper -> applyNativeSuper(nativeSuper, instance, args);
+            case JsFunction function -> interp.callFunction(function, instance, args, newTarget);
+            default -> adoptConstructed(interp.construct(superCtor, args, newTarget), instance);
         }
     }
 
@@ -262,7 +345,10 @@ public final class ClassEvaluator {
     // JsUndefined instead), giving an abstract native constructor like Iterator's a signal to
     // distinguish a super() call from a subclass from direct construction.
     private void applyNativeSuper(JsNativeFunction nativeSuper, JsObject instance, List<JsValue> args) {
-        final var produced = nativeSuper.invoke(instance, args);
+        adoptConstructed(nativeSuper.invoke(instance, args), instance);
+    }
+
+    private static void adoptConstructed(JsValue produced, JsObject instance) {
         if (produced instanceof JsObject object) {
             for (final var key : object.keys()) {
                 instance.defineValue(key, object.get(key));
@@ -280,8 +366,12 @@ public final class ClassEvaluator {
     }
 
     private void initFields(JsClass cls, JsObject instance) {
-        instance.addPrivateBrand(cls);
-        for (final var field : cls.getInstanceFields()) {
+        if (!instance.addPrivateBrand(cls) && cls.hasPrivateInstanceBrand()) {
+            throw new TypeErrorException(
+                    "Cannot initialize the private members of " + cls.getName() + " twice on the same object");
+        }
+        for (final var entry : cls.getInstanceFields()) {
+            final var field = entry.definition();
             final var fieldScope = cls.getMethodScope().child();
             fieldScope.defineThis(instance);
             final var value = field.getValue() == null
@@ -289,19 +379,16 @@ public final class ClassEvaluator {
                     : interp.eval(field.getValue(), fieldScope);
             if (field.getKey() instanceof PrivateIdentifier priv) {
                 nameField(field, value, "#" + priv.getName());
-                instance.setPrivate(priv.getName(), value);
-            } else if (field.isComputed()) {
-                final var keyValue = interp.eval(field.getKey(), fieldScope);
-                if (keyValue instanceof JsSymbol symbol) {
-                    nameField(field, value, symbolMethodName(symbol));
-                    instance.setSymbol(symbol, value);
-                } else {
-                    final var key = JsCoercion.toStr(keyValue);
-                    nameField(field, value, key);
-                    instance.set(key, value);
+                if (!instance.addPrivate(cls.declarePrivateName(priv.getName()), value)) {
+                    throw new TypeErrorException("Cannot add private field #" + priv.getName() + " to this object");
                 }
+            } else if (entry.key() instanceof JsSymbol symbol) {
+                nameField(field, value, symbolMethodName(symbol));
+                instance.setSymbol(symbol, value);
             } else {
-                final var key = staticKeyName(field.getKey());
+                final var key = entry.key() == null
+                        ? staticKeyName(field.getKey())
+                        : ((JsString) entry.key()).getValue();
                 nameField(field, value, key);
                 instance.set(key, value);
             }
@@ -318,13 +405,24 @@ public final class ClassEvaluator {
             throw new ReferenceErrorException("Super constructor may only be called once");
         }
         final var args = interp.evalArguments(call.getArguments(), env);
+        var self = (JsValue) instance;
+        if (home.hasNullHeritage()) {
+            throw new TypeErrorException("Super constructor null of " + home.getName() + " is not a constructor");
+        }
         if (home.getSuperClass() == null) {
-            applyNativeSuper(home.getNativeSuperClass(), instance, args);
+            applySuperConstructor(home.getSuperConstructor(), instance, args, env.resolveNewTarget());
         } else {
-            callConstructorChain(home.getSuperClass(), instance, args, env.resolveNewTarget());
+            self = callConstructorChain(home.getSuperClass(), instance, args, env.resolveNewTarget());
+        }
+        // A base constructor that returns an object becomes this derived constructor's `this`, so the
+        // derived class's fields and brand land on that object.
+        if (self != instance) {
+            env.replaceThis(self);
         }
         env.markThisInitialized();
-        initFields(home, instance);
+        if (self instanceof JsObject target) {
+            initFields(home, target);
+        }
         return JsUndefined.getInstance();
     }
 
@@ -351,8 +449,20 @@ public final class ClassEvaluator {
         throw new TypeErrorException("(intermediate value).super." + key + " is not a function");
     }
 
+    // PutValue on a super reference is Set(GetSuperBase(), key, value, thisValue): the receiver is
+    // `this`, so an absent setter on the super chain writes an own property on the instance.
+    public void evalSuperMemberWrite(MemberExpression member, JsValue value, Environment env) {
+        final var thisArg = env.resolveThis();
+        superProtoStart(env, "");
+        final var key = interp.memberKey(member, env);
+        if (!interp.members().setMember(thisArg, key, value, thisArg)) {
+            throw new TypeErrorException("Cannot assign to read only property 'super." + key + "'");
+        }
+    }
+
     public JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
         final var thisArg = env.resolveThis();
+        superProtoStart(env, "");
         final var key = interp.memberKey(member, env);
         if (thisArg instanceof JsClass) {
             final var parent = superMemberParent(superHomeClass(env), key);
@@ -370,49 +480,69 @@ public final class ClassEvaluator {
     }
 
     private JsValue superProtoRead(Environment env, String key, JsValue thisArg) {
-        final var found = interp.members().chainMember(superProtoStart(env, key), key, thisArg);
+        final var start = superProtoStart(env, key);
+        if (start == null) {
+            return JsUndefined.getInstance();
+        }
+        final var found = interp.members().chainMember(start, key, thisArg);
         return found == null ? JsUndefined.getInstance() : found;
     }
 
+    // GetSuperBase: the home object's [[Prototype]]. A base class or a plain object literal has none
+    // of its own, so the chain starts at Object.prototype; `extends null` genuinely has no base.
     private JsValue superProtoStart(Environment env, String key) {
         final var home = env.resolveHomeClass();
         if (home instanceof JsObject object) {
-            return object.getProto();
+            final var proto = object.getProto();
+            return proto == null ? interp.intrinsics().objectProto() : proto;
         }
-        final var cls = superHomeClass(env);
-        superMemberParent(cls, key);
-        return cls.getPrototype().getProto();
+        if (home instanceof JsClass cls) {
+            if (cls.hasNullHeritage()) {
+                return null;
+            }
+            final var start = cls.getPrototype().getProto();
+            return start == null ? interp.intrinsics().objectProto() : start;
+        }
+        throw new SyntaxErrorException("'super' keyword unexpected here: " + key);
     }
 
     private JsClass superHomeClass(Environment env) {
-        if (env.resolveHomeClass() instanceof JsClass cls
-                && (cls.getSuperClass() != null || cls.getNativeSuperClass() != null)) {
+        if (env.resolveHomeClass() instanceof JsClass cls && cls.isDerived()) {
             return cls;
         }
         throw new SyntaxErrorException("'super' keyword unexpected here");
     }
 
+    // A static `super.x` reads through the heritage class's own statics; a non-class heritage has no
+    // static tables to chain into.
     private JsClass superMemberParent(JsClass home, String key) {
         final var parent = home.getSuperClass();
         if (parent == null) {
-            throw new TypeErrorException("super." + key + " is not available: " + home.getNativeSuperClass().getName()
-                    + " is a builtin superclass with no chainable methods");
+            throw new TypeErrorException(
+                    "super." + key + " is not available: " + home.getName() + " has no class superclass");
         }
         return parent;
     }
 
     public JsValue evalBrandCheck(PrivateIdentifier priv, JsValue target, Environment env) {
-        final var name = priv.getName();
+        if (!isObjectLike(target)) {
+            throw new TypeErrorException(
+                    "Cannot use 'in' operator to search for '#" + priv.getName() + "' in a non-object");
+        }
+        final var owner = env.resolvePrivateClass(priv.getName());
+        if (owner == null) {
+            return JsBoolean.FALSE;
+        }
+        final var privateName = owner.privateNameFor(priv.getName());
         if (target instanceof JsClass cls) {
-            return JsBoolean.of(env.resolveHomeClass() instanceof JsClass home && home.declaresStaticPrivate(name)
-                    && cls.declaresStaticPrivate(name));
+            return JsBoolean.of(cls == owner && owner.declaresStaticPrivate(privateName));
         }
         if (target instanceof JsObject object) {
-            if (object.hasPrivate(name)) {
+            if (object.hasPrivate(privateName)) {
                 return JsBoolean.TRUE;
             }
-            if (env.resolveHomeClass() instanceof JsClass cls && cls.declaresPrivate(name)) {
-                return JsBoolean.of(object.hasPrivateBrand(cls));
+            if (owner.declaresPrivate(privateName)) {
+                return JsBoolean.of(object.hasPrivateBrand(owner));
             }
         }
         return JsBoolean.FALSE;

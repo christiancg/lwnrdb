@@ -40,22 +40,27 @@ public final class JsonBuiltins {
     }
 
     public static JsObject create(InterpreterOps ops, Invoker invoker) {
+        return create(ops, invoker, null);
+    }
+
+    public static JsObject create(InterpreterOps ops, Invoker invoker, JsObject objectProto) {
         final var json = new JsObject();
-        Intrinsics.defineHidden(json, "parse", new JsNativeFunction("parse", (_, args) -> parse(args, ops, invoker)));
+        Intrinsics.defineHidden(json, "parse",
+                new JsNativeFunction("parse", (_, args) -> parse(args, ops, invoker, objectProto)));
         Intrinsics.defineHidden(json, "stringify",
-                new JsNativeFunction("stringify", (_, args) -> stringify(args, ops, invoker)));
+                new JsNativeFunction("stringify", (_, args) -> stringify(args, ops, invoker, objectProto)));
         Intrinsics.defineNamespaceTag(json, "JSON");
         return json;
     }
 
-    private static JsValue parse(List<JsValue> args, InterpreterOps ops, Invoker invoker) {
+    private static JsValue parse(List<JsValue> args, InterpreterOps ops, Invoker invoker, JsObject objectProto) {
         final var text = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
-        final var parsed = new JsonTextParser(text).parseText();
+        final var parsed = new JsonTextParser(text, objectProto).parseText();
         final var reviver = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         if (!isCallable(reviver)) {
             return parsed;
         }
-        final var holder = new JsObject();
+        final var holder = newHolder(objectProto);
         holder.defineValue("", parsed);
         return internalize(holder, "", reviver, ops, invoker);
     }
@@ -91,18 +96,38 @@ public final class JsonBuiltins {
         if (revived instanceof JsUndefined) {
             ops.deleteMember(holder, name);
         } else {
-            ops.setMember(holder, name, revived);
+            // CreateDataProperty, not [[Set]]: a proxy's defineProperty trap must be the one that
+            // runs, and a rejected redefinition is ignored while an abrupt completion propagates.
+            if (isRedefinable(holder, name, ops)) {
+                ops.defineProperty(holder, name, dataDescriptor(revived));
+            }
         }
+    }
+
+    private static boolean isRedefinable(JsValue holder, JsString name, InterpreterOps ops) {
+        return !(ops.getOwnPropertyDescriptor(holder, name) instanceof JsObject descriptor)
+                || !descriptor.has("configurable") || JsCoercion.toBoolean(descriptor.get("configurable"));
+    }
+
+    private static JsObject dataDescriptor(JsValue value) {
+        final var descriptor = new JsObject();
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.of(true));
+        descriptor.set("enumerable", JsBoolean.of(true));
+        descriptor.set("configurable", JsBoolean.of(true));
+        return descriptor;
     }
 
     // A real JSON grammar rather than the EJson reader: EJson accepts text JSON rejects, collapses
     // -0 and would turn a "__proto__" key into a prototype assignment.
     private static final class JsonTextParser {
         private final String source;
+        private final JsObject objectProto;
         private int pos;
 
-        private JsonTextParser(String source) {
+        private JsonTextParser(String source, JsObject objectProto) {
             this.source = source;
+            this.objectProto = objectProto;
         }
 
         private JsValue parseText() {
@@ -140,7 +165,7 @@ public final class JsonBuiltins {
 
         private JsValue parseObject() {
             pos++;
-            final var object = new JsObject();
+            final var object = newHolder(objectProto);
             skipWhitespace();
             if (peek() == '}') {
                 pos++;
@@ -302,12 +327,18 @@ public final class JsonBuiltins {
         }
     }
 
-    private static JsValue stringify(List<JsValue> args, InterpreterOps ops, Invoker invoker) {
+    private static JsObject newHolder(JsObject objectProto) {
+        final var holder = new JsObject();
+        holder.setProto(objectProto);
+        return holder;
+    }
+
+    private static JsValue stringify(List<JsValue> args, InterpreterOps ops, Invoker invoker, JsObject objectProto) {
         if (args.isEmpty()) {
             return JsUndefined.getInstance();
         }
         final var root = args.getFirst();
-        final var holder = new JsObject();
+        final var holder = newHolder(objectProto);
         holder.set("", root);
         final var tree = toJsonTree(root, holder, "", replacerFor(args, ops), newSeen(), ops, invoker);
         if (tree == null) {
@@ -329,13 +360,24 @@ public final class JsonBuiltins {
         // A boxed primitive unwraps to its primitive before serialization, and a proxy is walked
         // through its traps rather than serialized as its raw target.
         return switch (value) {
+            case JsNumber number -> numberTree(number.getValue());
             case JsArray array -> arrayTree(array, replacer, seen, ops, invoker);
+            // A boxed Number/String goes through ToNumber/ToString, so an overridden valueOf/toString
+            // on the wrapper wins over the slot it was constructed with.
+            case JsObject wrapper when wrapper.getPrimitive() instanceof JsNumber ->
+                numberTree(JsCoercion.toNumber(wrapper, ops));
+            case JsObject wrapper when wrapper.getPrimitive() instanceof JsString ->
+                new org.techhouse.ejson.elements.JsonString(JsCoercion.toStr(wrapper, ops));
             case JsObject wrapper when wrapper.getPrimitive() != null -> EJsonInterop.toEjson(wrapper.getPrimitive());
             case JsObject object -> objectTree(object, replacer, seen, ops, invoker);
             case JsProxy proxy when isArray(proxy) -> proxyArrayTree(proxy, replacer, seen, ops, invoker);
             case JsProxy proxy when !isCallable(proxy) -> proxyObjectTree(proxy, replacer, seen, ops, invoker);
             default -> EJsonInterop.toEjson(value);
         };
+    }
+
+    private static JsonBaseElement numberTree(double value) {
+        return Double.isFinite(value) ? new org.techhouse.ejson.elements.JsonNumber(value) : JsonNull.INSTANCE;
     }
 
     private static JsonBaseElement proxyArrayTree(JsProxy proxy, Replacer replacer, Set<JsValue> seen,
@@ -386,9 +428,11 @@ public final class JsonBuiltins {
             Invoker invoker) {
         enter(array, seen);
         final var result = new JsonArray();
-        final var elements = array.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            final var child = toJsonTree(elements.get(i), array, Integer.toString(i), replacer, seen, ops, invoker);
+        final var length = array.length();
+        for (var i = 0; i < length; i++) {
+            final var key = Integer.toString(i);
+            final var child = toJsonTree(ops.getMember(array, new JsString(key)), array, key, replacer, seen, ops,
+                    invoker);
             result.add(child == null ? JsonNull.INSTANCE : child);
         }
         seen.remove(array);
@@ -399,10 +443,8 @@ public final class JsonBuiltins {
             Invoker invoker) {
         enter(object, seen);
         final var result = new JsonObject();
-        for (final var key : object.keys()) {
-            if (!object.isEnumerable(key) || isFiltered(replacer, key)) {
-                continue;
-            }
+        // A PropertyList replacer dictates both the membership *and* the order of the output keys.
+        for (final var key : serializableKeys(object, replacer)) {
             final var child = toJsonTree(ownValue(object, key, ops), object, key, replacer, seen, ops, invoker);
             if (child != null) {
                 result.add(key, child);
@@ -410,6 +452,19 @@ public final class JsonBuiltins {
         }
         seen.remove(object);
         return result;
+    }
+
+    private static List<String> serializableKeys(JsObject object, Replacer replacer) {
+        if (replacer.allowList() != null) {
+            return replacer.allowList();
+        }
+        final var keys = new ArrayList<String>();
+        for (final var key : object.keys()) {
+            if (object.isEnumerable(key)) {
+                keys.add(key);
+            }
+        }
+        return keys;
     }
 
     private static boolean isFiltered(Replacer replacer, String key) {
@@ -452,7 +507,7 @@ public final class JsonBuiltins {
         }
         if (element instanceof JsObject wrapper
                 && (wrapper.getPrimitive() instanceof JsString || wrapper.getPrimitive() instanceof JsNumber)) {
-            return JsCoercion.toStr(wrapper.getPrimitive(), ops);
+            return JsCoercion.toStr(wrapper, ops);
         }
         return null;
     }
@@ -461,14 +516,25 @@ public final class JsonBuiltins {
         if (args.size() < 3) {
             return null;
         }
-        var space = args.get(2);
-        if (space instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
-            space = wrapper.getPrimitive();
+        final var space = args.get(2);
+        if (space instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsNumber) {
+            return indentOfNumber(JsCoercion.toNumber(wrapper, ops));
+        }
+        if (space instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsString) {
+            return indentOfString(JsCoercion.toStr(wrapper, ops));
         }
         return switch (space) {
-            case JsNumber number -> " ".repeat(Math.clamp((long) JsCoercion.toNumber(number, ops), 0, MAX_INDENT));
-            case JsString string -> string.getValue().substring(0, Math.min(string.getValue().length(), MAX_INDENT));
+            case JsNumber number -> indentOfNumber(number.getValue());
+            case JsString string -> indentOfString(string.getValue());
             default -> null;
         };
+    }
+
+    private static String indentOfNumber(double value) {
+        return " ".repeat(Double.isNaN(value) ? 0 : Math.clamp((long) value, 0, MAX_INDENT));
+    }
+
+    private static String indentOfString(String value) {
+        return value.substring(0, Math.min(value.length(), MAX_INDENT));
     }
 }

@@ -10,6 +10,7 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 public final class DeclarationScope {
     private final Set<String> lexical = new HashSet<>();
     private final Set<String> vars = new HashSet<>();
+    private final Set<String> catchParams = new HashSet<>();
     private final DeclarationScope parent;
     private final boolean functionBoundary;
 
@@ -27,7 +28,15 @@ public final class DeclarationScope {
     }
 
     public void declareLexical(String name) {
-        if (!lexical.add(name) || vars.contains(name)) {
+        if (!lexical.add(name) || vars.contains(name) || catchParams.contains(name)) {
+            throw alreadyDeclared(name);
+        }
+    }
+
+    // A catch parameter clashes with a lexical declaration in the catch block but not with a `var`
+    // there: Annex B keeps `catch (e) { var e; }` legal for a simple binding identifier.
+    public void declareCatchParam(String name) {
+        if (!catchParams.add(name) || lexical.contains(name)) {
             throw alreadyDeclared(name);
         }
     }

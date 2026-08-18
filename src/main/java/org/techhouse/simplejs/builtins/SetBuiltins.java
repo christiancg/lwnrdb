@@ -29,7 +29,20 @@ public final class SetBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops, boolean weak) {
-        return new JsNativeFunction(weak ? "WeakSet" : "Set", (_, args) -> construct(args, ops, weak));
+        final var name = weak ? "WeakSet" : "Set";
+        return new JsNativeFunction(name, (thisArg, args) -> {
+            requireNewTarget(name, thisArg);
+            return construct(args, ops, weak);
+        });
+    }
+
+    // Reached without `new` there is no new.target; a subclass's super() call arrives with the
+    // instance under construction as thisArg, which is what keeps `class S extends Set {}` working.
+    private static void requireNewTarget(String name, JsValue thisArg) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
+            throw new TypeErrorException("Constructor " + name + " requires 'new'");
+        }
     }
 
     // The values are pulled one at a time (the iterable may be endless), the adder is read off the
@@ -47,6 +60,25 @@ public final class SetBuiltins {
         }
         new Iteration(ops, iterable).forEach(value -> ops.call(adder, set, List.of(value)));
         return set;
+    }
+
+    // `size` is an accessor on the prototype rather than a data method, and `keys` is not a method of
+    // its own at all: it is the very same function object as `values`, which a script can compare.
+    public static void installAccessors(JsObject proto, boolean weak) {
+        final var label = weak ? "WeakSet" : "Set";
+        final var getter = new JsNativeFunction("get size", (thisArg, _) -> {
+            if (!(thisArg instanceof JsSet set) || set.isWeak() != weak) {
+                throw new TypeErrorException(label + ".prototype.size called on an incompatible receiver");
+            }
+            return new JsNumber(set.size());
+        });
+        getter.setLength(0);
+        proto.defineAccessor("size", getter, null);
+        proto.setFlags("size", new JsObject.PropertyFlags(true, false, true));
+        final var values = proto.get("values");
+        if (values != null) {
+            Intrinsics.installMethod(proto, "keys", values);
+        }
     }
 
     public static JsValue getMethod(JsSet receiver, String name, Invoker invoker, InterpreterOps ops) {
@@ -165,7 +197,8 @@ public final class SetBuiltins {
     private static JsSet intersection(JsSet receiver, SetRecord other) {
         final var result = new JsSet();
         if (receiver.size() <= other.size()) {
-            for (final var value : new ArrayList<>(receiver.values())) {
+            final var cursor = receiver.cursor();
+            for (var value = cursor.next(); value != null; value = cursor.next()) {
                 if (other.contains(value)) {
                     result.add(value);
                 }
@@ -211,11 +244,14 @@ public final class SetBuiltins {
         return result;
     }
 
+    // The receiver's [[SetData]] is walked live: the argument's `has` may delete an entry this loop
+    // has not reached yet, and the spec re-reads the list length after every call.
     private static boolean isSubsetOf(JsSet receiver, SetRecord other) {
         if (receiver.size() > other.size()) {
             return false;
         }
-        for (final var value : new ArrayList<>(receiver.values())) {
+        final var cursor = receiver.cursor();
+        for (var value = cursor.next(); value != null; value = cursor.next()) {
             if (!other.contains(value)) {
                 return false;
             }
@@ -239,7 +275,8 @@ public final class SetBuiltins {
 
     private static boolean isDisjointFrom(JsSet receiver, SetRecord other) {
         if (receiver.size() <= other.size()) {
-            for (final var value : new ArrayList<>(receiver.values())) {
+            final var cursor = receiver.cursor();
+            for (var value = cursor.next(); value != null; value = cursor.next()) {
                 if (other.contains(value)) {
                     return false;
                 }
@@ -263,22 +300,29 @@ public final class SetBuiltins {
         set.add(value);
     }
 
+    // Both iterators and forEach walk a live [[SetData]] cursor, so a member added, deleted or
+    // re-added by the consumer is observed exactly as the spec prescribes.
     public static JsObject valuesIterator(JsSet set) {
-        return JsIterators.of(new ArrayList<>(set.values()).iterator());
+        final var cursor = set.cursor();
+        return JsIterators.lazy(_ -> cursor.next());
     }
 
     private static JsObject entriesIterator(JsSet set) {
-        final var snapshot = new ArrayList<JsValue>();
-        for (final var value : set.values()) {
-            snapshot.add(new JsArray(new ArrayList<>(List.of(value, value))));
-        }
-        return JsIterators.of(snapshot.iterator());
+        final var cursor = set.cursor();
+        return JsIterators.lazy(_ -> {
+            final var value = cursor.next();
+            return value == null ? null : new JsArray(new ArrayList<>(List.of(value, value)));
+        });
     }
 
     private static JsValue forEach(JsSet set, List<JsValue> args, Invoker invoker) {
         final var callback = arg(args, 0);
+        if (!InterpreterUtils.isCallable(callback)) {
+            throw new TypeErrorException("Set.prototype.forEach callbackfn is not a function");
+        }
         final var thisArg = arg(args, 1);
-        for (final var value : new ArrayList<>(set.values())) {
+        final var cursor = set.cursor();
+        for (var value = cursor.next(); value != null; value = cursor.next()) {
             invoker.call(callback, thisArg, List.of(value, value, set));
         }
         return JsUndefined.getInstance();

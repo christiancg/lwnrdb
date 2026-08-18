@@ -45,15 +45,16 @@ public final class GlobalFunctionsBuiltins {
     public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops,
             Intrinsics intrinsics) {
         define(global, "encodeURI", new JsNativeFunction("encodeURI",
-                (_, args) -> new JsString(encode(str(args), URI_UNESCAPED + URI_RESERVED, intrinsics))));
+                (_, args) -> new JsString(encode(str(args, ops), URI_UNESCAPED + URI_RESERVED, intrinsics))));
         define(global, "encodeURIComponent", new JsNativeFunction("encodeURIComponent",
-                (_, args) -> new JsString(encode(str(args), URI_UNESCAPED, intrinsics))));
+                (_, args) -> new JsString(encode(str(args, ops), URI_UNESCAPED, intrinsics))));
         define(global, "decodeURI",
-                new JsNativeFunction("decodeURI", (_, args) -> new JsString(decode(str(args), true, intrinsics))));
+                new JsNativeFunction("decodeURI", (_, args) -> new JsString(decode(str(args, ops), true, intrinsics))));
         define(global, "decodeURIComponent", new JsNativeFunction("decodeURIComponent",
-                (_, args) -> new JsString(decode(str(args), false, intrinsics))));
-        define(global, "escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(str(args)))));
-        define(global, "unescape", new JsNativeFunction("unescape", (_, args) -> new JsString(unescape(str(args)))));
+                (_, args) -> new JsString(decode(str(args, ops), false, intrinsics))));
+        define(global, "escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(str(args, ops)))));
+        define(global, "unescape",
+                new JsNativeFunction("unescape", (_, args) -> new JsString(unescape(str(args, ops)))));
         define(global, "structuredClone",
                 new JsNativeFunction("structuredClone",
                         (_, args) -> clone(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(),
@@ -106,26 +107,47 @@ public final class GlobalFunctionsBuiltins {
                 }
                 i += 3;
             } else {
-                final var count = leadingByteCount(first, intrinsics);
-                final var bytes = new byte[count];
-                bytes[0] = (byte) first;
-                var pos = i + 3;
-                for (var k = 1; k < count; k++) {
-                    if (pos >= input.length() || input.charAt(pos) != '%') {
-                        throw uriError(intrinsics);
-                    }
-                    final var next = hexByte(input, pos, intrinsics);
-                    if ((next & 0xC0) != 0x80) {
-                        throw uriError(intrinsics);
-                    }
-                    bytes[k] = (byte) next;
-                    pos += 3;
-                }
-                out.append(new String(bytes, StandardCharsets.UTF_8));
-                i = pos;
+                i = decodeSequence(input, i, first, out, intrinsics);
             }
         }
         return out.toString();
+    }
+
+    private static int decodeSequence(String input, int start, int first, StringBuilder out, Intrinsics intrinsics) {
+        final var count = leadingByteCount(first, intrinsics);
+        final var bytes = new byte[count];
+        bytes[0] = (byte) first;
+        var pos = start + 3;
+        for (var k = 1; k < count; k++) {
+            if (pos >= input.length() || input.charAt(pos) != '%') {
+                throw uriError(intrinsics);
+            }
+            bytes[k] = (byte) hexByte(input, pos, intrinsics);
+            pos += 3;
+        }
+        if (!isWellFormedUtf8(bytes)) {
+            throw uriError(intrinsics);
+        }
+        out.append(new String(bytes, StandardCharsets.UTF_8));
+        return pos;
+    }
+
+    // The spec's Decode rejects anything that is not a well-formed UTF-8 octet sequence, which rules
+    // out an overlong encoding, a surrogate code point and anything above U+10FFFF - all of which
+    // java.nio's decoder would happily replace with U+FFFD instead.
+    private static boolean isWellFormedUtf8(byte[] bytes) {
+        for (var k = 1; k < bytes.length; k++) {
+            if ((bytes[k] & 0xC0) != 0x80) {
+                return false;
+            }
+        }
+        final var lead = bytes[0] & 0xFF;
+        final var second = bytes.length > 1 ? bytes[1] & 0xFF : 0;
+        return switch (bytes.length) {
+            case 2 -> lead >= 0xC2;
+            case 3 -> lead != 0xE0 ? lead != 0xED || second <= 0x9F : second >= 0xA0;
+            default -> lead <= 0xF4 && (lead != 0xF0 || second >= 0x90) && (lead != 0xF4 || second <= 0x8F);
+        };
     }
 
     private static int leadingByteCount(int first, Intrinsics intrinsics) {
@@ -145,12 +167,23 @@ public final class GlobalFunctionsBuiltins {
         if (index + 2 >= input.length()) {
             throw uriError(intrinsics);
         }
-        final var high = Character.digit(input.charAt(index + 1), 16);
-        final var low = Character.digit(input.charAt(index + 2), 16);
+        final var high = asciiHex(input.charAt(index + 1));
+        final var low = asciiHex(input.charAt(index + 2));
         if (high < 0 || low < 0) {
             throw uriError(intrinsics);
         }
         return (high << 4) | low;
+    }
+
+    // Character.digit(c, 16) also accepts the Unicode decimal digits; a HexDigit is ASCII only.
+    private static int asciiHex(char c) {
+        if (c >= '0' && c <= '9') {
+            return c - '0';
+        }
+        if (c >= 'a' && c <= 'f') {
+            return c - 'a' + 10;
+        }
+        return c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
     }
 
     private static String escape(String input) {
@@ -193,7 +226,7 @@ public final class GlobalFunctionsBuiltins {
             return false;
         }
         for (var i = start; i < start + length; i++) {
-            if (Character.digit(input.charAt(i), 16) < 0) {
+            if (asciiHex(input.charAt(i)) < 0) {
                 return false;
             }
         }
@@ -278,15 +311,15 @@ public final class GlobalFunctionsBuiltins {
     }
 
     private static TypeErrorException dataCloneError(JsValue value) {
-        return new TypeErrorException(JsCoercion.toStr(value) + " could not be cloned");
+        return new TypeErrorException(JsCoercion.typeOf(value) + " could not be cloned");
     }
 
     private static JsThrowException uriError(Intrinsics intrinsics) {
         return new JsThrowException(intrinsics.makeError("URIError", "URI malformed"));
     }
 
-    private static String str(List<JsValue> args) {
-        return args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst());
+    private static String str(List<JsValue> args, InterpreterOps ops) {
+        return args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
     }
 
     private static void define(Environment global, String name, JsValue value) {

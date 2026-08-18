@@ -27,7 +27,11 @@ public final class MapBuiltins {
 
     public static JsNativeFunction create(IterableToList iterableToList, Invoker invoker, InterpreterOps ops,
             boolean weak) {
-        final var constructor = new JsNativeFunction(weak ? "WeakMap" : "Map", (_, args) -> construct(args, ops, weak));
+        final var name = weak ? "WeakMap" : "Map";
+        final var constructor = new JsNativeFunction(name, (thisArg, args) -> {
+            requireNewTarget(name, thisArg);
+            return construct(args, ops, weak);
+        });
         if (!weak) {
             constructor.setProperty("groupBy",
                     new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
@@ -35,9 +39,21 @@ public final class MapBuiltins {
         return constructor;
     }
 
+    // Reached without `new` there is no new.target; a subclass's super() call arrives with the
+    // instance under construction as thisArg, which is what keeps `class M extends Map {}` working.
+    private static void requireNewTarget(String name, JsValue thisArg) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
+            throw new TypeErrorException("Constructor " + name + " requires 'new'");
+        }
+    }
+
     private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
         final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var callback = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        if (!InterpreterUtils.isCallable(callback)) {
+            throw new TypeErrorException("Map.groupBy callbackfn is not a function");
+        }
         final var map = new JsMap(false);
         final var items = iterableToList.drain(source);
         for (var i = 0; i < items.size(); i++) {
@@ -76,6 +92,21 @@ public final class MapBuiltins {
             ops.call(adder, map, List.of(key, value));
         });
         return map;
+    }
+
+    // `size` is an accessor on the prototype, not a data method, so reading its descriptor off
+    // Map.prototype has to yield a getter and a foreign receiver has to throw rather than answer 0.
+    public static void installSizeAccessor(JsObject proto, boolean weak) {
+        final var label = weak ? "WeakMap" : "Map";
+        final var getter = new JsNativeFunction("get size", (thisArg, _) -> {
+            if (!(thisArg instanceof JsMap map) || map.isWeak() != weak) {
+                throw new TypeErrorException(label + ".prototype.size called on an incompatible receiver");
+            }
+            return new JsNumber(map.size());
+        });
+        getter.setLength(0);
+        proto.defineAccessor("size", getter, null);
+        proto.setFlags("size", new JsObject.PropertyFlags(true, false, true));
     }
 
     public static JsValue getMethod(JsMap receiver, String name, Invoker invoker) {
@@ -145,34 +176,40 @@ public final class MapBuiltins {
         map.set(key, value);
     }
 
+    // The three iterators and forEach all walk a live [[MapData]] cursor rather than a snapshot, so an
+    // entry added, deleted or re-added by the consumer is observed exactly as the spec prescribes.
     public static JsObject entriesIterator(JsMap map) {
-        final var snapshot = new ArrayList<JsValue>();
-        for (final var entry : map.entries()) {
-            snapshot.add(new JsArray(new ArrayList<>(List.of(entry.key(), entry.value()))));
-        }
-        return JsIterators.of(snapshot.iterator());
+        final var cursor = map.cursor();
+        return JsIterators.lazy(_ -> {
+            final var entry = cursor.next();
+            return entry == null ? null : new JsArray(new ArrayList<>(List.of(entry.key(), entry.value())));
+        });
     }
 
     private static JsObject keysIterator(JsMap map) {
-        final var snapshot = new ArrayList<JsValue>();
-        for (final var entry : map.entries()) {
-            snapshot.add(entry.key());
-        }
-        return JsIterators.of(snapshot.iterator());
+        final var cursor = map.cursor();
+        return JsIterators.lazy(_ -> {
+            final var entry = cursor.next();
+            return entry == null ? null : entry.key();
+        });
     }
 
     private static JsObject valuesIterator(JsMap map) {
-        final var snapshot = new ArrayList<JsValue>();
-        for (final var entry : map.entries()) {
-            snapshot.add(entry.value());
-        }
-        return JsIterators.of(snapshot.iterator());
+        final var cursor = map.cursor();
+        return JsIterators.lazy(_ -> {
+            final var entry = cursor.next();
+            return entry == null ? null : entry.value();
+        });
     }
 
     private static JsValue forEach(JsMap map, List<JsValue> args, Invoker invoker) {
         final var callback = arg(args, 0);
+        if (!InterpreterUtils.isCallable(callback)) {
+            throw new TypeErrorException("Map.prototype.forEach callbackfn is not a function");
+        }
         final var thisArg = arg(args, 1);
-        for (final var entry : new ArrayList<>(map.entries())) {
+        final var cursor = map.cursor();
+        for (var entry = cursor.next(); entry != null; entry = cursor.next()) {
             invoker.call(callback, thisArg, List.of(entry.value(), entry.key(), map));
         }
         return JsUndefined.getInstance();

@@ -17,7 +17,7 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
     private List<JsValue> boundArgs;
     private JsValue prototype;
     private JsValue ownProto;
-    private int explicitLength = -1;
+    private double explicitLength = -1;
     private boolean constructor;
 
     public JsNativeFunction(String name, BiFunction<JsValue, List<JsValue>, JsValue> implementation) {
@@ -44,11 +44,21 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
         this.explicitLength = length;
     }
 
+    // BoundFunctionLength can yield +Infinity or a value past the int range, so the slot itself is a
+    // double; getExplicitLength keeps its int shape for the builtin-length wiring, which never sees one.
+    public void setLength(double length) {
+        this.explicitLength = length;
+    }
+
     public boolean hasExplicitLength() {
         return explicitLength >= 0;
     }
 
     public int getExplicitLength() {
+        return (int) explicitLength;
+    }
+
+    public double getExplicitLengthValue() {
         return explicitLength;
     }
 

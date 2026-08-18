@@ -96,6 +96,24 @@ public final class TypedArrayBuiltins {
         return constructed;
     }
 
+    // OrdinaryCreateFromConstructor: a new.target whose `prototype` is not this kind's intrinsic one
+    // (Reflect.construct with a foreign constructor) produces an ordinary object carrying the view
+    // as its wrapped primitive, which is how every builtin with internal state is subclassed here.
+    private static JsValue withNewTargetPrototype(JsValue constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return constructed;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
+            return constructed;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(constructed);
+        wrapper.setProto(requested);
+        return wrapper;
+    }
+
     public static JsNativeFunction arrayBuffer(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("ArrayBuffer", (thisArg, args) -> {
             requireNewTarget("ArrayBuffer", thisArg);
@@ -166,11 +184,10 @@ public final class TypedArrayBuiltins {
         ctor.setProperty("of", of);
     }
 
-    public static JsNativeFunction create(JsTypedArray.Kind kind, IterableToList iterableToList,
-                                          InterpreterOps ops) {
+    public static JsNativeFunction create(JsTypedArray.Kind kind, IterableToList iterableToList, InterpreterOps ops) {
         final var ctor = new JsNativeFunction(kind.ctorName(), (thisArg, args) -> {
             requireNewTarget(kind.ctorName(), thisArg);
-            return withObservedPrototype(constructTyped(kind, args, iterableToList, ops), ops);
+            return withNewTargetPrototype(constructTyped(kind, args, iterableToList, ops), ops);
         });
         ctor.setLength(3);
         defineBytesPerElement(ctor.ownProperties(), kind);

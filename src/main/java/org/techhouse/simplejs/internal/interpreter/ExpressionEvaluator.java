@@ -288,10 +288,27 @@ public final class ExpressionEvaluator {
 
     private JsValue evalDelete(Expression argument, Environment env) {
         if (!(argument instanceof MemberExpression member)) {
+            // Deleting anything that is not a reference is still an evaluation: `delete f()` calls f.
+            interp.eval(argument, env);
             return JsBoolean.TRUE;
+        }
+        // `delete super.x` is a super reference, and deleting one is a ReferenceError at runtime
+        // rather than an early error, so the base and the key are evaluated first.
+        if (member.getObject() instanceof SuperExpression) {
+            interp.memberKeyValue(member, env);
+            throw new ReferenceErrorException("Unsupported reference to 'super'");
         }
         final var target = interp.eval(member.getObject(), env);
         final var keyValue = interp.memberKeyValue(member, env);
+        // [[Delete]] runs on ToObject(base), so a nullish base is a TypeError - unless the access is
+        // optional, where the whole chain short-circuits and the delete simply succeeds.
+        if (isNullish(target)) {
+            if (member.isOptional()) {
+                return JsBoolean.TRUE;
+            }
+            throw new TypeErrorException(
+                    "Cannot convert undefined or null to object in a delete of " + JsCoercion.toStr(keyValue));
+        }
         if (keyValue instanceof JsSymbol symbol) {
             return deleteSymbolMember(target, symbol);
         }
@@ -384,8 +401,14 @@ public final class ExpressionEvaluator {
                 interp.setPrivateMember(object, priv.getName(), newValue, env);
                 return update.isPrefix() ? newValue : numericOld(oldValue, interp.ops());
             }
+            if (member.getObject() instanceof SuperExpression) {
+                final var oldValue = classes.evalSuperMemberRead(member, env);
+                final var newValue = JsOperators.delta(oldValue, increment, interp.ops());
+                classes.evalSuperMemberWrite(member, newValue, env);
+                return update.isPrefix() ? newValue : numericOld(oldValue, interp.ops());
+            }
             final var target = interp.eval(member.getObject(), env);
-            final var key = interp.memberKeyValue(member, env);
+            final var key = interp.referenceKey(target, interp.memberKeyValue(member, env));
             final var oldValue = interp.getMemberByKey(target, key);
             final var newValue = JsOperators.delta(oldValue, increment, interp.ops());
             assignMember(target, key, newValue);
@@ -474,14 +497,20 @@ public final class ExpressionEvaluator {
         if (member.getProperty() instanceof PrivateIdentifier priv) {
             return interp.assignToPrivate(member, priv, assignment, env);
         }
+        if (member.getObject() instanceof SuperExpression) {
+            return assignToSuperMember(member, assignment, env);
+        }
         final var target = interp.eval(member.getObject(), env);
-        final var key = interp.memberKeyValue(member, env);
+        final var rawKey = interp.memberKeyValue(member, env);
         final var operator = assignment.getOperator();
         if ("=".equals(operator)) {
+            // A plain assignment never reads the reference, so ToPropertyKey waits for PutValue and
+            // therefore runs after the right-hand side.
             final var value = interp.eval(assignment.getValue(), env);
-            assignMember(target, key, value);
+            assignMember(target, rawKey, value);
             return value;
         }
+        final var key = interp.referenceKey(target, rawKey);
         final var current = interp.getMemberByKey(target, key);
         if (LOGICAL_ASSIGN.contains(operator)) {
             if (shouldNotApplyLogical(operator, current)) {
@@ -494,6 +523,28 @@ public final class ExpressionEvaluator {
         final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
                 interp.ops());
         assignMember(target, key, value);
+        return value;
+    }
+
+    private JsValue assignToSuperMember(MemberExpression member, AssignmentExpression assignment, Environment env) {
+        final var operator = assignment.getOperator();
+        if ("=".equals(operator)) {
+            final var value = interp.eval(assignment.getValue(), env);
+            classes.evalSuperMemberWrite(member, value, env);
+            return value;
+        }
+        final var current = classes.evalSuperMemberRead(member, env);
+        if (LOGICAL_ASSIGN.contains(operator)) {
+            if (shouldNotApplyLogical(operator, current)) {
+                return current;
+            }
+            final var value = interp.eval(assignment.getValue(), env);
+            classes.evalSuperMemberWrite(member, value, env);
+            return value;
+        }
+        final var value = JsOperators.binary(baseOperator(operator), current, interp.eval(assignment.getValue(), env),
+                interp.ops());
+        classes.evalSuperMemberWrite(member, value, env);
         return value;
     }
 

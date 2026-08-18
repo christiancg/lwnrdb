@@ -2,7 +2,6 @@ package org.techhouse.simplejs.values;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -14,7 +13,7 @@ public final class JsObject extends JsValue {
     private final PropertyTable table = new PropertyTable();
     private boolean errorData;
     private JsClass klass;
-    private Map<String, JsValue> privateFields;
+    private Map<PrivateName, JsValue> privateFields;
     private Set<JsClass> privateBrands;
     private JsValue proto;
     private JsValue primitive;
@@ -105,26 +104,37 @@ public final class JsObject extends JsValue {
         this.klass = klass;
     }
 
-    public JsValue getPrivate(String key) {
+    public JsValue getPrivate(PrivateName key) {
         return privateFields == null ? null : privateFields.get(key);
     }
 
-    public void setPrivate(String key, JsValue value) {
+    public void setPrivate(PrivateName key, JsValue value) {
         if (privateFields == null) {
-            privateFields = new LinkedHashMap<>();
+            privateFields = new IdentityHashMap<>();
         }
         privateFields.put(key, value);
     }
 
-    public boolean hasPrivate(String key) {
+    // PrivateFieldAdd: a name already present, or a non-extensible receiver, is a TypeError, which the
+    // caller raises from a false return.
+    public boolean addPrivate(PrivateName key, JsValue value) {
+        if (hasPrivate(key) || !isExtensible()) {
+            return false;
+        }
+        setPrivate(key, value);
+        return true;
+    }
+
+    public boolean hasPrivate(PrivateName key) {
         return privateFields != null && privateFields.containsKey(key);
     }
 
-    public void addPrivateBrand(JsClass owner) {
+    // PrivateBrandAdd: re-branding an object the same class already initialised is a TypeError.
+    public boolean addPrivateBrand(JsClass owner) {
         if (privateBrands == null) {
             privateBrands = Collections.newSetFromMap(new IdentityHashMap<>());
         }
-        privateBrands.add(owner);
+        return privateBrands.add(owner);
     }
 
     public boolean hasPrivateBrand(JsClass owner) {

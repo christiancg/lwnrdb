@@ -157,4 +157,22 @@ public class InOperatorProgramTest {
     public void test_symbol_method_in_instance() {
         assertTrue(bool("const s = Symbol('t'); class C { [s]() {} } s in new C()"));
     }
+
+    // A symbol key on an exotic receiver is not coerced to a string: it resolves through the value's
+    // intrinsic prototype chain instead of throwing "Cannot convert value to string"
+    @Test
+    public void test_symbol_key_on_an_exotic_receiver() {
+        assertTrue(bool("Symbol.iterator in []"));
+        assertFalse(bool("Symbol.toStringTag in []"));
+        assertTrue(bool("Symbol.replace in /x/"));
+        assertTrue(bool("Symbol.hasInstance in function() {}"));
+        assertTrue(bool("Symbol.iterator in new Map()"));
+        assertFalse(bool("Symbol('unshared') in []"));
+    }
+
+    // An own symbol added to an exotic value still wins over its prototype chain
+    @Test
+    public void test_own_symbol_on_an_exotic_receiver() {
+        assertTrue(bool("const s = Symbol('own'); const a = []; a[s] = 1; s in a"));
+    }
 }

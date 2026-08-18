@@ -7,6 +7,7 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.match
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
@@ -29,6 +30,7 @@ import org.techhouse.simplejs.nodes.ForInStatement;
 import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
 import org.techhouse.simplejs.nodes.IfStatement;
+import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.LabeledStatement;
 import org.techhouse.simplejs.nodes.ReturnStatement;
 import org.techhouse.simplejs.nodes.Statement;
@@ -245,7 +247,8 @@ public final class StatementEvaluator {
         if (statement.isAwait()) {
             return evalForAwaitOf(statement, env, label);
         }
-        final var iteration = new Iteration(interp, interp.eval(statement.getRight(), env));
+        final var iteration = new Iteration(interp,
+                evalIterationSource(statement.getLeft(), statement.getRight(), env));
         var value = iteration.next();
         while (value != null) {
             interp.tick();
@@ -343,8 +346,26 @@ public final class StatementEvaluator {
         return Completion.empty();
     }
 
+    // ForIn/OfHeadEvaluation: the head's lexically declared names exist, uninitialised, while the
+    // source expression runs, so `for (let x of [x])` is a ReferenceError rather than a lookup of an
+    // outer `x`.
+    private JsValue evalIterationSource(JsNode left, Expression right, Environment env) {
+        if (!(left instanceof VariableDeclaration declaration) || !LEXICAL_KINDS.contains(declaration.getKind())) {
+            return interp.eval(right, env);
+        }
+        final var headEnv = env.child();
+        final var names = new ArrayList<String>();
+        for (final var declarator : declaration.getDeclarations()) {
+            collectBoundNames(declarator.getId(), names);
+        }
+        for (final var name : names) {
+            headEnv.declareLexical(name, declaration.getKind());
+        }
+        return interp.eval(right, headEnv);
+    }
+
     public Completion evalForIn(ForInStatement statement, Environment env, String label) {
-        final var target = interp.eval(statement.getRight(), env);
+        final var target = evalIterationSource(statement.getLeft(), statement.getRight(), env);
         for (final var key : enumerateKeys(target)) {
             interp.tick();
             final var iterationEnv = env.child();
@@ -367,50 +388,53 @@ public final class StatementEvaluator {
                 && JsCoercion.toBoolean(desc.get("enumerable"));
     }
 
+    // EnumerateObjectProperties: own enumerable string keys first, then each prototype's, with a name
+    // already seen at a nearer level shadowing the inherited one even when the nearer one is not
+    // itself enumerable.
     private List<String> enumerateKeys(JsValue target) {
+        final var result = new ArrayList<String>();
+        final var seen = new HashSet<String>();
+        for (var current = target; current != null; current = current.getProto()) {
+            for (final var key : ownStringKeys(current)) {
+                if (seen.add(key) && isEnumerableOwn(current, key)) {
+                    result.add(key);
+                }
+            }
+            // A proxy answers for its whole chain through its own ownKeys trap.
+            if (current instanceof JsProxy || current instanceof JsGlobalObject) {
+                break;
+            }
+        }
+        return result;
+    }
+
+    private List<String> ownStringKeys(JsValue target) {
         if (target instanceof JsGlobalObject global) {
-            return new ArrayList<>(global.getEnv().enumerableGlobalNames());
+            return new ArrayList<>(global.getEnv().allGlobalNames());
         }
         if (target instanceof JsProxy proxy) {
             final var keys = new ArrayList<String>();
             for (final var key : proxies.ownKeys(proxy)) {
-                if (key instanceof JsString string && isEnumerableProxyKey(proxy, key)) {
+                if (key instanceof JsString string) {
                     keys.add(string.getValue());
                 }
             }
             return keys;
         }
-        if (target instanceof JsObject object) {
-            final var keys = new ArrayList<String>();
-            for (final var key : object.keys()) {
-                if (object.isEnumerable(key)) {
-                    keys.add(key);
-                }
-            }
-            return keys;
-        }
         if (target instanceof JsClass cls) {
-            final var owner = cls.getStaticOwner();
-            final var keys = new ArrayList<String>();
-            for (final var key : owner.keys()) {
-                if (owner.isEnumerable(key)) {
-                    keys.add(key);
-                }
-            }
-            return keys;
+            return new ArrayList<>(cls.getStaticOwner().keys());
+        }
+        if (target instanceof JsObject object) {
+            return new ArrayList<>(object.keys());
         }
         if (target instanceof JsArray array) {
             final var keys = new ArrayList<String>();
             for (var i = 0; i < array.length(); i++) {
-                if (!array.isHole(i) && array.getIndexFlags(i).enumerable()) {
+                if (!array.isHole(i)) {
                     keys.add(Integer.toString(i));
                 }
             }
-            for (final var key : array.namedPropertyKeys()) {
-                if (array.getPropFlags(key).enumerable()) {
-                    keys.add(key);
-                }
-            }
+            keys.addAll(array.namedPropertyKeys());
             return keys;
         }
         if (target instanceof JsString string) {
@@ -427,6 +451,22 @@ public final class StatementEvaluator {
             return callable.enumerablePropertyKeys();
         }
         return List.of();
+    }
+
+    private boolean isEnumerableOwn(JsValue target, String key) {
+        return switch (target) {
+            case JsGlobalObject global -> global.getEnv().enumerableGlobalNames().contains(key);
+            case JsProxy proxy -> isEnumerableProxyKey(proxy, new JsString(key));
+            case JsClass cls -> cls.getStaticOwner().isEnumerable(key);
+            case JsObject object -> object.isEnumerable(key);
+            case JsArray array -> arrayKeyEnumerable(array, key);
+            default -> true;
+        };
+    }
+
+    private static boolean arrayKeyEnumerable(JsArray array, String key) {
+        final var index = InterpreterUtils.arrayIndex(key);
+        return index == null ? array.getPropFlags(key).enumerable() : array.getIndexFlags(index).enumerable();
     }
 
     public Completion evalLabeled(LabeledStatement statement, Environment env) {

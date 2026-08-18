@@ -48,7 +48,15 @@ public final class PromiseBuiltins {
 
     public static JsNativeFunction create(EventLoop eventLoop, Invoker invoker, Intrinsics intrinsics) {
         final var ctx = new Ctx(eventLoop, invoker, intrinsics);
-        final var promise = new JsNativeFunction("Promise", (_, args) -> construct(ctx, args));
+        // Reached without `new` there is no new.target; a subclass's super() call arrives with the
+        // instance under construction as thisArg, which is what keeps `class P extends Promise {}` working.
+        final var promise = new JsNativeFunction("Promise", (thisArg, args) -> {
+            final var newTarget = JsNativeFunction.currentNewTarget();
+            if ((newTarget == null || newTarget instanceof JsUndefined) && !(thisArg instanceof JsObject)) {
+                throw new TypeErrorException("Constructor Promise requires 'new'");
+            }
+            return construct(ctx, args);
+        });
         promise.setProperty("resolve",
                 new JsNativeFunction("resolve", (receiver, args) -> resolveStatic(ctx, receiver, arg(args, 0))));
         promise.setProperty("reject",

@@ -165,10 +165,11 @@ public class NumberBuiltinsTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("BigInt('x')"));
     }
 
-    // BigInt rejects an object argument with a TypeError
+    // BigInt runs the object through ToPrimitive first, so it fails on the resulting string
     @Test
     public void test_bigint_object_throws() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt({})"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("BigInt({})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt(Symbol())"));
     }
 
     // toLocaleString formats with the default locale; digits survive grouping, specials stay readable

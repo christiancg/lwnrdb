@@ -26,17 +26,17 @@ public final class GlobalScope {
         global.declareNonWritableBuiltin("NaN", new JsNumber(Double.NaN));
         global.declareNonWritableBuiltin("Infinity", new JsNumber(Double.POSITIVE_INFINITY));
         global.declareNonWritableBuiltin("undefined", JsUndefined.getInstance());
-        ErrorBuiltins.install(global, intrinsics);
+        ErrorBuiltins.install(global, intrinsics, ops, iterableToList);
         constructor(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker, intrinsics),
                 intrinsics.objectProto());
         constructor(global, "Function", functionConstructor(), intrinsics.functionProto());
         constructor(global, "Array", ArrayBuiltins.create(invoker, eventLoop, ops, intrinsics),
                 intrinsics.arrayProto());
         constructor(global, "String", StringBuiltins.create(ops), intrinsics.stringProto());
-        constructor(global, "Number", NumberBuiltins.create(), intrinsics.numberProto());
+        constructor(global, "Number", NumberBuiltins.create(ops), intrinsics.numberProto());
         constructor(global, "Boolean", booleanFunction(), intrinsics.booleanProto());
         namespace(global, "Math", MathBuiltins.create(ops), intrinsics);
-        namespace(global, "JSON", JsonBuiltins.create(ops, invoker), intrinsics);
+        namespace(global, "JSON", JsonBuiltins.create(ops, invoker, intrinsics.objectProto()), intrinsics);
         namespace(global, "console",
                 consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink), intrinsics);
         constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, intrinsics),
@@ -60,7 +60,7 @@ public final class GlobalScope {
                 intrinsics.weakMapProto());
         constructor(global, "Set", SetBuiltins.create(ops, false), intrinsics.setProto());
         constructor(global, "WeakSet", SetBuiltins.create(ops, true), intrinsics.weakSetProto());
-        constructor(global, "Date", DateBuiltins.create(), intrinsics.dateProto());
+        constructor(global, "Date", DateBuiltins.create(ops), intrinsics.dateProto());
         constructor(global, "DisposableStack", DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false),
                 intrinsics.disposableStackProto());
         constructor(global, "AsyncDisposableStack",
@@ -86,13 +86,13 @@ public final class GlobalScope {
             ctor.setOwnProto(typedArrayCtor);
             constructor(global, kind.ctorName(), ctor, intrinsics.typedArrayProto(kind));
         }
-        final var bigInt = NumberBuiltins.bigIntFunction();
+        final var bigInt = NumberBuiltins.bigIntFunction(ops);
         BigIntBuiltins.installStatics(bigInt, ops);
         constructor(global, "BigInt", bigInt, intrinsics.bigintProto());
-        define(global, "parseInt", NumberBuiltins.parseIntFunction());
-        define(global, "parseFloat", NumberBuiltins.parseFloatFunction());
-        define(global, "isNaN", NumberBuiltins.isNaNFunction());
-        define(global, "isFinite", NumberBuiltins.isFiniteFunction());
+        define(global, "parseInt", NumberBuiltins.parseIntFunction(ops));
+        define(global, "parseFloat", NumberBuiltins.parseFloatFunction(ops));
+        define(global, "isNaN", NumberBuiltins.isNaNFunction(ops));
+        define(global, "isFinite", NumberBuiltins.isFiniteFunction(ops));
         GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops, intrinsics);
         FetchBuiltins.install(global, eventLoop, network, limits, intrinsics);
         define(global, "globalThis", globalThis);

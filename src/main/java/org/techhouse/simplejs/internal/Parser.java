@@ -1,8 +1,10 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -132,7 +134,21 @@ public final class Parser {
     }
 
     private static final class State extends TokenStream {
+        // The lexer tokenises these as keywords, but the grammar never reserves them: they are
+        // IdentifierReferences and BindingIdentifiers wherever a member key or declaration expects one.
+        private static final Set<String> CONTEXTUAL_KEYWORDS = Set.of("of", "async");
+
+        // Keywords that can begin an expression, used to tell `await x` (the operator) apart from
+        // `await` the identifier by a single-token lookahead.
+        private static final Set<String> EXPRESSION_KEYWORDS = Set.of("this", "super", "new", "function", "class",
+                "typeof", "void", "delete", "await", "yield", "async", "import", "of");
+
         private final PatternConverter patterns = new PatternConverter(this);
+        // Parenthesised expressions, by identity: the AST keeps no marker for them, but the
+        // ?? / && / || chaining early error only fires on an *unparenthesised* operand.
+        private final Set<Expression> parenthesised = Collections.newSetFromMap(new IdentityHashMap<>());
+        // Object literals carrying two `__proto__: v` properties, legal only as a destructuring target.
+        private final Set<Expression> duplicateProto = Collections.newSetFromMap(new IdentityHashMap<>());
         private DeclarationScope scope = new DeclarationScope(null, true);
         private PrivateScope privateScope;
         private final Map<String, Boolean> labels = new HashMap<>();
@@ -141,7 +157,16 @@ public final class Parser {
         private boolean inStaticBlock;
         private boolean inGenerator;
         private boolean inAsync = true;
+        // The grammar's [Await] parameter: where `await` may not be an identifier. It is set across an
+        // async function's parameters *and* body and across a class static block, and reset by any
+        // function boundary including an arrow's body (ConciseBody carries no [Await]) - which is why
+        // it is tracked separately from inAsync, the flag that allows an AwaitExpression.
+        private boolean awaitReserved;
         private boolean superCallAllowed;
+        // A SuperProperty is only in the grammar inside a method, an accessor, a class field
+        // initializer or a static block - an ordinary function body or the script's top level is an
+        // early error, whatever encloses them.
+        private boolean superPropertyAllowed;
         private boolean classHasHeritage;
         private final boolean strictScriptGoal;
         // Any function-like body, an arrow's included: where a `return` is allowed.
@@ -182,20 +207,32 @@ public final class Parser {
         // An arrow keeps the enclosing static block's `arguments` restriction; a real function
         // introduces its own `arguments` binding and so lifts it across both params and body.
         private FunctionParts parseFunctionParts(boolean generator, boolean async) {
-            return parseFunctionParts(generator, async, false);
+            return parseFunctionParts(generator, async, false, false);
         }
 
-        private FunctionParts parseFunctionParts(boolean generator, boolean async, boolean superCall) {
+        private FunctionParts parseFunctionParts(boolean generator, boolean async, boolean superCall, boolean method) {
+            final var wasSuperPropertyAllowed = superPropertyAllowed;
+            superPropertyAllowed = method;
+            try {
+                return parseFunctionPartsInContext(generator, async, superCall);
+            } finally {
+                superPropertyAllowed = wasSuperPropertyAllowed;
+            }
+        }
+
+        private FunctionParts parseFunctionPartsInContext(boolean generator, boolean async, boolean superCall) {
             final var wasInStaticBlock = inStaticBlock;
             final var wasInGenerator = inGenerator;
             final var wasInAsync = inAsync;
             final var wasSuperCallAllowed = superCallAllowed;
             final var wasInFunctionBody = inFunctionBody;
             final var wasInNonArrowFunction = inNonArrowFunction;
+            final var wasAwaitReserved = awaitReserved;
             inStaticBlock = false;
             superCallAllowed = superCall;
             inFunctionBody = true;
             inNonArrowFunction = true;
+            awaitReserved = async;
             try {
                 final var params = outsideGenerator(this::parseParams);
                 setFunctionKind(generator, async);
@@ -209,6 +246,7 @@ public final class Parser {
                 superCallAllowed = wasSuperCallAllowed;
                 inFunctionBody = wasInFunctionBody;
                 inNonArrowFunction = wasInNonArrowFunction;
+                awaitReserved = wasAwaitReserved;
             }
         }
 
@@ -372,6 +410,13 @@ public final class Parser {
                     && ((JsSeparator) peek()).getValue() == '(') {
                 throw new SyntaxErrorException("Strict mode code may not include a with statement");
             }
+            // `debugger` is a reserved word the lexer keeps as an identifier token, so the statement is
+            // recognised here and every other position rejects the word.
+            if (isContextualKeyword("debugger")) {
+                advance();
+                consumeSemicolon();
+                return new EmptyStatement();
+            }
             if (isUsingDeclarationStart()) {
                 return parseUsingDeclaration();
             }
@@ -387,14 +432,33 @@ public final class Parser {
 
         // `using x = e` — contextual: a declaration only when `using` is directly followed by a binding
         // identifier (so `using`, `using.foo()`, `using = 1`, `let using = 1` still parse as expressions).
+        // `using of` never begins a declaration: the for-of head carries that lookahead restriction so
+        // `for (using of of x)` reads `using` as the loop's own target.
         private boolean isUsingDeclarationStart() {
-            return isContextualKeyword("using") && peek().getType() == JsType.IDENTIFIER;
+            return isContextualKeyword("using") && identifierLikeAt(1) && isNotKeywordAt(1);
         }
 
         // `await using x = e` — three-token lookahead; otherwise `await` stays an AwaitExpression.
         private boolean isAwaitUsingDeclarationStart() {
             return isKeyword("await") && peek().getType() == JsType.IDENTIFIER
-                    && "using".equals(((JsIdentifier) peek()).getValue()) && peekAt(2).getType() == JsType.IDENTIFIER;
+                    && "using".equals(((JsIdentifier) peek()).getValue()) && identifierLikeAt(2);
+        }
+
+        private boolean identifierLikeAt(int offset) {
+            final var t = peekAt(offset);
+            if (t.getType() == JsType.IDENTIFIER) {
+                return true;
+            }
+            if (t.getType() != JsType.KEYWORD) {
+                return false;
+            }
+            final var kw = ((JsKeyword) t).getValue();
+            return CONTEXTUAL_KEYWORDS.contains(kw) || "await".equals(kw) && !awaitIsReserved();
+        }
+
+        private boolean isNotKeywordAt(int offset) {
+            final var t = peekAt(offset);
+            return t.getType() != JsType.KEYWORD || !((JsKeyword) t).getValue().equals("of");
         }
 
         private VariableDeclaration parseUsingDeclaration() {
@@ -607,8 +671,14 @@ public final class Parser {
                 }
                 return parseClassicForRest(null);
             }
+            // ForInOfStatement's head carries `[lookahead ∉ { let, async of }]`, so a bare `async`
+            // followed by `of` never begins a for-of head even though it is a valid reference elsewhere.
+            final var asyncHead = !isAwait && isKeyword("async");
             final var init = parseForHeaderLeft();
             if (isKeyword("in") || isKeyword("of")) {
+                if (asyncHead && isKeyword("of") && init instanceof Identifier id && "async".equals(id.getName())) {
+                    throw new SyntaxErrorException("The left-hand side of a for-of loop may not be the token 'async'");
+                }
                 return parseForInOf(init, isAwait);
             }
             if (isAwait) {
@@ -726,15 +796,26 @@ public final class Parser {
             return new TryStatement(block, handler, finalizer);
         }
 
+        // The catch parameter shares one scope with the block, so its bound names may not repeat, may
+        // not be redeclared lexically in the block, and may not be shadowed by a function declaration
+        // there. Declaring them in the block's own scope is what makes DeclarationScope catch all three.
         private CatchClause parseCatch() {
             expectKeyword("catch");
+            return inScope(this::parseCatchRest);
+        }
+
+        private CatchClause parseCatchRest() {
             JsNode param = null;
             if (matchSeparator('(')) {
                 param = parseBindingTarget();
                 expectSeparator(')');
+                final var names = new ArrayList<String>();
+                collectNames(param, names);
+                for (final var name : names) {
+                    scope.declareCatchParam(name);
+                }
             }
-            final var body = parseBlock();
-            return new CatchClause(param, body);
+            return new CatchClause(param, parseBlockBody());
         }
 
         private ThrowStatement parseThrow() {
@@ -798,7 +879,9 @@ public final class Parser {
         }
 
         private ReturnStatement parseReturn() {
-            if (strictScriptGoal && !inFunctionBody) {
+            // A class static block is function-like code but its body is a StatementList with no
+            // [Return] parameter, so a `return` there is always an early error.
+            if (inStaticBlock || strictScriptGoal && !inFunctionBody) {
                 throw new SyntaxErrorException("Illegal return statement");
             }
             expectKeyword("return");
@@ -1086,11 +1169,72 @@ public final class Parser {
 
         private Identifier parseIdentifier() {
             final var t = current();
-            if (t.getType() != JsType.IDENTIFIER) {
-                throw error();
+            if (t.getType() == JsType.IDENTIFIER) {
+                advance();
+                return new Identifier(((JsIdentifier) t).getValue());
+            }
+            if (keywordIsIdentifier()) {
+                advance();
+                return new Identifier(((JsKeyword) t).getValue());
+            }
+            throw error();
+        }
+
+        // `of`/`async` are never reserved; `await` is reserved only inside async function code, where
+        // it always introduces an AwaitExpression. A binding position needs no lookahead - only a
+        // reference position has to tell the operator apart from the identifier.
+        private boolean keywordIsIdentifier() {
+            final var t = current();
+            if (t.getType() != JsType.KEYWORD) {
+                return false;
+            }
+            final var kw = ((JsKeyword) t).getValue();
+            return CONTEXTUAL_KEYWORDS.contains(kw) || "await".equals(kw) && !awaitIsReserved();
+        }
+
+        // At the top level of a script the host contract keeps top-level await, so `await` there is
+        // the operator whenever an expression can follow it and the identifier otherwise.
+        private boolean awaitIsReserved() {
+            return awaitReserved;
+        }
+
+        // Outside async code an AwaitExpression is illegal anyway, so `await(x)` there is a call. Only
+        // at the top level of a script, where the host contract keeps top-level await, do the two
+        // readings compete and a single-token lookahead separates them.
+        private boolean awaitIsIdentifierReference() {
+            return !awaitIsReserved() && (!inAsync || !beginsExpression(peek()));
+        }
+
+        private static boolean beginsExpression(JsBaseElement t) {
+            return switch (t.getType()) {
+                case NUMBER, BIGINT, STRING, BOOLEAN, NULL, UNDEFINED, REGEX, TEMPLATE_STRING, IDENTIFIER,
+                        PRIVATE_IDENTIFIER ->
+                    true;
+                case KEYWORD -> EXPRESSION_KEYWORDS.contains(((JsKeyword) t).getValue());
+                case SEPARATOR -> {
+                    final char c = ((JsSeparator) t).getValue();
+                    yield c == '(' || c == '[' || c == '{';
+                }
+                case OPERATOR -> {
+                    final var op = ((JsOperator) t).getValue();
+                    yield ParserTables.PREFIX_UNARY_OPERATORS.contains(op) || "++".equals(op) || "--".equals(op);
+                }
+                default -> false;
+            };
+        }
+
+        // A contextual keyword in a reference position, including the `x => …` arrow head it can form.
+        private Expression parseContextualIdentifier(String name) {
+            if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
+                if (newlineBeforePeek()) {
+                    throw error();
+                }
+                advance();
+                advance();
+                return parseArrowBody(List.of(new Identifier(name)), false);
             }
             advance();
-            return new Identifier(((JsIdentifier) t).getValue());
+            return new Identifier(name);
         }
 
         private JsNode parseBindingTarget() {
@@ -1105,8 +1249,11 @@ public final class Parser {
 
         private Identifier parseBindingIdentifier() {
             rejectEscapedReserved();
+            final var contextual = keywordIsIdentifier();
             final var id = parseIdentifier();
-            validateBindingName(id.getName());
+            if (!contextual) {
+                validateBindingName(id.getName());
+            }
             return id;
         }
 
@@ -1120,10 +1267,21 @@ public final class Parser {
         // BindingIdentifier, not IdentifierName, so it is a SyntaxError there - checked on the token
         // rather than the name so a contextual word like `with` is only rejected when escaped.
         private void rejectEscapedReserved() {
-            if (current() instanceof JsIdentifier token && token.isEscaped()
-                    && Lexer.isReservedWord(token.getValue())) {
+            if (current() instanceof JsIdentifier token && token.isEscaped() && isEscapeReserved(token.getValue())) {
                 throw new SyntaxErrorException("Keyword must not contain escaped characters: " + token.getValue());
             }
+        }
+
+        // An escaped contextual keyword is only ever an identifier, so the escape is legal wherever
+        // the plain word would also have been an identifier.
+        private boolean isEscapeReserved(String word) {
+            if (CONTEXTUAL_KEYWORDS.contains(word)) {
+                return false;
+            }
+            if ("await".equals(word)) {
+                return awaitIsReserved();
+            }
+            return Lexer.isReservedWord(word);
         }
 
         private static void validateBindingName(String name) {
@@ -1236,6 +1394,9 @@ public final class Parser {
                     return new AssignmentExpression(op, target, parseAssignment());
                 }
             }
+            if (duplicateProto.contains(left)) {
+                throw new SyntaxErrorException("Duplicate __proto__ fields are not allowed in object literals");
+            }
             return left;
         }
 
@@ -1289,12 +1450,28 @@ public final class Parser {
                 advance();
                 final int nextMinPrec = "**".equals(op) ? prec : prec + 1;
                 final var right = parseBinary(nextMinPrec);
-                left = ParserTables.LOGICAL_OPERATORS.contains(op)
-                        ? new LogicalExpression(op, left, right)
-                        : new BinaryExpression(op, left, right);
+                if (ParserTables.LOGICAL_OPERATORS.contains(op)) {
+                    rejectCoalesceChain(op, left);
+                    rejectCoalesceChain(op, right);
+                    left = new LogicalExpression(op, left, right);
+                } else {
+                    left = new BinaryExpression(op, left, right);
+                }
                 op = currentBinaryOperator();
             }
             return left;
+        }
+
+        // CoalesceExpression's operands are not ShortCircuitExpressions, so `a ?? b || c` and
+        // `a || b ?? c` are Syntax Errors unless the inner one is parenthesised.
+        private void rejectCoalesceChain(String op, Expression operand) {
+            if (!(operand instanceof LogicalExpression logical) || parenthesised.contains(operand)) {
+                return;
+            }
+            final var inner = logical.getOperator();
+            if ("??".equals(op) != "??".equals(inner)) {
+                throw new SyntaxErrorException("Cannot chain '" + inner + "' with '" + op + "' without parentheses");
+            }
         }
 
         // instanceof and in arrive as keyword tokens, not operators, so both sources feed the binary ladder.
@@ -1347,7 +1524,7 @@ public final class Parser {
                     advance();
                     return rejectExponentiationBase(new UnaryExpression(kw, parseUnary(), true));
                 }
-                if ("await".equals(kw)) {
+                if ("await".equals(kw) && !awaitIsIdentifierReference()) {
                     advance();
                     if (!inAsync) {
                         throw new SyntaxErrorException("await is only valid inside an async function");
@@ -1635,8 +1812,14 @@ public final class Parser {
             final var t = (JsIdentifier) current();
             // An escaped keyword lexes as an identifier so it can serve as an IdentifierName; in a
             // reference position it is still the reserved word, and so a SyntaxError.
-            if (t.isEscaped() && Lexer.isReservedWord(t.getValue())) {
+            if (t.isEscaped() && isEscapeReserved(t.getValue())) {
                 throw new SyntaxErrorException("Keyword must not contain escaped characters: " + t.getValue());
+            }
+            // An IdentifierReference is never a reserved word: `with`, `debugger`, `enum` and the
+            // strict future-reserved words reach the parser as identifier tokens but are not usable.
+            // `eval`/`arguments` are restricted only as binding and assignment targets, not as reads.
+            if (Lexer.isReservedWord(t.getValue()) || ParserTables.STRICT_RESERVED.contains(t.getValue())) {
+                throw new SyntaxErrorException("'" + t.getValue() + "' cannot be used as an identifier in strict mode");
             }
             if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
                 if (newlineBeforePeek()) {
@@ -1659,14 +1842,26 @@ public final class Parser {
                     yield new ThisExpression();
                 }
                 case "function" -> parseFunctionExpression(false);
-                case "async" -> parseAsyncPrimary();
+                case "async" -> asyncStartsFunctionOrArrow() ? parseAsyncPrimary() : parseContextualIdentifier("async");
+                case "of" -> parseContextualIdentifier("of");
+                case "await" -> {
+                    if (awaitIsReserved()) {
+                        throw error();
+                    }
+                    yield parseContextualIdentifier("await");
+                }
                 case "class" -> parseClassExpression();
                 case "super" -> {
                     rejectOutsideFunctionCode("super");
                     advance();
-                    if (isSeparator('(') && !superCallAllowed) {
+                    if (isSeparator('(')) {
+                        if (!superCallAllowed) {
+                            throw new SyntaxErrorException(
+                                    "'super' keyword unexpected here: a super call belongs to a derived constructor");
+                        }
+                    } else if (!superPropertyAllowed) {
                         throw new SyntaxErrorException(
-                                "'super' keyword unexpected here: a super call belongs to a derived constructor");
+                                "'super' keyword unexpected here: a super property belongs to a method");
                     }
                     yield new SuperExpression();
                 }
@@ -1705,22 +1900,44 @@ public final class Parser {
                     || (next.getType() == JsType.OPERATOR && ".".equals(((JsOperator) next).getValue()));
         }
 
+        // `async` only modifies what follows it when a function or an arrow head does: `async(1)` is a
+        // call of a function named async, and `async` alone is an ordinary identifier reference.
+        private boolean asyncStartsFunctionOrArrow() {
+            final var next = peek();
+            if (next.getType() == JsType.KEYWORD && "function".equals(((JsKeyword) next).getValue())) {
+                return !newlineBeforePeek();
+            }
+            if (newlineBeforePeek()) {
+                return false;
+            }
+            if (next.getType() == JsType.SEPARATOR && ((JsSeparator) next).getValue() == '(') {
+                return matchingParenFollowedByArrowFrom(pos + 1);
+            }
+            if (next.getType() != JsType.IDENTIFIER && !(next.getType() == JsType.KEYWORD
+                    && CONTEXTUAL_KEYWORDS.contains(((JsKeyword) next).getValue()))) {
+                return false;
+            }
+            final var after = peekAt(2);
+            return after.getType() == JsType.OPERATOR && "=>".equals(((JsOperator) after).getValue());
+        }
+
         private Expression parseAsyncPrimary() {
             expectKeyword("async");
             if (isKeyword("function")) {
                 return parseFunctionExpression(true);
             }
-            if (current().getType() == JsType.IDENTIFIER && peek().getType() == JsType.OPERATOR
-                    && "=>".equals(((JsOperator) peek()).getValue())) {
+            // An async arrow's parameters are AsyncArrowBindingIdentifier/CoverCallExpression under
+            // [+Await], so `await` is reserved there even though the head is not yet the body.
+            if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
                 if (newlineBeforePeek()) {
                     throw error();
                 }
-                final var param = parseBindingIdentifier();
+                final var param = withAwaitReserved(true, this::parseBindingIdentifier);
                 expectOperator("=>");
                 return parseArrowBody(List.of(param), true);
             }
             if (isSeparator('(') && matchingParenFollowedByArrow()) {
-                final var params = parseParams();
+                final var params = withAwaitReserved(true, this::parseParams);
                 if (newlineBeforeCurrent()) {
                     throw error();
                 }
@@ -1730,13 +1947,24 @@ public final class Parser {
             throw error();
         }
 
+        // the assignment is read by the production lambda, which PMD's dataflow cannot see
+        @SuppressWarnings("PMD.UnusedAssignment")
+        private <T> T withAwaitReserved(boolean reserved, Supplier<T> production) {
+            final var wasAwaitReserved = awaitReserved;
+            awaitReserved = reserved;
+            try {
+                return production.get();
+            } finally {
+                awaitReserved = wasAwaitReserved;
+            }
+        }
+
+        // A FunctionExpression's own name is a BindingIdentifier[~Yield, ~Await] (and [+Await] only for
+        // an async one), so `(function await(){})` is legal even inside a class static block.
         private FunctionExpression parseFunctionExpression(boolean async) {
             expectKeyword("function");
             final var generator = matchOperator("*");
-            Identifier name = null;
-            if (current().getType() == JsType.IDENTIFIER) {
-                name = parseBindingIdentifier();
-            }
+            final var name = withAwaitReserved(async, () -> identifierLikeAt(0) ? parseBindingIdentifier() : null);
             final var parts = parseFunctionParts(generator, async);
             return new FunctionExpression(name, parts.params(), parts.body(), async, generator);
         }
@@ -1752,7 +1980,7 @@ public final class Parser {
         private ClassExpression parseClassExpression() {
             expectKeyword("class");
             Identifier id = null;
-            if (current().getType() == JsType.IDENTIFIER) {
+            if (identifierLikeAt(0) && isNotKeywordAt(0)) {
                 id = parseBindingIdentifier();
             }
             final var superClass = parseClassHeritage();
@@ -1803,10 +2031,12 @@ public final class Parser {
         private ClassBody parseClassBodyMembers(boolean hasHeritage) {
             final var wasClassHasHeritage = classHasHeritage;
             final var wasInNonArrowFunction = inNonArrowFunction;
+            final var wasSuperPropertyAllowed = superPropertyAllowed;
             classHasHeritage = hasHeritage;
             // A field initializer and a static block are function-like code too, so `super` and
             // `new.target` reach them.
             inNonArrowFunction = true;
+            superPropertyAllowed = true;
             expectSeparator('{');
             final var members = new ArrayList<JsNode>();
             final Map<String, Set<String>> privateNames = new HashMap<>();
@@ -1828,6 +2058,7 @@ public final class Parser {
             } finally {
                 classHasHeritage = wasClassHasHeritage;
                 inNonArrowFunction = wasInNonArrowFunction;
+                superPropertyAllowed = wasSuperPropertyAllowed;
             }
             expectSeparator('}');
             return new ClassBody(members);
@@ -1853,16 +2084,17 @@ public final class Parser {
                 checkStaticMethodName(memberKey, isStatic);
                 final var resolvedKind = resolveMethodKind(kind, memberKey, isStatic, async, generator);
                 final var parts = parseFunctionParts(generator, async,
-                        "constructor".equals(resolvedKind) && classHasHeritage);
+                        "constructor".equals(resolvedKind) && classHasHeritage, true);
+                checkAccessorParams(resolvedKind, parts.params());
                 final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
-                declarePrivateName(privateNames, memberKey, resolvedKind);
+                declarePrivateName(privateNames, memberKey, resolvedKind, isStatic);
                 return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
             }
             if (!"method".equals(kind) || async || generator) {
                 throw error();
             }
             checkFieldName(memberKey, isStatic);
-            declarePrivateName(privateNames, memberKey, "field");
+            declarePrivateName(privateNames, memberKey, "field", isStatic);
             Expression value = null;
             if (matchOperator("=")) {
                 value = outsideGenerator(this::parseAssignment);
@@ -1873,6 +2105,17 @@ public final class Parser {
             }
             consumeSemicolon();
             return new FieldDefinition(memberKey.key(), value, isStatic, memberKey.computed());
+        }
+
+        // A getter takes no parameters and a setter takes exactly one, which may carry a default but
+        // may not be a rest element (PropertySetParameterList is a single FormalParameter).
+        private void checkAccessorParams(String kind, List<JsNode> params) {
+            if ("get".equals(kind) && !params.isEmpty()) {
+                throw new SyntaxErrorException("Getter must not have any formal parameters");
+            }
+            if ("set".equals(kind) && (params.size() != 1 || params.getFirst() instanceof RestElement)) {
+                throw new SyntaxErrorException("Setter must have exactly one formal parameter");
+            }
         }
 
         // A static method cannot be named `prototype`: the class object already has that property.
@@ -1912,7 +2155,8 @@ public final class Parser {
 
         // A private name may be declared more than once only as exactly one getter and one setter
         // pair; any other repetition of the same #name is a Syntax Error.
-        private void declarePrivateName(Map<String, Set<String>> privateNames, MemberKey memberKey, String kind) {
+        private void declarePrivateName(Map<String, Set<String>> privateNames, MemberKey memberKey, String kind,
+                boolean isStatic) {
             if (!(memberKey.key() instanceof PrivateIdentifier priv)) {
                 return;
             }
@@ -1929,7 +2173,13 @@ public final class Parser {
             if (isDuplicate) {
                 throw new SyntaxErrorException("Duplicate private name #" + priv.getName());
             }
+            // The one legal repetition is a getter/setter pair, and the pair has to agree on `static`.
+            if (!existing.isEmpty() && existing.contains(isStatic ? "instance" : "static")) {
+                throw new SyntaxErrorException(
+                        "A private getter and setter named #" + priv.getName() + " must agree on 'static'");
+            }
             existing.add(kind);
+            existing.add(isStatic ? "static" : "instance");
         }
 
         // ContainsArguments / ContainsSuperCall, approximated: recurse through ordinary expressions
@@ -1981,7 +2231,19 @@ public final class Parser {
             }));
         }
 
+        // ClassStaticBlockStatementList is StatementList[+Await], so `await` is reserved throughout,
+        // even though a static block is not async code and an AwaitExpression is separately an error.
         private StaticBlock parseStaticBlockBody() {
+            final var wasAwaitReserved = awaitReserved;
+            awaitReserved = true;
+            try {
+                return parseStaticBlockStatements();
+            } finally {
+                awaitReserved = wasAwaitReserved;
+            }
+        }
+
+        private StaticBlock parseStaticBlockStatements() {
             expectSeparator('{');
             final var body = outsideGenerator(() -> {
                 final var statements = new ArrayList<Statement>();
@@ -2099,6 +2361,7 @@ public final class Parser {
             expectSeparator('(');
             final var expr = withInAllowed(this::parseExpression);
             expectSeparator(')');
+            parenthesised.add(expr);
             // Parentheses make a literal a PrimaryExpression, so `({}) = x` is an early error even
             // though the identical unparenthesised `{} = x` is a destructuring assignment.
             if (isOperator("=") && (expr instanceof ObjectExpression || expr instanceof ArrayExpression)) {
@@ -2135,7 +2398,9 @@ public final class Parser {
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
             final var wasInFunctionBody = inFunctionBody;
+            final var wasAwaitReserved = awaitReserved;
             inFunctionBody = true;
+            awaitReserved = async;
             try {
                 return inFunctionKind(async, () -> inBreakableBoundary(() -> {
                     if (isSeparator('{')) {
@@ -2147,6 +2412,7 @@ public final class Parser {
                 }));
             } finally {
                 inFunctionBody = wasInFunctionBody;
+                awaitReserved = wasAwaitReserved;
             }
         }
 
@@ -2185,7 +2451,37 @@ public final class Parser {
                 } while (trailingComma);
             }
             expectSeparator('}');
-            return new ObjectExpression(properties, trailingComma);
+            final var object = new ObjectExpression(properties, trailingComma);
+            if (hasDuplicateProto(properties)) {
+                duplicateProto.add(object);
+            }
+            return object;
+        }
+
+        // An object literal may carry at most one `__proto__: value` property: the second one would be
+        // a second [[Prototype]] setter. The same text is legal as a destructuring pattern, so the
+        // error is raised only where the literal is not reinterpreted as an assignment target.
+        private static boolean hasDuplicateProto(List<JsNode> properties) {
+            var seen = false;
+            for (final var member : properties) {
+                if (!(member instanceof Property property) || property.isComputed() || property.isShorthand()
+                        || !"init".equals(property.getKind()) || !"__proto__".equals(propertyKeyName(property))) {
+                    continue;
+                }
+                if (seen) {
+                    return true;
+                }
+                seen = true;
+            }
+            return false;
+        }
+
+        private static String propertyKeyName(Property property) {
+            return switch (property.getKey()) {
+                case Identifier id -> id.getName();
+                case StringLiteral str -> str.getValue();
+                case null, default -> null;
+            };
         }
 
         private JsNode parseObjectMember() {
@@ -2197,7 +2493,7 @@ public final class Parser {
 
         private Property parseProperty() {
             var async = false;
-            if (isKeyword("async") && starOrKeyFollows()) {
+            if (isKeyword("async") && starOrKeyFollows() && !newlineBeforePeek()) {
                 advance();
                 async = true;
             }
@@ -2213,7 +2509,8 @@ public final class Parser {
                     && isReservedWord(((JsIdentifier) current()).getValue());
             final var key = parsePropertyKey();
             if (isSeparator('(')) {
-                final var parts = parseFunctionParts(generator, async);
+                final var parts = parseFunctionParts(generator, async, false, true);
+                checkAccessorParams(kind, parts.params());
                 final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
                 return new Property(key, value, computed, false, "init".equals(kind) ? "method" : kind);
             }
@@ -2298,6 +2595,7 @@ public final class Parser {
             nested.privateScope = privateScope;
             nested.inFunctionBody = inFunctionBody;
             nested.inNonArrowFunction = inNonArrowFunction;
+            nested.awaitReserved = awaitReserved;
             return nested;
         }
 

@@ -65,11 +65,17 @@ public class ScriptGoalProgramTest {
         assertAcceptedByBoth("class C { static { new.target; } }");
     }
 
-    // A super property is not reachable from global code, through an arrow included
+    // A super property belongs to a method, so global code rejects it under either goal - the Script
+    // goal only adds the rejection for the arrow-wrapped form the host contract would otherwise allow
     @Test
     public void test_top_level_super_property_rejected() {
-        assertRejectedOnlyByGoal("super.property;");
-        assertRejectedOnlyByGoal("var f = () => super.property;");
+        assertRejectedByBoth("super.property;");
+        assertRejectedByBoth("var f = () => super.property;");
+    }
+
+    private void assertRejectedByBoth(String source) {
+        assertThrows(SyntaxErrorException.class, () -> parseStrict(source), source);
+        assertThrows(SyntaxErrorException.class, () -> parseRelaxed(source), source);
     }
 
     // A method, a field initializer and a static block all keep their super binding

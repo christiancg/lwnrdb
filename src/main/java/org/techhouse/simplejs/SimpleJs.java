@@ -96,10 +96,21 @@ public final class SimpleJs {
     private ScriptResult errorFromThrow(JsThrowException thrown) {
         final var value = thrown.getValue();
         if (value instanceof JsObject object) {
-            final var name = object.has("name") ? JsCoercion.toStr(object.get("name")) : "Error";
-            final var message = object.has("message") ? JsCoercion.toStr(object.get("message")) : "";
-            return ScriptResult.error(name, message);
+            return ScriptResult.error(field(object, "name", "Error"), field(object, "message", ""));
         }
         return ScriptResult.error("Error", JsCoercion.toStr(value));
+    }
+
+    // An error instance carries only the properties the constructor set: `name` normally lives on
+    // the intrinsic prototype, so the chain has to be walked to report it.
+    private String field(JsObject object, String key, String fallback) {
+        var current = object;
+        while (current != null) {
+            if (current.has(key)) {
+                return JsCoercion.toStr(current.get(key));
+            }
+            current = current.getProto() instanceof JsObject proto ? proto : null;
+        }
+        return fallback;
     }
 }

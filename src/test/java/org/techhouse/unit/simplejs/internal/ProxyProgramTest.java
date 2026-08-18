@@ -478,4 +478,82 @@ public class ProxyProgramTest {
                 """;
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
+
+    // Proxy is constructor-only: reached without `new` there is no new.target
+    @Test
+    public void test_constructor_requires_new() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Proxy({}, {})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Proxy.call(null, {}, {})"));
+    }
+
+    // Every trap is called with the handler object as its `this`
+    @Test
+    public void test_traps_run_with_the_handler_as_this() {
+        final var source = """
+                let seen = [];
+                let handler = {
+                  get(t, k) { seen.push(this === handler ? 'get' : 'get?'); return t[k]; },
+                  has(t, k) { seen.push(this === handler ? 'has' : 'has?'); return k in t; },
+                  set(t, k, v) { seen.push(this === handler ? 'set' : 'set?'); t[k] = v; return true; },
+                  deleteProperty(t, k) {
+                    seen.push(this === handler ? 'deleteProperty' : 'delete?');
+                    delete t[k];
+                    return true;
+                  },
+                  ownKeys(t) { seen.push(this === handler ? 'ownKeys' : 'ownKeys?'); return Reflect.ownKeys(t); }
+                };
+                let p = new Proxy({ a: 1 }, handler);
+                p.a; 'a' in p; p.b = 2; delete p.b; Object.keys(p);
+                seen.join(',')
+                """;
+        assertEquals("get,has,set,deleteProperty,ownKeys", str(source));
+    }
+
+    // A revoked proxy throws from every trap, whether or not the handler defines one
+    @Test
+    public void test_revoked_proxy_throws_everywhere() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let r = Proxy.revocable({}, {}); r.revoke(); r.proxy.x"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let r = Proxy.revocable({}, {}); r.revoke(); 'x' in r.proxy"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let r = Proxy.revocable({}, {}); r.revoke(); Object.keys(r.proxy)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let r = Proxy.revocable({}, {}); r.revoke(); delete r.proxy.x"));
+    }
+
+    // The ownKeys result is validated: duplicates, non-string/symbol keys and a dropped
+    // non-configurable target key are each a TypeError
+    @Test
+    public void test_own_keys_result_is_validated() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.keys(new Proxy({}, { ownKeys: () => ['a', 'a'] }))"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.keys(new Proxy({}, { ownKeys: () => [1] }))"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let t = {}; Object.defineProperty(t, 'a', { value: 1, configurable: false });"
+                        + "Object.getOwnPropertyNames(new Proxy(t, { ownKeys: () => [] }))"));
+    }
+
+    // Construct through a proxy of a proxy reaches the underlying constructor
+    @Test
+    public void test_construct_through_a_proxy_of_a_proxy() {
+        assertTrue(bool("""
+                function C() { this.x = 1; }
+                let inner = new Proxy(C, {});
+                let outer = new Proxy(inner, {});
+                new outer().x === 1
+                """));
+    }
+
+    // A symbol key reaches the has trap instead of being coerced to a string
+    @Test
+    public void test_symbol_keys_in_the_has_trap() {
+        assertTrue(bool("""
+                let seen;
+                let p = new Proxy({}, { has(t, k) { seen = k; return true; } });
+                let ok = Symbol.iterator in p;
+                ok && seen === Symbol.iterator
+                """));
+    }
 }

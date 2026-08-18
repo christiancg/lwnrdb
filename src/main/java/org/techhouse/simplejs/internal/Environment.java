@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -45,6 +46,7 @@ public final class Environment {
     private boolean thisInitialized = true;
     private JsValue homeClass;
     private boolean hasHomeClass;
+    private JsClass privateOwner;
     private JsValue newTarget;
     private boolean hasNewTarget;
     private List<DisposalEntry> disposables;
@@ -102,6 +104,14 @@ public final class Environment {
         return env == null || env.thisInitialized;
     }
 
+    // BindThisValue after a super() whose base constructor returned an object of its own.
+    public void replaceThis(JsValue value) {
+        final var env = thisEnvironment();
+        if (env != null) {
+            env.thisValue = value;
+        }
+    }
+
     public void markThisInitialized() {
         final var env = thisEnvironment();
         if (env != null) {
@@ -114,6 +124,26 @@ public final class Environment {
         while (env != null) {
             if (env.hasThis) {
                 return env;
+            }
+            env = env.parent;
+        }
+        return null;
+    }
+
+    // The PrivateEnvironment a class body introduces. It is a chain distinct from the home-class one:
+    // a class's private names are already in scope in its computed keys, which are evaluated in the
+    // class scope and so before any home object exists.
+    public void definePrivateEnvironment(JsClass owner) {
+        this.privateOwner = owner;
+    }
+
+    // ResolvePrivateIdentifier: the innermost enclosing class body that declares the name wins, so a
+    // nested class shadowing an outer `#x` reaches its own slot and never the outer one.
+    public JsClass resolvePrivateClass(String name) {
+        var env = this;
+        while (env != null) {
+            if (env.privateOwner != null && env.privateOwner.privateNameFor(name) != null) {
+                return env.privateOwner;
             }
             env = env.parent;
         }
@@ -211,7 +241,12 @@ public final class Environment {
         if (binding == null) {
             throw new ReferenceErrorException(name + " is not defined");
         }
-        if ("const".equals(binding.kind) && binding.initialized) {
+        // A lexical binding is in TDZ until its declaration runs, and an assignment reaches it just as
+        // a read does - a closure that writes it early is a ReferenceError, not a silent initialisation.
+        if (!binding.initialized && !"var".equals(binding.kind)) {
+            throw new ReferenceErrorException("Cannot access '" + name + "' before initialization");
+        }
+        if ("const".equals(binding.kind)) {
             throw new TypeErrorException("Assignment to constant variable.");
         }
         if (!binding.writable) {

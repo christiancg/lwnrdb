@@ -555,10 +555,11 @@ public final class MemberEvaluator {
     }
 
     public boolean setMember(JsValue target, String key, JsValue value, JsValue receiver) {
-        // An integer-indexed write is the view's own [[Set]]: it never coerces for, or falls through
-        // to, a foreign receiver.
-        if (target instanceof JsTypedArray typed && typed.setExoticIndex(new JsString(key), value, receiver)) {
-            return true;
+        // An integer-indexed write is the view's own [[Set]]: it either answers the write itself or,
+        // for a live index meant for a foreign receiver, leaves an ordinary property on that
+        // receiver - never a write through to the view.
+        if (target instanceof JsTypedArray typed && typed.hasCanonicalNumericIndex(new JsString(key))) {
+            return typed.setExoticIndex(new JsString(key), value, receiver) || setOnReceiver(receiver, key, value);
         }
         if (target instanceof JsObject object) {
             return setObjectMember(object, key, value, receiver);
@@ -571,6 +572,13 @@ public final class MemberEvaluator {
             for (var chain = new Chain(object); chain.hasLink(); chain.advance()) {
                 if (chain.link() instanceof JsProxy proxy) {
                     return proxies.set(proxy, new JsString(key), value, receiver);
+                }
+                // An integer-indexed link answers the whole write itself: the index is either
+                // dropped or created on the receiver, and no accessor further up the chain (the
+                // per-kind prototype included) is ever consulted.
+                if (chain.link() instanceof JsTypedArray typed && typed.hasCanonicalNumericIndex(new JsString(key))) {
+                    return typed.setExoticIndex(new JsString(key), value, receiver)
+                            || setOnReceiver(receiver, key, value);
                 }
                 final var accessor = protoAccessor(chain.link(), key);
                 if (accessor != null) {
@@ -623,16 +631,12 @@ public final class MemberEvaluator {
                 yield true;
             }
             case JsArray array -> setArrayMember(array, key, value);
-            case JsTypedArray typed -> {
-                final var index = arrayIndex(key);
-                if (index != null) {
-                    typed.setElement(index, value);
-                    yield true;
-                }
-                // A CanonicalNumericIndexString that is not a valid index is silently discarded by
-                // IntegerIndexedElementSet; it must never become an ordinary own property.
-                yield InterpreterUtils.isCanonicalNumericIndexString(key) || typed.ownProperties().set(key, value);
-            }
+            // A plain assignment is the view's own [[Set]] with itself as the receiver, so every
+            // CanonicalNumericIndexString coerces the value first and only then decides whether a
+            // slot receives it; one that names no slot is discarded, never stored as an ordinary
+            // own property.
+            case JsTypedArray typed -> typed.setExoticIndex(new JsString(key), value, typed)
+                    || setTableMember(typed, typed.ownProperties(), key, value);
             // PerformPromiseThen invokes the receiver's own `then`, and SpeciesConstructor reads its
             // own `constructor`, so an assignment to either has to land as an ordinary own property.
             case JsPromise promise -> promise.ownProperties().set(key, value);
@@ -649,16 +653,15 @@ public final class MemberEvaluator {
                 if (isNonWritableMetadata(callable, key)) {
                     yield false;
                 }
-                // `new` only consumes an object-like `.prototype` (falling back to the intrinsic
-                // Object.prototype otherwise), so a primitive assignment is accepted as a no-op
-                // rather than stored.
+                // An ordinary function's `prototype` is a writable own property, so even a primitive
+                // assignment is stored and observable through Get (`new` and
+                // OrdinaryCreateFromConstructor fall back to the intrinsic when it is not an
+                // object). A builtin's is not writable, and only an object-like value is kept there.
                 if ("prototype".equals(key)) {
-                    if (InterpreterUtils.isObjectLike(value)) {
-                        if (callable instanceof JsFunction fn) {
-                            fn.setPrototype(value);
-                        } else if (callable instanceof JsNativeFunction nf) {
-                            nf.setPrototype(value);
-                        }
+                    if (callable instanceof JsFunction fn) {
+                        fn.setPrototype(value);
+                    } else if (callable instanceof JsNativeFunction nf && InterpreterUtils.isObjectLike(value)) {
+                        nf.setPrototype(value);
                     }
                 } else {
                     callable.setEnumerableProperty(key, value);

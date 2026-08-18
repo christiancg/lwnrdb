@@ -1010,12 +1010,14 @@ public class ParserTest {
         assertThrows(SyntaxErrorException.class, () -> parse("class C { constructor() { super(); } }"));
     }
 
-    // super.m() parses to a call over a member access on super
+    // super.m() parses to a call over a member access on super; a super property only reaches a method
     @Test
     public void test_super_member() {
-        final var call = assertInstanceOf(CallExpression.class, firstExpression("super.m()"));
+        final var call = assertInstanceOf(CallExpression.class,
+                privateBodyExpression("class C extends B { m() { super.m(); } }"));
         final var member = assertInstanceOf(MemberExpression.class, call.getCallee());
         assertInstanceOf(SuperExpression.class, member.getObject());
+        assertThrows(SyntaxErrorException.class, () -> parse("super.m()"));
     }
 
     // Stray semicolons between members are skipped
@@ -1235,11 +1237,12 @@ public class ParserTest {
         assertEquals("method", method.getKind());
     }
 
-    // async not followed by function/arrow is an error
+    // async not followed by function/arrow is an ordinary identifier reference
     @Test
-    public void test_async_without_function_or_arrow_throws() {
-        assertThrows(UnexpectedTokenException.class, () -> parse("async 1"));
-        assertThrows(UnexpectedTokenException.class, () -> parse("async +"));
+    public void test_async_without_function_or_arrow_is_an_identifier() {
+        assertEquals("async", assertInstanceOf(Identifier.class, firstExpression("async")).getName());
+        assertEquals("async", assertInstanceOf(Identifier.class, firstExpression("async;")).getName());
+        assertThrows(RuntimeException.class, () -> parse("async +"));
     }
 
     // yield* requires an argument

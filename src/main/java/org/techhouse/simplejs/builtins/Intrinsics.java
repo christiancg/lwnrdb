@@ -112,7 +112,7 @@ public final class Intrinsics {
                 (receiver, name) -> StringBuiltins.getMethod(requireString(receiver, name), name, invoker, ops));
         installStringPrimitiveMethods(stringProto);
         numberProto = prototypeOf(NumberBuiltins.NAMES, "Number.prototype",
-                (receiver, name) -> NumberBuiltins.getMethod(requireNumber(receiver, name), name));
+                (receiver, name) -> NumberBuiltins.getMethod(requireNumber(receiver, name), name, ops));
         booleanProto = booleanPrototype();
         // The three wrapper prototypes are themselves ordinary objects carrying the corresponding
         // primitive slot, so `Number.prototype.toString()` reads 0 rather than rejecting the receiver.
@@ -120,7 +120,7 @@ public final class Intrinsics {
         numberProto.setPrimitive(new JsNumber(0));
         booleanProto.setPrimitive(JsBoolean.FALSE);
         bigintProto = prototypeOf(BigIntBuiltins.NAMES, "BigInt.prototype",
-                (receiver, name) -> BigIntBuiltins.getMethod(requireBigInt(receiver, name), name));
+                (receiver, name) -> BigIntBuiltins.getMethod(requireBigInt(receiver, name), name, ops));
         symbolProto = prototypeOf(SymbolBuiltins.NAMES, "Symbol.prototype",
                 (receiver, name) -> SymbolBuiltins.getMethod(requireSymbol(receiver, name), name));
         installSymbolAccessors(symbolProto);
@@ -137,7 +137,9 @@ public final class Intrinsics {
         weakSetProto = prototypeOf(SetBuiltins.WEAK_NAMES, "WeakSet.prototype",
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, true), name, invoker, ops));
         dateProto = prototypeOf(DateBuiltins.NAMES, "Date.prototype",
-                (receiver, name) -> DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
+                (receiver, name) -> DateBuiltins.isGeneric(name)
+                        ? DateBuiltins.genericMethod(name, ops)
+                        : DateBuiltins.getMethod(requireDate(receiver, name), name, ops));
         // Date.prototype[@@toPrimitive] is the one non-writable well-known-symbol method.
         installSymbolValue(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops),
                 new PropertyFlags(false, false, true));
@@ -418,10 +420,23 @@ public final class Intrinsics {
         }
     }
 
-    private static String errorText(JsObject error) {
-        final var name = error.has("name") ? JsCoercion.toStr(error.get("name")) : "Error";
-        final var message = error.has("message") ? JsCoercion.toStr(error.get("message")) : "";
+    // Error.prototype.toString is specified over Get(O, "name")/Get(O, "message"), so it walks the
+    // prototype chain and observes an accessor, and an empty name yields just the message.
+    private String errorText(JsObject error) {
+        final var name = errorField(error, "name", "Error");
+        final var message = errorField(error, "message", "");
+        if (name.isEmpty()) {
+            return message;
+        }
         return message.isEmpty() ? name : name + ": " + message;
+    }
+
+    private String errorField(JsObject error, String key, String fallback) {
+        final var value = ops == null ? error.get(key) : ops.getMember(error, new JsString(key));
+        if (value == null || value instanceof JsUndefined) {
+            return fallback;
+        }
+        return JsCoercion.toStr(value, ops);
     }
 
     // Unlike every other String.prototype method these two are brand-checked rather than generic:

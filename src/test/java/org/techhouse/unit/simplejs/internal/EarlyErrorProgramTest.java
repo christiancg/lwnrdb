@@ -192,4 +192,97 @@ public class EarlyErrorProgramTest {
         rejectsParse("var o = {}; o?.a = 1;");
         assertEquals(1, num("var a = []; [...a] = [1]; a[0]"));
     }
+
+    // an early error is raised before any statement of the program runs, so a leading throw is never
+    // reached
+    private static void rejectsWithoutRunning(String source) {
+        final var error = assertThrows(RuntimeException.class, () -> Interpreter.run("throw 'ran'; " + source));
+        assertTrue(error instanceof SyntaxErrorException || error instanceof UnexpectedTokenException,
+                "expected a parse rejection but got " + error);
+    }
+
+    // ?? may not be chained with && or || unless one side is parenthesised
+    @Test
+    public void test_coalesce_cannot_chain_with_logical_operators() {
+        rejectsWithoutRunning("var a = null ?? true || false;");
+        rejectsWithoutRunning("var a = null ?? true && false;");
+        rejectsWithoutRunning("var a = true || false ?? null;");
+        rejectsWithoutRunning("var a = true && false ?? null;");
+        assertEquals(1, num("null ?? (false || 1)"));
+        assertEquals(1, num("(null ?? false) || 1"));
+    }
+
+    // a super property belongs to a method, not to an ordinary function or the top level
+    @Test
+    public void test_super_property_outside_a_method_is_a_syntax_error() {
+        rejectsWithoutRunning("function f() { super.x; }");
+        rejectsWithoutRunning("function f(a = super.x) {}");
+        rejectsWithoutRunning("async function f() { super.x; }");
+        rejectsWithoutRunning("var f = function() { super.x; };");
+        assertEquals(1, num("({ m() { return 1; } }).m()"));
+    }
+
+    // a getter takes no parameters and a setter takes exactly one non-rest parameter
+    @Test
+    public void test_accessor_parameter_shapes_are_checked() {
+        rejectsWithoutRunning("({ get a(param) {} });");
+        rejectsWithoutRunning("({ get a(param = null) {} });");
+        rejectsWithoutRunning("({ set a() {} });");
+        rejectsWithoutRunning("({ set a(...rest) {} });");
+        rejectsWithoutRunning("class C { get a(param) {} }");
+        rejectsWithoutRunning("class C { set a(...rest) {} }");
+        assertEquals(1, num("({ get a() { return 1; } }).a"));
+        assertEquals(1, num("var o = { set a(v) { this.b = v; } }; o.a = 1; o.b"));
+    }
+
+    // an object literal may set __proto__ at most once, but the same text is a legal pattern
+    @Test
+    public void test_duplicate_proto_in_an_object_literal_is_a_syntax_error() {
+        rejectsWithoutRunning("({ __proto__: null, other: 1, '__proto__': null });");
+        assertEquals(1, num("var x, y; ({ __proto__: x, __proto__: y } = { __proto__: 1 }); 1"));
+        assertEquals(1, num("({ __proto__: null, ['__proto__']: 1 })['__proto__']"));
+    }
+
+    // the catch parameter shares a scope with the catch block
+    @Test
+    public void test_catch_parameter_early_errors() {
+        rejectsWithoutRunning("try {} catch (e) { let e; }");
+        rejectsWithoutRunning("try {} catch (e) { function e() {} }");
+        rejectsWithoutRunning("try {} catch ({ a, a }) {}");
+        assertEquals(1, num("var r = 0; try { throw 1; } catch (e) { var e; r = e; } r"));
+    }
+
+    // a private getter and setter pair must agree on `static`
+    @Test
+    public void test_split_private_accessor_pair_is_a_syntax_error() {
+        rejectsWithoutRunning("class C { get #m() {} static set #m(v) {} }");
+        rejectsWithoutRunning("class C { static get #m() {} set #m(v) {} }");
+        assertEquals(1,
+                num("class C { get #m() { return 1; } set #m(v) {} read() { return this.#m; } }" + " new C().read()"));
+    }
+
+    // a class static block is not function code, so it cannot return
+    @Test
+    public void test_return_in_a_static_block_is_a_syntax_error() {
+        rejectsWithoutRunning("class C { static { return; } }");
+        rejectsWithoutRunning("function f() { class C { static { return 1; } } }");
+        assertEquals(1, num("var r = 0; class C { static { r = 1; } } r"));
+    }
+
+    // a reserved word is never an identifier reference, and `debugger` is a statement of its own
+    @Test
+    public void test_reserved_words_are_not_identifier_references() {
+        rejectsWithoutRunning("with = 1;");
+        rejectsWithoutRunning("(debugger);");
+        rejectsWithoutRunning("debugger 1;");
+        rejectsWithoutRunning("void { get x() { public = 42; } };");
+        assertEquals(1, num("debugger; 1"));
+    }
+
+    // `async` may not be separated from the member key it modifies by a line terminator
+    @Test
+    public void test_async_method_line_terminator_is_a_syntax_error() {
+        rejectsWithoutRunning("({\n  async\n  foo() {}\n});");
+        assertEquals(1, num("var o = { async: 1 }; o.async"));
+    }
 }

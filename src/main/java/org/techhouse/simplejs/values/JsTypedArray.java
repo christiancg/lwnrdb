@@ -371,12 +371,21 @@ public final class JsTypedArray extends JsValue {
         if (index == null) {
             return false;
         }
-        final var valid = isValidIntegerIndex(index);
         if (receiver == this) {
-            setElement(valid ? index.intValue() : -1, value, ops);
+            setElement(elementSlot(index), value, ops);
             return true;
         }
-        return !valid;
+        return !isValidIntegerIndex(index);
+    }
+
+    // The slot the coerced value will be written to, resolved *before* coercion but validated after
+    // it: a valueOf that resizes the buffer can turn an out-of-bounds index into a live one. A
+    // fractional or negative index (-0 included) can never name a slot, so it is dropped outright.
+    private static int elementSlot(double index) {
+        if (index != Math.floor(index) || index < 0 || index > Integer.MAX_VALUE || Double.compare(index, -0.0) == 0) {
+            return -1;
+        }
+        return (int) index;
     }
 
     public boolean hasCanonicalNumericIndex(JsValue key) {

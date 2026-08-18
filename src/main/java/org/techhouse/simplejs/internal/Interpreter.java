@@ -530,6 +530,7 @@ public final class Interpreter {
             case JsObject object -> hasStringMember(object, JsCoercion.toStr(keyValue));
             case JsClass cls when keyValue instanceof JsSymbol symbol -> hasStaticSymbolMember(cls, symbol);
             case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue));
+            case JsArray array when keyValue instanceof JsSymbol -> exoticHasMember(array, keyValue);
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue)) || exoticHasMember(array, keyValue);
             case JsArguments arguments ->
                 indexInRange(keyValue, arguments.length()) || exoticHasMember(arguments, keyValue);
@@ -537,6 +538,8 @@ public final class Interpreter {
             // non-integral one is absent, never inherited from the prototype chain.
             case JsTypedArray typed when typed.hasCanonicalNumericIndex(keyValue) -> typed.hasOwnKey(keyValue);
             case JsTypedArray typed -> indexInRange(keyValue, typed.length()) || exoticHasMember(typed, keyValue);
+            case JsCallableProperties callable when keyValue instanceof JsSymbol ->
+                exoticHasMember((JsValue) callable, keyValue);
             case JsCallableProperties callable -> callableHasMember(callable, JsCoercion.toStr(keyValue));
             default -> {
                 if (!isObjectLike(container)) {
@@ -564,19 +567,20 @@ public final class Interpreter {
     private boolean exoticHasMember(JsValue container, JsValue keyValue) {
         final var table = container.ownProperties();
         if (table != null) {
-            if (keyValue instanceof JsSymbol symbol) {
-                return table.hasSymbol(symbol) || table.hasSymbolAccessor(symbol);
-            }
-            final var key = JsCoercion.toStr(keyValue);
-            if (table.has(key) || table.hasAccessor(key)) {
+            if (keyValue instanceof JsSymbol symbol && (table.hasSymbol(symbol) || table.hasSymbolAccessor(symbol))) {
                 return true;
             }
+            if (!(keyValue instanceof JsSymbol)) {
+                final var key = JsCoercion.toStr(keyValue);
+                if (table.has(key) || table.hasAccessor(key)) {
+                    return true;
+                }
+            }
         }
-        if (keyValue instanceof JsSymbol) {
-            return false;
+        if (keyValue instanceof JsSymbol symbol) {
+            return members.chainHasSymbol(intrinsics.protoFor(container), symbol);
         }
-        final var key = JsCoercion.toStr(keyValue);
-        return members.chainHasKey(intrinsics.protoFor(container), key);
+        return members.chainHasKey(intrinsics.protoFor(container), JsCoercion.toStr(keyValue));
     }
 
     private boolean callableHasMember(JsCallableProperties callable, String key) {
@@ -660,7 +664,7 @@ public final class Interpreter {
 
     public String memberKey(MemberExpression member, Environment env) {
         if (member.isComputed()) {
-            return JsCoercion.toStr(eval(member.getProperty(), env));
+            return JsCoercion.toStr(eval(member.getProperty(), env), ops);
         }
         if (member.getProperty() instanceof Identifier id) {
             return id.getName();
@@ -668,6 +672,9 @@ public final class Interpreter {
         throw new UnsupportedNodeException(member.getProperty().getType().name());
     }
 
+    // The reference keeps the raw property value: ToPropertyKey is part of GetValue/PutValue, which
+    // is why a poisoned toString is observed after a compound assignment's ToObject but only after
+    // the right-hand side of a plain one.
     public JsValue memberKeyValue(MemberExpression member, Environment env) {
         if (member.isComputed()) {
             return eval(member.getProperty(), env);
@@ -678,14 +685,35 @@ public final class Interpreter {
         throw new UnsupportedNodeException(member.getProperty().getType().name());
     }
 
+    // GetValue on a property reference: ToObject(base) first, so a nullish base is a TypeError before
+    // the key is ever coerced, then ToPropertyKey - which may run a user toString.
     public JsValue getMemberByKey(JsValue target, JsValue keyValue) {
         if (target instanceof JsProxy proxy) {
             return proxies.get(proxy, keyValue);
         }
-        if (keyValue instanceof JsSymbol symbol) {
+        requireObjectCoercible(target);
+        final var key = JsCoercion.toPropertyKey(keyValue, ops);
+        if (key instanceof JsSymbol symbol) {
             return members.getSymbolMember(target, symbol);
         }
-        return members.getMember(target, JsCoercion.toStr(keyValue));
+        return members.getMember(target, ((JsString) key).getValue());
+    }
+
+    // A reference that is both read and written - a compound assignment or an update - coerces its key
+    // exactly once, so the caller resolves it up front and passes the result to both halves.
+    public JsValue referenceKey(JsValue target, JsValue rawKey) {
+        if (target instanceof JsProxy) {
+            return rawKey;
+        }
+        requireObjectCoercible(target);
+        return JsCoercion.toPropertyKey(rawKey, ops);
+    }
+
+    private static void requireObjectCoercible(JsValue target) {
+        if (isNullish(target)) {
+            throw new TypeErrorException(
+                    "Cannot read properties of " + JsCoercion.toStr(target) + " (reading a computed property)");
+        }
     }
 
     public JsValue getMemberByKey(JsValue target, JsValue keyValue, JsValue receiver) {
@@ -718,10 +746,12 @@ public final class Interpreter {
         return currentCoroutine.get();
     }
 
-    public boolean setMemberByKey(JsValue target, JsValue keyValue, JsValue value) {
+    public boolean setMemberByKey(JsValue target, JsValue rawKey, JsValue value) {
         if (target instanceof JsProxy proxy) {
-            return proxies.set(proxy, keyValue, value);
+            return proxies.set(proxy, rawKey, value);
         }
+        requireObjectCoercible(target);
+        final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
         if (keyValue instanceof JsSymbol symbol) {
             if (target instanceof JsObject object) {
                 if (object.hasSymbolAccessor(symbol)) {
@@ -750,23 +780,35 @@ public final class Interpreter {
             final var table = target.ownProperties();
             return table == null || table.setSymbol(symbol, value);
         }
-        return members.setMember(target, JsCoercion.toStr(keyValue), value);
+        return members.setMember(target, ((JsString) keyValue).getValue(), value);
     }
 
-    public boolean setMemberByKey(JsValue target, JsValue keyValue, JsValue value, JsValue receiver) {
+    public boolean setMemberByKey(JsValue target, JsValue rawKey, JsValue value, JsValue receiver) {
         if (target instanceof JsProxy proxy) {
-            return proxies.set(proxy, keyValue, value, receiver);
+            return proxies.set(proxy, rawKey, value, receiver);
         }
+        requireObjectCoercible(target);
+        final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
         if (keyValue instanceof JsSymbol) {
             return setMemberByKey(target, keyValue, value);
         }
-        return members.setMember(target, JsCoercion.toStr(keyValue), value, receiver);
+        return members.setMember(target, ((JsString) keyValue).getValue(), value, receiver);
     }
 
+    // A named function expression gets its own scope holding an immutable binding for that name, so
+    // the body can call itself and an assignment to it is a TypeError rather than a stray global.
     private JsValue evalFunctionExpression(FunctionExpression expression, Environment env) {
-        final var name = expression.getName() == null ? null : expression.getName().getName();
-        return makeFunction(name, expression.getParams(), expression.getBody(), false, false, expression.isAsync(),
-                expression.isGenerator(), env);
+        if (expression.getName() == null) {
+            return makeFunction(null, expression.getParams(), expression.getBody(), false, false, expression.isAsync(),
+                    expression.isGenerator(), env);
+        }
+        final var name = expression.getName().getName();
+        final var funcEnv = env.child();
+        final var function = makeFunction(name, expression.getParams(), expression.getBody(), false, false,
+                expression.isAsync(), expression.isGenerator(), funcEnv);
+        funcEnv.declareLexical(name, "const");
+        funcEnv.initialize(name, function);
+        return function;
     }
 
     private JsValue evalArrowFunction(ArrowFunctionExpression expression, Environment env) {
@@ -828,6 +870,10 @@ public final class Interpreter {
 
     private JsValue constructValue(JsValue callee, List<JsValue> args) {
         return constructValue(callee, args, callee);
+    }
+
+    public JsValue construct(JsValue callee, List<JsValue> args, JsValue newTarget) {
+        return constructValue(callee, args, newTarget);
     }
 
     private JsValue constructValue(JsValue callee, List<JsValue> args, JsValue newTarget) {
@@ -940,20 +986,29 @@ public final class Interpreter {
                 activation.defineNewTarget(newTarget);
                 activation.declareFunction("arguments", makeArguments(function.getParams(), args, activation));
             }
+            // An async function's parameter list runs inside the returned promise, so a throwing
+            // default rejects it instead of escaping to the caller synchronously.
+            if (function.isAsync() && !function.isGenerator()) {
+                return runAsync(function, activation, args);
+            }
             binding.bindParams(function.getParams(), args, activation);
-            if (function.isAsync() && function.isGenerator()) {
+            if (function.isAsync()) {
                 return makeAsyncGenerator(function, activation);
             }
             if (function.isGenerator()) {
                 return makeGenerator(function, activation);
             }
-            if (function.isAsync()) {
-                return runAsync(function, activation);
-            }
             final var result = runPlainFunction(function, activation);
-            if (function.isDerivedConstructor() && !activation.isThisInitialized()) {
-                throw new ReferenceErrorException(
-                        "Must call super constructor before returning from a derived class constructor");
+            if (function.isDerivedConstructor()) {
+                // A derived constructor may only return an object or undefined, and the type check
+                // comes before the `this`-was-initialised one.
+                if (!isObjectLike(result) && !(result instanceof JsUndefined)) {
+                    throw new TypeErrorException("Derived constructors may only return object or undefined");
+                }
+                if (!activation.isThisInitialized()) {
+                    throw new ReferenceErrorException(
+                            "Must call super constructor before returning from a derived class constructor");
+                }
             }
             return result;
         } finally {
@@ -980,12 +1035,44 @@ public final class Interpreter {
             return eval((Expression) function.getBody(), activation);
         }
         final var body = (BlockStatement) function.getBody();
-        VarHoisting.hoistVars(body.getBody(), activation);
-        hoist(body.getBody(), activation);
+        final var bodyEnv = bodyEnvironment(function, activation, body);
+        hoist(body.getBody(), bodyEnv);
         final var completion = statements.blockDeclaresUsing(body.getBody())
-                ? statements.runDisposing(activation, () -> statements.execStatements(body.getBody(), activation))
-                : statements.execStatements(body.getBody(), activation);
+                ? statements.runDisposing(bodyEnv, () -> statements.execStatements(body.getBody(), bodyEnv))
+                : statements.execStatements(body.getBody(), bodyEnv);
         return completion.kind() == Completion.Kind.RETURN ? completion.value() : JsUndefined.getInstance();
+    }
+
+    // FunctionDeclarationInstantiation step 27: with parameter expressions the body gets its own
+    // variable environment, so a closure created in a parameter default never sees the body's `var`
+    // declarations. A body `var` that shadows a parameter is *initialised from* that parameter rather
+    // than aliasing it. A simple parameter list keeps one environment - which is also exactly when
+    // `arguments` is mapped onto the parameter bindings.
+    private Environment bodyEnvironment(JsFunction function, Environment activation, BlockStatement body) {
+        if (!hasParameterExpressions(function.getParams())) {
+            VarHoisting.hoistVars(body.getBody(), activation);
+            return activation;
+        }
+        final var bodyEnv = activation.functionChild();
+        for (final var name : VarHoisting.varNames(body.getBody())) {
+            if (bodyEnv.hasLocal(name)) {
+                continue;
+            }
+            bodyEnv.declareVar(name);
+            if (activation.hasLocal(name)) {
+                bodyEnv.assign(name, activation.get(name));
+            }
+        }
+        return bodyEnv;
+    }
+
+    private static boolean hasParameterExpressions(List<JsNode> params) {
+        for (final var param : params) {
+            if (!(param instanceof Identifier)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private JsValue makeGenerator(JsFunction function, Environment activation) {
@@ -999,7 +1086,7 @@ public final class Interpreter {
         return new JsGenerator(coroutine);
     }
 
-    private JsValue runAsync(JsFunction function, Environment activation) {
+    private JsValue runAsync(JsFunction function, Environment activation, List<JsValue> args) {
         final var promise = new JsPromise(eventLoop);
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
@@ -1007,6 +1094,7 @@ public final class Interpreter {
         coroutine.startAsync(() -> {
             currentCoroutine.set(coroutine);
             try {
+                binding.bindParams(function.getParams(), args, activation);
                 promise.resolve(runFunctionBody(function, activation));
             } catch (JsThrowException | TypeErrorException | ReferenceErrorException | RangeErrorException
                     | SyntaxErrorException error) {
@@ -1116,78 +1204,80 @@ public final class Interpreter {
         // A class constructor's [[Prototype]] is its heritage, so a builtin superclass's statics
         // (Promise.resolve on `class P extends Promise`) are inherited by the subclass constructor.
         final var nativeSuper = cls.findNativeSuperClass();
-        return nativeSuper == null ? JsUndefined.getInstance() : getMember(nativeSuper, key);
+        if (nativeSuper != null) {
+            return getMember(nativeSuper, key);
+        }
+        // Otherwise the class object is an ordinary function object, so its [[Prototype]] chain ends
+        // at Function.prototype and Object.prototype - `C.hasOwnProperty(…)` has to resolve there.
+        return getMember(intrinsics.functionProto(), key);
     }
 
     public JsValue getPrivateMember(JsValue target, String name, Environment env) {
-        if (target instanceof JsClass cls && declaresStaticPrivate(env, name)) {
-            final var getter = cls.getPrivateStaticGetter(name);
+        final var owner = env.resolvePrivateClass(name);
+        final var privateName = owner == null ? null : owner.privateNameFor(name);
+        if (owner != null && target == owner && owner.declaresStaticPrivate(privateName)) {
+            final var getter = owner.getPrivateStaticGetter(privateName);
             if (getter != null) {
-                return callFunction(getter, cls, List.of());
+                return callFunction(getter, owner, List.of());
             }
-            final var method = cls.getPrivateStaticMethod(name);
+            final var method = owner.getPrivateStaticMethod(privateName);
             if (method != null) {
                 return method;
             }
-            if (cls.hasPrivateStaticField(name)) {
-                return cls.getPrivateStaticField(name);
+            if (owner.hasPrivateStaticField(privateName)) {
+                return owner.getPrivateStaticField(privateName);
             }
         }
-        if (target instanceof JsObject object) {
-            if (object.hasPrivate(name)) {
-                return object.getPrivate(name);
+        if (owner != null && target instanceof JsObject object) {
+            if (object.hasPrivate(privateName)) {
+                return object.getPrivate(privateName);
             }
-            if (env.resolveHomeClass() instanceof JsClass cls) {
-                final var getter = cls.getPrivateInstanceGetter(name);
-                final var method = cls.getPrivateInstanceMethod(name);
-                requirePrivateBrand(object, cls, name, getter != null || method != null);
-                if (getter != null) {
-                    return callFunction(getter, object, List.of());
-                }
-                if (method != null) {
-                    return method;
-                }
+            final var getter = owner.getPrivateInstanceGetter(privateName);
+            final var method = owner.getPrivateInstanceMethod(privateName);
+            requirePrivateBrand(object, owner, name, getter != null || method != null);
+            if (getter != null) {
+                return callFunction(getter, object, List.of());
+            }
+            if (method != null) {
+                return method;
             }
         }
         throw new TypeErrorException(
                 "Cannot read private member #" + name + " from an object whose class did not declare it");
     }
 
-    private static boolean declaresStaticPrivate(Environment env, String name) {
-        return env.resolveHomeClass() instanceof JsClass home && home.declaresStaticPrivate(name);
-    }
-
     public void setPrivateMember(JsValue target, String name, JsValue value, Environment env) {
-        if (target instanceof JsClass cls && declaresStaticPrivate(env, name)) {
-            final var setter = cls.getPrivateStaticSetter(name);
+        final var owner = env.resolvePrivateClass(name);
+        final var privateName = owner == null ? null : owner.privateNameFor(name);
+        if (owner != null && target == owner && owner.declaresStaticPrivate(privateName)) {
+            final var setter = owner.getPrivateStaticSetter(privateName);
             if (setter != null) {
-                callFunction(setter, cls, List.of(value));
+                callFunction(setter, owner, List.of(value));
                 return;
             }
-            if (cls.getPrivateStaticMethod(name) != null || cls.getPrivateStaticGetter(name) != null) {
+            if (owner.getPrivateStaticMethod(privateName) != null
+                    || owner.getPrivateStaticGetter(privateName) != null) {
                 throw new TypeErrorException("Cannot write to private member #" + name + ", it has no setter");
             }
-            if (cls.hasPrivateStaticField(name)) {
-                cls.setPrivateStaticField(name, value);
+            if (owner.hasPrivateStaticField(privateName)) {
+                owner.setPrivateStaticField(privateName, value);
                 return;
             }
         }
-        if (target instanceof JsObject object) {
-            if (env.resolveHomeClass() instanceof JsClass cls) {
-                final var setter = cls.getPrivateInstanceSetter(name);
-                final var readOnly = cls.getPrivateInstanceGetter(name) != null
-                        || cls.getPrivateInstanceMethod(name) != null;
-                requirePrivateBrand(object, cls, name, setter != null || readOnly);
-                if (setter != null) {
-                    callFunction(setter, object, List.of(value));
-                    return;
-                }
-                if (readOnly) {
-                    throw new TypeErrorException("Cannot write to private member #" + name + ", it has no setter");
-                }
+        if (owner != null && target instanceof JsObject object) {
+            final var setter = owner.getPrivateInstanceSetter(privateName);
+            final var readOnly = owner.getPrivateInstanceGetter(privateName) != null
+                    || owner.getPrivateInstanceMethod(privateName) != null;
+            requirePrivateBrand(object, owner, name, setter != null || readOnly);
+            if (setter != null) {
+                callFunction(setter, object, List.of(value));
+                return;
             }
-            if (object.hasPrivate(name)) {
-                object.setPrivate(name, value);
+            if (readOnly) {
+                throw new TypeErrorException("Cannot write to private member #" + name + ", it has no setter");
+            }
+            if (object.hasPrivate(privateName)) {
+                object.setPrivate(privateName, value);
                 return;
             }
         }

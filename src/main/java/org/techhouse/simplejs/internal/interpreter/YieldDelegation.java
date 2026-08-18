@@ -77,13 +77,13 @@ public final class YieldDelegation {
             interp.tick();
             final var result = advance(mode, sent);
             if (JsCoercion.toBoolean(interp.getMember(result, "done"))) {
-                final var value = resultValue(result);
+                final var value = resultValue(result, false);
                 if (mode == Mode.RETURN) {
                     throw new Coroutine.ReturnSignal(value);
                 }
                 return value;
             }
-            final var yielded = async ? resultValue(result) : new PassThrough(result);
+            final var yielded = async ? resultValue(result, true) : new PassThrough(result);
             try {
                 if (async) {
                     coroutine.markDelegatedYield();
@@ -137,9 +137,32 @@ public final class YieldDelegation {
         return result;
     }
 
-    private JsValue resultValue(JsValue result) {
+    // AsyncFromSyncIteratorContinuation awaits only the step's `value`, and on a rejection of a
+    // not-done step it closes the wrapped synchronous iterator before the rejection propagates.
+    private JsValue resultValue(JsValue result, boolean closeOnRejection) {
         final var value = interp.getMember(result, "value");
-        return fromSync ? awaited(value) : value;
+        if (!fromSync) {
+            return value;
+        }
+        try {
+            return awaited(value);
+        } catch (JsThrowException | TypeErrorException rejection) {
+            if (closeOnRejection) {
+                closeQuietly();
+            }
+            throw rejection;
+        }
+    }
+
+    private void closeQuietly() {
+        try {
+            final var returner = interp.getMember(iterator, "return");
+            if (isCallable(returner)) {
+                interp.callValue(returner, iterator, List.of());
+            }
+        } catch (JsThrowException | TypeErrorException ignored) {
+            // the original rejection wins over anything the iterator's `return` throws
+        }
     }
 
     private JsValue method(String name) {

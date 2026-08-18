@@ -32,7 +32,7 @@ public final class VarHoisting {
         }
     }
 
-    private static List<String> varNames(List<Statement> body) {
+    public static List<String> varNames(List<Statement> body) {
         final var names = new ArrayList<String>();
         for (final var statement : body) {
             collect(statement, names);

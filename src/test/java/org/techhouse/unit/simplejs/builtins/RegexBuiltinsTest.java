@@ -168,6 +168,30 @@ public class RegexBuiltinsTest {
         assertTrue(bool("new RegExp(RegExp.escape('abc')).test('abc')"));
     }
 
+    // ECMA-262 WhiteSpace is not java's: NBSP, NNBSP and the byte order mark are escaped too, and a
+    // surrogate that is not half of a well-formed pair has no printable spelling.
+    @Test
+    public void test_escape_whitespace_and_lone_surrogates() {
+        assertEquals("\\ufeff\\x20\\xa0\\u202f", str("RegExp.escape('\\ufeff\\u0020\\u00a0\\u202f')"));
+        assertEquals("\\ud800", str("RegExp.escape('\\ud800')"));
+        assertEquals("\\udfff", str("RegExp.escape('\\udfff')"));
+        assertEquals("2", str("String(RegExp.escape('\\ud800\\udc00').length)"));
+        assertEquals("\\u2028", str("RegExp.escape('\\u2028')"));
+    }
+
+    // RegExp(pattern) called (not constructed) with a regexp-like whose constructor is RegExp
+    // itself and no flags of its own returns that very object.
+    @Test
+    public void test_call_returns_a_matching_pattern_unchanged() {
+        assertTrue(bool("const re = /x/i; RegExp(re) === re"));
+        assertTrue(bool("const re = /x/i; RegExp(re, undefined) === re"));
+        assertFalse(bool("const re = /x/i; new RegExp(re) === re"));
+        assertFalse(bool("const re = /x/i; RegExp(re, 'g') === re"));
+        assertTrue(bool("const like = { constructor: RegExp, [Symbol.match]: true }; RegExp(like) === like"));
+        assertFalse(bool("const like = { constructor: Object, [Symbol.match]: true, source: 'a', flags: '' };"
+                + "RegExp(like) === like"));
+    }
+
     // RegExp.escape rejects a non-string argument
     @Test
     public void test_escape_non_string_throws() {

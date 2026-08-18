@@ -593,7 +593,8 @@ public final class AsyncIteratorBuiltins {
             if (!isCallable(returnMethod)) {
                 throw new TypeErrorException("The iterator's 'return' property is not callable");
             }
-            toPromise(loop, ops.call(returnMethod, receiver, List.of(JsUndefined.getInstance())))
+            // Call(return, O, « ») - no argument at all, which a `return` counting its arguments sees.
+            toPromise(loop, ops.call(returnMethod, receiver, List.of()))
                     .subscribe(_ -> out.resolve(JsUndefined.getInstance()), out::reject);
         });
         return out;

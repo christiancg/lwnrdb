@@ -47,12 +47,16 @@ public final class RegexBuiltins {
     private static final char VERTICAL_TAB = '\u000B';
     private static final char LINE_SEPARATOR = '\u2028';
     private static final char PARAGRAPH_SEPARATOR = '\u2029';
+    private static final char NO_BREAK_SPACE = '\u00a0';
+    private static final char BYTE_ORDER_MARK = '\ufeff';
 
     private RegexBuiltins() {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var regExp = new JsNativeFunction("RegExp", (_, args) -> construct(args, ops));
+        final var self = new JsValue[1];
+        final var regExp = new JsNativeFunction("RegExp", (_, args) -> construct(args, self[0], ops));
+        self[0] = regExp;
         regExp.setProperty("escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(args))));
         return regExp;
     }
@@ -70,13 +74,14 @@ public final class RegexBuiltins {
             } else if (SYNTAX_CHARACTERS.indexOf(ch) >= 0) {
                 result.append('\\').append(ch);
             } else {
-                appendNamedOrLiteral(result, ch);
+                appendNamedOrLiteral(result, value, i);
             }
         }
         return result.toString();
     }
 
-    private static void appendNamedOrLiteral(StringBuilder result, char ch) {
+    private static void appendNamedOrLiteral(StringBuilder result, String value, int index) {
+        final var ch = value.charAt(index);
         switch (ch) {
             case '\t' -> result.append("\\t");
             case '\n' -> result.append("\\n");
@@ -84,7 +89,8 @@ public final class RegexBuiltins {
             case '\f' -> result.append("\\f");
             case '\r' -> result.append("\\r");
             default -> {
-                if (OTHER_PUNCTUATORS.indexOf(ch) >= 0 || Character.isWhitespace(ch) || isLineTerminator(ch)) {
+                if (OTHER_PUNCTUATORS.indexOf(ch) >= 0 || isWhiteSpace(ch) || isLineTerminator(ch)
+                        || isLoneSurrogate(value, index)) {
                     appendHex(result, ch);
                 } else {
                     result.append(ch);
@@ -101,6 +107,23 @@ public final class RegexBuiltins {
         return ch == LINE_SEPARATOR || ch == PARAGRAPH_SEPARATOR;
     }
 
+    // ECMA-262 WhiteSpace, which is not java's: NBSP, NNBSP and the byte order mark are all
+    // WhiteSpace to the grammar but not to Character.isWhitespace.
+    private static boolean isWhiteSpace(char ch) {
+        return ch == ' ' || ch == NO_BREAK_SPACE || ch == BYTE_ORDER_MARK
+                || Character.getType(ch) == Character.SPACE_SEPARATOR;
+    }
+
+    // A surrogate that is not part of a well-formed pair has no printable spelling, so it is escaped;
+    // a pair is left alone and emitted as the two code units of its code point.
+    private static boolean isLoneSurrogate(String value, int index) {
+        final var ch = value.charAt(index);
+        if (Character.isHighSurrogate(ch)) {
+            return index + 1 >= value.length() || !Character.isLowSurrogate(value.charAt(index + 1));
+        }
+        return Character.isLowSurrogate(ch) && (index == 0 || !Character.isHighSurrogate(value.charAt(index - 1)));
+    }
+
     private static void appendHex(StringBuilder result, char ch) {
         if (ch <= 0xFF) {
             result.append("\\x").append(String.format("%02x", (int) ch));
@@ -111,10 +134,16 @@ public final class RegexBuiltins {
 
     // Spec RegExp(pattern, flags): a RegExp argument contributes its source/flags directly, and any
     // other IsRegExp object contributes them through Get, so a regexp-like object works too.
-    private static JsValue construct(List<JsValue> args, InterpreterOps ops) {
+    private static JsValue construct(List<JsValue> args, JsValue self, InterpreterOps ops) {
         final var first = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var flagsArg = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         final var explicitFlags = !(flagsArg instanceof JsUndefined);
+        // Called (not constructed) with a regexp-like whose own constructor is this very function and
+        // no flags of its own, the pattern is returned unchanged rather than re-compiled.
+        if (!explicitFlags && JsNativeFunction.currentNewTarget() == null && isRegExp(first, ops)
+                && SameValueZero.equal(ops.getMember(first, new JsString("constructor")), self)) {
+            return first;
+        }
         if (first instanceof JsRegExp existing) {
             return RegexTranslator.compile(existing.getSource(),
                     explicitFlags ? JsCoercion.toStr(flagsArg, ops) : existing.getFlags());

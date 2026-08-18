@@ -33,8 +33,13 @@ public final class BigIntBuiltins {
     }
 
     public static JsValue getMethod(JsBigInt receiver, String name) {
+        return getMethod(receiver, name, null);
+    }
+
+    public static JsValue getMethod(JsBigInt receiver, String name, InterpreterOps ops) {
         return switch (name) {
-            case "toString" -> new JsNativeFunction("toString", (_, args) -> new JsString(toString(receiver, args)));
+            case "toString" ->
+                new JsNativeFunction("toString", (_, args) -> new JsString(toString(receiver, args, ops)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> receiver);
             case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> new JsString(
                     java.text.NumberFormat.getInstance(java.util.Locale.getDefault()).format(receiver.getValue())));
@@ -83,11 +88,11 @@ public final class BigIntBuiltins {
         return new JsBigInt(parsed);
     }
 
-    private static String toString(JsBigInt receiver, List<JsValue> args) {
+    private static String toString(JsBigInt receiver, List<JsValue> args, InterpreterOps ops) {
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
             return receiver.getValue().toString();
         }
-        final var radix = (int) JsCoercion.toNumber(args.getFirst());
+        final var radix = (int) toIntegerOrInfinity(JsCoercion.toNumber(args.getFirst(), ops));
         if (radix < MIN_RADIX || radix > MAX_RADIX) {
             throw new RangeErrorException("toString() radix must be between 2 and 36");
         }

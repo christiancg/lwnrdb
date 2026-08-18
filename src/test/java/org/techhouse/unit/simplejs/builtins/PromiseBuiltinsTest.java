@@ -632,4 +632,26 @@ public class PromiseBuiltinsTest {
                 """;
         assertEquals("boom|true", string(arr(source)));
     }
+
+    // Promise is constructor-only: no new.target means a TypeError, whatever `this` is
+    @Test
+    public void test_constructor_requires_new() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise(function() {})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise.call(null, function() {})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("let p = new Promise(function() {}); Promise.call(p, function() {})"));
+    }
+
+    // ...while a subclass's super() call still reaches it
+    @Test
+    public void test_subclass_construction_still_works() {
+        final var source = """
+                let out = [];
+                class P extends Promise {}
+                let p = new P(resolve => resolve(1));
+                p.then(v => out.push(v + '|' + (p instanceof P)));
+                out
+                """;
+        assertEquals("1|true", string(arr(source)));
+    }
 }

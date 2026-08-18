@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.internal.JsonStrings;
 
+// U+0020 is spelled as an escape because it is the boundary of RFC 8259's control-character
+// escaping range: everything below it is escaped, the space itself passes through.
+@SuppressWarnings("UnnecessaryUnicodeEscape")
 public class JsonStringsTest {
     // The two structural characters are escaped
     @Test
@@ -55,5 +58,22 @@ public class JsonStringsTest {
     @Test
     public void test_escape_after_clean_prefix() {
         assertEquals("abc\\ndef", JsonStrings.escape("abc\ndef"));
+    }
+
+    // An unpaired surrogate cannot be encoded as UTF-8, so it is escaped rather than emitted raw
+    @Test
+    public void test_escapes_lone_surrogates() {
+        assertEquals("\\ud834", JsonStrings.escape("\uD834"));
+        assertEquals("\\udd1e", JsonStrings.escape("\uDD1E"));
+        assertEquals("a\\ud834b", JsonStrings.escape("a\uD834b"));
+        assertEquals("\\ud834\\ud834", JsonStrings.escape("\uD834\uD834"));
+    }
+
+    // A well-formed surrogate pair still passes through untouched
+    @Test
+    public void test_keeps_surrogate_pairs() {
+        final var pair = "𝄞";
+        assertSame(pair, JsonStrings.escape(pair));
+        assertEquals("a𝄞b", JsonStrings.escape("a𝄞b"));
     }
 }

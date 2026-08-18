@@ -112,6 +112,32 @@ public class FunctionProtoBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("({}) instanceof Object.create(null)"));
     }
 
+    // BoundFunctionLength reads the target's own `length` without coercing it: an absent or
+    // non-Number one gives 0, an infinite one survives the subtraction, and a fractional one truncates
+    @Test
+    public void test_bound_length() {
+        assertEquals(2, num("function f(a, b, c) {} f.bind(null, 1).length"));
+        assertEquals(0, num("function f(a) {} f.bind(null, 1, 2, 3).length"));
+        assertEquals(Double.POSITIVE_INFINITY,
+                num("function f() {} Object.defineProperty(f, 'length', {value: Infinity}); f.bind(0, 0).length"));
+        assertEquals(0, num("function f() {} Object.defineProperty(f, 'length', {value: -Infinity}); f.bind().length"));
+        assertEquals(3, num("function f() {} Object.defineProperty(f, 'length', {value: 3.66}); f.bind().length"));
+        assertEquals(0, num("function f() {} Object.defineProperty(f, 'length', {value: NaN}); f.bind().length"));
+        assertEquals(0, num("function f() {} Object.defineProperty(f, 'length', {value: '1'}); f.bind().length"));
+        assertEquals(2147483648d,
+                num("function f() {} Object.defineProperty(f, 'length', {value: 2147483648}); f.bind().length"));
+        assertEquals(0, num("function f() {} Object.setPrototypeOf(f, {length: 42}); delete f.length;"
+                + "Function.prototype.bind.call(f, null, 1).length"));
+    }
+
+    // the bound function's own `length` keeps the builtin shape {w:false, e:false, c:true}
+    @Test
+    public void test_bound_length_descriptor() {
+        assertEquals("false,false,true",
+                strOf("function f(a) {} let d =" + " Object.getOwnPropertyDescriptor(f.bind(null), 'length');"
+                        + "[d.writable, d.enumerable, d.configurable].join(',')"));
+    }
+
     private static String strOf(String source) {
         return ((org.techhouse.simplejs.values.JsString) Interpreter.run(source)).getValue();
     }
