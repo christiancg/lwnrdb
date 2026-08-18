@@ -182,6 +182,9 @@ public final class Interpreter {
             if (target instanceof JsObject || isNullish(target)) {
                 return ObjectBuiltins.getPrototypeOf(List.of(target));
             }
+            if (target instanceof JsClass && target.getProto() != null) {
+                return target.getProto();
+            }
             return intrinsics.protoFor(target);
         }
 
@@ -563,7 +566,9 @@ public final class Interpreter {
     }
 
     // Every exotic value type carries its own property table, so HasProperty on one is its own keys
-    // plus its intrinsic prototype chain rather than an outright rejection.
+    // plus its prototype chain rather than an outright rejection. An explicit [[Prototype]] (e.g.
+    // Object.setPrototypeOf(array, proxy)) wins over the realm's intrinsic default for the type -
+    // only a JsArray/JsClass can carry one today, everything else falls back to the intrinsic.
     private boolean exoticHasMember(JsValue container, JsValue keyValue) {
         final var table = container.ownProperties();
         if (table != null) {
@@ -577,10 +582,11 @@ public final class Interpreter {
                 }
             }
         }
+        final var chainStart = container.getProto() == null ? intrinsics.protoFor(container) : container.getProto();
         if (keyValue instanceof JsSymbol symbol) {
-            return members.chainHasSymbol(intrinsics.protoFor(container), symbol);
+            return members.chainHasSymbol(chainStart, symbol);
         }
-        return members.chainHasKey(intrinsics.protoFor(container), JsCoercion.toStr(keyValue));
+        return members.chainHasKey(chainStart, JsCoercion.toStr(keyValue));
     }
 
     private boolean callableHasMember(JsCallableProperties callable, String key) {
@@ -1001,11 +1007,14 @@ public final class Interpreter {
             final var result = runPlainFunction(function, activation);
             if (function.isDerivedConstructor()) {
                 // A derived constructor may only return an object or undefined, and the type check
-                // comes before the `this`-was-initialised one.
+                // comes before the `this`-was-initialised one. An explicit object return (step 13a
+                // of [[Construct]]) short-circuits before `this` is ever consulted, so returning an
+                // object without calling super() is legal; only an undefined (implicit or bare
+                // `return;`) result needs `this` to have been initialised.
                 if (!isObjectLike(result) && !(result instanceof JsUndefined)) {
                     throw new TypeErrorException("Derived constructors may only return object or undefined");
                 }
-                if (!activation.isThisInitialized()) {
+                if (!isObjectLike(result) && !activation.isThisInitialized()) {
                     throw new ReferenceErrorException(
                             "Must call super constructor before returning from a derived class constructor");
                 }

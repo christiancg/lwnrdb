@@ -18,6 +18,14 @@ public final class ErrorBuiltins {
             "ReferenceError", "EvalError");
     private static final JsObject.PropertyFlags ERROR_PROPERTY = new JsObject.PropertyFlags(true, false, true);
 
+    // makeSuppressedError is called from the using/await-using disposal path (StatementEvaluator,
+    // DisposableStackBuiltins), which has no Intrinsics parameter to pass through. Threading one in
+    // would touch those foreign files, so the realm's Intrinsics is instead recorded here at
+    // install() time on an inheritable thread-local: async disposal runs on a Coroutine's own
+    // virtual thread, and InheritableThreadLocal is what lets that thread see the value its parent
+    // (ultimately the thread that ran install()) set before any coroutine existed.
+    private static final ThreadLocal<Intrinsics> CURRENT_INTRINSICS = new InheritableThreadLocal<>();
+
     private ErrorBuiltins() {
     }
 
@@ -42,7 +50,9 @@ public final class ErrorBuiltins {
     }
 
     public static JsObject makeSuppressedError(JsValue error, JsValue suppressed, String message) {
-        final var result = makeError("SuppressedError", message);
+        final var intrinsics = CURRENT_INTRINSICS.get();
+        final var proto = intrinsics == null ? null : intrinsics.errorProto("SuppressedError");
+        final var result = makeError("SuppressedError", message, proto);
         defineErrorProperty(result, "error", error);
         defineErrorProperty(result, "suppressed", suppressed);
         return result;
@@ -111,6 +121,7 @@ public final class ErrorBuiltins {
 
     public static void install(Environment global, Intrinsics intrinsics, InterpreterOps ops,
             IterableToList iterableToList) {
+        CURRENT_INTRINSICS.set(intrinsics);
         JsNativeFunction errorConstructor = null;
         for (final var name : NAMES) {
             final var constructor = new JsNativeFunction(name, (_, args) -> construct(intrinsics, name, args, ops));

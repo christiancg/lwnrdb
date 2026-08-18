@@ -288,6 +288,11 @@ public final class PropertyTable {
     public void defineAccessor(String key, JsValue getter, JsValue setter) {
         if (getter != null || setter != null) {
             keyOrder.add(key);
+            // A key transitioning from a data property to an accessor pair (e.g. a class
+            // installing `static set length(_) {}` over the constructor's own default "length"
+            // value) must drop the stale data value - has()/get() and the accessor tables are
+            // meant to be mutually exclusive for one key.
+            properties.remove(key);
         }
         if (getter != null) {
             if (accessorGetters == null) {

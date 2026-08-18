@@ -124,6 +124,122 @@ public class InterpreterMemberTest {
         assertEquals("undefined", str("let n = 5; n.foo = 9; typeof n.foo"));
     }
 
+    // A prototype-chain accessor setter must run even when the receiver is a callable: writing to
+    // Function.prototype's poisoned `caller`/`arguments` pair through a bound function throws,
+    // rather than silently landing as a new own property on the bound function.
+    @Test
+    public void test_callable_receiver_consults_inherited_accessor_setter() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("function f() {} const b = f.bind(null); b.caller = 12;"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("function f() {} f.arguments = 12;"));
+    }
+
+    // An inherited own writable data property is still writable through a callable receiver
+    @Test
+    public void test_callable_receiver_own_property_write_still_works() {
+        assertEquals(3, num("function f() {} f.x = 3; f.x"));
+    }
+
+    // Object.create(typedArray)[index] = v writes through the typed array's own [[Set]], which -
+    // for a receiver that differs from the view itself - creates an ordinary own property on the
+    // receiver instead of ever writing through the view or an inherited accessor on its prototype
+    @Test
+    public void test_typed_array_as_prototype_receiver_set() {
+        final var source = """
+                const target = new Float64Array([0]);
+                const receiver = Object.create(target);
+                receiver[0] = 42;
+                [target[0], receiver[0], receiver.hasOwnProperty(0)]
+                """;
+        assertEquals("0,42,true", joined(source));
+    }
+
+    // The same typed-array-in-chain short-circuit applies when the receiver is a plain array
+    // (setArrayMember), not only a plain object (setObjectMember)
+    @Test
+    public void test_typed_array_as_prototype_of_array_receiver_set() {
+        final var source = """
+                const target = new Float64Array([0]);
+                const receiver = Object.setPrototypeOf([], target);
+                receiver[0] = 42;
+                [target[0], receiver[0], receiver.length]
+                """;
+        assertEquals("0,42,1", joined(source));
+    }
+
+    // A canonical-but-out-of-range numeric key on the typed-array parent is a pure no-op: it must
+    // never fall through to an inherited accessor further up the chain (the per-kind prototype)
+    @Test
+    public void test_typed_array_invalid_canonical_index_in_chain_is_a_noop() {
+        final var source = """
+                let unreachable = false;
+                Object.defineProperty(Float64Array.prototype, 1, {
+                    set: function() { unreachable = true; },
+                    configurable: true,
+                });
+                const target = new Float64Array([0]);
+                const receiver = Object.setPrototypeOf([], target);
+                receiver[1] = 42;
+                delete Float64Array.prototype[1];
+                [unreachable, receiver.hasOwnProperty(1)]
+                """;
+        assertEquals("false,false", joined(source));
+    }
+
+    // A proxy sitting in a prototype chain has its "set" trap dispatched (with the original
+    // receiver forwarded), rather than being skipped as if it had no own-property table at all
+    @Test
+    public void test_proxy_in_prototype_chain_dispatches_set_trap() {
+        final var source = """
+                let seenReceiver;
+                const target = {};
+                const proxy = new Proxy(target, { set(t, key, value, receiver) {
+                    seenReceiver = receiver;
+                    t[key] = value;
+                    return true;
+                }});
+                const array = new Array(1);
+                Object.setPrototypeOf(array, proxy);
+                array[0] = 1;
+                [target[0], seenReceiver === array]
+                """;
+        assertEquals("1,true", joined(source));
+    }
+
+    // `1 in array` walks the array's explicit [[Prototype]] (a proxy), not the intrinsic
+    // Array.prototype the array would otherwise fall back to
+    @Test
+    public void test_in_operator_on_array_with_proxy_prototype_dispatches_has_trap() {
+        final var source = """
+                let seenProp;
+                const proxy = new Proxy({}, { has(t, prop) { seenProp = prop; return false; } });
+                const array = [];
+                Object.setPrototypeOf(array, proxy);
+                [1 in array, seenProp]
+                """;
+        assertEquals("false,1", joined(source));
+    }
+
+    // Reflect.set with a JsProxy receiver dispatches the proxy's defineProperty trap rather than
+    // silently failing (a plain JsProxy has no ordinary [[GetOwnProperty]]/[[DefineOwnProperty]])
+    @Test
+    public void test_reflect_set_with_proxy_receiver_dispatches_define_property_trap() {
+        final var source = """
+                const target = new Float64Array([0]);
+                let calls = 0;
+                const receiver = new Proxy(Object.create(target), {
+                    defineProperty(t, key, desc) {
+                        calls++;
+                        Object.defineProperty(t, key, desc);
+                        return true;
+                    },
+                });
+                receiver[0] = 42;
+                [target[0], receiver[0], calls]
+                """;
+        assertEquals("0,42,1", joined(source));
+    }
+
     // Calling throw() on an async generator that already ran to completion rejects immediately
     @Test
     public void test_async_generator_throw_after_completion_rejects() {

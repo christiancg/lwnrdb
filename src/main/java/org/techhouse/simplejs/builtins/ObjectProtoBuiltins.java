@@ -198,20 +198,20 @@ public final class ObjectProtoBuiltins {
         final var key = JsCoercion.toPropertyKey(arg(args), ops);
         requireCoercible(receiver, "hasOwnProperty");
         if (key instanceof JsSymbol symbol) {
-            return ObjectBuiltins.hasOwnSymbol(receiver, symbol);
+            return ObjectBuiltins.hasOwnSymbol(receiver, symbol, ops);
         }
-        return ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(key));
+        return ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(key), ops);
     }
 
     private static boolean isEnumerable(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
         final var propertyKey = JsCoercion.toPropertyKey(arg(args), ops);
         requireCoercible(receiver, "propertyIsEnumerable");
         if (propertyKey instanceof JsSymbol symbol) {
-            return ObjectBuiltins.hasOwnSymbol(receiver, symbol)
+            return ObjectBuiltins.hasOwnSymbol(receiver, symbol, ops)
                     && ObjectBuiltins.isEnumerableOwnSymbol(receiver, symbol);
         }
         final var key = JsCoercion.toStr(propertyKey);
-        if (!ObjectBuiltins.hasOwnKey(receiver, key)) {
+        if (!ObjectBuiltins.hasOwnKey(receiver, key, ops)) {
             return false;
         }
         return switch (receiver) {

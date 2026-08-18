@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -280,6 +281,30 @@ public class PromiseCapabilityProgramTest {
         assertEquals("1", joined("""
                 let out = [];
                 Promise.race([Promise.resolve(1), new Promise(() => {})]).then(v => out.push(v));
+                out
+                """));
+    }
+
+    // OrdinaryCreateFromConstructor's Get(newTarget, "prototype") is observable even before the
+    // executor runs: a throwing accessor there must abort construction.
+    @Test
+    public void test_reflect_construct_propagates_a_throwing_prototype_getter() {
+        assertThrows(JsThrowException.class, () -> Interpreter.run("""
+                const bound = (function() {}).bind();
+                Object.defineProperty(bound, 'prototype', {
+                    get: function() { throw new Error('boom'); },
+                });
+                Reflect.construct(Promise, [function() {}], bound);
+                """));
+    }
+
+    // The ordinary path (no newTarget.prototype override) still constructs normally.
+    @Test
+    public void test_reflect_construct_still_constructs_normally() {
+        assertEquals("9", joined("""
+                let out = [];
+                const p = Reflect.construct(Promise, [(resolve) => resolve(9)]);
+                p.then(v => out.push(v));
                 out
                 """));
     }

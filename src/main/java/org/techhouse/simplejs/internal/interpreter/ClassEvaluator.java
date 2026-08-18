@@ -1,6 +1,5 @@
 package org.techhouse.simplejs.internal.interpreter;
 
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.hasInPrototypeChain;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
@@ -34,6 +33,7 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -85,8 +85,10 @@ public final class ClassEvaluator {
         final var cls = new JsClass(name, superClass, methodScope);
         if (nullHeritage) {
             cls.markNullHeritage();
-        }
-        if (superConstructor != null) {
+            // The prototype object has no parent, but the constructor function itself still chains
+            // to %Function.prototype% like any other heritage-less constructor.
+            cls.setProto(interp.intrinsics().functionProto());
+        } else if (superConstructor != null) {
             // ClassDefinitionEvaluation reads Get(superclass, "prototype"), so an accessor-valued or
             // assigned `prototype` on the heritage is observed here; anything that is neither an
             // object nor null is a TypeError before the body is evaluated.
@@ -96,6 +98,9 @@ public final class ClassEvaluator {
                         + JsCoercion.toStr(parentPrototype));
             }
             cls.setSuperConstructor(superConstructor, parentPrototype instanceof JsNull ? null : parentPrototype);
+        } else if (superClass == null) {
+            cls.setProto(interp.intrinsics().functionProto());
+            cls.getPrototype().setProto(interp.intrinsics().objectProto());
         }
         methodScope.defineHomeClass(cls);
         declarePrivateNames(cls, body);
@@ -284,7 +289,7 @@ public final class ClassEvaluator {
         }
         final var key = entry.key() == null ? staticKeyName(field.getKey()) : ((JsString) entry.key()).getValue();
         nameField(field, value, key);
-        cls.setStaticProp(key, value);
+        cls.defineStaticField(key, value);
     }
 
     public JsValue construct(JsClass cls, List<JsValue> args, JsValue newTarget) {
@@ -574,6 +579,23 @@ public final class ClassEvaluator {
         };
     }
 
+    // OrdinaryHasInstance's own prototype-chain walk (step 6): [[GetPrototypeOf]] on a proxy runs
+    // its trap (and enforces the extensible-target invariant), which a raw JsValue.getProto() read
+    // can never see, so a proxy anywhere in the chain - including as `left` itself - has to be
+    // dereferenced through the InterpreterOps seam rather than InterpreterUtils.hasInPrototypeChain.
+    private boolean hasInPrototypeChain(JsValue left, JsValue prototype) {
+        for (var proto = protoOf(left); proto != null; proto = protoOf(proto)) {
+            if (proto == prototype) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private JsValue protoOf(JsValue value) {
+        return value instanceof JsProxy ? interp.ops().getPrototypeOf(value) : value.getProto();
+    }
+
     // OrdinaryHasInstance reads Get(C, "prototype"), not the internal slot, so an accessor-valued
     // `prototype` runs and a non-object result is a TypeError instead of a silent false.
     private JsValue declaredPrototype(JsValue constructor) {
@@ -584,15 +606,16 @@ public final class ClassEvaluator {
         throw new TypeErrorException("Function has a non-object prototype in an instanceof check");
     }
 
+    // A native-heritage class's instances are always constructed as a JsObject wrapper (klass +
+    // proto set to the class's own prototype, per ClassEvaluator.construct), so the klass/proto
+    // checks above already cover them. Walking the native super's intrinsic chain here would be
+    // wrong: every plain `new Set()` shares that same intrinsic Set.prototype, so it would make
+    // `new Set() instanceof MySet` true for any class MySet extends Set.
     private boolean isInstanceOfClass(JsValue left, JsClass cls, JsValue prototype) {
         if (left instanceof JsObject object && object.getKlass() != null && object.getKlass().isSubclassOf(cls)) {
             return true;
         }
-        if (hasInPrototypeChain(left, prototype)) {
-            return true;
-        }
-        final var nativeSuper = cls.findNativeSuperClass();
-        return nativeSuper != null && isInstanceOfNative(left, nativeSuper.getPrototype());
+        return hasInPrototypeChain(left, prototype);
     }
 
     // A non-JsObject runtime value has no own prototype link, so an object-like one (array, map,

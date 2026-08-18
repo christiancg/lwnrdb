@@ -37,6 +37,7 @@ dir:     language/eval-code/indirect/  # indirect eval — written (0, eval)(…
 dir:     built-ins/eval/               # the descriptor surface of a global eval that deliberately does not exist
 dir:     language/statements/class/subclass/builtin-objects/Function/  # subclassing a constructor that deliberately throws: no runtime code generation
 dir:     language/statements/class/subclass/builtin-objects/GeneratorFunction/  # subclassing the derived generator constructor, which deliberately throws
+dir:     language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js  # ArrayBuffer.prototype.slice's species construction needs Symbol.species (deliberately unimplemented)
 #
 # The property-escapes pair is not a feature gap. With no ICU dependency our Unicode data is
 # whatever the JDK ships, and the project builds on both 25 (Unicode 16.0) and 26 (Unicode 17.0),

@@ -712,7 +712,10 @@ public class ObjectBuiltinsTest {
     // assign with a non-object target and no sources returns the target argument unchanged
     @Test
     public void test_assign_non_object_target() {
-        assertEquals(5, num("Object.assign(5)"));
+        // Object.assign always ToObjects the target, even with no sources at all, so a primitive
+        // target comes back wrapped rather than unchanged.
+        assertEquals("object", str("typeof Object.assign(5)"));
+        assertEquals(5, num("Object.assign(5).valueOf()"));
     }
 
     // isFrozen/isSealed/isExtensible report the trivial defaults for non-object, non-array values
@@ -1626,6 +1629,120 @@ public class ObjectBuiltinsTest {
                   Object.prototype.hasOwnProperty.call(null, { toString() { throw new RangeError('k'); } });
                 } catch (e) { caught = e.name; }
                 caught
+                """));
+    }
+
+    // hasOwnProperty falls back to an exotic type's real PropertyTable instead of hard-coding false,
+    // so an ad hoc write is reported even though the type has no dedicated hasOwnKey arm.
+    @Test
+    public void hasOwnPropertyFallsBackToAnExoticTypesTable() {
+        assertTrue(flag("const d = new Date(0); d.foo = 1; d.hasOwnProperty('foo')"));
+        assertTrue(flag("const m = new Map(); m.foo = 1; m.hasOwnProperty('foo')"));
+        assertTrue(flag("const re = /x/; re.hasOwnProperty('lastIndex')"));
+        assertTrue(flag("const p = Promise.resolve(1); p.foo = 1; p.hasOwnProperty('foo')"));
+        // An accessor-only own property on a bound function is reported too, not only a data one.
+        assertTrue(flag("""
+                function f() {}
+                const bound = f.bind({});
+                Object.defineProperty(bound, 'x', { set(v) {} });
+                bound.hasOwnProperty('x')
+                """));
+    }
+
+    // hasOwnProperty and getOwnPropertySymbols consult a Proxy's traps instead of always answering
+    // empty/false, since a Proxy carries no PropertyTable of its own.
+    @Test
+    public void hasOwnPropertyAndGetOwnPropertySymbolsAreProxyAware() {
+        assertTrue(flag("""
+                const target = { attr: 1 };
+                const p = new Proxy(target, {});
+                p.hasOwnProperty('attr')
+                """));
+        assertFalse(flag("""
+                const p = new Proxy({}, { getOwnPropertyDescriptor: () => undefined });
+                p.hasOwnProperty('attr')
+                """));
+        assertEquals(1, num("""
+                const s = Symbol('s');
+                const p = new Proxy({}, { ownKeys: () => [s] , getOwnPropertyDescriptor: () => ({
+                    value: 1, writable: true, enumerable: true, configurable: true
+                }) });
+                Object.getOwnPropertySymbols(p).length
+                """));
+    }
+
+    // Object.setPrototypeOf on a non-extensible target throws, but a no-op (setting the same
+    // prototype it already has) is allowed even though the target isn't extensible.
+    @Test
+    public void setPrototypeOfRejectsANonExtensibleTarget() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("const o = Object.preventExtensions({}); Object.setPrototypeOf(o, {})"));
+        assertTrue(flag("""
+                const proto = {};
+                const o = Object.create(proto);
+                Object.preventExtensions(o);
+                Object.setPrototypeOf(o, proto) === o
+                """));
+        // A plain object literal is already linked to Object.prototype (never a bare Java null), so
+        // retargeting a non-extensible one to null is a real change and still rejected.
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.setPrototypeOf(Object.preventExtensions({}), null)"));
+    }
+
+    // Object.setPrototypeOf validates its arguments before it ever looks at the target's
+    // extensibility: a nullish target and a non-object/non-null proto both throw.
+    @Test
+    public void setPrototypeOfValidatesItsArguments() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.setPrototypeOf(undefined, {})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.setPrototypeOf(null, {})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.setPrototypeOf({})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.setPrototypeOf({}, 1)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.setPrototypeOf({}, 'x')"));
+        // A primitive target is simply returned unchanged once the proto argument passes validation.
+        assertEquals(5, num("Object.setPrototypeOf(5, {})"));
+    }
+
+    // Object.assign ToObjects a primitive target (typeof becomes "object") and copies a String
+    // source's index characters, an Array source/target's exotic length semantics, and a Proxy
+    // source's own keys/values through the ops seam rather than special-casing each shape.
+    @Test
+    public void assignHandlesPrimitiveTargetsStringSourcesAndArrays() {
+        assertEquals("object,object,object",
+                str("typeof Object.assign(true) + ',' + typeof Object.assign(1) + ',' + typeof Object.assign('s')"));
+        assertEquals("1,2,3", str("""
+                const r = Object.assign({}, '123');
+                r[0] + ',' + r[1] + ',' + r[2]
+                """));
+        assertEquals("1,8,3", str("""
+                const target = [7, 8, 9];
+                Object.assign(target, [1]);
+                const sparse = [];
+                sparse[2] = 3;
+                Object.assign(target, sparse);
+                target.join(',')
+                """));
+    }
+
+    // A Proxy source's ownKeys/getOwnPropertyDescriptor/get traps are consulted exactly once per
+    // key, and a trap throwing propagates rather than being swallowed.
+    @Test
+    public void assignConsultsAProxySourcesTrapsExactlyOnce() {
+        assertEquals(1, num("""
+                let calls = 0;
+                const p = new Proxy({}, {
+                    ownKeys: () => ['a'],
+                    getOwnPropertyDescriptor: () => { calls++; return undefined; }
+                });
+                Object.assign({}, p);
+                calls
+                """));
+        assertTrue(flag("""
+                let caught = null;
+                try {
+                    const p = new Proxy({}, { ownKeys: () => { throw new RangeError('boom'); } });
+                    Object.assign({}, p);
+                } catch (e) { caught = e; }
+                caught instanceof RangeError
                 """));
     }
 }

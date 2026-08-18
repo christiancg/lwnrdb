@@ -33,8 +33,8 @@ public final class StringBuiltins {
 
     // Spec GetMethod(argument, symbol) + Call, guarded by "If regexp is an Object": the well-known
     // symbol wins for any object argument, a RegExp included, but is never read off a primitive.
-    private static JsValue delegateToSymbol(String value, List<JsValue> args, JsSymbol symbol, InterpreterOps ops,
-            List<JsValue> extra) {
+    private static JsValue delegateToSymbol(String value, List<JsValue> args, InterpreterOps ops,
+                                            List<JsValue> extra) {
         if (ops == null || args.isEmpty()) {
             return null;
         }
@@ -42,7 +42,7 @@ public final class StringBuiltins {
         if (!InterpreterUtils.isObjectLike(pattern)) {
             return null;
         }
-        final var method = ops.getMember(pattern, symbol);
+        final var method = ops.getMember(pattern, JsSymbol.MATCH_ALL);
         if (!(method instanceof JsFunction) && !(method instanceof JsNativeFunction)) {
             return null;
         }
@@ -64,6 +64,96 @@ public final class StringBuiltins {
 
     private static List<JsValue> tail(List<JsValue> args) {
         return args.size() > 1 ? args.subList(1, args.size()) : List.of();
+    }
+
+    // split/replace/replaceAll/match/search are generic per spec: RequireObjectCoercible(this) runs
+    // first, then a well-known-symbol delegation attempt against the raw (un-stringified) receiver
+    // and argument, and only once that is ruled out does ToString(this) happen. Intrinsics routes
+    // these five names here instead of through the eager-coercing getMethod dispatch.
+    public static boolean isGeneric(String name) {
+        return switch (name) {
+            case "split", "replace", "replaceAll", "match", "search" -> true;
+            default -> false;
+        };
+    }
+
+    public static JsNativeFunction genericMethod(String name, InterpreterOps ops, Invoker invoker) {
+        if (!isGeneric(name)) {
+            return null;
+        }
+        return new JsNativeFunction(name, (thisArg, args) -> genericDispatch(name, thisArg, args, ops, invoker));
+    }
+
+    private static JsValue genericDispatch(String name, JsValue thisArg, List<JsValue> args, InterpreterOps ops,
+            Invoker invoker) {
+        requireCoercible(thisArg, name);
+        if ("replaceAll".equals(name)) {
+            requireGlobalRegExp(args, "replaceAll", ops);
+        }
+        final var delegated = delegateToSymbolRaw(thisArg, args, genericSymbol(name), ops, genericExtra(name, args));
+        if (delegated != null) {
+            return delegated;
+        }
+        final var value = JsCoercion.toStr(thisArg, ops);
+        return switch (name) {
+            case "split" -> split(value, args, ops);
+            case "replace" -> replace(value, args, invoker, false, ops);
+            case "replaceAll" -> replace(value, args, invoker, true, ops);
+            case "match" -> viaRegExp(value, args, "", JsSymbol.MATCH, ops);
+            case "search" -> viaRegExp(value, args, "", JsSymbol.SEARCH, ops);
+            default -> throw new IllegalStateException(name);
+        };
+    }
+
+    private static JsSymbol genericSymbol(String name) {
+        return switch (name) {
+            case "split" -> JsSymbol.SPLIT;
+            case "replace", "replaceAll" -> JsSymbol.REPLACE;
+            case "match" -> JsSymbol.MATCH;
+            case "search" -> JsSymbol.SEARCH;
+            default -> throw new IllegalStateException(name);
+        };
+    }
+
+    private static List<JsValue> genericExtra(String name, List<JsValue> args) {
+        return switch (name) {
+            case "split", "replace", "replaceAll" -> tail(args);
+            default -> List.of();
+        };
+    }
+
+    private static void requireCoercible(JsValue receiver, String method) {
+        if (receiver instanceof JsNull || receiver instanceof JsUndefined) {
+            throw new TypeErrorException("String.prototype." + method + " called on null or undefined");
+        }
+    }
+
+    // Same GetMethod(argument, symbol) + Call as delegateToSymbol, except the call argument carrying
+    // the receiver is the raw RequireObjectCoercible result rather than an already ToString'd copy -
+    // the delegate (e.g. RegExp.prototype[@@replace]) performs its own ToString on it per spec, so a
+    // poisoned receiver's toString must not run before the delegation check has ruled itself out.
+    private static JsValue delegateToSymbolRaw(JsValue receiver, List<JsValue> args, JsSymbol symbol,
+            InterpreterOps ops, List<JsValue> extra) {
+        if (ops == null || args.isEmpty()) {
+            return null;
+        }
+        final var pattern = args.getFirst();
+        if (!InterpreterUtils.isObjectLike(pattern)) {
+            return null;
+        }
+        final var method = ops.getMember(pattern, symbol);
+        if (method instanceof JsUndefined || method instanceof JsNull) {
+            return null;
+        }
+        // GetMethod: a defined-but-non-callable well-known-symbol method is a TypeError, not a
+        // silent fall-through to the ToString(this)/ToString(searchValue) path.
+        if (!(method instanceof JsFunction) && !(method instanceof JsNativeFunction)) {
+            throw new TypeErrorException(symbol + " is not a function");
+        }
+        final var callArgs = new ArrayList<JsValue>();
+        callArgs.add(receiver);
+        callArgs.addAll(extra);
+        return ops.call(method, pattern, callArgs);
     }
 
     // Spec IsRegExp(argument): Get(argument, @@match) - which can itself throw from a user getter -
@@ -218,36 +308,18 @@ public final class StringBuiltins {
     }
 
     public static JsNativeFunction getMethod(JsString receiver, String name, Invoker invoker, InterpreterOps ops) {
+        if (isGeneric(name)) {
+            return genericMethod(name, ops, invoker);
+        }
         final var value = receiver.getValue();
         return switch (name) {
             case "slice" -> new JsNativeFunction("slice", (_, args) -> new JsString(slice(value, args, ops)));
             case "substring" ->
                 new JsNativeFunction("substring", (_, args) -> new JsString(substring(value, args, ops)));
-            case "split" -> new JsNativeFunction("split", (_, args) -> {
-                final var delegated = delegateToSymbol(value, args, JsSymbol.SPLIT, ops, tail(args));
-                return delegated != null ? delegated : split(value, args, ops);
-            });
-            case "replace" -> new JsNativeFunction("replace", (_, args) -> {
-                final var delegated = delegateToSymbol(value, args, JsSymbol.REPLACE, ops, tail(args));
-                return delegated != null ? delegated : replace(value, args, invoker, false, ops);
-            });
-            case "replaceAll" -> new JsNativeFunction("replaceAll", (_, args) -> {
-                requireGlobalRegExp(args, "replaceAll", ops);
-                final var delegated = delegateToSymbol(value, args, JsSymbol.REPLACE, ops, tail(args));
-                return delegated != null ? delegated : replace(value, args, invoker, true, ops);
-            });
-            case "match" -> new JsNativeFunction("match", (_, args) -> {
-                final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH, ops, List.of());
-                return delegated != null ? delegated : viaRegExp(value, args, "", JsSymbol.MATCH, ops);
-            });
             case "matchAll" -> new JsNativeFunction("matchAll", (_, args) -> {
                 requireGlobalRegExp(args, "matchAll", ops);
-                final var delegated = delegateToSymbol(value, args, JsSymbol.MATCH_ALL, ops, List.of());
+                final var delegated = delegateToSymbol(value, args, ops, List.of());
                 return delegated != null ? delegated : viaRegExp(value, args, "g", JsSymbol.MATCH_ALL, ops);
-            });
-            case "search" -> new JsNativeFunction("search", (_, args) -> {
-                final var delegated = delegateToSymbol(value, args, JsSymbol.SEARCH, ops, List.of());
-                return delegated != null ? delegated : viaRegExp(value, args, "", JsSymbol.SEARCH, ops);
             });
             case "toUpperCase" ->
                 new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
@@ -487,26 +559,30 @@ public final class StringBuiltins {
         return new JsArray(List.copyOf(array.getElements().subList(0, (int) limit)));
     }
 
+    // ToString(replaceValue) (when it is not callable) runs unconditionally before the string is even
+    // searched for a match - a no-match result must still have observed replaceValue's coercion.
     private static JsValue replace(String value, List<JsValue> args, Invoker invoker, boolean all, InterpreterOps ops) {
         final var search = str(args, 0, ops);
+        final var callable = args.size() > 1 && isCallable(args.get(1));
+        final var replacement = callable ? null : str(args, 1, ops);
         if (all) {
-            return new JsString(replaceAllLiteral(value, search, args, invoker, ops));
+            return new JsString(replaceAllLiteral(value, search, args, invoker, callable, replacement, ops));
         }
         final var index = value.indexOf(search);
         if (index < 0) {
             return new JsString(value);
         }
-        final var piece = literalPiece(value, search, index, args, invoker, ops);
+        final var piece = literalPiece(value, search, index, args, invoker, callable, replacement, ops);
         return new JsString(value.substring(0, index) + piece + value.substring(index + search.length()));
     }
 
     private static String literalPiece(String value, String search, int index, List<JsValue> args, Invoker invoker,
-            InterpreterOps ops) {
-        if (args.size() > 1 && isCallable(args.get(1))) {
+            boolean callable, String replacement, InterpreterOps ops) {
+        if (callable) {
             return JsCoercion.toStr(invoker.call(args.get(1), JsUndefined.getInstance(),
-                    List.of(new JsString(search), new JsNumber(index), new JsString(value))));
+                    List.of(new JsString(search), new JsNumber(index), new JsString(value))), ops);
         }
-        return expandLiteral(str(args, 1, ops), search, value, index);
+        return expandLiteral(replacement, search, value, index);
     }
 
     private static String expandLiteral(String template, String matched, String input, int position) {
@@ -533,7 +609,7 @@ public final class StringBuiltins {
     }
 
     private static String replaceAllLiteral(String value, String search, List<JsValue> args, Invoker invoker,
-            InterpreterOps ops) {
+            boolean callable, String replacement, InterpreterOps ops) {
         // advanceBy is max(1, searchLength), so an empty search matches at every position including
         // the one past the end.
         final var advanceBy = Math.max(1, search.length());
@@ -542,7 +618,7 @@ public final class StringBuiltins {
         var index = value.indexOf(search);
         while (index >= 0) {
             sb.append(value, from, index);
-            sb.append(literalPiece(value, search, index, args, invoker, ops));
+            sb.append(literalPiece(value, search, index, args, invoker, callable, replacement, ops));
             from = index + search.length();
             final var next = index + advanceBy;
             if (next > value.length()) {

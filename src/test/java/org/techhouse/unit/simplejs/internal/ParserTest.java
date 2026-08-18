@@ -360,6 +360,26 @@ public class ParserTest {
         assertEquals("init", assertInstanceOf(Property.class, obj.getProperties().get(1)).getKind());
     }
 
+    // `true`/`false`/`null`/`undefined` are ordinary IdentifierNames grammar-wise even though the
+    // lexer turns them into value tokens rather than keywords, so each is a legal accessor name too.
+    @Test
+    public void test_object_accessors_named_with_literal_keywords() {
+        final var obj = assertInstanceOf(ObjectExpression.class,
+                firstExpression("({ get undefined() {}, set undefined(v) {}, get null() {}, set true(v) {} })"));
+        final var getUndefined = assertInstanceOf(Property.class, obj.getProperties().getFirst());
+        assertEquals("get", getUndefined.getKind());
+        assertEquals("undefined", ((Identifier) getUndefined.getKey()).getName());
+        final var setUndefined = assertInstanceOf(Property.class, obj.getProperties().get(1));
+        assertEquals("set", setUndefined.getKind());
+        assertEquals("undefined", ((Identifier) setUndefined.getKey()).getName());
+        final var getNull = assertInstanceOf(Property.class, obj.getProperties().get(2));
+        assertEquals("get", getNull.getKind());
+        assertEquals("null", ((Identifier) getNull.getKey()).getName());
+        final var setTrue = assertInstanceOf(Property.class, obj.getProperties().get(3));
+        assertEquals("set", setTrue.getKind());
+        assertEquals("true", ((Identifier) setTrue.getKey()).getName());
+    }
+
     @Test
     public void test_object_cover_initialized_shorthand_parses() {
         final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ a = 1 })"));

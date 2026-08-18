@@ -63,7 +63,6 @@ IGNORED_FLAGS = {"generated", "CanBlockIsFalse", "CanBlockIsTrue", "non-determin
 # filter, the prelude or the verdict logic is wrong — not that the engine improved.
 DIVERGENCES = [
     ("descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor)", ["built-ins/Object/defineProperty/"]),
-    ("Object.assign bypasses the target's setter", ["built-ins/Object/assign/"]),
     ("instanceof survives F.prototype reassignment", ["language/expressions/instanceof/"]),
     ("tagged template strings array not per-site cached", ["language/expressions/tagged-template/"]),
     ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
@@ -73,9 +72,10 @@ DIVERGENCES = [
 # "all green" is the expected state, not the alarm.
 # Rows are removed from the list above as their divergence is closed. A row only asserts that *some*
 # test under its prefix still fails, so a stale one keeps passing on an unrelated failure and quietly
-# becomes a false claim about the engine - the five dropped so far (String(symbol) throwing,
+# becomes a false claim about the engine - the six dropped so far (String(symbol) throwing,
 # Reflect.ownKeys omitting symbols, shallow primitive wrappers, typed arrays lacking the
-# integer-indexed internals, regex named-group limitations) were each verified fixed by probe first.
+# integer-indexed internals, regex named-group limitations, Object.assign bypassing a setter) were
+# each verified fixed by probe first.
 
 
 class HarnessError(RuntimeError):

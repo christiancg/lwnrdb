@@ -84,6 +84,13 @@ public abstract class TokenStream {
         throw error();
     }
 
+    // The one unconditional ASI rule (no line-terminator or `}`/EOF condition attached): a
+    // do-while statement's terminating semicolon is always inserted after its `)`, so `do; while
+    // (0) x = 1;` is two statements even with no newline between them.
+    protected void consumeDoWhileSemicolon() {
+        matchSeparator(';');
+    }
+
     // The for-header left-hand side is parsed under the no-in production: `in` is not a
     // binary operator there, so `for (a in b)` reads `in` as the loop keyword. A bracketed
     // sub-expression re-enters the [+In] grammar (innermost context wins via the stack),

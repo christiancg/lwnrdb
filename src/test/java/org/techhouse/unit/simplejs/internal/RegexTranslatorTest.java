@@ -298,6 +298,16 @@ public class RegexTranslatorTest {
         rejects("\\c1", "u");
     }
 
+    // Annex B's ControlLetter accepts either case, but java.util.regex's own `\cX` syntax only
+    // recognises an uppercase letter, so a lowercase one must be translated by computed value
+    // (`letter % 32`) rather than passed through as `\cx`.
+    @Test
+    public void translatesLowercaseControlEscapes() {
+        assertTrue(fullMatch("\\ca", "", ""));
+        assertTrue(fullMatch("[\\ca]", "", ""));
+        assertTrue(fullMatch("\\cz", "", ""));
+    }
+
     @Test
     public void translatesHexAndUnicodeEscapes() {
         assertTrue(fullMatch("\\x41", "", "A"));

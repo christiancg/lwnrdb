@@ -650,7 +650,7 @@ public final class Parser {
             expectSeparator('(');
             final var test = parseExpression();
             expectSeparator(')');
-            consumeSemicolon();
+            consumeDoWhileSemicolon();
             return new DoWhileStatement(body, test);
         }
 
@@ -2557,7 +2557,10 @@ public final class Parser {
 
         private boolean beginsPropertyKey(JsBaseElement t) {
             return switch (t.getType()) {
-                case IDENTIFIER, KEYWORD, STRING, NUMBER -> true;
+                // `true`/`false`/`null`/`undefined` are ordinary IdentifierNames grammar-wise even
+                // though the lexer turns them into value tokens rather than keywords (see
+                // identifierName's comment), so each is a legal property key on its own here too.
+                case IDENTIFIER, KEYWORD, STRING, NUMBER, BOOLEAN, NULL, UNDEFINED -> true;
                 case SEPARATOR -> ((JsSeparator) t).getValue() == '[';
                 default -> false;
             };

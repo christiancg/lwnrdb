@@ -791,7 +791,7 @@ but is not a constructor.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **98.38%**, 35,898/36,490). The denominator
+Conformance is **measured, not asserted** (currently **98.81%**, 36,055/36,489). The denominator
 shrank from 36,535 when the restriction-bound tests below were filtered out — that step moved the
 rate without changing the passing count, so the two figures are only comparable through the ledger in
 `plans/simplejs-test262-100-percent-progress.md`. The official
@@ -1030,7 +1030,11 @@ be kept in step — an exclusion with no entry here is a number being flattered.
 - **Arbitrary module resolution** — `import` resolves only the host `args`/`db` built-ins;
   filesystem/URL module loading would be a sandbox escape.
 - **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;
-  by-copy methods always allocate the default type.
+  by-copy methods always allocate the default type. The same gap means a derived-construction builtin
+  method (e.g. `ArrayBuffer.prototype.slice`) always returns a base-type instance even on a subclass
+  receiver (`class AB extends ArrayBuffer {}`), excluded as
+  `language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js` in
+  `config/test262-exclusions.txt`.
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
 - **Proposals outside the ES2026 snapshot** — `joint-iteration` (`Iterator.zip`/`zipKeyed`),

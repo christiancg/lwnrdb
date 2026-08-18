@@ -548,4 +548,89 @@ public class StringBuiltinsTest {
         assertEquals("  a", str("'a'.padStart(3, undefined)"));
         assertEquals("a  ", str("'a'.padEnd(3, undefined)"));
     }
+
+    // split/replace/replaceAll/match/search are generic: RequireObjectCoercible(this) runs, then the
+    // well-known-symbol delegation attempt against the raw receiver/argument, and only once that is
+    // ruled out does ToString(this) happen - so a poisoned receiver's toString must not fire when a
+    // matching delegate exists, even when called via .call() with a non-string `this`.
+    @Test
+    public void genericDispatchDelegatesBeforeCoercingThePoisonedReceiver() {
+        assertTrue(bool("""
+                var poisoned = 0;
+                var poison = { toString() { poisoned += 1; throw 'should not run'; } };
+                var searchValue = { [Symbol.replace]: (o, r) => o === poison && r === poison };
+                var result = ''.replaceAll.call(poison, searchValue, poison);
+                result === true && poisoned === 0
+                """));
+        assertTrue(bool("""
+                var poisoned = 0;
+                var poison = { toString() { poisoned += 1; throw 'should not run'; } };
+                var splitter = { [Symbol.split]: (o) => o === poison };
+                var result = ''.split.call(poison, splitter);
+                result === true && poisoned === 0
+                """));
+        assertTrue(bool("""
+                var poisoned = 0;
+                var poison = { toString() { poisoned += 1; throw 'should not run'; } };
+                var matcher = { [Symbol.match]: (o) => o === poison };
+                var result = ''.match.call(poison, matcher);
+                result === true && poisoned === 0
+                """));
+    }
+
+    // Once delegation is ruled out (a non-object searchValue), ToString(this) still has to happen
+    // before ToString(searchValue) - the receiver-coercion order test262 pins down.
+    @Test
+    public void genericDispatchCoercesReceiverBeforeSeparatorWhenNoDelegate() {
+        final var thrown = assertThrows(JsThrowException.class, () -> Interpreter.run("""
+                var receiver = { toString() { throw 'receiver first'; } };
+                var separator = { toString() { throw 'separator second'; }, valueOf() { throw 'separator second'; } };
+                String.prototype.split.call(receiver, separator);
+                """));
+        assertEquals("receiver first", ((JsString) thrown.getValue()).getValue());
+    }
+
+    // replace/replaceAll coerce a non-callable replaceValue up front (spec step 6), even when the
+    // search string is never found - a no-match result must still observe replaceValue's ToString.
+    @Test
+    public void replaceCoercesNonCallableReplacementEvenWithoutAMatch() {
+        assertTrue(bool("""
+                var calls = 0;
+                var replaceValue = { toString() { calls += 1; return 'x'; } };
+                var result = ''.replace('a', replaceValue);
+                result === '' && calls === 1
+                """));
+        assertTrue(bool("""
+                var calls = 0;
+                var replaceValue = { toString() { calls += 1; return 'x'; } };
+                var result = ''.replaceAll('a', replaceValue);
+                result === '' && calls === 1
+                """));
+    }
+
+    // A callable replaceValue is never stringified, matched or not - only its call result is coerced.
+    @Test
+    public void replaceLeavesACallableReplacementUncoerced() {
+        assertTrue(bool("""
+                var called = 0;
+                var fn = () => { called += 1; return 'x'; };
+                var result = 'a'.replace('a', fn);
+                result === 'x' && called === 1
+                """));
+        assertTrue(bool("""
+                var called = 0;
+                var fn = () => { called += 1; return 'x'; };
+                var result = ''.replace('a', fn);
+                result === '' && called === 0
+                """));
+    }
+
+    // A defined-but-non-callable well-known-symbol delegate is a TypeError (GetMethod step 4), not a
+    // silent fall-through to the generic ToString path.
+    @Test
+    public void genericDispatchRejectsNonCallableDelegate() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("''.replaceAll.call('x', { [Symbol.replace]: 'nope' }, 'y')"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("''.search.call('x', { [Symbol.search]: 42 })"));
+    }
 }

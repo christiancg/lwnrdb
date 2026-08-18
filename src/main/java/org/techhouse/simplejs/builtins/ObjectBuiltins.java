@@ -42,7 +42,7 @@ public final class ObjectBuiltins {
         object.setProperty("values", new JsNativeFunction("values", (_, args) -> values(boxed(args, intrinsics), ops)));
         object.setProperty("entries",
                 new JsNativeFunction("entries", (_, args) -> entries(boxed(args, intrinsics), ops)));
-        object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args, ops)));
+        object.setProperty("assign", new JsNativeFunction("assign", (_, args) -> assign(args, ops, intrinsics)));
         object.setProperty("freeze", new JsNativeFunction("freeze", (_, args) -> setIntegrityLevel(args, ops, true)));
         object.setProperty("isFrozen",
                 new JsNativeFunction("isFrozen", (_, args) -> testIntegrityLevel(args, ops, true)));
@@ -83,7 +83,7 @@ public final class ObjectBuiltins {
                 new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
         object.setProperty("is", new JsNativeFunction("is", (_, args) -> is(args)));
         object.setProperty("getOwnPropertySymbols", new JsNativeFunction("getOwnPropertySymbols",
-                (_, args) -> getOwnPropertySymbols(boxed(args, intrinsics))));
+                (_, args) -> getOwnPropertySymbols(boxed(args, intrinsics), ops)));
         return object;
     }
 
@@ -110,9 +110,12 @@ public final class ObjectBuiltins {
         return JsBoolean.of(!OrdinaryProperties.isNotSameValue(argAt(args, 0), argAt(args, 1)));
     }
 
-    private static JsValue getOwnPropertySymbols(List<JsValue> args) {
+    // Routed through ops.ownKeys rather than target.ownPropertyKeys() so a Proxy's ownKeys trap
+    // (and its result-invariant validation) is consulted instead of silently answering empty - a
+    // Proxy has no PropertyTable of its own (ProxyDispatch intercepts ahead of it).
+    private static JsValue getOwnPropertySymbols(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
-        for (final var key : first(args).ownPropertyKeys()) {
+        for (final var key : ops.ownKeys(first(args))) {
             if (key instanceof JsSymbol) {
                 result.push(key);
             }
@@ -126,29 +129,45 @@ public final class ObjectBuiltins {
         }
         final var key = toPropertyKey(argAt(args, 1), ops);
         if (key instanceof JsSymbol symbol) {
-            return JsBoolean.of(hasOwnSymbol(args.getFirst(), symbol));
+            return JsBoolean.of(hasOwnSymbol(args.getFirst(), symbol, ops));
         }
-        return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(key)));
+        return JsBoolean.of(hasOwnKey(args.getFirst(), JsCoercion.toStr(key), ops));
     }
 
-    // Deliberately narrower than JsValue.hasOwnKey: an accessor-only own property and an exotic
-    // type's table are not reported here, which several corpus expectations still rely on.
-    static boolean hasOwnKey(JsValue target, String key) {
+    // A Proxy is answered through its [[GetOwnProperty]] trap (via ops), since it carries no
+    // PropertyTable of its own for the generic fallback below to find. Every other exotic type
+    // (JsRegExp, JsDate, JsMap, JsSet, JsPromise, buffers/views, generators...) that isn't given
+    // its own arm here still has a real table behind ownProperties(), so the fallback answers from
+    // that instead of hard-coding false - which is what let an ad hoc `sample.foo = true` go
+    // unreported by hasOwnProperty even though getOwnPropertyNames listed it.
+    static boolean hasOwnKey(JsValue target, String key, InterpreterOps ops) {
         return switch (target) {
+            case JsProxy proxy ->
+                ops != null && !(ops.getOwnPropertyDescriptor(proxy, new JsString(key)) instanceof JsUndefined);
             case JsObject object -> object.hasOwnKey(new JsString(key)) || object.hasAccessor(key);
             case JsClass cls -> cls.getStaticOwner().has(key) || cls.getStaticOwner().hasAccessor(key);
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
-            case JsTypedArray typed -> "length".equals(key) || typedHasIndex(typed, key);
+            case JsTypedArray typed ->
+                "length".equals(key) || typedHasIndex(typed, key) || hasTableAccessor(target, key)
+                        || (target.ownProperties() != null && target.ownProperties().has(key));
             case JsGlobalObject global -> global.getEnv().isDeclared(key) || global.ownProperties().hasAccessor(key);
             case JsArguments arguments -> arguments.hasOwnKey(new JsString(key));
-            case JsCallableProperties callable ->
-                callable.hasProperty(key) || OrdinaryProperties.metadataKey(callable, key);
-            default -> false;
+            case JsCallableProperties callable -> callable.hasProperty(key)
+                    || OrdinaryProperties.metadataKey(callable, key) || hasTableAccessor(target, key);
+            default -> target.hasOwnKey(new JsString(key));
         };
     }
 
-    static boolean hasOwnSymbol(JsValue target, JsSymbol key) {
+    private static boolean hasTableAccessor(JsValue target, String key) {
+        final var table = target.ownProperties();
+        return table != null && table.hasAccessor(key);
+    }
+
+    static boolean hasOwnSymbol(JsValue target, JsSymbol key, InterpreterOps ops) {
+        if (target instanceof JsProxy proxy) {
+            return ops != null && !(ops.getOwnPropertyDescriptor(proxy, key) instanceof JsUndefined);
+        }
         final var table = symbolTableOf(target);
         return table != null && (table.hasSymbol(key) || table.hasSymbolAccessor(key));
     }
@@ -381,37 +400,35 @@ public final class ObjectBuiltins {
         return result;
     }
 
-    private static JsValue assign(List<JsValue> args, InterpreterOps ops) {
-        final var targetArg = first(args);
-        if (targetArg instanceof JsNull || targetArg instanceof JsUndefined) {
-            throw new TypeErrorException("Cannot convert undefined or null to object");
-        }
-        if (!(targetArg instanceof JsObject target)) {
-            return targetArg;
-        }
+    // Object.assign, spec-general rather than special-cased per source/target shape: ToObject the
+    // target (a primitive target must come back wrapped and typeof "object"), then for every
+    // source walk its real [[OwnPropertyKeys]]/[[GetOwnProperty]]/[[Get]] through the ops seam -
+    // which is what makes a String source's index characters, an Array source/target's exotic
+    // length semantics, and a Proxy source's traps (including one that throws) all fall out for
+    // free instead of needing their own branch. The [[Set]] on the target honours an inherited
+    // setter and throws when the write is rejected (non-writable, non-extensible), per Set(...,
+    // throwOnFailure=true).
+    private static JsValue assign(List<JsValue> args, InterpreterOps ops, Intrinsics intrinsics) {
+        final var to = intrinsics.toObject(first(args));
         for (var i = 1; i < args.size(); i++) {
-            if (args.get(i) instanceof JsObject source) {
-                for (final var key : source.keys()) {
-                    // Routed through the interpreter's [[Set]] (not the raw property map) so a
-                    // target accessor's setter fires and a rejected write (non-writable,
-                    // non-extensible) throws per spec's Set(..., throwOnFailure=true).
-                    if (source.isEnumerable(key)
-                            && !ops.setMember(target, new JsString(key), ownValue(source, key, ops))) {
-                        throw new TypeErrorException("Cannot assign to read only property '" + key + "' of object");
-                    }
+            final var sourceArg = argAt(args, i);
+            if (InterpreterUtils.isNullish(sourceArg)) {
+                continue;
+            }
+            final var from = intrinsics.toObject(sourceArg);
+            for (final var key : ops.ownKeys(from)) {
+                if (!(ops.getOwnPropertyDescriptor(from, key) instanceof JsObject descriptor)
+                        || !JsCoercion.toBoolean(descriptor.get("enumerable"))) {
+                    continue;
                 }
-                for (final var symbol : source.symbolKeys()) {
-                    if (!ops.setMember(target, symbol, source.getSymbol(symbol))) {
-                        throw new TypeErrorException("Cannot assign to read only property of object");
-                    }
-                }
-            } else if (args.get(i) instanceof JsCallableProperties callable) {
-                for (final var key : callable.enumerablePropertyKeys()) {
-                    target.set(key, callable.getProperty(key));
+                final var value = ops.getMember(from, key);
+                if (!ops.setMember(to, key, value)) {
+                    throw new TypeErrorException(
+                            "Cannot assign to read only property '" + JsCoercion.toStr(key) + "' of object");
                 }
             }
         }
-        return target;
+        return to;
     }
 
     // SetIntegrityLevel: extensibility is dropped first, then every own property is redefined
@@ -520,15 +537,34 @@ public final class ObjectBuiltins {
 
     public static JsValue setPrototypeOf(List<JsValue> args) {
         final var target = first(args);
+        // RequireObjectCoercible(O), then the Type(proto) check - both run before step 4 asks
+        // whether O is even an object, so a primitive target still rejects a bad proto argument.
+        if (InterpreterUtils.isNullish(target)) {
+            throw new TypeErrorException("Object.setPrototypeOf called on null or undefined");
+        }
+        final var protoArg = argAt(args, 1);
+        if (!InterpreterUtils.isObjectLike(protoArg) && !(protoArg instanceof JsNull)) {
+            throw new TypeErrorException(
+                    "Object prototype may only be an Object or null: " + JsCoercion.toStr(protoArg));
+        }
         if (InterpreterUtils.isObjectLike(target)) {
-            final var proto = args.size() > 1 && InterpreterUtils.isObjectLike(args.get(1)) ? args.get(1) : null;
-            // OrdinarySetPrototypeOf step 8: a cycle would make every later chain walk unbounded.
-            for (var walk = proto; walk != null; walk = walk.getProto()) {
-                if (walk == target) {
-                    throw new TypeErrorException("Cyclic __proto__ value");
+            final var proto = InterpreterUtils.isObjectLike(protoArg) ? protoArg : null;
+            // OrdinarySetPrototypeOf step 2: SameValue(V, current) is a no-op even when the target
+            // is non-extensible.
+            if (proto != target.getProto()) {
+                // Step 4: rejected before the cyclic walk, which is otherwise the only signal a
+                // non-extensible target ever gives - it would silently "succeed" without this.
+                if (!target.isExtensible()) {
+                    throw new TypeErrorException("Object.setPrototypeOf called on non-extensible object");
                 }
+                // Step 8: a cycle would make every later chain walk unbounded.
+                for (var walk = proto; walk != null; walk = walk.getProto()) {
+                    if (walk == target) {
+                        throw new TypeErrorException("Cyclic __proto__ value");
+                    }
+                }
+                target.setProto(proto);
             }
-            target.setProto(proto);
         }
         return target;
     }

@@ -6,11 +6,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.nodes.FieldDefinition;
 
 public final class JsClass extends JsValue {
     private static final JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(true, false, true);
+    private static final JsObject.PropertyFlags NON_WRITABLE_HIDDEN = new JsObject.PropertyFlags(false, false, true);
 
     private String name;
     private final JsClass superClass;
@@ -33,6 +35,11 @@ public final class JsClass extends JsValue {
     private final Environment methodScope;
     private JsValue superConstructor;
     private boolean nullHeritage;
+    private JsValue proto;
+    // Set once a class body explicitly claims "name" as a static member (method/accessor/field),
+    // so a later NamedEvaluation (`setInferredName`, for an anonymous class expression) does not
+    // clobber it - matching the spec's HasOwnProperty(v, "name") guard on SetFunctionName.
+    private boolean explicitNameProperty;
 
     public JsClass(String name, JsClass superClass, Environment methodScope) {
         this.name = name;
@@ -40,9 +47,16 @@ public final class JsClass extends JsValue {
         this.methodScope = methodScope;
         if (superClass != null) {
             prototype.setProto(superClass.getPrototype());
+            this.proto = superClass;
         }
         prototype.defineValue("constructor", this);
         prototype.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
+        // OrdinaryFunctionCreate/SetFunctionName/MakeConstructor install these in this exact order
+        // (length, name, prototype), which is what Object.getOwnPropertyNames must report.
+        staticOwner.defineValue("length", new JsNumber(0));
+        staticOwner.setFlags("length", NON_WRITABLE_HIDDEN);
+        staticOwner.defineValue("name", new JsString(name == null ? "" : name));
+        staticOwner.setFlags("name", NON_WRITABLE_HIDDEN);
         // A class constructor's `prototype` is a real own property, so it is reachable through
         // hasOwnProperty/getOwnPropertyDescriptor and not only through the internal slot.
         staticOwner.defineValue("prototype", prototype);
@@ -51,6 +65,19 @@ public final class JsClass extends JsValue {
 
     public JsObject getPrototype() {
         return prototype;
+    }
+
+    // ClassDefinitionEvaluation sets the constructor function's own [[Prototype]] to the heritage
+    // (a class, a native/plain constructor, or %Function.prototype% by default), separately from
+    // `prototype`'s own [[Prototype]] (the instance chain).
+    @Override
+    public JsValue getProto() {
+        return proto;
+    }
+
+    @Override
+    public void setProto(JsValue proto) {
+        this.proto = proto;
     }
 
     public JsObject getStaticOwner() {
@@ -76,6 +103,7 @@ public final class JsClass extends JsValue {
 
     public void setSuperConstructor(JsValue superConstructor, JsValue parentPrototype) {
         this.superConstructor = superConstructor;
+        this.proto = superConstructor;
         if (superConstructor != null && superClass == null && parentPrototype != null) {
             prototype.setProto(parentPrototype);
         }
@@ -109,8 +137,9 @@ public final class JsClass extends JsValue {
     }
 
     public void setInferredName(String inferred) {
-        if (name == null) {
+        if (name == null && !explicitNameProperty) {
             name = inferred;
+            staticOwner.defineValue("name", new JsString(inferred));
         }
     }
 
@@ -128,6 +157,7 @@ public final class JsClass extends JsValue {
 
     public void setConstructor(JsFunction constructor) {
         this.constructor = constructor;
+        staticOwner.defineValue("length", FunctionProtoBuiltins.metadata(constructor, "length"));
     }
 
     public void addInstanceMethod(String key, String kind, JsFunction fn) {
@@ -150,6 +180,9 @@ public final class JsClass extends JsValue {
             staticOwner.defineValue(key, fn);
         }
         staticOwner.setFlags(key, HIDDEN);
+        if ("name".equals(key)) {
+            explicitNameProperty = true;
+        }
     }
 
     // Every private name a class body declares is created up front, before any member (or computed
@@ -297,6 +330,17 @@ public final class JsClass extends JsValue {
 
     public void setStaticProp(String key, JsValue value) {
         staticOwner.set(key, value);
+    }
+
+    // ClassFieldDefinitionEvaluation's DefineField is a CreateDataPropertyOrThrow, not an ordinary
+    // [[Set]]: a static field named "name"/"length" must override the constructor's own metadata
+    // default rather than being silently dropped by their non-writable flags.
+    public void defineStaticField(String key, JsValue value) {
+        staticOwner.defineValue(key, value);
+        staticOwner.setFlags(key, JsObject.PropertyFlags.DEFAULT);
+        if ("name".equals(key)) {
+            explicitNameProperty = true;
+        }
     }
 
     public JsValue getStaticProp(String key) {

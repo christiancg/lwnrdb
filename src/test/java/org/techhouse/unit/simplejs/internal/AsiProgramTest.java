@@ -12,6 +12,7 @@ import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.BlockStatement;
 import org.techhouse.simplejs.nodes.BreakStatement;
+import org.techhouse.simplejs.nodes.DoWhileStatement;
 import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.Program;
@@ -98,5 +99,24 @@ public class AsiProgramTest {
     @Test
     public void test_same_line_statements_without_separator_rejected() {
         assertThrows(UnexpectedTokenException.class, () -> parse("a = 1 b = 2"));
+    }
+
+    // A do-while statement's terminating semicolon is always inserted after its `)`, even with no
+    // line break and no explicit `;` before the next statement (the one unconditional ASI rule).
+    @Test
+    public void test_do_while_semicolon_always_inserted_after_close_paren() {
+        final var body = parse("do break; while (0) x = 42;").getBody();
+        assertEquals(2, body.size());
+        assertInstanceOf(DoWhileStatement.class, body.getFirst());
+        assertInstanceOf(ExpressionStatement.class, body.get(1));
+    }
+
+    // The rule applies with no explicit `;` at all directly after the `)`.
+    @Test
+    public void test_do_while_semicolon_inserted_without_explicit_semicolon() {
+        final var body = parse("do ; while (x) x = 39;").getBody();
+        assertEquals(2, body.size());
+        assertInstanceOf(DoWhileStatement.class, body.getFirst());
+        assertInstanceOf(ExpressionStatement.class, body.get(1));
     }
 }

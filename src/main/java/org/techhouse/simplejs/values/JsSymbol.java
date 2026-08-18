@@ -18,6 +18,10 @@ public final class JsSymbol extends JsValue {
     public static final JsSymbol SPECIES = new JsSymbol("Symbol.species");
 
     private final String description;
+    // CanBeHeldWeakly: a symbol minted through Symbol.for lives in the process-wide registry for
+    // good, so it must never satisfy a WeakMap/WeakSet key (that would defeat weakness); a plain
+    // Symbol(...) is collectible like any other object and stays a valid weak key.
+    private boolean registered;
 
     public JsSymbol(String description) {
         this.description = description;
@@ -25,5 +29,13 @@ public final class JsSymbol extends JsValue {
 
     public String getDescription() {
         return description;
+    }
+
+    public void markRegistered() {
+        this.registered = true;
+    }
+
+    public boolean isRegistered() {
+        return registered;
     }
 }

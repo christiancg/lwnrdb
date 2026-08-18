@@ -55,6 +55,16 @@ public final class PromiseBuiltins {
             if ((newTarget == null || newTarget instanceof JsUndefined) && !(thisArg instanceof JsObject)) {
                 throw new TypeErrorException("Constructor Promise requires 'new'");
             }
+            if (!isCallable(arg(args, 0))) {
+                throw new TypeErrorException("Promise resolver is not a function");
+            }
+            // OrdinaryCreateFromConstructor's Get(newTarget, "prototype") is observable even though
+            // this engine has no reachable use for a builtin's newTarget.prototype yet: a throwing
+            // accessor there must still abort construction before the executor runs, but only after
+            // the executor's own callability has already been checked (spec step order).
+            if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+                ctx.ops().getMember(newTarget, new JsString("prototype"));
+            }
             return construct(ctx, args);
         });
         promise.setProperty("resolve",

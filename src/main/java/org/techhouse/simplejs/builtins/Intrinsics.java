@@ -101,15 +101,17 @@ public final class Intrinsics {
         promiseProto = prototypeOf(PromiseBuiltins.PROTO_NAMES, "Promise.prototype",
                 (receiver, name) -> PromiseBuiltins.getMethod(receiver, name, eventLoop, invoker, this));
         iteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "Generator.prototype",
-                (receiver, name) -> GeneratorBuiltins.getMethod(requireGenerator(receiver, name), name));
-        asyncIteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "AsyncGenerator.prototype", (receiver,
-                name) -> GeneratorBuiltins.getAsyncMethod(requireAsyncGenerator(receiver, name), name, driver));
+                (receiver, name) -> GeneratorBuiltins.getMethod(requireGenerator(receiver, name), name, objectProto));
+        asyncIteratorProto = prototypeOf(GeneratorBuiltins.PROTO_NAMES, "AsyncGenerator.prototype",
+                (receiver, name) -> asyncGeneratorMethod(receiver, name, driver, eventLoop));
         functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype", (receiver,
                 name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker, ops));
         installFunctionHasInstance(functionProto);
         arrayProto = arrayPrototype();
         stringProto = prototypeOf(StringBuiltins.NAMES, "String.prototype",
-                (receiver, name) -> StringBuiltins.getMethod(requireString(receiver, name), name, invoker, ops));
+                (receiver, name) -> StringBuiltins.isGeneric(name)
+                        ? StringBuiltins.genericMethod(name, ops, invoker)
+                        : StringBuiltins.getMethod(requireString(receiver, name), name, invoker, ops));
         installStringPrimitiveMethods(stringProto);
         numberProto = prototypeOf(NumberBuiltins.NAMES, "Number.prototype",
                 (receiver, name) -> NumberBuiltins.getMethod(requireNumber(receiver, name), name, ops));
@@ -130,10 +132,12 @@ public final class Intrinsics {
         installRegExpAccessors(regexpProto);
         mapProto = prototypeOf(MapBuiltins.NAMES, "Map.prototype",
                 (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name, false), name, invoker));
+        installMapSizeAccessor(mapProto);
         weakMapProto = prototypeOf(MapBuiltins.WEAK_NAMES, "WeakMap.prototype",
                 (receiver, name) -> MapBuiltins.getMethod(requireMap(receiver, name, true), name, invoker));
         setProto = prototypeOf(SetBuiltins.NAMES, "Set.prototype",
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, false), name, invoker, ops));
+        installSetSizeAccessor(setProto);
         weakSetProto = prototypeOf(SetBuiltins.WEAK_NAMES, "WeakSet.prototype",
                 (receiver, name) -> SetBuiltins.getMethod(requireSet(receiver, name, true), name, invoker, ops));
         dateProto = prototypeOf(DateBuiltins.NAMES, "Date.prototype",
@@ -176,8 +180,10 @@ public final class Intrinsics {
                         eventLoop, false));
         DisposableStackBuiltins.installAccessors(disposableStackProto, false);
         asyncDisposableStackProto = prototypeOf(DisposableStackBuiltins.ASYNC_NAMES, "AsyncDisposableStack.prototype",
-                (receiver, name) -> DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker,
-                        eventLoop, true));
+                (receiver, name) -> "disposeAsync".equals(name)
+                        ? disposeAsyncMethod(receiver, name, eventLoop)
+                        : DisposableStackBuiltins.getMethod(requireStack(receiver, name), name, ops, invoker, eventLoop,
+                                true));
         DisposableStackBuiltins.installAccessors(asyncDisposableStackProto, true);
         installObjectPrototype();
         installErrorPrototypes();
@@ -215,6 +221,11 @@ public final class Intrinsics {
         if (instancePrototype != null) {
             define(proto, "prototype", instancePrototype);
             proto.setFlags("prototype", new PropertyFlags(false, false, true));
+            // The back-link spec names %GeneratorPrototype%.constructor / %AsyncGeneratorPrototype%.
+            // constructor: the instance prototype's own constructor is this function-kind prototype
+            // object, not the generator/async-generator instances that happen to link through it.
+            define(instancePrototype, "constructor", proto);
+            instancePrototype.setFlags("constructor", new PropertyFlags(false, false, true));
         }
         defineToStringTag(proto, name);
         return proto;
@@ -854,6 +865,67 @@ public final class Intrinsics {
             return generator;
         }
         throw incompatible("AsyncGenerator.prototype." + method, receiver);
+    }
+
+    // AsyncGenerator.prototype.{next,return,throw} create their PromiseCapability before the brand
+    // check per spec (IfAbruptRejectPromise), so a receiver that fails the check rejects the returned
+    // promise instead of throwing synchronously.
+    private JsValue asyncGeneratorMethod(JsValue receiver, String name, GeneratorBuiltins.AsyncDriver driver,
+            EventLoop eventLoop) {
+        try {
+            return GeneratorBuiltins.getAsyncMethod(requireAsyncGenerator(receiver, name), name, driver);
+        } catch (TypeErrorException e) {
+            return rejectedMethod(name, eventLoop, e);
+        }
+    }
+
+    // AsyncDisposableStack.prototype.disposeAsync has the same create-capability-before-brand-check
+    // shape: an ordinary object, a DisposableStack, or a disposed stack all reject rather than throw.
+    private JsValue disposeAsyncMethod(JsValue receiver, String name, EventLoop eventLoop) {
+        try {
+            final var stack = requireStack(receiver, name);
+            final var method = DisposableStackBuiltins.getMethod(stack, name, ops, invoker, eventLoop, true);
+            if (method != null) {
+                return method;
+            }
+            throw incompatible("AsyncDisposableStack.prototype." + name, receiver);
+        } catch (TypeErrorException e) {
+            return rejectedMethod(name, eventLoop, e);
+        }
+    }
+
+    private JsNativeFunction rejectedMethod(String name, EventLoop eventLoop, RuntimeException error) {
+        return new JsNativeFunction(name, (_, _) -> {
+            final var promise = new JsPromise(eventLoop);
+            promise.reject(InterpreterUtils.toErrorValue(error, this));
+            return promise;
+        });
+    }
+
+    // `size` is an accessor on the prototype, not a data method: it has to be reachable off a
+    // foreign/subclassed receiver by walking the prototype chain (docs' "builtin subclassing" note -
+    // a subclass instance is a plain JsObject wrapping the real JsMap in its primitive slot), so the
+    // brand check goes through requireMap's own unwrap fallback rather than a raw `instanceof`.
+    private void installMapSizeAccessor(JsObject proto) {
+        final var getter = new JsNativeFunction("get size",
+                (thisArg, _) -> new JsNumber(requireMap(thisArg, "size", false).size()));
+        getter.setLength(0);
+        proto.defineAccessor("size", getter, null);
+        proto.setFlags("size", new PropertyFlags(true, false, true));
+    }
+
+    // Same shape as installMapSizeAccessor; `keys` is not a method of its own, it is the very same
+    // function object as `values`, which a script can compare.
+    private void installSetSizeAccessor(JsObject proto) {
+        final var getter = new JsNativeFunction("get size",
+                (thisArg, _) -> new JsNumber(requireSet(thisArg, "size", false).size()));
+        getter.setLength(0);
+        proto.defineAccessor("size", getter, null);
+        proto.setFlags("size", new PropertyFlags(true, false, true));
+        final var values = proto.get("values");
+        if (values != null) {
+            installMethod(proto, "keys", values);
+        }
     }
 
     private JsMap requireMap(JsValue receiver, String method, boolean weak) {

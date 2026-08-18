@@ -160,4 +160,41 @@ public class SymbolBuiltinsTest {
         final var descriptor = "let d = Object.getOwnPropertyDescriptor(Symbol.prototype, Symbol.toPrimitive); ";
         assertTrue(bool(descriptor + "d.writable === false && d.enumerable === false && d.configurable === true"));
     }
+
+    // Symbol.for's registered symbol is CanBeHeldWeakly-ineligible: it lives in the registry for the
+    // whole run, so it must not be usable as a WeakMap/WeakSet key, while a plain Symbol() still is.
+    @Test
+    public void registeredSymbolIsRejectedAsAWeakKeyButAPlainSymbolIsAccepted() {
+        assertTrue(bool(threwTypeError("new WeakMap().set(Symbol.for('k'), 1)")));
+        assertTrue(bool(threwTypeError("new WeakSet().add(Symbol.for('k'))")));
+        assertTrue(bool("""
+                (function() {
+                    const s = Symbol('plain');
+                    const m = new WeakMap();
+                    m.set(s, 1);
+                    return m.get(s) === 1;
+                })()
+                """));
+        assertTrue(bool("""
+                (function() {
+                    const s = Symbol('plain');
+                    const set = new WeakSet();
+                    set.add(s);
+                    return set.has(s);
+                })()
+                """));
+    }
+
+    // The well-known symbols (Symbol.iterator etc.) are not registered through Symbol.for, so they
+    // remain valid weak keys.
+    @Test
+    public void wellKnownSymbolsAreNotTreatedAsRegistered() {
+        assertTrue(bool("""
+                (function() {
+                    const m = new WeakMap();
+                    m.set(Symbol.iterator, 1);
+                    return m.get(Symbol.iterator) === 1;
+                })()
+                """));
+    }
 }

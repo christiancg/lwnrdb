@@ -601,6 +601,9 @@ public final class MemberEvaluator {
     // OrdinarySet lands the write on the receiver, not on the object whose chain answered the lookup:
     // reached when a proxy or Reflect.set supplies a receiver other than the target.
     private boolean setOnReceiver(JsValue receiver, String key, JsValue value) {
+        if (receiver instanceof JsProxy) {
+            return setOnProxyReceiver(receiver, key, value);
+        }
         final var keyValue = new JsString(key);
         final var existing = receiver.getOwnProperty(keyValue);
         if (existing != null && (existing.isAccessorDescriptor() || !existing.writableOr(false))) {
@@ -610,6 +613,33 @@ public final class MemberEvaluator {
                 existing == null
                         ? PropertyDescriptor.data(value, JsObject.PropertyFlags.DEFAULT)
                         : new PropertyDescriptor(value, null, null, null, null, null));
+    }
+
+    // A JsProxy receiver has no ordinary [[GetOwnProperty]]/[[DefineOwnProperty]] of its own -
+    // ProxyDispatch intercepts ahead of the JsValue defaults, which would otherwise report the
+    // receiver as if it had no own-property table at all. Routed through the InterpreterOps seam
+    // so both the existing-descriptor check and the write itself dispatch the proxy's traps.
+    private boolean setOnProxyReceiver(JsValue receiver, String key, JsValue value) {
+        final var keyValue = new JsString(key);
+        final var existing = interp.ops().getOwnPropertyDescriptor(receiver, keyValue);
+        if (!(existing instanceof JsUndefined)) {
+            final var isAccessor = interp.hasMember(existing, new JsString("get"))
+                    || interp.hasMember(existing, new JsString("set"));
+            final var writable = interp.hasMember(existing, new JsString("writable"))
+                    && JsCoercion.toBoolean(interp.getMember(existing, "writable"));
+            if (isAccessor || !writable) {
+                return false;
+            }
+            final var valueOnly = new JsObject();
+            valueOnly.set("value", value);
+            return interp.ops().defineProperty(receiver, keyValue, valueOnly);
+        }
+        final var fullDescriptor = new JsObject();
+        fullDescriptor.set("value", value);
+        fullDescriptor.set("writable", JsBoolean.TRUE);
+        fullDescriptor.set("enumerable", JsBoolean.TRUE);
+        fullDescriptor.set("configurable", JsBoolean.TRUE);
+        return interp.ops().defineProperty(receiver, keyValue, fullDescriptor);
     }
 
     public boolean setMember(JsValue target, String key, JsValue value) {
@@ -663,9 +693,18 @@ public final class MemberEvaluator {
                     } else if (callable instanceof JsNativeFunction nf && InterpreterUtils.isObjectLike(value)) {
                         nf.setPrototype(value);
                     }
-                } else {
-                    callable.setEnumerableProperty(key, value);
+                    yield true;
                 }
+                // A callable has no own property table walk of its own, so an inherited accessor
+                // (Function.prototype's poisoned `caller`/`arguments` pair, or a script-installed
+                // one) is only reachable by consulting the chain explicitly here.
+                if (!callable.hasProperty(key)) {
+                    final var outcome = setThroughChain(target, key, target, value);
+                    if (outcome.handled()) {
+                        yield outcome.result();
+                    }
+                }
+                callable.setEnumerableProperty(key, value);
                 yield true;
             }
             // Date, Map, Set, buffers, views and generators are ordinary objects apart from their
@@ -688,18 +727,47 @@ public final class MemberEvaluator {
             return true;
         }
         if (!table.has(key)) {
-            final var accessor = inheritedAccessor(target, key);
-            if (accessor != null) {
-                return writeThroughAccessor(target, accessor, value);
+            final var outcome = setThroughChain(target, key, target, value);
+            if (outcome.handled()) {
+                return outcome.result();
             }
         }
         return table.set(key, value);
     }
 
-    // OrdinarySet's prototype step: the nearest accessor the receiver inherits for the key, or null
-    // when the chain holds none and the write should create an own property instead.
-    private PropertyDescriptor inheritedAccessor(JsValue target, String key) {
-        return chainAccessor(protoChainStart(target), key);
+    // The result of walking the prototype chain looking for something other than an ordinary own
+    // property: `handled` is false when the chain held none of the three cases setThroughChain
+    // recognises, in which case the caller creates an own data property on `receiver` instead.
+    private record ChainSetOutcome(boolean handled, boolean result) {
+        private static final ChainSetOutcome NOT_HANDLED = new ChainSetOutcome(false, false);
+
+        private static ChainSetOutcome of(boolean result) {
+            return new ChainSetOutcome(true, result);
+        }
+    }
+
+    // OrdinarySet's prototype step, extended for the three kinds of parent this walk can reach
+    // that are not an ordinary own-property table: a proxy parent, whose own [[Set]] trap is the
+    // whole answer (its result propagates directly, per parent.[[Set]](P, V, Receiver) in
+    // OrdinarySetWithOwnDescriptor); an Integer-Indexed exotic parent (a typed array), whose own
+    // [[Set]] likewise short-circuits the walk before any further inherited accessor is
+    // consulted (its own accessor-less data property must never be mistaken for "nothing found
+    // here, keep walking"); and an ordinary accessor.
+    private ChainSetOutcome setThroughChain(JsValue target, String key, JsValue receiver, JsValue value) {
+        for (var chain = new Chain(protoChainStart(target)); chain.hasLink(); chain.advance()) {
+            if (chain.link() instanceof JsProxy proxy) {
+                return ChainSetOutcome.of(proxies.set(proxy, new JsString(key), value, receiver));
+            }
+            if (chain.link() instanceof JsTypedArray typed && typed.hasCanonicalNumericIndex(new JsString(key))) {
+                return ChainSetOutcome.of(typed.setExoticIndex(new JsString(key), value, receiver)
+                        || setOnReceiver(receiver, key, value));
+            }
+            final var accessor = protoAccessor(chain.link(), key);
+            if (accessor != null) {
+                return ChainSetOutcome.of(writeThroughAccessor(receiver, accessor, value));
+            }
+        }
+        return ChainSetOutcome.NOT_HANDLED;
     }
 
     // An inherited accessor takes the write; a getter-only one rejects it.
@@ -709,17 +777,6 @@ public final class MemberEvaluator {
         }
         interp.callValue(accessor.setter(), target, List.of(value));
         return true;
-    }
-
-    // The nearest inherited accessor for the key, or null when the chain holds none.
-    private PropertyDescriptor chainAccessor(JsValue start, String key) {
-        for (var chain = new Chain(start); chain.hasLink(); chain.advance()) {
-            final var accessor = protoAccessor(chain.link(), key);
-            if (accessor != null) {
-                return accessor;
-            }
-        }
-        return null;
     }
 
     // An explicit [[Prototype]] wins; without one the value inherits from the realm's intrinsic
@@ -773,9 +830,9 @@ public final class MemberEvaluator {
             return true;
         }
         if (!arrayOwnsKey(array, key, index)) {
-            final var accessor = inheritedAccessor(array, key);
-            if (accessor != null) {
-                return writeThroughAccessor(array, accessor, value);
+            final var outcome = setThroughChain(array, key, array, value);
+            if (outcome.handled()) {
+                return outcome.result();
             }
         }
         return index == null ? array.setProperty(key, value) : array.set(index, value);

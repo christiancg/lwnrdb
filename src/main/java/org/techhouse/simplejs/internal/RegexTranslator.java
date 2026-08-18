@@ -910,9 +910,12 @@ public final class RegexTranslator {
 
         private String readControlEscape(boolean inClass) {
             if (has(2) && Character.isLetter(source.charAt(pos + 2)) && source.charAt(pos + 2) < 0x80) {
+                // `\cX` per Annex B ControlLetter accepts either case, but java.util.regex's own
+                // `\cX` syntax only recognises an uppercase letter — emit the computed control
+                // code point directly so a lowercase letter (e.g. `\ca`) still works.
                 final var letter = source.charAt(pos + 2);
                 pos += 3;
-                return "\\c" + letter;
+                return "\\x{" + Integer.toHexString(letter % 32) + "}";
             }
             if (unicode) {
                 throw invalid("invalid control escape");

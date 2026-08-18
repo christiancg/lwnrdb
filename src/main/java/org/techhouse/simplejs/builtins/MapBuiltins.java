@@ -13,6 +13,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -215,15 +216,21 @@ public final class MapBuiltins {
         return JsUndefined.getInstance();
     }
 
+    // CanBeHeldWeakly: an object is always valid; a Symbol is valid unless it was minted through
+    // Symbol.for (that registry keeps it alive for the process's lifetime, so holding it weakly
+    // would be meaningless); every other primitive is never valid.
     private static boolean isNotObjectKey(JsValue value) {
-        return !switch (value) {
-            case JsNumber ignored -> false;
-            case JsString ignored -> false;
-            case JsBoolean ignored -> false;
-            case org.techhouse.simplejs.values.JsBigInt ignored -> false;
-            case JsNull ignored -> false;
-            case JsUndefined ignored -> false;
-            default -> true;
+        if (value instanceof JsSymbol symbol) {
+            return symbol.isRegistered();
+        }
+        return switch (value) {
+            case JsNumber ignored -> true;
+            case JsString ignored -> true;
+            case JsBoolean ignored -> true;
+            case org.techhouse.simplejs.values.JsBigInt ignored -> true;
+            case JsNull ignored -> true;
+            case JsUndefined ignored -> true;
+            default -> false;
         };
     }
 

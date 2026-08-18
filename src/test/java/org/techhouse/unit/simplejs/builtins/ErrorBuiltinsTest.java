@@ -131,4 +131,45 @@ public class ErrorBuiltinsTest {
         assertTrue(bool("let threw = false; try { Object.getOwnPropertyDescriptor(Error.prototype, 'stack')"
                 + ".set.call({}, 1); } catch (e) { threw = e instanceof TypeError } threw"));
     }
+
+    // makeSuppressedError (the using/await-using disposal aggregation path, as opposed to `new
+    // SuppressedError(...)`) must still link the realm's real SuppressedError.prototype, not a bare
+    // proto-less object - so the aggregated error is a genuine `instanceof SuppressedError`/`Error`.
+    @Test
+    public void disposalSuppressedErrorHasARealPrototype() {
+        final var source = """
+                let caught = null;
+                try {
+                    using a = { [Symbol.dispose]() { throw new Error('first'); } };
+                    using b = { [Symbol.dispose]() { throw new Error('second'); } };
+                } catch (e) { caught = e; }
+                caught instanceof SuppressedError
+                    && caught instanceof Error
+                    && caught.name === 'SuppressedError'
+                    && caught.error.message === 'first'
+                    && caught.suppressed.message === 'second'
+                """;
+        assertTrue(bool(source));
+    }
+
+    // The same aggregation runs for await using in an async context; run() drains the event loop
+    // before Interpreter.run returns, so the mutation the async body made is visible in the final
+    // expression's value.
+    @Test
+    public void asyncDisposalSuppressedErrorHasARealPrototype() {
+        final var source = """
+                let ok = false;
+                async function run() {
+                    try {
+                        await using a = { [Symbol.asyncDispose]() { throw new Error('first'); } };
+                        await using b = { [Symbol.asyncDispose]() { throw new Error('second'); } };
+                    } catch (e) {
+                        ok = e instanceof SuppressedError && e instanceof Error && e.name === 'SuppressedError';
+                    }
+                }
+                run();
+                ok
+                """;
+        assertTrue(bool(source));
+    }
 }

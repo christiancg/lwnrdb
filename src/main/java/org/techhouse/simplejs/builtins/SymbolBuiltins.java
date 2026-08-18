@@ -46,7 +46,11 @@ public final class SymbolBuiltins {
         wellKnown(symbol, "unscopables", JsSymbol.UNSCOPABLES);
         wellKnown(symbol, "species", JsSymbol.SPECIES);
         symbol.setProperty("for",
-                new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args, ops), JsSymbol::new)));
+                new JsNativeFunction("for", (_, args) -> registry.computeIfAbsent(key(args, ops), registryKey -> {
+                    final var registered = new JsSymbol(registryKey);
+                    registered.markRegistered();
+                    return registered;
+                })));
         symbol.setProperty("keyFor", new JsNativeFunction("keyFor", (_, args) -> keyFor(registry, args)));
         return symbol;
     }

@@ -722,4 +722,70 @@ public class InterpreterClassTest {
         assertTrue(bool("class C { #m() {} static has(o) { return #m in o; } } C.has(new C())"));
         assertFalse(bool("class C { #m() {} static has(o) { return #m in o; } } C.has({})"));
     }
+
+    // A class object has real own name/length/prototype properties, in that declaration order
+    @Test
+    public void test_class_has_own_name_length_and_prototype_properties() {
+        assertTrue(bool("class C {} Object.getOwnPropertyNames(C).includes('name')"));
+        assertTrue(bool("class C {} Object.getOwnPropertyNames(C).includes('length')"));
+        assertTrue(bool("class C {} Object.getOwnPropertyNames(C).includes('prototype')"));
+        assertEquals("C", str("class C {} C.name"));
+        assertEquals(0, num("class C {} C.length"));
+        assertEquals(2, num("class C { constructor(a, b) {} } C.length"));
+        assertEquals(1, num("class C { constructor(a, b = 1) {} } C.length"));
+        assertEquals("Anon", str("const Anon = class {}; Anon.name"));
+        // name/length are non-writable but configurable; prototype is fully non-configurable
+        assertTrue(bool("class C {} C.name = 'x'; C.name === 'C'"));
+        assertTrue(bool("class C {} C.length = 9; C.length === 0"));
+        assertFalse(bool("class C {} Object.getOwnPropertyDescriptor(C, 'prototype').configurable"));
+    }
+
+    // An explicit static "name" member (method, accessor or field) takes precedence over the
+    // inferred class-expression name - the anonymous-class NamedEvaluation must not clobber it
+    @Test
+    public void test_explicit_static_name_member_beats_inferred_name() {
+        assertEquals("function", str("const X = class { static name() {} }; typeof X.name"));
+        assertEquals("string", str("const X = class { static name = 'explicit'; }; typeof X.name"));
+        assertEquals("explicit", str("const X = class { static name = 'explicit'; }; X.name"));
+    }
+
+    // Object.getPrototypeOf(C) chains to the heritage (a class, a plain/native constructor, or
+    // %Function.prototype% by default); Object.getPrototypeOf(C.prototype) chains separately
+    @Test
+    public void test_class_object_and_prototype_chain_to_the_right_parent() {
+        assertTrue(bool("class C {} Object.getPrototypeOf(C) === Function.prototype"));
+        assertTrue(bool("class C {} Object.getPrototypeOf(C.prototype) === Object.prototype"));
+        assertTrue(bool("class A {} class B extends A {} Object.getPrototypeOf(B) === A"));
+        assertTrue(bool("class A {} class B extends A {} Object.getPrototypeOf(B.prototype) === A.prototype"));
+        assertTrue(bool("class C extends null {} Object.getPrototypeOf(C) === Function.prototype"));
+    }
+
+    // A native-heritage class's instances are real JsObjects (klass + proto linked to the class's
+    // own prototype), so instanceof must not fall back to the shared native intrinsic prototype -
+    // that would make every plain `new Set()` look like an instance of any `class extends Set`
+    @Test
+    public void test_instanceof_with_native_heritage_does_not_match_every_native_instance() {
+        final var setup = "class MySet extends Set {} ";
+        assertFalse(bool(setup + "new Set() instanceof MySet"));
+        assertTrue(bool(setup + "new MySet() instanceof MySet"));
+        assertTrue(bool(setup + "new MySet() instanceof Set"));
+        assertTrue(bool(setup + "Object.getPrototypeOf(new MySet()) === MySet.prototype"));
+        assertFalse(bool(setup + "Object.getPrototypeOf(new MySet()) === Set.prototype"));
+    }
+
+    // A derived constructor returning an object short-circuits [[Construct]] before `this` is ever
+    // consulted (spec step 13a), so it never needs to have called super() at all
+    @Test
+    public void test_derived_constructor_returning_object_need_not_call_super() {
+        assertEquals("object", str("class C extends null { constructor() { return {}; } } typeof new C()"));
+        final var source = """
+                var obj;
+                class Foo extends null {
+                    constructor() { return obj = {}; }
+                }
+                var f = new Foo();
+                f === obj && Object.getPrototypeOf(f) === Object.prototype
+                """;
+        assertTrue(bool(source));
+    }
 }

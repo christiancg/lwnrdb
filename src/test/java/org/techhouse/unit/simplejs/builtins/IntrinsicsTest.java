@@ -110,8 +110,8 @@ public class IntrinsicsTest {
         assertKeys(realm.asyncIteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
         assertKeys(realm.arrayBufferProto(), TypedArrayBuiltins.BUFFER_NAMES, TypedArrayBuiltins.bufferAccessorNames());
         assertKeys(realm.dataViewProto(), TypedArrayBuiltins.VIEW_NAMES, TypedArrayBuiltins.viewAccessorNames());
-        assertKeys(realm.mapProto(), MapBuiltins.NAMES);
-        assertKeys(realm.setProto(), SetBuiltins.NAMES);
+        assertKeys(realm.mapProto(), MapBuiltins.NAMES, List.of("size"));
+        assertKeys(realm.setProto(), SetBuiltins.NAMES, List.of("size"));
     }
 
     private static void assertKeys(JsObject proto, List<String> names) {
@@ -359,8 +359,49 @@ public class IntrinsicsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Function.prototype.call.call(5)"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("let g = (function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
-        assertThrows(TypeErrorException.class,
-                () -> Interpreter.run("let g = (async function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
+    }
+
+    // AsyncGenerator.prototype.{next,return,throw} build their PromiseCapability before the brand
+    // check (spec IfAbruptRejectPromise), so an incompatible receiver rejects the returned promise
+    // instead of throwing synchronously - unlike every synchronous prototype family above.
+    @Test
+    public void test_async_generator_incompatible_receiver_rejects_instead_of_throwing() {
+        assertEquals("caught", firstLogEntry("""
+                let g = (async function*(){})();
+                async function check() {
+                    try {
+                        await Object.getPrototypeOf(g).next.call(5);
+                        log.push('no-throw');
+                    } catch (e) {
+                        log.push(e instanceof TypeError ? 'caught' : 'wrong-error');
+                    }
+                }
+                check();
+                """));
+    }
+
+    // AsyncDisposableStack.prototype.disposeAsync has the same create-capability-before-brand-check
+    // shape as AsyncGenerator's methods.
+    @Test
+    public void test_async_disposable_stack_dispose_async_incompatible_receiver_rejects() {
+        assertEquals("caught", firstLogEntry("""
+                async function check() {
+                    try {
+                        await AsyncDisposableStack.prototype.disposeAsync.call({});
+                        log.push('no-throw');
+                    } catch (e) {
+                        log.push(e instanceof TypeError ? 'caught' : 'wrong-error');
+                    }
+                }
+                check();
+                """));
+    }
+
+    // Runs a script that pushes onto a shared `log` array from inside an async function, then reads
+    // the array's first entry once Interpreter.run has drained the event loop to quiescence.
+    private static String firstLogEntry(String source) {
+        final var array = (JsArray) Interpreter.run("let log = [];\n" + source + "\nlog");
+        return ((JsString) array.get(0)).getValue();
     }
 
     // String.prototype methods are generic: a non-string receiver is coerced via ToString rather
@@ -557,5 +598,76 @@ public class IntrinsicsTest {
         assertEquals(1, num("const r = /b/; r.exec = () => 1; r.exec()"));
         assertEquals("lastIndex,exec", run("const r = /b/; r.exec = () => 1; Object.getOwnPropertyNames(r).join(',')"));
         assertTrue(bool("const r = /b/; r.exec = () => 1; typeof /c/.exec === 'function'"));
+    }
+
+    // Map.prototype.size/Set.prototype.size are real accessor properties, reachable off a foreign
+    // receiver (which must throw) and off a builtin-subclass instance (which wraps its JsMap/JsSet in
+    // the JsObject primitive slot, so the accessor's brand check has to unwrap it, not reject it).
+    @Test
+    public void mapAndSetSizeAreAccessorsThatHandleSubclasses() {
+        assertEquals(2, num("(new Map([['a', 1], ['b', 2]])).size"));
+        assertEquals(2, num("(new Set([1, 2])).size"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(Map.prototype, 'size').get !== undefined"
+                + " && Object.getOwnPropertyDescriptor(Map.prototype, 'size').set === undefined"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.getOwnPropertyDescriptor(Map.prototype, 'size').get.call({})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.getOwnPropertyDescriptor(Set.prototype, 'size').get.call(new Map())"));
+        assertEquals(2,
+                num("class MyMap extends Map { constructor(v) { super(v); } } new MyMap([['a', 1], ['b', 2]]).size"));
+        assertEquals(3, num("class MySet extends Set { constructor(v) { super(v); } } "
+                + "const s = new MySet([1, 2]); s.add(3); s.size"));
+        assertTrue(bool("Set.prototype.keys === Set.prototype.values"));
+    }
+
+    // The realm's Object.prototype is linked onto the plain {value, done} object a sync generator's
+    // next/return/throw build (InterpreterUtils.stepResult has no realm of its own to reach it).
+    @Test
+    public void syncGeneratorResultObjectsLinkObjectPrototype() {
+        assertTrue(bool("""
+                function* g() { yield 1; }
+                var it = g();
+                Object.getPrototypeOf(it.next()) === Object.prototype
+                """));
+        assertTrue(bool("""
+                function* g() { yield 1; }
+                var it = g();
+                Object.getPrototypeOf(it.return(2)) === Object.prototype
+                """));
+    }
+
+    // %GeneratorPrototype%/%AsyncGeneratorPrototype%'s own `constructor` is the corresponding
+    // function-kind prototype object (%GeneratorFunction.prototype%), not left unset.
+    @Test
+    public void generatorPrototypeOwnsItsConstructorBackLink() {
+        assertTrue(bool("""
+                function* g() {}
+                var generatorPrototype = Object.getPrototypeOf(g.prototype);
+                generatorPrototype.constructor === Object.getPrototypeOf(g)
+                """));
+        assertTrue(bool("""
+                async function* g() {}
+                var asyncGeneratorPrototype = Object.getPrototypeOf(g.prototype);
+                asyncGeneratorPrototype.constructor === Object.getPrototypeOf(g)
+                """));
+        assertTrue(bool("""
+                function* g() {}
+                var d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(g.prototype), 'constructor');
+                d.writable === false && d.enumerable === false && d.configurable === true
+                """));
+    }
+
+    // A well-known-symbol delegate that exists but is not callable is a TypeError (spec GetMethod
+    // step 4), not a silent fall-through to the generic ToString(this)/ToString(searchValue) path.
+    @Test
+    public void stringGenericDelegationRejectsNonCallableWellKnownSymbolMethod() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var searchValue = { [Symbol.replace]: {} };
+                ''.replaceAll.call('x', searchValue, 'y')
+                """));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                var separator = { [Symbol.split]: 42 };
+                ''.split.call('x', separator)
+                """));
     }
 }
