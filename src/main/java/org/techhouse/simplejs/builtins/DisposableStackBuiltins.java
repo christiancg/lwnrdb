@@ -17,6 +17,7 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
+import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -44,14 +45,14 @@ public final class DisposableStackBuiltins {
         return ENTRIES;
     }
 
-    public static JsNativeFunction create(JsObject proto, boolean async) {
+    public static JsNativeFunction create(JsObject proto, boolean async, InterpreterOps ops) {
         final var name = async ? "AsyncDisposableStack" : "DisposableStack";
         final var constructor = new JsNativeFunction(name, (thisArg, _) -> {
             final var newTarget = JsNativeFunction.currentNewTarget();
             if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
                 throw new TypeErrorException("Constructor " + name + " requires 'new'");
             }
-            return newStack(proto, async, thisArg);
+            return newStack(proto, async, thisArg, ops);
         });
         constructor.setLength(0);
         return constructor;
@@ -107,13 +108,25 @@ public final class DisposableStackBuiltins {
 
     // A subclass's super() call arrives with the instance under construction as thisArg; the internal
     // slots have to land on that object, since applyNativeSuper only copies string-keyed properties.
-    private static JsObject newStack(JsObject proto, boolean async, JsValue thisArg) {
+    private static JsObject newStack(JsObject proto, boolean async, JsValue thisArg, InterpreterOps ops) {
         final var stack = thisArg instanceof JsObject instance ? instance : new JsObject();
         if (stack.getProto() == null) {
-            stack.setProto(proto);
+            stack.setProto(resolvePrototype(proto, ops));
         }
         installSlots(stack, async, new JsArray());
         return stack;
+    }
+
+    // OrdinaryCreateFromConstructor: Get(newTarget, "prototype") is an ordinary, observable property
+    // read (an accessor may throw, a proxy trap may run) that must happen exactly once, falling back
+    // to the shared intrinsic prototype when the result is not an object.
+    private static JsObject resolvePrototype(JsObject fallback, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return fallback;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        return proto instanceof JsObject object ? object : fallback;
     }
 
     private static void installSlots(JsObject stack, boolean async, JsValue entries) {

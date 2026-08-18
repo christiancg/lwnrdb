@@ -8,6 +8,7 @@ import java.util.Objects;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.internal.interpreter.Iteration;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -57,9 +58,13 @@ public final class ObjectBuiltins {
         }));
         object.setProperty("isExtensible",
                 new JsNativeFunction("isExtensible", (_, args) -> JsBoolean.of(ops.isExtensible(first(args)))));
-        object.setProperty("create", new JsNativeFunction("create", (_, args) -> createObject(args, ops)));
-        object.setProperty("getPrototypeOf",
-                new JsNativeFunction("getPrototypeOf", (_, args) -> ops.getPrototypeOf(first(args))));
+        object.setProperty("create", new JsNativeFunction("create", (_, args) -> createObject(args, ops, intrinsics)));
+        object.setProperty("getPrototypeOf", new JsNativeFunction("getPrototypeOf", (_, args) -> {
+            if (InterpreterUtils.isNullish(first(args))) {
+                throw new TypeErrorException("Cannot convert undefined or null to object");
+            }
+            return ops.getPrototypeOf(intrinsics.toObject(first(args)));
+        }));
         object.setProperty("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
             ops.setPrototypeOf(first(args), argAt(args, 1));
             return first(args);
@@ -72,15 +77,18 @@ public final class ObjectBuiltins {
                 new JsNativeFunction("defineProperties", (_, args) -> defineProperties(args, ops)));
         object.setProperty("getOwnPropertyNames", new JsNativeFunction("getOwnPropertyNames",
                 (_, args) -> getOwnPropertyNames(boxed(args, intrinsics), ops)));
-        object.setProperty("getOwnPropertyDescriptor", new JsNativeFunction("getOwnPropertyDescriptor",
-                (_, args) -> ops.getOwnPropertyDescriptor(intrinsics.toObject(first(args)), argAt(args, 1))));
+        object.setProperty("getOwnPropertyDescriptor",
+                new JsNativeFunction("getOwnPropertyDescriptor",
+                        (_, args) -> attachObjectProto(
+                                ops.getOwnPropertyDescriptor(intrinsics.toObject(first(args)), argAt(args, 1)),
+                                intrinsics)));
         object.setProperty("getOwnPropertyDescriptors", new JsNativeFunction("getOwnPropertyDescriptors",
-                (_, args) -> getOwnPropertyDescriptors(boxed(args, intrinsics), ops)));
+                (_, args) -> getOwnPropertyDescriptors(boxed(args, intrinsics), ops, intrinsics)));
         object.setProperty("fromEntries",
-                new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, iterableToList)));
+                new JsNativeFunction("fromEntries", (_, args) -> fromEntries(args, ops, intrinsics)));
         object.setProperty("hasOwn", new JsNativeFunction("hasOwn", (_, args) -> hasOwn(args, ops)));
         object.setProperty("groupBy",
-                new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker)));
+                new JsNativeFunction("groupBy", (_, args) -> groupBy(args, iterableToList, invoker, ops)));
         object.setProperty("is", new JsNativeFunction("is", (_, args) -> is(args)));
         object.setProperty("getOwnPropertySymbols", new JsNativeFunction("getOwnPropertySymbols",
                 (_, args) -> getOwnPropertySymbols(boxed(args, intrinsics), ops)));
@@ -221,7 +229,7 @@ public final class ObjectBuiltins {
     }
 
     private static void requireAccessorField(JsValue value, String label) {
-        if (value != null && !isCallable(value) && !(value instanceof JsUndefined)) {
+        if (value != null && isNotCallable(value) && !(value instanceof JsUndefined)) {
             throw new TypeErrorException(label + " must be a function");
         }
     }
@@ -236,24 +244,46 @@ public final class ObjectBuiltins {
         return index != null && index < typed.length();
     }
 
-    private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
+    // GroupBy(items, callbackfn, property): items must be object-coercible and callbackfn callable
+    // before any iteration happens, and the bucket key goes through the real ToPropertyKey (which can
+    // yield a Symbol, and can throw on a poisoned toString/valueOf) rather than a raw toStr.
+    private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker,
+            InterpreterOps ops) {
         final var source = first(args);
-        final var callback = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
+        if (InterpreterUtils.isNullish(source)) {
+            throw new TypeErrorException("Object.groupBy requires that the first argument not be null or undefined");
+        }
+        final var callback = argAt(args, 1);
+        if (isNotCallable(callback)) {
+            throw new TypeErrorException("Object.groupBy: callback is not a function");
+        }
         final var result = new JsObject();
         final var items = source instanceof JsArray array ? array.getElements() : iterableToList.drain(source);
         for (var i = 0; i < items.size(); i++) {
-            final var key = JsCoercion
-                    .toStr(invoker.call(callback, JsUndefined.getInstance(), List.of(items.get(i), new JsNumber(i))));
-            final JsArray bucket;
-            if (result.get(key) instanceof JsArray existing) {
-                bucket = existing;
-            } else {
-                bucket = new JsArray();
-                result.defineValue(key, bucket);
-            }
-            bucket.push(items.get(i));
+            final var rawKey = invoker.call(callback, JsUndefined.getInstance(),
+                    List.of(items.get(i), new JsNumber(i)));
+            final var propertyKey = toPropertyKey(rawKey, ops);
+            groupByBucket(result, propertyKey).push(items.get(i));
         }
         return result;
+    }
+
+    private static JsArray groupByBucket(JsObject result, JsValue propertyKey) {
+        if (propertyKey instanceof JsSymbol symbol) {
+            if (result.getSymbol(symbol) instanceof JsArray existing) {
+                return existing;
+            }
+            final var bucket = new JsArray();
+            result.setSymbol(symbol, bucket);
+            return bucket;
+        }
+        final var key = JsCoercion.toStr(propertyKey);
+        if (result.get(key) instanceof JsArray existing) {
+            return existing;
+        }
+        final var bucket = new JsArray();
+        result.defineValue(key, bucket);
+        return bucket;
     }
 
     private static JsValue keys(List<JsValue> args, InterpreterOps ops) {
@@ -266,7 +296,7 @@ public final class ObjectBuiltins {
             }
             case JsObject object -> {
                 for (final var key : object.keys()) {
-                    if (object.isEnumerable(key)) {
+                    if ((object.has(key) || object.hasAccessor(key)) && object.isEnumerable(key)) {
                         result.push(new JsString(key));
                     }
                 }
@@ -316,13 +346,17 @@ public final class ObjectBuiltins {
         final var result = new JsArray();
         switch (first(args)) {
             case JsProxy proxy -> {
-                for (final var key : enumerableProxyStringKeys(proxy, ops)) {
-                    result.push(ops.getMember(proxy, new JsString(key)));
+                // EnumerableOwnPropertyNames(kind=value): GetOwnProperty then, if enumerable, Get -
+                // interleaved per key (not a getOwnPropertyDescriptor batch followed by a get batch).
+                for (final var key : ops.ownKeys(proxy)) {
+                    if (key instanceof JsString && isEnumerableOwnKey(proxy, key, ops)) {
+                        result.push(ops.getMember(proxy, key));
+                    }
                 }
             }
             case JsObject object -> {
                 for (final var key : object.keys()) {
-                    if (object.isEnumerable(key)) {
+                    if ((object.has(key) || object.hasAccessor(key)) && object.isEnumerable(key)) {
                         result.push(ownValue(object, key, ops));
                     }
                 }
@@ -359,13 +393,15 @@ public final class ObjectBuiltins {
         final var result = new JsArray();
         switch (first(args)) {
             case JsProxy proxy -> {
-                for (final var key : enumerableProxyStringKeys(proxy, ops)) {
-                    result.push(new JsArray(List.of(new JsString(key), ops.getMember(proxy, new JsString(key)))));
+                for (final var key : ops.ownKeys(proxy)) {
+                    if (key instanceof JsString string && isEnumerableOwnKey(proxy, key, ops)) {
+                        result.push(new JsArray(List.of(string, ops.getMember(proxy, key))));
+                    }
                 }
             }
             case JsObject object -> {
                 for (final var key : object.keys()) {
-                    if (object.isEnumerable(key)) {
+                    if ((object.has(key) || object.hasAccessor(key)) && object.isEnumerable(key)) {
                         result.push(new JsArray(List.of(new JsString(key), ownValue(object, key, ops))));
                     }
                 }
@@ -512,7 +548,7 @@ public final class ObjectBuiltins {
         });
     }
 
-    private static JsValue createObject(List<JsValue> args, InterpreterOps ops) {
+    private static JsValue createObject(List<JsValue> args, InterpreterOps ops, Intrinsics intrinsics) {
         final var proto = first(args);
         if (!InterpreterUtils.isObjectLike(proto) && !(proto instanceof JsNull)) {
             throw new TypeErrorException("Object prototype may only be an Object or null: " + JsCoercion.toStr(proto));
@@ -525,7 +561,10 @@ public final class ObjectBuiltins {
             if (args.get(1) instanceof JsNull) {
                 throw new TypeErrorException("Cannot convert undefined or null to object");
             }
-            applyPropertiesFrom(object, args.get(1), ops);
+            // ObjectDefineProperties: Let props be ? ToObject(Properties) - a primitive (e.g. a
+            // non-empty string) must be boxed so its real index/length own properties are what gets
+            // walked, not silently skipped.
+            applyPropertiesFrom(object, intrinsics.toObject(args.get(1)), ops);
         }
         return object;
     }
@@ -601,14 +640,17 @@ public final class ObjectBuiltins {
 
     // ToObject(Properties) accepts any object, so the descriptor bag is read through the member
     // seam rather than requiring a literal JsObject.
-    // ObjectDefineProperties step 3 only picks up the *enumerable* own keys, so a bag like Math -
-    // whose builtin members are all non-enumerable - contributes only what the caller put on it.
+    // ObjectDefineProperties step 4 walks every own key (string AND symbol - a symbol-named
+    // descriptor bag entry defines a symbol-keyed property just fine) and calls [[GetOwnProperty]]
+    // on *each one*, in key order, before checking [[Enumerable]] - that GetOwnProperty call is
+    // observable (e.g. through a Proxy's "getOwnPropertyDescriptor" trap), so a key must never be
+    // skipped ahead of it on the sole basis of its type.
     private static void applyPropertiesFrom(JsValue target, JsValue props, InterpreterOps ops) {
         for (final var key : ops.ownKeys(props)) {
-            if (!(key instanceof JsString name) || !isEnumerableOwnKey(props, key, ops)) {
+            if (!isEnumerableOwnKey(props, key, ops)) {
                 continue;
             }
-            defineProperty(List.of(target, name, ops.getMember(props, key)), ops);
+            defineProperty(List.of(target, key, ops.getMember(props, key)), ops);
         }
     }
 
@@ -645,18 +687,19 @@ public final class ObjectBuiltins {
         return keys;
     }
 
-    private static boolean isCallable(JsValue value) {
-        return value instanceof JsFunction || value instanceof JsNativeFunction;
+    private static boolean isNotCallable(JsValue value) {
+        return !(value instanceof JsFunction) && !(value instanceof JsNativeFunction);
     }
 
-    private static JsValue getOwnPropertyDescriptors(List<JsValue> args, InterpreterOps ops) {
+    private static JsValue getOwnPropertyDescriptors(List<JsValue> args, InterpreterOps ops, Intrinsics intrinsics) {
         final var target = first(args);
         if (InterpreterUtils.isNullish(target)) {
             throw new TypeErrorException("Cannot convert undefined or null to object");
         }
         final var result = new JsObject();
+        result.setProto(intrinsics.objectProto());
         for (final var key : ops.ownKeys(target)) {
-            final var descriptor = ops.getOwnPropertyDescriptor(target, key);
+            final var descriptor = attachObjectProto(ops.getOwnPropertyDescriptor(target, key), intrinsics);
             if (descriptor instanceof JsUndefined) {
                 continue;
             }
@@ -669,10 +712,21 @@ public final class ObjectBuiltins {
         final var table = target.ownProperties();
         if (table != null) {
             for (final var symbol : table.symbolKeys()) {
-                result.setSymbol(symbol, ops.getOwnPropertyDescriptor(target, symbol));
+                result.setSymbol(symbol, attachObjectProto(ops.getOwnPropertyDescriptor(target, symbol), intrinsics));
             }
         }
         return result;
+    }
+
+    // FromPropertyDescriptor builds a descriptor object linked to %Object.prototype% - the shared
+    // static getOwnPropertyDescriptor(List) below has no Intrinsics access (it is also called from
+    // the InterpreterOps seam, which this file does not own), so callers that do have an Intrinsics
+    // reference patch the link in afterwards instead of leaving it proto-less.
+    private static JsValue attachObjectProto(JsValue value, Intrinsics intrinsics) {
+        if (value instanceof JsObject object && object.getProto() == null) {
+            object.setProto(intrinsics.objectProto());
+        }
+        return value;
     }
 
     private static JsValue getOwnPropertyNames(List<JsValue> args, InterpreterOps ops) {
@@ -715,16 +769,35 @@ public final class ObjectBuiltins {
         return result;
     }
 
-    private static JsValue fromEntries(List<JsValue> args, IterableToList iterableToList) {
-        final var result = new JsObject();
+    // AddEntriesFromIterable, with the CreateDataPropertyOrThrow adder inlined (Object.fromEntries'
+    // own closure): GetIterator, then per step Get "0"/"1" off the entry (never iterate it - a
+    // string/array entry's own @@iterator must not be touched) and only then ToPropertyKey the
+    // result - in that exact order, since it is externally observable. A non-object entry, or an
+    // abrupt completion from any of those three reads, closes the iterator via Iteration.forEach's
+    // own IteratorClose-on-throw semantics before the original error propagates.
+    private static JsValue fromEntries(List<JsValue> args, InterpreterOps ops, Intrinsics intrinsics) {
         final var source = first(args);
-        final var entries = source instanceof JsArray array ? array.getElements() : iterableToList.drain(source);
-        for (final var element : entries) {
-            if (element instanceof JsArray pair && pair.length() > 0) {
-                final var value = pair.length() > 1 ? pair.get(1) : JsUndefined.getInstance();
-                result.set(JsCoercion.toStr(pair.get(0)), value);
-            }
+        if (InterpreterUtils.isNullish(source)) {
+            throw new TypeErrorException(
+                    "Object.fromEntries requires that the first argument not be null or undefined");
         }
+        final var result = new JsObject();
+        result.setProto(intrinsics.objectProto());
+        final var zero = new JsString("0");
+        final var one = new JsString("1");
+        new Iteration(ops, source).forEach(entry -> {
+            if (!InterpreterUtils.isObjectLike(entry)) {
+                throw new TypeErrorException("Iterator value " + JsCoercion.toStr(entry) + " is not an entry object");
+            }
+            final var key = ops.getMember(entry, zero);
+            final var value = ops.getMember(entry, one);
+            final var propertyKey = toPropertyKey(key, ops);
+            if (propertyKey instanceof JsSymbol symbol) {
+                result.setSymbol(symbol, value);
+            } else {
+                result.set(JsCoercion.toStr(propertyKey), value);
+            }
+        });
         return result;
     }
 

@@ -350,6 +350,47 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("done:true", joined(source));
     }
 
+    // AsyncGeneratorAwaitReturn's PromiseResolve(%Promise%, value) reads value.constructor even when
+    // value is already a promise; a poisoned accessor there must reject return()'s promise rather
+    // than being silently skipped (return() would otherwise resolve when it should reject).
+    @Test
+    public void test_return_at_suspended_start_propagates_a_broken_promise_constructor() {
+        final var source = """
+                let out = [];
+                async function* g() { throw new Error('must not resume'); }
+                let broken = Promise.resolve(42);
+                Object.defineProperty(broken, 'constructor', { get() { throw new Error('broken promise'); } });
+                g().return(broken).then(
+                    () => out.push('resolved'),
+                    e => out.push('rejected:' + e.message)
+                );
+                out
+                """;
+        assertEquals("rejected:broken promise", joined(source));
+    }
+
+    // The same poisoned-constructor promise, returned while suspended at a yield, is awaited before
+    // resuming the body - so the throw is injected at the yield point as a catchable exception.
+    @Test
+    public void test_return_at_suspended_yield_injects_the_broken_promise_error_at_the_yield() {
+        final var source = """
+                let out = [];
+                async function* g() {
+                    try { yield; } catch (e) { out.push('caught:' + e.message); }
+                }
+                let broken = Promise.resolve(42);
+                Object.defineProperty(broken, 'constructor', { get() { throw new Error('broken promise'); } });
+                async function main() {
+                    let it = g();
+                    await it.next();
+                    await it.return(broken);
+                }
+                main();
+                out
+                """;
+        assertEquals("caught:broken promise", joined(source));
+    }
+
     // yield* hands a delegated value through untouched rather than awaiting it a second time
     @Test
     public void test_delegated_values_are_not_unwrapped() {

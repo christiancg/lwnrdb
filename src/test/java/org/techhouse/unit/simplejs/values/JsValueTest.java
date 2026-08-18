@@ -293,4 +293,28 @@ public class JsValueTest {
         object.set("01", new JsNumber(5));
         assertEquals(List.of("2", "10", "b", "a", "01"), List.copyOf(object.keys()));
     }
+
+    // deleteOwnProperty of a lazily-materialised metadata property (a builtin constructor's
+    // non-configurable "prototype") must materialise it first, the same way defineOwnProperty
+    // already does, so the delete consults the real flags instead of finding the table empty and
+    // trivially succeeding.
+    @Test
+    public void test_delete_own_property_materialises_metadata_first() {
+        final var ctor = new JsNativeFunction("Sample", (_, _) -> JsUndefined.getInstance());
+        ctor.markConstructor();
+        ctor.setPrototype(new JsObject());
+        assertFalse(ctor.deleteOwnProperty(new JsString("prototype")));
+        assertTrue(ctor.hasOwnKey(new JsString("prototype")));
+    }
+
+    // An already-materialised ordinary own property (unrelated to the name/length/prototype
+    // metadata) still deletes normally.
+    @Test
+    public void test_delete_own_property_removes_an_ordinary_property() {
+        final var fn = new JsNativeFunction("Sample", (_, _) -> JsUndefined.getInstance());
+        fn.setEnumerableProperty("tag", new JsString("x"));
+        assertTrue(fn.hasOwnKey(new JsString("tag")));
+        assertTrue(fn.deleteOwnProperty(new JsString("tag")));
+        assertFalse(fn.hasOwnKey(new JsString("tag")));
+    }
 }

@@ -151,7 +151,7 @@ public final class ProxyDispatch {
     public JsValue construct(JsProxy proxy, List<JsValue> args, JsValue newTarget) {
         final var trap = trapOf(proxy, "construct");
         if (trap == null) {
-            return ops.construct(proxy.getTarget(), args, newTarget == proxy ? proxy.getTarget() : newTarget);
+            return ops.construct(proxy.getTarget(), args, newTarget);
         }
         final var result = ops.call(trap, proxy.getHandler(),
                 List.of(proxy.getTarget(), new JsArray(new ArrayList<>(args)), newTarget));

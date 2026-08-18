@@ -24,6 +24,9 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.values.EJsonInterop;
+import org.techhouse.simplejs.values.JsClass;
+import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -96,21 +99,58 @@ public final class SimpleJs {
     private ScriptResult errorFromThrow(JsThrowException thrown) {
         final var value = thrown.getValue();
         if (value instanceof JsObject object) {
-            return ScriptResult.error(field(object, "name", "Error"), field(object, "message", ""));
+            return ScriptResult.error(errorName(object), field(object));
         }
         return ScriptResult.error("Error", JsCoercion.toStr(value));
     }
 
-    // An error instance carries only the properties the constructor set: `name` normally lives on
-    // the intrinsic prototype, so the chain has to be walked to report it.
-    private String field(JsObject object, String key, String fallback) {
+    // A thrown value may have no "name" anywhere on its prototype chain (e.g. the test262 harness's
+    // Test262Error, a plain function constructor whose prototype only defines `toString`); fall back
+    // to the constructor function's own name before defaulting to "Error".
+    private String errorName(JsObject object) {
         var current = object;
         while (current != null) {
-            if (current.has(key)) {
-                return JsCoercion.toStr(current.get(key));
+            if (current.has("name")) {
+                return JsCoercion.toStr(current.get("name"));
             }
             current = current.getProto() instanceof JsObject proto ? proto : null;
         }
-        return fallback;
+        current = object;
+        while (current != null) {
+            if (current.has("constructor")) {
+                final var ctorName = constructorName(current.get("constructor"));
+                if (ctorName != null) {
+                    return ctorName;
+                }
+            }
+            current = current.getProto() instanceof JsObject proto ? proto : null;
+        }
+        return "Error";
+    }
+
+    private String constructorName(JsValue constructorValue) {
+        if (constructorValue instanceof JsFunction function) {
+            return function.getName();
+        }
+        if (constructorValue instanceof JsNativeFunction function) {
+            return function.getName();
+        }
+        if (constructorValue instanceof JsClass klass) {
+            return klass.getName();
+        }
+        return null;
+    }
+
+    // An error instance carries only the properties the constructor set: `name` normally lives on
+    // the intrinsic prototype, so the chain has to be walked to report it.
+    private String field(JsObject object) {
+        var current = object;
+        while (current != null) {
+            if (current.has("message")) {
+                return JsCoercion.toStr(current.get("message"));
+            }
+            current = current.getProto() instanceof JsObject proto ? proto : null;
+        }
+        return "";
     }
 }

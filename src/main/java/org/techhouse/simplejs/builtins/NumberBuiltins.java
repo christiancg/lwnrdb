@@ -1,7 +1,10 @@
 package org.techhouse.simplejs.builtins;
 
 import java.math.BigInteger;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
@@ -300,11 +303,33 @@ public final class NumberBuiltins {
         return negative ? "-" + sb : sb.toString();
     }
 
+    // The spec requires Number.parseFloat/parseInt to be the *same* function object as the global
+    // parseFloat/parseInt (18.2.4/18.2.5 vs 21.1.2.15/21.1.2.16), but GlobalScope wires the global
+    // and the Number namespace through two independent calls into this class. A per-realm cache
+    // (keyed by the realm's InterpreterOps, weakly so it never outlives the realm) makes the second
+    // call return the exact instance the first one built instead of a behaviourally-identical twin.
+    private static final Map<InterpreterOps, JsNativeFunction> PARSE_FLOAT_CACHE = Collections
+            .synchronizedMap(new WeakHashMap<>());
+    private static final Map<InterpreterOps, JsNativeFunction> PARSE_INT_CACHE = Collections
+            .synchronizedMap(new WeakHashMap<>());
+
     public static JsNativeFunction parseFloatFunction(InterpreterOps ops) {
+        return ops == null
+                ? newParseFloatFunction(null)
+                : PARSE_FLOAT_CACHE.computeIfAbsent(ops, NumberBuiltins::newParseFloatFunction);
+    }
+
+    private static JsNativeFunction newParseFloatFunction(InterpreterOps ops) {
         return new JsNativeFunction("parseFloat", (_, args) -> new JsNumber(parseFloat(text(args, ops))));
     }
 
     public static JsNativeFunction parseIntFunction(InterpreterOps ops) {
+        return ops == null
+                ? newParseIntFunction(null)
+                : PARSE_INT_CACHE.computeIfAbsent(ops, NumberBuiltins::newParseIntFunction);
+    }
+
+    private static JsNativeFunction newParseIntFunction(InterpreterOps ops) {
         return new JsNativeFunction("parseInt", (_, args) -> new JsNumber(parseInt(text(args, ops), radix(args, ops))));
     }
 

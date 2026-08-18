@@ -322,7 +322,11 @@ public final class MemberEvaluator {
             if (inherited != null) {
                 return inherited;
             }
-            final var intrinsic = intrinsicMember(object, key);
+            // Not intrinsicMember: that would re-walk from object.getProto() again (just tried
+            // above and already failed), and an intermediate JsObject link with an uninitialised
+            // (not deliberately null) own proto stops the walk before reaching Object.prototype -
+            // the realm's type-default is the correct last resort here, unconditionally.
+            final var intrinsic = orUndefined(chainMember(interp.intrinsics().protoFor(object), key, object));
             if (!(intrinsic instanceof JsUndefined)) {
                 return intrinsic;
             }
@@ -340,13 +344,20 @@ public final class MemberEvaluator {
     }
 
     private JsValue getGlobalMember(JsGlobalObject global, String key) {
-        final var value = global.getEnv().tryGet(key);
+        final var value = global.getEnv().tryGetGlobalProperty(key);
         if (value != null) {
             return value;
         }
         // A global accessor property cannot live in an Environment binding, so it sits in the
         // ordinary table and is read through the generic descriptor path.
-        return orUndefined(fromDescriptor(global.getOwnProperty(new JsString(key)), global));
+        final var own = fromDescriptor(global.getOwnProperty(new JsString(key)), global);
+        if (own != null) {
+            return own;
+        }
+        // globalThis's own [[Prototype]] is %Object.prototype% (Object.getPrototypeOf(globalThis)
+        // already resolves there via Intrinsics.protoFor's default case), so a global miss - e.g.
+        // `this.hasOwnProperty(...)` in global/script code - still inherits Object.prototype methods.
+        return orUndefined(chainMember(interp.intrinsics().objectProto(), key, global));
     }
 
     private JsValue getArgumentsMember(JsArguments arguments, String key) {
@@ -390,7 +401,10 @@ public final class MemberEvaluator {
                 return table.get(key);
             }
         }
-        return orUndefined(chainMember(interp.intrinsics().protoFor(target), key, target));
+        // An explicit own [[Prototype]] (a generator/async-generator instance linked to its
+        // function's `prototype`, a class instance's heritage, ...) wins over the realm's intrinsic
+        // default for the type, mirroring protoChainStart's rule for the set path.
+        return orUndefined(chainMember(protoChainStart(target), key, target));
     }
 
     private JsValue functionMember(JsValue function, String key) {
@@ -932,9 +946,19 @@ public final class MemberEvaluator {
         generator.setState(JsAsyncGenerator.State.EXECUTING);
         if (request.kind() == JsAsyncGenerator.RequestKind.RETURN) {
             // AsyncGeneratorUnwrapYieldResumption awaits a return completion's value before the body
-            // resumes, so `gen.return(promise)` unwraps rather than returning the promise itself.
-            interp.toPromise(request.value()).subscribe(
-                    value -> resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.RETURN, value),
+            // resumes, so `gen.return(promise)` unwraps rather than returning the promise itself. The
+            // await's PromiseResolve can itself complete abruptly (a poisoned `constructor`
+            // accessor); that is injected at the yield point as a throw completion, same as a
+            // rejected awaited promise.
+            final JsPromise promise;
+            try {
+                promise = interp.toPromise(request.value());
+            } catch (SimpleJsRuntimeException error) {
+                resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.THROW,
+                        toErrorValue(error, interp.intrinsics()));
+                return;
+            }
+            promise.subscribe(value -> resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.RETURN, value),
                     reason -> resumeAsyncGenerator(generator, JsAsyncGenerator.RequestKind.THROW, reason));
             return;
         }
@@ -946,17 +970,7 @@ public final class MemberEvaluator {
     private boolean settleWithoutResuming(JsAsyncGenerator generator, JsAsyncGenerator.Request request) {
         if (request.kind() == JsAsyncGenerator.RequestKind.RETURN) {
             generator.setState(JsAsyncGenerator.State.AWAITING_RETURN);
-            interp.toPromise(request.value()).subscribe(value -> {
-                generator.setState(JsAsyncGenerator.State.COMPLETED);
-                generator.pollRequest();
-                request.capability().resolve(stepResult(value, true));
-                drainAsyncGenerator(generator);
-            }, reason -> {
-                generator.setState(JsAsyncGenerator.State.COMPLETED);
-                generator.pollRequest();
-                request.capability().reject(reason);
-                drainAsyncGenerator(generator);
-            });
+            awaitReturnValue(generator, request);
             return false;
         }
         generator.setState(JsAsyncGenerator.State.COMPLETED);
@@ -964,9 +978,36 @@ public final class MemberEvaluator {
         if (request.kind() == JsAsyncGenerator.RequestKind.THROW) {
             request.capability().reject(request.value());
         } else {
-            request.capability().resolve(stepResult(JsUndefined.getInstance(), true));
+            request.capability().resolve(linkResultProto(stepResult(JsUndefined.getInstance(), true)));
         }
         return true;
+    }
+
+    // AsyncGeneratorAwaitReturn's PromiseResolve(%Promise%, value) can itself complete abruptly
+    // (e.g. a poisoned `constructor` accessor on an already-settled promise) - that abrupt
+    // completion settles this step exactly like a rejected awaited promise would (steps 7a-7c).
+    private void awaitReturnValue(JsAsyncGenerator generator, JsAsyncGenerator.Request request) {
+        final JsPromise promise;
+        try {
+            promise = interp.toPromise(request.value());
+        } catch (SimpleJsRuntimeException error) {
+            generator.setState(JsAsyncGenerator.State.COMPLETED);
+            generator.pollRequest();
+            request.capability().reject(toErrorValue(error, interp.intrinsics()));
+            drainAsyncGenerator(generator);
+            return;
+        }
+        promise.subscribe(value -> {
+            generator.setState(JsAsyncGenerator.State.COMPLETED);
+            generator.pollRequest();
+            request.capability().resolve(linkResultProto(stepResult(value, true)));
+            drainAsyncGenerator(generator);
+        }, reason -> {
+            generator.setState(JsAsyncGenerator.State.COMPLETED);
+            generator.pollRequest();
+            request.capability().reject(reason);
+            drainAsyncGenerator(generator);
+        });
     }
 
     private void resumeAsyncGenerator(JsAsyncGenerator generator, JsAsyncGenerator.RequestKind kind, JsValue value) {
@@ -1021,9 +1062,18 @@ public final class MemberEvaluator {
     private void completeResolve(JsAsyncGenerator generator, JsValue value, boolean done) {
         final var request = generator.pollRequest();
         if (request != null) {
-            request.capability().resolve(stepResult(value, done));
+            request.capability().resolve(linkResultProto(stepResult(value, done)));
         }
         drainAsyncGenerator(generator);
+    }
+
+    // stepResult builds a plain {value, done} object with no [[Prototype]]; the spec's
+    // CreateIterResultObject links it to the realm's %Object.prototype%.
+    private JsValue linkResultProto(JsValue result) {
+        if (result instanceof JsObject object && object.getProto() == null) {
+            object.setProto(interp.intrinsics().objectProto());
+        }
+        return result;
     }
 
     private void completeStep(JsAsyncGenerator generator, RuntimeException error) {

@@ -98,6 +98,7 @@ pattern: =\s*eval\s*;               # indirect eval through an alias: the global
 pattern: \(\s*0\s*,\s*eval\s*\)     # indirect eval through an alias: the global is absent by design
 pattern: (?:===|!==)\s*eval\b|\beval\s*(?:===|!==)  # indirect eval through an alias: the global is absent by design
 pattern: new Proxy\(eval,           # indirect eval through an alias: the global is absent by design
+pattern: \.call\(eval\)             # a bare eval reference as an argument: the global is absent by design
 #
 # ... and the same for the Function constructor family reached without naming it: through
 # Function.prototype.call/apply (S15.3_A2/A3, S13.2.2_A8_T3 — a body that must be parsed, so the

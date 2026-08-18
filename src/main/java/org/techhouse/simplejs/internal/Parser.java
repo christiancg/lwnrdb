@@ -1284,7 +1284,17 @@ public final class Parser {
             return Lexer.isReservedWord(word);
         }
 
-        private static void validateBindingName(String name) {
+        // `await` is a reserved word only where an AwaitExpression could appear (async code / top
+        // level), not unconditionally like a genuine future-reserved word - so it needs the same
+        // context-sensitive check `isEscapeReserved`/`keywordIsIdentifier` already use, rather than
+        // the blanket `Lexer.isReservedWord` classification the other reserved words fall through to.
+        private void validateBindingName(String name) {
+            if ("await".equals(name)) {
+                if (awaitIsReserved()) {
+                    throw new SyntaxErrorException("'await' cannot be used as a binding identifier in strict mode");
+                }
+                return;
+            }
             if (ParserTables.STRICT_RESERVED.contains(name) || ParserTables.RESTRICTED_BINDINGS.contains(name)
                     || Lexer.isReservedWord(name)) {
                 throw new SyntaxErrorException("'" + name + "' cannot be used as a binding identifier in strict mode");
@@ -1351,6 +1361,9 @@ public final class Parser {
             final Expression key = switch (t.getType()) {
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
+                // LiteralPropertyName : NumericLiteral is ToString(NumericValue); a BigInt's
+                // NumericValue always has an exact decimal string form (no exponent notation).
+                case BIGINT -> new StringLiteral(((JsBigInt) t).getValue().toString());
                 default -> literalPropertyKey(t);
             };
             advance();
@@ -2286,6 +2299,7 @@ public final class Parser {
             final Expression key = switch (t.getType()) {
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
+                case BIGINT -> new StringLiteral(((JsBigInt) t).getValue().toString());
                 case PRIVATE_IDENTIFIER -> new PrivateIdentifier(((JsPrivateIdentifier) t).getValue());
                 default -> literalPropertyKey(t);
             };
@@ -2303,6 +2317,15 @@ public final class Parser {
             }
             final var next = peek();
             if (next.getType() == JsType.OPERATOR && "=".equals(((JsOperator) next).getValue())) {
+                return false;
+            }
+            // A GeneratorMethod's `*` can never follow `get`/`set`'s own ClassElementName production
+            // (unlike `static`, which a static generator method legitimately follows with one), so
+            // `get`/`set` immediately before `*` must be the member's own name instead - e.g.
+            // `get\n*a(){}` is a field named "get" (closed by ASI on the intervening newline) plus a
+            // separate generator method "a", not a getter accessor.
+            if (("get".equals(name) || "set".equals(name)) && next.getType() == JsType.OPERATOR
+                    && "*".equals(((JsOperator) next).getValue())) {
                 return false;
             }
             if (next.getType() == JsType.SEPARATOR) {
@@ -2504,8 +2527,14 @@ public final class Parser {
                 advance();
             }
             final var computed = isSeparator('[');
-            final var fromIdentifier = current().getType() == JsType.IDENTIFIER;
-            final var escapedReserved = fromIdentifier && ((JsIdentifier) current()).isEscaped()
+            final var identifierToken = current().getType() == JsType.IDENTIFIER;
+            // A shorthand property's value is an IdentifierReference, so a keyword token that is
+            // presently usable as one (`await` outside async code; `of`/`async` always) is just as
+            // eligible as a genuine identifier token - `literalPropertyKey` already turns either into
+            // the same `Identifier` node used below as both key and value.
+            final var fromIdentifier = identifierToken
+                    || current().getType() == JsType.KEYWORD && keywordIsIdentifier();
+            final var escapedReserved = identifierToken && ((JsIdentifier) current()).isEscaped()
                     && isReservedWord(((JsIdentifier) current()).getValue());
             final var key = parsePropertyKey();
             if (isSeparator('(')) {
@@ -2549,6 +2578,7 @@ public final class Parser {
             final Expression key = switch (t.getType()) {
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
+                case BIGINT -> new StringLiteral(((JsBigInt) t).getValue().toString());
                 default -> literalPropertyKey(t);
             };
             advance();

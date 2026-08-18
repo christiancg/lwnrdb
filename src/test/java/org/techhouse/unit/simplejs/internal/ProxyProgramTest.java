@@ -556,4 +556,56 @@ public class ProxyProgramTest {
                 ok && seen === Symbol.iterator
                 """));
     }
+
+    // A numeric key reaching a trap-carrying proxy's own get trap must be ToPropertyKey'd (a String)
+    // first, not handed through as the raw JsNumber - otherwise a `switch (key) { case "10": ... }`
+    // inside the trap never matches.
+    @Test
+    public void test_numeric_key_is_converted_to_a_string_before_reaching_a_trap() {
+        assertTrue(bool("""
+                let seenType;
+                let p = new Proxy({}, { get(t, k) { seenType = typeof k; return k === '10'; } });
+                p[10] === true && seenType === 'string'
+                """));
+    }
+
+    // Same ToPropertyKey requirement for the set and has traps.
+    @Test
+    public void test_numeric_key_is_converted_to_a_string_before_set_and_has_traps() {
+        assertTrue(bool("""
+                let setKey, hasKey;
+                let p = new Proxy({}, {
+                    set(t, k, v) { setKey = k; return true; },
+                    has(t, k) { hasKey = k; return true; }
+                });
+                p[10] = 'x';
+                let seen = 10 in p;
+                seen && setKey === '10' && hasKey === '10'
+                """));
+    }
+
+    // [[Construct]] forwards newTarget unchanged through a chain of missing-trap proxies (it must
+    // not be replaced by the proxy's own target), so a Reflect.construct newTarget three layers
+    // down still links the created instance to that newTarget's prototype.
+    @Test
+    public void test_construct_forwards_newtarget_through_missing_trap_proxies() {
+        assertTrue(bool("""
+                class Base {}
+                let inner = new Proxy(Base, {});
+                let outer = new Proxy(inner, {});
+                class Other {}
+                Object.getPrototypeOf(Reflect.construct(outer, [], Other)) === Other.prototype
+                """));
+    }
+
+    // GetFunctionRealm on a newTarget that is a revoked Proxy is a TypeError: a `get` trap that
+    // revokes its own proxy as a side effect while OrdinaryCreateFromConstructor reads "prototype"
+    // must surface that, rather than silently falling back to the default prototype.
+    @Test
+    public void test_construct_with_newtarget_revoked_during_prototype_read_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("""
+                let handle = Proxy.revocable(function() {}, { get: function() { handle.revoke(); } });
+                new handle.proxy();
+                """));
+    }
 }

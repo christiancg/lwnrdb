@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.values;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.math.BigInteger;
@@ -12,6 +13,7 @@ import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -194,6 +196,18 @@ public class JsTypedArrayTest {
         view.setBigInt(0, BigInteger.valueOf(-1), true);
         assertEquals(BigInteger.valueOf(-1), view.getBigInt(false, 0, true));
         assertEquals(new BigInteger("18446744073709551615"), view.getBigInt(true, 0, true));
+    }
+
+    // A typed array's [[Prototype]] is a real, settable slot: unset it defaults to null (letting
+    // every choke point fall back to the realm's per-kind intrinsic prototype), and Object.
+    // setPrototypeOf-style assignment must be observable afterwards through getProto().
+    @Test
+    public void test_proto_slot_is_settable() {
+        final var array = allocate(JsTypedArray.Kind.INT8, 1);
+        assertNull(array.getProto());
+        final var proto = new JsObject();
+        array.setProto(proto);
+        assertEquals(proto, array.getProto());
     }
 
     // A typed array stringifies as a comma-joined list of its elements

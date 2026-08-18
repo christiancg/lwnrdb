@@ -41,6 +41,13 @@ public final class Environment {
     private final Environment parent;
     private final boolean functionScope;
     private final Map<String, Binding> bindings = new LinkedHashMap<>();
+    // GlobalDeclarationInstantiation keeps lexical (let/const/class) top-level declarations in a
+    // separate Lexical Environment Record from the Global Object Record that `bindings` otherwise
+    // doubles as here (var/function/builtin bindings, i.e. the global object's own properties): a
+    // top-level `let x` must shadow a same-named builtin for bare-identifier lookups without
+    // replacing (or being visible through) the global object's own `x` property. Only ever
+    // populated on the root environment (parent == null).
+    private Map<String, Binding> globalLexicalBindings;
     private JsValue thisValue;
     private boolean hasThis;
     private boolean thisInitialized = true;
@@ -216,13 +223,34 @@ public final class Environment {
     }
 
     public void declareLexical(String name, String kind) {
+        if (parent == null) {
+            if (globalLexicalBindings == null) {
+                globalLexicalBindings = new LinkedHashMap<>();
+            }
+            globalLexicalBindings.put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
+            return;
+        }
         bindings.put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
     }
 
     public void initialize(String name, JsValue value) {
-        final var binding = bindings.get(name);
+        final var binding = ownBinding(name);
         binding.value = value;
         binding.initialized = true;
+    }
+
+    // The binding this environment itself owns for `name` (not a parent's) - a global lexical
+    // declaration lives in globalLexicalBindings rather than bindings, so a TDZ-initializing write
+    // must land on the same record declareLexical created instead of falling through to (and
+    // corrupting) an unrelated same-named var/builtin entry in bindings.
+    private Binding ownBinding(String name) {
+        if (parent == null && globalLexicalBindings != null) {
+            final var lexical = globalLexicalBindings.get(name);
+            if (lexical != null) {
+                return lexical;
+            }
+        }
+        return bindings.get(name);
     }
 
     public JsValue get(String name) {
@@ -258,6 +286,15 @@ public final class Environment {
 
     public JsValue tryGet(String name) {
         final var binding = resolve(name);
+        return binding == null || !binding.initialized ? null : binding.value;
+    }
+
+    // Unlike tryGet (which a bare-identifier lookup uses and which must honour a top-level lexical
+    // shadow), this reads only the Global Object Record - the global object's own var/function/
+    // builtin property - ignoring any same-named lexical (let/const/class) declaration. Used by
+    // JsGlobalObject's own-property reads, e.g. `this.Array` after a shadowing top-level `let Array`.
+    public JsValue tryGetGlobalProperty(String name) {
+        final var binding = bindings.get(name);
         return binding == null || !binding.initialized ? null : binding.value;
     }
 
@@ -322,6 +359,19 @@ public final class Environment {
                 : new JsObject.PropertyFlags(binding.writable, binding.enumerable, binding.configurable);
     }
 
+    // Global Object Record only (see tryGetGlobalProperty): a lexical shadow of the same name must
+    // not substitute its own flags for the actual global property's.
+    public boolean hasGlobalProperty(String name) {
+        return bindings.containsKey(name);
+    }
+
+    public JsObject.PropertyFlags globalPropertyFlags(String name) {
+        final var binding = bindings.get(name);
+        return binding == null
+                ? null
+                : new JsObject.PropertyFlags(binding.writable, binding.enumerable, binding.configurable);
+    }
+
     public boolean deleteGlobal(String name) {
         final var binding = bindings.get(name);
         if (binding == null) {
@@ -337,6 +387,12 @@ public final class Environment {
     private Binding resolve(String name) {
         var env = this;
         while (env != null) {
+            if (env.parent == null && env.globalLexicalBindings != null) {
+                final var lexical = env.globalLexicalBindings.get(name);
+                if (lexical != null) {
+                    return lexical;
+                }
+            }
             final var binding = env.bindings.get(name);
             if (binding != null) {
                 return binding;

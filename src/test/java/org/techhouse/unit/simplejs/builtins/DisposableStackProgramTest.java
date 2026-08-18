@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -131,5 +132,28 @@ public class DisposableStackProgramTest {
     public void test_use_argument_validation() {
         assertTrue(bool("new DisposableStack().use(null) === null"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new DisposableStack().use({})"));
+    }
+
+    // OrdinaryCreateFromConstructor: Reflect.construct with a foreign newTarget links the instance
+    // to that newTarget's own `prototype` instead of the shared DisposableStack.prototype.
+    @Test
+    public void test_prototype_from_new_target() {
+        assertTrue(bool("Object.getPrototypeOf(Reflect.construct(DisposableStack, [], Object)) === Object.prototype"));
+        assertTrue(
+                bool("Object.getPrototypeOf(Reflect.construct(AsyncDisposableStack, [], Array)) === Array.prototype"));
+    }
+
+    // Get(newTarget, "prototype") is observable and runs exactly once, so a throwing accessor must
+    // propagate instead of the constructor silently falling back to the shared prototype.
+    @Test
+    public void test_prototype_from_new_target_propagates_a_throwing_accessor() {
+        assertThrows(JsThrowException.class, () -> Interpreter.run("""
+                let calls = 0;
+                let newTarget = function() {}.bind(null);
+                Object.defineProperty(newTarget, 'prototype', {
+                    get: function() { calls += 1; throw new TypeError('broken'); }
+                });
+                Reflect.construct(DisposableStack, [], newTarget);
+                """));
     }
 }

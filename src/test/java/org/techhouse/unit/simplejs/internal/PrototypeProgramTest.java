@@ -283,4 +283,24 @@ public class PrototypeProgramTest {
                         + " return [s.toString(), s.description, (255n).toString(16), true.toString(),"
                         + " (1.5).toFixed(2)]"));
     }
+
+    // A plain function's own .prototype object never has its [[Prototype]] explicitly set to
+    // Object.prototype, so an instance's chain walk must still reach Object.prototype methods
+    // through that intermediate, uninitialised-proto link rather than stopping short of it.
+    @Test
+    public void test_plain_function_prototype_chain_reaches_object_prototype() {
+        assertEquals("[true,true,true]",
+                run("function Base() {} const b = new Base(); const d = Object.create(b);"
+                        + " return [Object.getPrototypeOf(d) === b, b.isPrototypeOf(d),"
+                        + " typeof b.hasOwnProperty === 'function']"));
+    }
+
+    // OrdinaryCreateFromConstructor: a generator function's own .prototype set to a non-object
+    // must fall back to the intrinsic %GeneratorPrototype%/%AsyncGeneratorPrototype%, not to a
+    // null [[Prototype]] on the created instance.
+    @Test
+    public void test_generator_prototype_falls_back_to_intrinsic_default() {
+        assertEquals("true", run("function* g() {} const GeneratorPrototype = Object.getPrototypeOf(g).prototype;"
+                + " g.prototype = null; return Object.getPrototypeOf(g()) === GeneratorPrototype"));
+    }
 }

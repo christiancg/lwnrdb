@@ -186,10 +186,13 @@ public class ObjectBuiltinsTest {
                 .run("let o = Object.create({a: 1}); Object.setPrototypeOf(o, null); Object.getPrototypeOf(o)"));
     }
 
-    // fromEntries ignores malformed entries and defaults missing values to undefined
+    // fromEntries defaults a missing "1" property to undefined, but a non-object entry - even one
+    // reached after already-valid entries - throws per AddEntriesFromIterable step 3.c (Type(next)
+    // is not Object), it does not just skip that one entry.
     @Test
     public void test_from_entries_edge_cases() {
-        assertEquals(1, num("Object.keys(Object.fromEntries([['a'], 5, ['b', 2]])).length - 1"));
+        assertEquals(1, num("Object.keys(Object.fromEntries([['a']])).length"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.fromEntries([['a'], 5, ['b', 2]])"));
     }
 
     // a non-writable data property ignores later assignment
@@ -1744,5 +1747,144 @@ public class ObjectBuiltinsTest {
                 } catch (e) { caught = e; }
                 caught instanceof RangeError
                 """));
+    }
+
+    // fromEntries: the result is proto-linked to %Object.prototype% (OrdinaryObjectCreate), symbol
+    // keys are supported (ToPropertyKey can yield one), and "0"/"1" are read via Get rather than by
+    // iterating the entry - an entry whose own [Symbol.iterator] throws must never be touched.
+    @Test
+    public void fromEntriesLinksPrototypeAndSupportsSymbolKeysAndPlainObjectEntries() {
+        assertTrue(flag("Object.getPrototypeOf(Object.fromEntries([])) === Object.prototype"));
+        assertTrue(flag("""
+                const key = Symbol('k');
+                Object.fromEntries([[key, 'value']])[key] === 'value'
+                """));
+        assertEquals("first value", str("""
+                const entry = {
+                    '0': 'first key',
+                    '1': 'first value',
+                    get [Symbol.iterator]() { throw new Error('must not iterate the entry'); },
+                };
+                Object.fromEntries([entry])['first key']
+                """));
+    }
+
+    // A non-object entry (or an abrupt Get/ToPropertyKey) throws a TypeError and closes the source
+    // iterator (IteratorClose) before the error propagates.
+    @Test
+    public void fromEntriesRejectsNonObjectEntriesAndClosesTheIterator() {
+        assertTrue(flag("""
+                let returned = false;
+                const iterable = {
+                    [Symbol.iterator]() {
+                        let done = false;
+                        return {
+                            next() { const d = done; done = true; return { done: d, value: 'nope' }; },
+                            return() { returned = true; },
+                        };
+                    },
+                };
+                let threw = false;
+                try { Object.fromEntries(iterable); } catch (e) { threw = e instanceof TypeError; }
+                threw && returned
+                """));
+    }
+
+    // Object.groupBy: a non-callable callback throws synchronously, and the bucket key goes through
+    // the real ToPropertyKey (a stringable object's toString(), not a raw String() coercion).
+    @Test
+    public void groupByRejectsNonCallableAndUsesRealToPropertyKey() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.groupBy([], null)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.groupBy([], {})"));
+        assertEquals("1", str("""
+                const stringable = { toString() { return 1; } };
+                const g = Object.groupBy([1, '1', stringable], v => v);
+                Object.keys(g).join(',')
+                """));
+    }
+
+    // A poisoned ToPropertyKey on the callback's return value propagates instead of being swallowed.
+    @Test
+    public void groupByPropagatesAPoisonedPropertyKeyConversion() {
+        assertTrue(flag("""
+                let caught = null;
+                try {
+                    Object.groupBy([1], () => ({ toString() { throw new RangeError('nope'); } }));
+                } catch (e) { caught = e; }
+                caught instanceof RangeError
+                """));
+    }
+
+    // Object.create's Properties argument is ToObject'd, so a non-empty string is walked by its
+    // boxed index characters - each of which is a bare string value, not a descriptor object.
+    @Test
+    public void createRejectsANonEmptyStringPropertiesArgument() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.create({}, 'hello')"));
+    }
+
+    // Object.getPrototypeOf/getOwnPropertyDescriptor ToObject their argument, so null/undefined is
+    // a TypeError rather than a silent null/undefined answer.
+    @Test
+    public void getPrototypeOfRequiresAnObjectCoercibleArgument() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getPrototypeOf()"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getPrototypeOf(null)"));
+        assertTrue(flag("Object.getPrototypeOf(5) === Number.prototype"));
+    }
+
+    // The descriptor object FromPropertyDescriptor builds is itself proto-linked to Object.prototype
+    // (both the single- and the batch- getOwnPropertyDescriptor forms).
+    @Test
+    public void getOwnPropertyDescriptorResultIsAnInstanceOfObject() {
+        assertTrue(flag("Object.getOwnPropertyDescriptor({p: 1}, 'p') instanceof Object"));
+        assertTrue(flag("Object.getPrototypeOf(Object.getOwnPropertyDescriptors({})) === Object.prototype"));
+    }
+
+    // ObjectDefineProperties walks every own key - including symbols - calling
+    // getOwnPropertyDescriptor on each one in key order, not skipping symbol keys ahead of that call.
+    @Test
+    public void definePropertiesConsultsEveryOwnKeyIncludingSymbols() {
+        assertEquals("0,foo,symbol", str("""
+                const target = {};
+                const sym = Symbol();
+                target[sym] = 1;
+                target.foo = 2;
+                target[0] = 3;
+                const seen = [];
+                const proxy = new Proxy(target, {
+                    getOwnPropertyDescriptor(t, key) { seen.push(typeof key === 'symbol' ? 'symbol' : key); },
+                });
+                Object.defineProperties({}, proxy);
+                seen.join(',')
+                """));
+    }
+
+    // Object.values/entries do not see a key removed by an earlier getter during the same
+    // enumeration pass - the snapshot [[OwnPropertyKeys]] list stays fixed, but each key's presence
+    // is re-checked right before it would be read.
+    @Test
+    public void valuesAndEntriesSkipAKeyDeletedByAnEarlierGetter() {
+        final var setup = """
+                const o = { a: 'A', get b() { delete this.c; return 'B'; }, c: 'C' };
+                """;
+        assertEquals("A,B", str(setup + "Object.values(o).join(',')"));
+        assertEquals("a,b", str(setup + "Object.entries(o).map(e => e[0]).join(',')"));
+    }
+
+    // Object.values/entries over a Proxy interleave getOwnPropertyDescriptor and get per key (not a
+    // getOwnPropertyDescriptor batch followed by a get batch).
+    @Test
+    public void valuesOverAProxyInterleavesDescriptorCheckAndGetPerKey() {
+        assertEquals("|ownKeys|getOwnPropertyDescriptor:a|get:a|getOwnPropertyDescriptor:b|get:b",
+                str("""
+                        let log = '';
+                        const object = { a: 1, b: 2 };
+                        const proxy = new Proxy(object, {
+                            get(t, k) { log += '|get:' + k; return t[k]; },
+                            getOwnPropertyDescriptor(t, k) { log += '|getOwnPropertyDescriptor:' + k; return Object.getOwnPropertyDescriptor(t, k); },
+                            ownKeys(t) { log += '|ownKeys'; return Object.getOwnPropertyNames(t); },
+                        });
+                        Object.values(proxy);
+                        log
+                        """));
     }
 }

@@ -63,11 +63,20 @@ public final class ClassEvaluator {
     }
 
     private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env) {
+        // ClassDefinitionEvaluation creates the class's own scope - with the class name bound but
+        // uninitialized (TDZ) - and switches into it *before* evaluating ClassHeritage, so `class x
+        // extends x {}` throws a ReferenceError from the TDZ read rather than resolving `x` in the
+        // enclosing scope.
+        final var classScope = env.child();
+        final var name = id == null ? null : id.getName();
+        if (name != null) {
+            classScope.declareLexical(name, "const");
+        }
         JsClass superClass = null;
         JsValue superConstructor = null;
         var nullHeritage = false;
         if (superClassExpr != null) {
-            final var resolved = interp.eval(superClassExpr, env);
+            final var resolved = interp.eval(superClassExpr, classScope);
             if (resolved instanceof JsClass sc) {
                 superClass = sc;
             } else if (resolved instanceof JsNull) {
@@ -79,9 +88,7 @@ public final class ClassEvaluator {
                         "Class extends value " + JsCoercion.toStr(resolved) + " is not a constructor or null");
             }
         }
-        final var classScope = env.child();
         final var methodScope = classScope.child();
-        final var name = id == null ? null : id.getName();
         final var cls = new JsClass(name, superClass, methodScope);
         if (nullHeritage) {
             cls.markNullHeritage();
@@ -106,7 +113,6 @@ public final class ClassEvaluator {
         declarePrivateNames(cls, body);
         classScope.definePrivateEnvironment(cls);
         if (name != null) {
-            classScope.declareLexical(name, "const");
             classScope.initialize(name, cls);
         }
         final var staticInit = new ArrayList<StaticEntry>();
@@ -140,17 +146,19 @@ public final class ClassEvaluator {
             return null;
         }
         final var key = JsCoercion.toPropertyKey(interp.eval(field.getKey(), classScope), interp.ops());
-        if (field.isStatic() && isNamed(key, "prototype")) {
+        if (field.isStatic() && isNamed(key)) {
             throw new TypeErrorException("Classes may not have a static field named 'prototype'");
         }
-        if (!field.isStatic() && isNamed(key, "constructor")) {
-            throw new TypeErrorException("Classes may not have a field named 'constructor'");
-        }
+        // Unlike the literal-name early error the parser enforces (Static Semantics: PropName),
+        // PropName of a ComputedPropertyName is always *empty* - so a computed field name that
+        // merely evaluates to "constructor" at run time is not the same restriction and must not be
+        // rejected: DefineField's CreateDataPropertyOrThrow happily installs an own "constructor"
+        // data property on a plain instance (there is nothing there to collide with).
         return key;
     }
 
-    private static boolean isNamed(JsValue key, String name) {
-        return key instanceof JsString string && name.equals(string.getValue());
+    private static boolean isNamed(JsValue key) {
+        return key instanceof JsString string && "prototype".equals(string.getValue());
     }
 
     // PrivateBoundIdentifiers of a ClassBody: the private-named members' keys, all created before the
@@ -195,7 +203,7 @@ public final class ClassEvaluator {
         }
         if (method.isComputed()) {
             final var keyValue = JsCoercion.toPropertyKey(interp.eval(method.getKey(), classScope), interp.ops());
-            if (method.isStatic() && isNamed(keyValue, "prototype")) {
+            if (method.isStatic() && isNamed(keyValue)) {
                 throw new TypeErrorException("Classes may not have a static method named 'prototype'");
             }
             if (keyValue instanceof JsSymbol symbol) {
@@ -259,7 +267,11 @@ public final class ClassEvaluator {
             if (entry.field() != null) {
                 runStaticField(cls, entry, staticScope);
             } else {
-                final var blockEnv = staticScope.child();
+                // ClassStaticBlockDefinitionEvaluation: OrdinaryFunctionCreate makes each static block
+                // its own function, so a `var` inside it hoists to that block's own scope rather than
+                // leaking into the class's shared static scope (other blocks/fields) or, worse, past
+                // it into whatever ordinary function/script scope encloses the class declaration.
+                final var blockEnv = staticScope.functionChild();
                 interp.hoist(entry.block().getBody(), blockEnv);
                 for (final var statement : entry.block().getBody()) {
                     if (!interp.evalStatement(statement, blockEnv).isNormal()) {
@@ -314,14 +326,15 @@ public final class ClassEvaluator {
         }
         var self = (JsValue) instance;
         if (superCtor != null) {
-            applySuperConstructor(superCtor, instance, args, newTarget);
+            self = applySuperConstructor(superCtor, instance, args, newTarget);
         } else if (cls.hasNullHeritage()) {
             throw new TypeErrorException("Super constructor null of " + cls.getName() + " is not a constructor");
         } else if (cls.getSuperClass() != null) {
             self = callConstructorChain(cls.getSuperClass(), instance, args, newTarget);
         }
-        if (self instanceof JsObject target) {
-            initFields(cls, target);
+        final var fieldTarget = unwrapForFieldInit(self);
+        if (fieldTarget != null) {
+            initFields(cls, self, fieldTarget);
         }
         if (constructor != null) {
             return overrideOrInstance(interp.callFunction(constructor, self, args, newTarget), self);
@@ -333,15 +346,38 @@ public final class ClassEvaluator {
         return isObjectLike(returned) ? returned : instance;
     }
 
-    // A non-class heritage: a user function runs directly on the instance under construction (its body
-    // writes through `this`), a builtin goes through the copy path that keeps its internal state, and
-    // anything else constructible is constructed and its own state adopted.
-    private void applySuperConstructor(JsValue superCtor, JsObject instance, List<JsValue> args, JsValue newTarget) {
-        switch (superCtor) {
-            case JsNativeFunction nativeSuper -> applyNativeSuper(nativeSuper, instance, args);
-            case JsFunction function -> interp.callFunction(function, instance, args, newTarget);
-            default -> adoptConstructed(interp.construct(superCtor, args, newTarget), instance);
+    // InitializeInstanceElements installs private/public fields on whatever `this` resolved to,
+    // which may be a Proxy when a base constructor in the chain returned one (PrivateFieldAdd and
+    // CreateDataPropertyOrThrow both act on the object directly, bypassing any [[DefineProperty]]
+    // trap) - our private-member storage lives on the concrete JsObject, so the field lands on the
+    // proxy's (possibly nested) target rather than being silently skipped.
+    private static JsObject unwrapForFieldInit(JsValue self) {
+        var current = self;
+        while (current instanceof JsProxy proxy) {
+            current = proxy.getTarget();
         }
+        return current instanceof JsObject object ? object : null;
+    }
+
+    // A non-class heritage: a user function is invoked as an ordinary [[Construct]] against the
+    // instance under construction (its body writes through `this`), and - per OrdinaryCallEvaluateBody
+    // step 6 - a returned object overrides that instance as the effective `this` of the whole chain. A
+    // builtin instead goes through the copy path that keeps its internal state (there is no `this`
+    // parameter it can write through), and anything else constructible is constructed and its own
+    // state adopted.
+    private JsValue applySuperConstructor(JsValue superCtor, JsObject instance, List<JsValue> args, JsValue newTarget) {
+        return switch (superCtor) {
+            case JsNativeFunction nativeSuper -> {
+                applyNativeSuper(nativeSuper, instance, args);
+                yield instance;
+            }
+            case JsFunction function ->
+                overrideOrInstance(interp.callFunction(function, instance, args, newTarget), instance);
+            default -> {
+                adoptConstructed(interp.construct(superCtor, args, newTarget), instance);
+                yield instance;
+            }
+        };
     }
 
     // A native super has no method tables to chain into, so its result's own state is copied onto the
@@ -370,33 +406,62 @@ public final class ClassEvaluator {
         }
     }
 
-    private void initFields(JsClass cls, JsObject instance) {
-        if (!instance.addPrivateBrand(cls) && cls.hasPrivateInstanceBrand()) {
+    // `self` is the receiver InitializeInstanceElements actually operates on (may be a Proxy, when a
+    // super constructor in the chain returned one) - a public/symbol field goes through it via a
+    // trap-aware CreateDataPropertyOrThrow, matching DefineField. Private storage cannot go through a
+    // Proxy at all (PrivateFieldAdd has no trap and our storage lives on the concrete JsObject), so
+    // that part uses `storage` (the same value unwrapped for field init, see `unwrapForFieldInit`).
+    private void initFields(JsClass cls, JsValue self, JsObject storage) {
+        // PrivateMethodOrAccessorAdd's brand entry is installed on the same instance a private field
+        // would be (PrivateFieldAdd), so a class that declares any private method/accessor rejects a
+        // non-extensible receiver exactly as a private field would - only relevant when this class
+        // actually has something to brand (a class with none never observes non-extensibility here).
+        if (cls.hasPrivateInstanceBrand() && !storage.isExtensible()) {
+            throw new TypeErrorException(
+                    "Cannot add private members to a non-extensible object (" + cls.getName() + ")");
+        }
+        if (!storage.addPrivateBrand(cls) && cls.hasPrivateInstanceBrand()) {
             throw new TypeErrorException(
                     "Cannot initialize the private members of " + cls.getName() + " twice on the same object");
         }
         for (final var entry : cls.getInstanceFields()) {
             final var field = entry.definition();
             final var fieldScope = cls.getMethodScope().child();
-            fieldScope.defineThis(instance);
+            fieldScope.defineThis(self);
             final var value = field.getValue() == null
                     ? JsUndefined.getInstance()
                     : interp.eval(field.getValue(), fieldScope);
             if (field.getKey() instanceof PrivateIdentifier priv) {
                 nameField(field, value, "#" + priv.getName());
-                if (!instance.addPrivate(cls.declarePrivateName(priv.getName()), value)) {
+                if (!storage.addPrivate(cls.declarePrivateName(priv.getName()), value)) {
                     throw new TypeErrorException("Cannot add private field #" + priv.getName() + " to this object");
                 }
             } else if (entry.key() instanceof JsSymbol symbol) {
                 nameField(field, value, symbolMethodName(symbol));
-                instance.setSymbol(symbol, value);
+                defineFieldProperty(self, symbol, value);
             } else {
                 final var key = entry.key() == null
                         ? staticKeyName(field.getKey())
                         : ((JsString) entry.key()).getValue();
                 nameField(field, value, key);
-                instance.set(key, value);
+                defineFieldProperty(self, new JsString(key), value);
             }
+        }
+    }
+
+    // DefineField's non-private branch: CreateDataPropertyOrThrow(receiver, fieldName, initValue) -
+    // an ordinary [[DefineOwnProperty]], so a Proxy receiver's `defineProperty` trap fires and a
+    // non-extensible (frozen) receiver rejects a new key instead of silently dropping the field.
+    private void defineFieldProperty(JsValue self, JsValue key, JsValue value) {
+        final var descriptor = new JsObject();
+        descriptor.setProto(interp.intrinsics().objectProto());
+        descriptor.set("value", value);
+        descriptor.set("writable", JsBoolean.TRUE);
+        descriptor.set("enumerable", JsBoolean.TRUE);
+        descriptor.set("configurable", JsBoolean.TRUE);
+        if (!interp.ops().defineProperty(self, key, descriptor)) {
+            throw new TypeErrorException(
+                    "Cannot define field '" + JsCoercion.toStr(key, interp.ops()) + "' on this object");
         }
     }
 
@@ -406,18 +471,24 @@ public final class ClassEvaluator {
         if (!(thisValue instanceof JsObject instance)) {
             throw new TypeErrorException("'super' call outside of a constructor");
         }
+        // ArgumentListEvaluation runs before the IsConstructor check (SuperCall step 4-5), so a side
+        // effect in an argument expression is observed even when the resolved super constructor turns
+        // out not to be callable at all (e.g. its slot was reassigned to a non-constructor value, or a
+        // `extends null` class's constructorParent is %Function.prototype%).
+        final var args = interp.evalArguments(call.getArguments(), env);
+        if (!InterpreterUtils.isConstructor(home.getProto())) {
+            throw new TypeErrorException("Super constructor " + JsCoercion.toStr(home.getProto()) + " of "
+                    + home.getName() + " is not a constructor");
+        }
+        final JsValue self = home.getSuperClass() == null
+                ? applySuperConstructor(home.getSuperConstructor(), instance, args, env.resolveNewTarget())
+                : callConstructorChain(home.getSuperClass(), instance, args, env.resolveNewTarget());
+        // BindThisValue's own "already initialized" guard runs after Construct (SuperCall step 8, well
+        // after ArgumentListEvaluation and Construct at steps 4/6) - a nested/repeated super() call's
+        // side effects (argument evaluation, the base constructor running again) are observable before
+        // this throws, so the check cannot move any earlier than here.
         if (env.isThisInitialized()) {
             throw new ReferenceErrorException("Super constructor may only be called once");
-        }
-        final var args = interp.evalArguments(call.getArguments(), env);
-        var self = (JsValue) instance;
-        if (home.hasNullHeritage()) {
-            throw new TypeErrorException("Super constructor null of " + home.getName() + " is not a constructor");
-        }
-        if (home.getSuperClass() == null) {
-            applySuperConstructor(home.getSuperConstructor(), instance, args, env.resolveNewTarget());
-        } else {
-            self = callConstructorChain(home.getSuperClass(), instance, args, env.resolveNewTarget());
         }
         // A base constructor that returns an object becomes this derived constructor's `this`, so the
         // derived class's fields and brand land on that object.
@@ -425,29 +496,25 @@ public final class ClassEvaluator {
             env.replaceThis(self);
         }
         env.markThisInitialized();
-        if (self instanceof JsObject target) {
-            initFields(home, target);
+        final var fieldTarget = unwrapForFieldInit(self);
+        if (fieldTarget != null) {
+            initFields(home, self, fieldTarget);
         }
-        return JsUndefined.getInstance();
+        // SuperCall evaluates to BindThisValue's result: the same value now bound as `this`.
+        return self;
     }
 
     public JsValue evalSuperMemberCall(MemberExpression member, CallExpression call, Environment env) {
         final var thisArg = env.resolveThis();
+        // GetSuperBase() is captured before the property key is resolved/coerced (MakeSuperPropertyReference
+        // runs before GetValue's deferred ToPropertyKey), so a side effect during key evaluation must not
+        // change which object the read is dispatched against. A static method's home is the class
+        // itself, so its GetSuperBase() is the class's own (dynamic) [[Prototype]] - a class heritage,
+        // a non-class constructor, or %Function.prototype% by default - not the instance chain.
+        final var start = thisArg instanceof JsClass cls ? cls.getProto() : superProtoStart(env);
         final var key = interp.memberKey(member, env);
         final var args = interp.evalArguments(call.getArguments(), env);
-        if (thisArg instanceof JsClass) {
-            final var parent = superMemberParent(superHomeClass(env), key);
-            final var method = parent.findStaticMethod(key);
-            if (method != null) {
-                return interp.callFunction(method, thisArg, args);
-            }
-            final var getter = parent.findStaticGetter(key);
-            if (getter != null) {
-                return interp.callValue(interp.callFunction(getter, thisArg, List.of()), thisArg, args);
-            }
-            throw new TypeErrorException("(intermediate value).super." + key + " is not a function");
-        }
-        final var value = superProtoRead(env, key, thisArg);
+        final var value = superProtoRead(start, key, thisArg);
         if (isCallable(value)) {
             return interp.callValue(value, thisArg, args);
         }
@@ -455,37 +522,73 @@ public final class ClassEvaluator {
     }
 
     // PutValue on a super reference is Set(GetSuperBase(), key, value, thisValue): the receiver is
-    // `this`, so an absent setter on the super chain writes an own property on the instance.
+    // `this`, so an absent setter on the super chain writes an own property on the instance. The base
+    // for the [[Set]] is GetSuperBase() itself (captured before the key is resolved, same ordering
+    // rationale as the read/call paths above) - not `thisArg`, which would re-enter the very accessor
+    // being assigned to whenever the home object also owns an accessor of the same name (infinite
+    // recursion, e.g. an object-literal setter that does `super.x = v`). A static method's home is the
+    // class itself, so GetSuperBase() there is the class's own (dynamic, possibly reassigned)
+    // [[Prototype]] rather than the instance prototype chain used by `superProtoStart`.
     public void evalSuperMemberWrite(MemberExpression member, JsValue value, Environment env) {
         final var thisArg = env.resolveThis();
-        superProtoStart(env, "");
         final var key = interp.memberKey(member, env);
-        if (!interp.members().setMember(thisArg, key, value, thisArg)) {
+        if (thisArg instanceof JsClass cls) {
+            final var base = cls.getProto();
+            if (base == null) {
+                throw new TypeErrorException("Cannot set properties of null (setting '" + key + "')");
+            }
+            if (!interp.members().setMember(base, key, value, thisArg)) {
+                throw new TypeErrorException("Cannot assign to read only property 'super." + key + "'");
+            }
+            return;
+        }
+        final var start = superProtoStart(env, true);
+        final var target = start == null ? interp.intrinsics().objectProto() : start;
+        if (!interp.members().setMember(target, key, value, thisArg)) {
             throw new TypeErrorException("Cannot assign to read only property 'super." + key + "'");
         }
     }
 
-    public JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
+    // The plain-assignment ("=") entry point for `super.x = expr`/`super[expr1] = expr2`: unlike
+    // `evalSuperMemberWrite` (used once the right-hand side is already known, e.g. `super.x += 1` or
+    // `super.x++`), here the right-hand side must be evaluated *between* resolving the reference (the
+    // super base, plus the raw - not yet ToPropertyKey'd - key) and performing the actual [[Set]], per
+    // AssignmentExpression's left-to-right evaluation and PutValue's own deferred ToPropertyKey/
+    // RequireObjectCoercible ordering.
+    public JsValue evalSuperMemberAssign(MemberExpression member, Expression valueExpr, Environment env) {
         final var thisArg = env.resolveThis();
-        superProtoStart(env, "");
-        final var key = interp.memberKey(member, env);
-        if (thisArg instanceof JsClass) {
-            final var parent = superMemberParent(superHomeClass(env), key);
-            final var getter = parent.findStaticGetter(key);
-            if (getter != null) {
-                return interp.callFunction(getter, thisArg, List.of());
+        if (thisArg instanceof JsClass cls) {
+            final var rawKey = interp.memberKeyValue(member, env);
+            final var base = cls.getProto();
+            final var value = interp.eval(valueExpr, env);
+            final var key = JsCoercion.toStr(rawKey, interp.ops());
+            if (base == null) {
+                throw new TypeErrorException("Cannot set properties of null (setting '" + key + "')");
             }
-            final var method = parent.findStaticMethod(key);
-            if (method != null) {
-                return method;
+            if (!interp.members().setMember(base, key, value, thisArg)) {
+                throw new TypeErrorException("Cannot assign to read only property 'super." + key + "'");
             }
-            return interp.getStaticMember(parent, key);
+            return value;
         }
-        return superProtoRead(env, key, thisArg);
+        final var start = superProtoStart(env, false);
+        final var rawKey = interp.memberKeyValue(member, env);
+        final var value = interp.eval(valueExpr, env);
+        final var key = JsCoercion.toStr(rawKey, interp.ops());
+        final var target = start == null ? interp.intrinsics().objectProto() : start;
+        if (!interp.members().setMember(target, key, value, thisArg)) {
+            throw new TypeErrorException("Cannot assign to read only property 'super." + key + "'");
+        }
+        return value;
     }
 
-    private JsValue superProtoRead(Environment env, String key, JsValue thisArg) {
-        final var start = superProtoStart(env, key);
+    public JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
+        final var thisArg = env.resolveThis();
+        final var start = thisArg instanceof JsClass cls ? cls.getProto() : superProtoStart(env);
+        final var key = interp.memberKey(member, env);
+        return superProtoRead(start, key, thisArg);
+    }
+
+    private JsValue superProtoRead(JsValue start, String key, JsValue thisArg) {
         if (start == null) {
             return JsUndefined.getInstance();
         }
@@ -494,8 +597,17 @@ public final class ClassEvaluator {
     }
 
     // GetSuperBase: the home object's [[Prototype]]. A base class or a plain object literal has none
-    // of its own, so the chain starts at Object.prototype; `extends null` genuinely has no base.
-    private JsValue superProtoStart(Environment env, String key) {
+    // of its own, so the chain starts at Object.prototype; `extends null` genuinely has no base, which
+    // RequireObjectCoercible rejects outright (unlike a plain object whose own [[Prototype]] happens to
+    // be unset, which this representation cannot distinguish from an explicit null proto).
+    private JsValue superProtoStart(Environment env) {
+        return superProtoStart(env, true);
+    }
+
+    // `throwOnNullHeritage` lets a caller that must sequence its own side effects (RHS evaluation)
+    // after resolving the base but before RequireObjectCoercible - i.e. a plain assignment's PutValue -
+    // defer the throw instead of raising it the moment the base is resolved.
+    private JsValue superProtoStart(Environment env, boolean throwOnNullHeritage) {
         final var home = env.resolveHomeClass();
         if (home instanceof JsObject object) {
             final var proto = object.getProto();
@@ -503,12 +615,15 @@ public final class ClassEvaluator {
         }
         if (home instanceof JsClass cls) {
             if (cls.hasNullHeritage()) {
+                if (throwOnNullHeritage) {
+                    throw new TypeErrorException("Cannot read properties of null (reading '" + "')");
+                }
                 return null;
             }
             final var start = cls.getPrototype().getProto();
             return start == null ? interp.intrinsics().objectProto() : start;
         }
-        throw new SyntaxErrorException("'super' keyword unexpected here: " + key);
+        throw new SyntaxErrorException("'super' keyword unexpected here: ");
     }
 
     private JsClass superHomeClass(Environment env) {
@@ -516,17 +631,6 @@ public final class ClassEvaluator {
             return cls;
         }
         throw new SyntaxErrorException("'super' keyword unexpected here");
-    }
-
-    // A static `super.x` reads through the heritage class's own statics; a non-class heritage has no
-    // static tables to chain into.
-    private JsClass superMemberParent(JsClass home, String key) {
-        final var parent = home.getSuperClass();
-        if (parent == null) {
-            throw new TypeErrorException(
-                    "super." + key + " is not available: " + home.getName() + " has no class superclass");
-        }
-        return parent;
     }
 
     public JsValue evalBrandCheck(PrivateIdentifier priv, JsValue target, Environment env) {

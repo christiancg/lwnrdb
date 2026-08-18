@@ -788,4 +788,247 @@ public class InterpreterClassTest {
                 """;
         assertTrue(bool(source));
     }
+
+    // super.x = v on the proto chain writes through the home object's own [[Prototype]] as the
+    // [[Set]] target, receiver `this` - not `this` as the target - so a setter that itself does
+    // `super.x = v` does not re-enter its own accessor and recurse forever
+    @Test
+    public void test_object_literal_setter_super_write_does_not_recurse() {
+        final var source = """
+                var proto = { _x: 0, set x(v) { this._x = v; } };
+                var object = { set x(v) { super.x = v; } };
+                Object.setPrototypeOf(object, proto);
+                var result = (object.x = 1);
+                JSON.stringify([result, object._x, Object.getPrototypeOf(object)._x])
+                """;
+        assertEquals("[1,1,0]", str(source));
+    }
+
+    // GetSuperBase() is captured before a computed super-member key is coerced/evaluated, so a
+    // toString side effect that mutates the home object's prototype must not change which object the
+    // read/write actually lands on
+    @Test
+    public void test_super_computed_key_evaluated_after_getsuperbase_captured() {
+        final var source = """
+                var proto = { p: 'ok' };
+                var proto2 = { p: 'bad' };
+                var obj = {
+                    __proto__: proto,
+                    m() { return super[key]; }
+                };
+                var key = { toString() { Object.setPrototypeOf(obj, proto2); return 'p'; } };
+                obj.m()
+                """;
+        assertEquals("ok", str(source));
+    }
+
+    // super() in a plain-function heritage's derived constructor evaluates to BindThisValue's result
+    // (the constructed `this`), and a base function that returns a custom object overrides `this`
+    // with that object rather than the pre-allocated instance
+    @Test
+    public void test_super_call_binds_and_returns_base_functions_override_object() {
+        // An explicit `return this;` sidesteps the unrelated (already-tracked) gap where a derived
+        // constructor falling off the end without one does not yet re-read the environment's
+        // (possibly-replaced) `this` binding - this test is only about super()'s own return value.
+        final var source = """
+                var customThisValue = {};
+                var boundThisValue;
+                function Parent() { return customThisValue; }
+                class Child extends Parent {
+                    constructor() { boundThisValue = super(); return this; }
+                }
+                var c = new Child();
+                boundThisValue === customThisValue && c === customThisValue
+                """;
+        assertTrue(bool(source));
+    }
+
+    // GetSuperConstructor() reads the active constructor's own (dynamic) [[Prototype]], so mutating a
+    // class's own prototype after definition changes what super() resolves to - IsConstructor is
+    // checked after ArgumentListEvaluation, so a side effect in the argument list is still observed
+    @Test
+    public void test_super_call_checks_dynamic_prototype_after_evaluating_arguments() {
+        final var source = """
+                var evaluatedArg = false;
+                var caught;
+                class C extends Object {
+                    constructor() {
+                        try { super(evaluatedArg = true); } catch (err) { caught = err; }
+                    }
+                }
+                Object.setPrototypeOf(C, parseInt);
+                try { new C(); } catch (_) {}
+                JSON.stringify([typeof caught, caught instanceof TypeError, evaluatedArg])
+                """;
+        assertEquals("[\"object\",true,true]", str(source));
+    }
+
+    // A repeated super() call's own side effects (argument evaluation, the base constructor running
+    // again) are observable before BindThisValue's "already initialised" check finally throws
+    @Test
+    public void test_repeated_super_call_runs_side_effects_before_throwing() {
+        final var source = """
+                var baseCalled = 0;
+                class Base { constructor() { baseCalled++; } }
+                var fCalled = 0;
+                function f() { fCalled++; return 3; }
+                var exn = null;
+                class Sub extends Base {
+                    constructor() {
+                        super();
+                        baseCalled = 0;
+                        fCalled = 0;
+                        try { super(f()); } catch (e) { exn = e; }
+                    }
+                }
+                new Sub();
+                JSON.stringify([exn instanceof ReferenceError, fCalled, baseCalled])
+                """;
+        assertEquals("[true,1,1]", str(source));
+    }
+
+    // `this` accessed before super() has run is a TDZ ReferenceError, even nested inside super()'s own
+    // argument list (`super(super())`), where the inner call's own bookkeeping must not silently let
+    // the outer call succeed without ever throwing at all
+    @Test
+    public void test_nested_super_call_in_argument_list_throws_reference_error() {
+        final var source = """
+                class Base {}
+                class C extends Base {
+                    constructor() { super(super()); }
+                }
+                var threw = false;
+                try { new C(); } catch (e) { threw = e instanceof ReferenceError; }
+                threw
+                """;
+        assertTrue(bool(source));
+    }
+
+    // A static method's `super.x` resolves through the class's own dynamic [[Prototype]], which
+    // holds even when the heritage is a plain (non-class) constructor, not just another class
+    @Test
+    public void test_static_super_property_reads_through_plain_function_heritage() {
+        final var source = """
+                function Parent() {}
+                Parent.test262 = 'test262';
+                var value;
+                class C extends Parent {
+                    static { value = super.test262; }
+                }
+                value
+                """;
+        assertEquals("test262", str(source));
+    }
+
+    // Each class static block is its own function-like scope for `var`: a var declared inside one
+    // block neither leaks into the enclosing scope nor into a sibling static block
+    @Test
+    public void test_static_block_var_is_scoped_to_its_own_block() {
+        final var source = """
+                var test262 = 'outer scope';
+                var probe1, probe2;
+                class C {
+                    static { var test262 = 'first block'; probe1 = test262; }
+                    static { var test262 = 'second block'; probe2 = test262; }
+                }
+                JSON.stringify([test262, probe1, probe2])
+                """;
+        assertEquals("[\"outer scope\",\"first block\",\"second block\"]", str(source));
+    }
+
+    // `class x extends x {}` evaluates ClassHeritage in the class's own scope, where the class name
+    // is bound but not yet initialised (TDZ), so referencing it in the heritage throws ReferenceError
+    // rather than resolving to an outer binding of the same name
+    @Test
+    public void test_class_name_in_own_heritage_is_a_tdz_reference_error() {
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run("var x = (class x extends x {});"));
+    }
+
+    // A computed field name is never subject to the literal-PropName early error, even when it
+    // evaluates to "constructor" at run time - CreateDataPropertyOrThrow just installs it as an
+    // ordinary own data property on the instance
+    @Test
+    public void test_computed_field_named_constructor_is_allowed() {
+        final var source = """
+                var x = 'constructor';
+                class C { [x]; }
+                var c = new C();
+                JSON.stringify([c.hasOwnProperty('constructor'), C.hasOwnProperty('constructor')])
+                """;
+        assertEquals("[true,false]", str(source));
+    }
+
+    // Public field initialization is a real CreateDataPropertyOrThrow: it fires a Proxy's own
+    // defineProperty trap and rejects a field on a non-extensible receiver instead of silently
+    // dropping it
+    @Test
+    public void test_public_field_init_goes_through_proxy_definetrap() {
+        final var source = """
+                function ProxyBase() {
+                    return new Proxy(this, { defineProperty(t, k, d) { throw new TypeError('trapped'); } });
+                }
+                class Base extends ProxyBase { f = 'x'; }
+                var threw = false;
+                try { new Base(); } catch (e) { threw = e instanceof TypeError; }
+                threw
+                """;
+        assertTrue(bool(source));
+    }
+
+    // A field on an already non-extensible instance is rejected, matching CreateDataPropertyOrThrow's
+    // failure on a non-extensible receiver
+    @Test
+    public void test_public_field_init_rejected_on_frozen_instance() {
+        final var source = """
+                class Base { constructor() { Object.preventExtensions(this); } }
+                class C extends Base { f = 1; }
+                var threw = false;
+                try { new C(); } catch (e) { threw = e instanceof TypeError; }
+                threw
+                """;
+        assertTrue(bool(source));
+    }
+
+    // A private field's assignment target can appear inside a destructuring pattern (object/array
+    // pattern, or a for-of head), which routes through the same private-member write as `this.#f = v`
+    @Test
+    public void test_private_field_as_destructuring_assignment_target() {
+        final var source = """
+                class C {
+                    #field;
+                    m(obj) { ({ a: this.#field } = obj); return this.#field; }
+                    n() { for (this.#field of [9]) ; return this.#field; }
+                }
+                var c = new C();
+                JSON.stringify([c.m({ a: 5 }), c.n()])
+                """;
+        assertEquals("[5,9]", str(source));
+    }
+
+    // A class field/method literally named with a BigInt property name uses the exact decimal string
+    // form of the BigInt's numeric value, both in object literals and class bodies
+    @Test
+    public void test_bigint_literal_property_and_method_names() {
+        final var source = """
+                var o = { 1n() { return 'bar'; } };
+                class C { 1n() { return 'baz'; } }
+                JSON.stringify([o['1'](), new C()['1']()])
+                """;
+        assertEquals("[\"bar\",\"baz\"]", str(source));
+    }
+
+    // ASI splits a field literally named "get"/"set" from a following generator method when a
+    // newline separates them, since `*` can never continue the accessor-modifier production
+    @Test
+    public void test_field_named_get_followed_by_generator_is_two_members() {
+        final var source = """
+                class A {
+                    get
+                    *a() {}
+                }
+                var a = new A();
+                JSON.stringify([A.prototype.hasOwnProperty('a'), a.hasOwnProperty('get')])
+                """;
+        assertEquals("[true,true]", str(source));
+    }
 }

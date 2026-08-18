@@ -479,4 +479,48 @@ public class InterpreterObjectTest {
                 """;
         assertEquals("[[\"set-after-redefine\"],\"undefined\"]", str(source));
     }
+
+    // A computed key (object-literal property, method-shorthand, or accessor) runs ToPropertyKey -
+    // invoking the key's own toString/valueOf - not the data-only "[object Object]" fallback
+    @Test
+    public void test_computed_key_invokes_topropertykey_side_effect() {
+        final var source = """
+                var counter = 0;
+                var key1 = { toString() { return counter++, 'b'; } };
+                var key2 = { toString() { return counter++, 'd'; } };
+                var object = {
+                    a() { return 'A'; },
+                    [key1]() { return 'B'; },
+                    c() { return 'C'; },
+                    [key2]() { return 'D'; },
+                };
+                JSON.stringify([counter, object.a(), object.b(), object.c(), object.d()])
+                """;
+        assertEquals("[2,\"A\",\"B\",\"C\",\"D\"]", str(source));
+    }
+
+    // KeyedDestructuringAssignmentEvaluation resolves the target reference before reading the source
+    // property's value, so a getter on the source is never observed to run before the target's own
+    // base/key expressions have already been evaluated
+    @Test
+    public void test_object_destructuring_resolves_target_before_reading_source() {
+        final var source = """
+                var log = [];
+                function target() { log.push('target'); return { set q(v) { log.push('set'); } }; }
+                var source = { get p() { log.push('get'); } };
+                ({ p: target().q } = source);
+                JSON.stringify(log)
+                """;
+        assertEquals("[\"target\",\"get\",\"set\"]", str(source));
+    }
+
+    // Object rest destructuring's CopyDataProperties runs ToObject on a primitive source: a string's
+    // own (enumerable) keys are its character indices, and a number/symbol source yields an empty -
+    // but still real, Object-instanceof - rest object
+    @Test
+    public void test_object_rest_from_primitive_source() {
+        assertEquals("[\"f\",\"o\",\"o\"]",
+                str("var rest; ({...rest} = 'foo'); JSON.stringify([rest['0'], rest['1'], rest['2']])"));
+        assertTrue(flag("var rest; ({...rest} = 51); rest instanceof Object"));
+    }
 }

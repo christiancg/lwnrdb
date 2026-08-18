@@ -93,10 +93,16 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         return closure;
     }
 
+    // Properties of Generator/AsyncGenerator Function Instances: unlike an ordinary function's own
+    // `prototype` (which back-links `.constructor` to the function itself), a generator function's
+    // `prototype` object has no own properties at all - the `constructor` back-link instead lives on
+    // the shared %GeneratorPrototype%/%AsyncGeneratorPrototype%, set up once in makeFunction.
     public JsValue getPrototype() {
         if (prototype == null) {
             final var created = new JsObject();
-            created.set("constructor", this);
+            if (!generator) {
+                created.set("constructor", this);
+            }
             prototype = created;
         }
         return prototype;

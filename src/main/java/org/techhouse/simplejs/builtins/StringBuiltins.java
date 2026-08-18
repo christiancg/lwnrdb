@@ -33,8 +33,7 @@ public final class StringBuiltins {
 
     // Spec GetMethod(argument, symbol) + Call, guarded by "If regexp is an Object": the well-known
     // symbol wins for any object argument, a RegExp included, but is never read off a primitive.
-    private static JsValue delegateToSymbol(String value, List<JsValue> args, InterpreterOps ops,
-                                            List<JsValue> extra) {
+    private static JsValue delegateToSymbol(String value, List<JsValue> args, InterpreterOps ops, List<JsValue> extra) {
         if (ops == null || args.isEmpty()) {
             return null;
         }

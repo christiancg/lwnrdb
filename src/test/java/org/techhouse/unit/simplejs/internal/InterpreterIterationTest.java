@@ -415,12 +415,15 @@ public class InterpreterIterationTest {
         assertTrue(bool(source));
     }
 
-    // the member path honours a patched Generator.prototype.next
+    // the member path honours a patched Generator.prototype.next. A generator instance's own
+    // [[Prototype]] is its function's `prototype` object (one level below %GeneratorPrototype%), so
+    // reaching the shared intrinsic that every generator - including the unrelated anonymous one
+    // below - inherits from takes a double unwrap.
     @Test
     public void test_patched_next_on_generator_iterable() {
         final var source = """
                 function* seed() { yield 1; }
-                const proto = Object.getPrototypeOf(seed());
+                const proto = Object.getPrototypeOf(Object.getPrototypeOf(seed()));
                 const original = proto.next;
                 proto.next = function () { return { value: 9, done: true }; };
                 const o = { [Symbol.iterator]() { return (function* () { yield 1; yield 2; })(); } };

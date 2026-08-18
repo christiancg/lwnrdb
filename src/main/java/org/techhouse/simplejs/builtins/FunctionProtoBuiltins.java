@@ -13,6 +13,7 @@ import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -121,7 +122,7 @@ public final class FunctionProtoBuiltins {
     }
 
     private static JsValue bind(JsValue target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
-        if (!InterpreterUtils.isCallable(target)) {
+        if (!isFunctionLike(target)) {
             throw new TypeErrorException("Function.prototype.bind called on a non-callable");
         }
         final var boundThis = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
@@ -137,6 +138,15 @@ public final class FunctionProtoBuiltins {
             bound.markConstructor();
         }
         return bound;
+    }
+
+    // IsCallable(Target): InterpreterUtils.isCallable is a JsFunction/JsNativeFunction-only check,
+    // but a class constructor and a proxy wrapping a callable target both have a [[Call]] internal
+    // slot too (bind itself never invokes it, so a class's "cannot be called without new" throw is
+    // deferred to whenever the bound function is actually called).
+    private static boolean isFunctionLike(JsValue target) {
+        return InterpreterUtils.isCallable(target) || target instanceof JsClass
+                || (target instanceof JsProxy proxy && proxy.isCallable());
     }
 
     // Both come from Get(Target, ...) rather than the internal slots, so a script-installed own

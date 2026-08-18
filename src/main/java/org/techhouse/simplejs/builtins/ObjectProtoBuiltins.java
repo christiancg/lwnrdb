@@ -8,25 +8,19 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsArrayBuffer;
-import org.techhouse.simplejs.values.JsAsyncGenerator;
-import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsFunction;
-import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsGlobalObject;
-import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
-import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsRegExp;
-import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
@@ -49,12 +43,15 @@ public final class ObjectProtoBuiltins {
             case "hasOwnProperty" ->
                 new JsNativeFunction("hasOwnProperty", (_, args) -> JsBoolean.of(hasOwnProperty(receiver, args, ops)));
             case "isPrototypeOf" -> new JsNativeFunction("isPrototypeOf",
-                    (_, args) -> JsBoolean.of(isPrototypeOf(receiver, args, intrinsics)));
+                    (_, args) -> JsBoolean.of(isPrototypeOf(receiver, args, ops, intrinsics)));
             case "propertyIsEnumerable" -> new JsNativeFunction("propertyIsEnumerable",
                     (_, args) -> JsBoolean.of(isEnumerable(receiver, args, ops)));
             case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(objectToString(receiver, ops)));
             case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> toLocaleString(receiver, ops));
-            case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> requireCoercible(receiver, "valueOf"));
+            // Object.prototype.valueOf: 1. Return ? ToObject(this value) - a primitive receiver must
+            // come back as its wrapper object, not the bare primitive.
+            case "valueOf" ->
+                new JsNativeFunction("valueOf", (_, _) -> intrinsics.toObject(requireCoercible(receiver, "valueOf")));
             case "__defineGetter__" -> new JsNativeFunction("__defineGetter__",
                     (_, args) -> defineAccessor(receiver, args, ops, intrinsics, GET));
             case "__defineSetter__" -> new JsNativeFunction("__defineSetter__",
@@ -149,6 +146,12 @@ public final class ObjectProtoBuiltins {
         return "[object " + brand(receiver) + "]";
     }
 
+    // ES2026 step 14's builtinTag switch names only Array/Function/Error/Boolean/Number/String/
+    // Date/RegExp (else "Object"); a Map/Set/WeakMap/WeakSet/Promise/Generator/AsyncGenerator/
+    // Symbol/BigInt object's usual type name comes entirely from a *real*, deletable/overridable
+    // @@toStringTag property installed on its prototype (consulted above, before brand() runs) -
+    // never from this builtin-tag fallback, so once that property is removed or answers a non-string
+    // the fallback here must be "Object", not the type name.
     private static String brand(JsValue receiver) {
         return switch (receiver) {
             case JsUndefined ignored -> "Undefined";
@@ -160,16 +163,9 @@ public final class ObjectProtoBuiltins {
             case JsClass ignored -> "Function";
             case JsBoolean ignored -> "Boolean";
             case JsNumber ignored -> "Number";
-            case JsBigInt ignored -> "BigInt";
             case JsString ignored -> "String";
-            case JsSymbol ignored -> "Symbol";
             case JsDate ignored -> "Date";
             case JsRegExp ignored -> "RegExp";
-            case JsMap map -> map.isWeak() ? "WeakMap" : "Map";
-            case JsSet set -> set.isWeak() ? "WeakSet" : "Set";
-            case JsPromise ignored -> "Promise";
-            case JsGenerator ignored -> "Generator";
-            case JsAsyncGenerator ignored -> "AsyncGenerator";
             case JsArrayBuffer ignored -> "ArrayBuffer";
             case JsDataView ignored -> "DataView";
             case JsTypedArray typed -> typed.kind().ctorName();
@@ -222,27 +218,46 @@ public final class ObjectProtoBuiltins {
         };
     }
 
-    // A value's builtin prototype is reached through Intrinsics.protoFor rather than a proto link, and
-    // those prototypes terminate at Object.prototype implicitly, so both hops are walked explicitly.
-    private static boolean isPrototypeOf(JsValue receiver, List<JsValue> args, Intrinsics intrinsics) {
-        if (args.isEmpty() || !isObjectLike(receiver) || !isObjectLike(args.getFirst())) {
+    // Object.prototype.isPrototypeOf(V): 1. If V is not an Object, return false. 2. Let O be
+    // ? ToObject(this value). - step 1 must run (and short-circuit to false) before step 2 even
+    // looks at `this`, so a nullish/primitive receiver only throws/no-ops once V is confirmed to be
+    // an object. A value's builtin prototype is reached through Intrinsics.protoFor rather than a
+    // proto link, and those prototypes terminate at Object.prototype implicitly, so both hops are
+    // walked explicitly; a Proxy anywhere in the chain runs its "getPrototypeOf" trap via the ops
+    // seam instead of a raw (and for a Proxy, absent) JsValue.getProto() read.
+    private static boolean isPrototypeOf(JsValue receiver, List<JsValue> args, InterpreterOps ops,
+            Intrinsics intrinsics) {
+        final var candidate = arg(args);
+        if (!isObjectLike(candidate)) {
             return false;
         }
-        final var candidate = args.getFirst();
-        var proto = candidate.getProto();
-        if (proto == null && intrinsics != null) {
-            proto = intrinsics.protoFor(candidate);
+        requireCoercible(receiver, "isPrototypeOf");
+        if (!isObjectLike(receiver)) {
+            return false;
         }
+        var proto = nextProto(candidate, ops, intrinsics);
         while (proto != null) {
             if (proto == receiver) {
                 return true;
             }
-            final var next = proto.getProto();
-            proto = next == null && intrinsics != null && proto != intrinsics.objectProto()
-                    ? intrinsics.objectProto()
-                    : next;
+            proto = nextProto(proto, ops, intrinsics);
         }
         return false;
+    }
+
+    private static JsValue nextProto(JsValue value, InterpreterOps ops, Intrinsics intrinsics) {
+        if (value instanceof JsProxy) {
+            final var proto = ops.getPrototypeOf(value);
+            return proto instanceof JsNull ? null : proto;
+        }
+        final var proto = value.getProto();
+        if (proto != null) {
+            return proto;
+        }
+        if (intrinsics == null || value == intrinsics.objectProto()) {
+            return null;
+        }
+        return intrinsics.protoFor(value);
     }
 
     private static JsValue requireCoercible(JsValue receiver, String method) {

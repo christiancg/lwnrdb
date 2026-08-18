@@ -264,4 +264,29 @@ public class NumberBuiltinsTest {
         assertTrue(bool("Infinity > 0 && !isFinite(Infinity)"));
         assertTrue(bool("typeof undefined === 'undefined'"));
     }
+
+    // Number.parseInt/parseFloat must be the *same* function object as the global parseInt/
+    // parseFloat (21.1.2.15/21.1.2.16 vs 18.2.5/18.2.4), even though GlobalScope wires the global
+    // and the Number namespace through two independent calls into NumberBuiltins.
+    @Test
+    public void test_number_parse_functions_share_identity_with_the_globals() {
+        assertTrue(bool("Number.parseInt === parseInt"));
+        assertTrue(bool("Number.parseFloat === parseFloat"));
+    }
+
+    // The shared identity still behaves correctly for both call sites
+    @Test
+    public void test_number_parse_functions_still_work() {
+        assertEquals(42, num("Number.parseInt('42px')"));
+        assertEquals(3.14, num("Number.parseFloat('3.14em')"));
+        assertEquals(42, num("parseInt('42px')"));
+        assertEquals(3.14, num("parseFloat('3.14em')"));
+    }
+
+    // Two independent script runs (separate realms) each get their own function object - the
+    // per-realm cache must not leak identity across scripts.
+    @Test
+    public void test_number_parse_functions_are_not_shared_across_realms() {
+        assertNotEquals(Interpreter.run("Number.parseInt"), Interpreter.run("Number.parseInt"));
+    }
 }

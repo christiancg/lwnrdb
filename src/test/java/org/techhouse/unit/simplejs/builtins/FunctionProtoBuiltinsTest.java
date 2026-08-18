@@ -145,4 +145,24 @@ public class FunctionProtoBuiltinsTest {
     private static String str() {
         return ((org.techhouse.simplejs.values.JsString) Interpreter.run("typeof (function() {}).nope")).getValue();
     }
+
+    // A class constructor has a [[Call]] slot (bind never invokes it, so the class's own
+    // "cannot be called without new" restriction is irrelevant here) and so must be bindable, unlike
+    // a plain non-callable value.
+    @Test
+    public void test_bind_accepts_a_class_target() {
+        assertEquals(3, num("""
+                class Foo {
+                    constructor(a, b) { this.sum = a + b; }
+                }
+                let Bound = Foo.bind(null, 1);
+                new Bound(2).sum
+                """));
+    }
+
+    // bind still rejects a genuinely non-callable receiver
+    @Test
+    public void test_bind_rejects_non_callable() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Function.prototype.bind.call({}, null)"));
+    }
 }

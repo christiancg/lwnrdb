@@ -1,15 +1,12 @@
 package org.techhouse.unit.simplejs.internal;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.values.JsNumber;
+
+import static org.junit.jupiter.api.Assertions.*;
 
 public class EnvironmentTest {
     // A var declaration can be assigned and read back
@@ -97,5 +94,35 @@ public class EnvironmentTest {
     @Test
     public void test_home_class_absent_returns_null() {
         assertNull(Environment.global().resolveHomeClass());
+    }
+
+    // GlobalDeclarationInstantiation: a top-level lexical (let/const/class) declaration is not a
+    // property of the global object, so it must not replace - or be visible through - a same-named
+    // builtin/var binding's own Global Object Record entry, even though a bare identifier lookup
+    // (tryGet/get/assign) should still see the lexical shadow.
+    @Test
+    public void test_global_lexical_declaration_does_not_replace_the_global_property() {
+        final var env = Environment.global();
+        final var builtin = new JsNumber(1);
+        env.declareBuiltin("Array", builtin);
+        env.declareLexical("Array", "let");
+        env.initialize("Array", org.techhouse.simplejs.values.JsUndefined.getInstance());
+
+        // The bare identifier now resolves to the lexical shadow.
+        assertSame(org.techhouse.simplejs.values.JsUndefined.getInstance(), env.tryGet("Array"));
+        // But the global object's own property is untouched.
+        assertSame(builtin, env.tryGetGlobalProperty("Array"));
+        assertTrue(env.hasGlobalProperty("Array"));
+    }
+
+    // A block/function-scoped lexical declaration is unaffected by the global-only split: it still
+    // lives in the ordinary bindings map for that scope (only the root environment separates the
+    // two records).
+    @Test
+    public void test_non_global_lexical_declaration_is_unaffected() {
+        final var child = Environment.global().child();
+        child.declareLexical("y", "let");
+        child.initialize("y", new JsNumber(5));
+        assertEquals(5, ((JsNumber) child.get("y")).getValue());
     }
 }

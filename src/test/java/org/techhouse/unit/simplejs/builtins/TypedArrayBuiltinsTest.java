@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArrayBuffer;
+import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
@@ -16,6 +17,10 @@ import org.techhouse.simplejs.values.JsTypedArray;
 public class TypedArrayBuiltinsTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
+    }
+
+    private static boolean bool(String source) {
+        return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
     private static String caught(String expression) {
@@ -305,6 +310,33 @@ public class TypedArrayBuiltinsTest {
         assertEquals("3", str("String(Int8Array.length)"));
     }
 
+    // DataView has only one required parameter (buffer); byteOffset/byteLength are optional and
+    // don't count toward the builtin's length.
+    @Test
+    public void test_data_view_length_is_one() {
+        assertEquals("1", str("String(DataView.length)"));
+    }
+
+    // OrdinaryCreateFromConstructor: Reflect.construct(DataView, args, newTarget) links the new
+    // instance's prototype to newTarget.prototype instead of %DataView.prototype%, wrapping the view
+    // in a plain object the way the other builtins with internal state already do.
+    @Test
+    public void test_data_view_honours_new_target_prototype() {
+        assertEquals("true:true", str("""
+                function newTarget() {}
+                const proto = {};
+                newTarget.prototype = proto;
+                const sample = Reflect.construct(DataView, [new ArrayBuffer(8), 0], newTarget);
+                String(sample.constructor === Object) + ":" + String(Object.getPrototypeOf(sample) === proto);
+                """));
+    }
+
+    // A plain `new DataView(...)` still links to the ordinary %DataView.prototype%.
+    @Test
+    public void test_data_view_default_prototype_unaffected() {
+        assertTrue(bool("Object.getPrototypeOf(new DataView(new ArrayBuffer(8))) === DataView.prototype"));
+    }
+
     // isView answers for both view kinds and for nothing else
     @Test
     public void test_is_view_recognises_both_view_kinds() {
@@ -522,5 +554,33 @@ public class TypedArrayBuiltinsTest {
                 + "v.setBigInt64(100, { valueOf: function () { throw { name: 'Test262Error' }; } })"));
         assertEquals("7", str("const v = new DataView(new ArrayBuffer(8));"
                 + "v.setBigInt64(0, { valueOf: function () { return 7n; } }); String(v.getBigInt64(0))"));
+    }
+
+    // A typed array's [[Prototype]] is now a real settable slot, so Object.setPrototypeOf actually
+    // takes effect and [[HasProperty]] on a non-canonical, non-own key walks up to it (previously the
+    // link was silently dropped and the lookup fell back to the intrinsic %TypedArray%.prototype).
+    @Test
+    public void test_set_prototype_of_is_observable_and_walks_to_it() {
+        assertTrue(bool("""
+                const a = new Int32Array(1);
+                const b = { foo: 1 };
+                Object.setPrototypeOf(a, b);
+                ("foo" in a) && !("bar" in a)
+                """));
+    }
+
+    // Reflect.has on a typed array with a foreign object as its prototype must consult that
+    // prototype's own [[HasProperty]] (a Proxy `has` trap included) rather than silently answering
+    // false because the prototype link never took effect.
+    @Test
+    public void test_has_property_walks_a_foreign_prototype() {
+        assertTrue(bool("""
+                let trapped = false;
+                const handler = { has() { trapped = true; return true; } };
+                const proxy = new Proxy({}, handler);
+                const sample = new Int32Array(1);
+                Object.setPrototypeOf(sample, proxy);
+                Reflect.has(sample, "foo") && trapped
+                """));
     }
 }

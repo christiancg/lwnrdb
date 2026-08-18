@@ -17,6 +17,7 @@ public final class JsAsyncGenerator extends JsValue {
     }
 
     private PropertyTable table;
+    private JsValue proto;
 
     private final Coroutine coroutine;
     private final Deque<Request> queue = new ArrayDeque<>();
@@ -60,5 +61,17 @@ public final class JsAsyncGenerator extends JsValue {
             table = new PropertyTable();
         }
         return table;
+    }
+
+    // An async generator instance's [[Prototype]] is the async generator function's own
+    // `.prototype` (%AsyncGeneratorPrototype%-derived), one level below the shared realm intrinsic.
+    @Override
+    public JsValue getProto() {
+        return proto;
+    }
+
+    @Override
+    public void setProto(JsValue proto) {
+        this.proto = proto;
     }
 }

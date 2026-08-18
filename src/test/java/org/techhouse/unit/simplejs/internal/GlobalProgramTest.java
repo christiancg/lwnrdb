@@ -116,4 +116,38 @@ public class GlobalProgramTest {
     public void test_lexical_global_not_enumerated() {
         assertFalse(bool("let lexicalOnly = 1; Object.keys(globalThis).includes('lexicalOnly')"));
     }
+
+    // A top-level `let` shadowing a builtin's name is a distinct lexical binding, not a replacement
+    // of the global object's own property: the bare identifier sees the shadow, but the builtin
+    // remains reachable - and unmodified - through globalThis.
+    @Test
+    public void test_top_level_let_shadows_a_builtin_without_replacing_its_global_property() {
+        assertTrue(bool("let Array; Array === undefined"));
+        assertEquals("function", str("let Array; typeof globalThis.Array"));
+        assertTrue(bool("let Array; globalThis.Array.isArray([1, 2, 3])"));
+    }
+
+    // Object.getOwnPropertyDescriptor(globalThis, name) must report the real (configurable, plain
+    // writable, non-enumerable) builtin descriptor, not the shadow's.
+    @Test
+    public void test_global_property_descriptor_unaffected_by_a_lexical_shadow() {
+        final var source = """
+                let Array;
+                let d = Object.getOwnPropertyDescriptor(globalThis, 'Array');
+                d.configurable + ',' + d.enumerable + ',' + d.writable
+                """;
+        assertEquals("true,false,true", str(source));
+    }
+
+    // globalThis's own [[Prototype]] is %Object.prototype%, so a miss on every declared global
+    // binding still resolves an inherited method like hasOwnProperty instead of answering undefined.
+    @Test
+    public void test_global_this_inherits_object_prototype_methods() {
+        assertTrue(bool("var topLevelVar = 1; this.hasOwnProperty('topLevelVar')"));
+        assertEquals("function", str("typeof globalThis.hasOwnProperty"));
+    }
+
+    private static String str(String source) {
+        return ((org.techhouse.simplejs.values.JsString) Interpreter.run(source)).getValue();
+    }
 }

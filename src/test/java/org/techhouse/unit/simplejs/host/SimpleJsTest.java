@@ -87,6 +87,31 @@ public class SimpleJsTest {
         assertEquals("bad thing", result.getErrorMessage());
     }
 
+    // A thrown value whose prototype chain has no "name" property (e.g. a plain function
+    // constructor, matching the test262 harness's own Test262Error convention) still reports a
+    // usable error name - falling back to the constructor's own function name - instead of the
+    // generic "Error" default.
+    @Test
+    public void test_thrown_value_with_no_name_falls_back_to_constructor_name() {
+        final var result = run("""
+                function CustomError(message) { this.message = message; }
+                CustomError.prototype.toString = function() { return 'CustomError: ' + this.message; };
+                throw new CustomError('bad thing');
+                """);
+        assertTrue(result.isError());
+        assertEquals("CustomError", result.getErrorName());
+        assertEquals("bad thing", result.getErrorMessage());
+    }
+
+    // A thrown plain object (no constructor, no name) still falls back to "Error" rather than
+    // throwing while reporting the failure itself.
+    @Test
+    public void test_thrown_plain_object_with_no_name_or_constructor() {
+        final var result = run("throw Object.create(null);");
+        assertTrue(result.isError());
+        assertEquals("Error", result.getErrorName());
+    }
+
     // A runtime TypeError (member access on null) is reported as an error result
     @Test
     public void test_runtime_type_error() {

@@ -24,6 +24,7 @@ public final class JsTypedArray extends JsValue {
 
     private PropertyTable table;
     private InterpreterOps ops;
+    private JsValue proto;
 
     public enum Kind {
         INT8("Int8Array", 1), UINT8("Uint8Array", 1), UINT8CLAMPED("Uint8ClampedArray", 1), INT16("Int16Array",
@@ -281,6 +282,20 @@ public final class JsTypedArray extends JsValue {
             table = new PropertyTable();
         }
         return table;
+    }
+
+    // A typed array's [[Prototype]] is an ordinary, settable slot (only [[Get]]/[[Set]]/
+    // [[HasProperty]]/[[OwnPropertyKeys]]/[[DefineOwnProperty]]/[[Delete]] are exotic); the default
+    // `null` means "unset" and every choke point that reads it already falls back to the realm's
+    // per-kind intrinsic prototype in that case.
+    @Override
+    public JsValue getProto() {
+        return proto;
+    }
+
+    @Override
+    public void setProto(JsValue proto) {
+        this.proto = proto;
     }
 
     /**

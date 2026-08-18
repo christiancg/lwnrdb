@@ -99,15 +99,23 @@ public abstract class JsValue {
         return true;
     }
 
-    // [[Delete]] of a property that isn't there succeeds, which is why a primitive answers true.
+    // [[Delete]] of a property that isn't there succeeds, which is why a primitive answers true. A
+    // lazily-materialised metadata property (a callable's non-configurable "name"/"length", a
+    // builtin's "prototype", ...) is absent from the table until defineOwnProperty first touches it,
+    // so `table.delete` alone would see nothing there and trivially succeed - materialising it first
+    // (as defineOwnProperty already does) makes the real, possibly non-configurable flags the ones
+    // consulted.
     public boolean deleteOwnProperty(JsValue key) {
         final var table = ownProperties();
         if (table == null) {
             return true;
         }
-        return key instanceof JsSymbol symbol
-                ? !table.isNotDeleteSymbol(symbol)
-                : table.delete(OrdinaryProperties.keyName(key));
+        if (key instanceof JsSymbol symbol) {
+            return !table.isNotDeleteSymbol(symbol);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        OrdinaryProperties.materialiseMetadata(this, table, name);
+        return table.delete(name);
     }
 
     public boolean hasOwnKey(JsValue key) {

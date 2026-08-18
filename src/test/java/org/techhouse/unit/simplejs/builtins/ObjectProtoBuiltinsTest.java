@@ -128,7 +128,11 @@ public class ObjectProtoBuiltinsTest {
     @Test
     public void test_value_of_returns_receiver() {
         assertTrue(bool("const o = {}; Object.prototype.valueOf.call(o) === o"));
-        assertTrue(bool("Object.prototype.valueOf.call(5) === 5"));
+        // valueOf is `Return ? ToObject(this value)`: a primitive receiver comes back boxed, not
+        // the bare primitive, so it is never === to itself and typeof reports "object".
+        assertFalse(bool("Object.prototype.valueOf.call(5) === 5"));
+        assertTrue(bool("typeof Object.prototype.valueOf.call(true) === 'object'"));
+        assertTrue(bool("Object.prototype.valueOf.call('x').valueOf() === 'x'"));
     }
 
     // hasOwnProperty answers a symbol key from the symbol storage
@@ -328,5 +332,59 @@ public class ObjectProtoBuiltinsTest {
                         + "&& Object.prototype.__lookupSetter__.length === 1"));
         assertEquals("__defineGetter__", strOf("Object.prototype.__defineGetter__.name"));
         assertEquals("__lookupSetter__", strOf("Object.prototype.__lookupSetter__.name"));
+    }
+
+    // isPrototypeOf(V): step 1 (V must be an Object) runs before step 2 (ToObject(this value)), so
+    // a non-object V short-circuits to false even when `this` is null/undefined, while an object V
+    // with a null/undefined `this` throws.
+    @Test
+    public void test_is_prototype_of_argument_checked_before_this() {
+        assertFalse(bool("Object.prototype.isPrototypeOf.call(null, 1)"));
+        assertFalse(bool("Object.prototype.isPrototypeOf.call(undefined, 1)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.prototype.isPrototypeOf.call(null, function() {})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Object.prototype.isPrototypeOf.call(undefined, {})"));
+    }
+
+    // a primitive `this` can never appear in an object's prototype chain, so it answers false
+    // rather than throwing once V has been confirmed to be an object.
+    @Test
+    public void test_is_prototype_of_primitive_this_is_false() {
+        assertFalse(bool("Object.prototype.isPrototypeOf.call(1, {})"));
+    }
+
+    // isPrototypeOf on a Proxy argument runs only its "getPrototypeOf" trap, not a raw internal
+    // [[Prototype]] read (which a Proxy has none of).
+    @Test
+    public void test_is_prototype_of_over_a_proxy_argument() {
+        assertTrue(bool("""
+                const proxyProto = [];
+                const handler = { getPrototypeOf(_t) { return proxyProto; } };
+                const proxy = new Proxy({}, handler);
+                proxyProto.isPrototypeOf(proxy)
+                """));
+    }
+
+    // Object.prototype.toString's builtinTag fallback for Map/Set/WeakMap/WeakSet/Promise/
+    // Generator/Symbol/BigInt is "Object" (ES2026 step 14 names only Array/Function/Error/
+    // Boolean/Number/String/Date/RegExp) - their usual "[object Map]"-style name comes entirely
+    // from a real, deletable @@toStringTag on the type's own prototype, consulted above brand().
+    @Test
+    public void test_to_string_builtin_tag_fallback_is_object_once_the_real_tag_is_gone() {
+        assertEquals("[object Object]", strOf("""
+                const m = new Map();
+                delete Map.prototype[Symbol.toStringTag];
+                Object.prototype.toString.call(m)
+                """));
+        assertEquals("[object Object]", strOf("""
+                delete Symbol.prototype[Symbol.toStringTag];
+                Object.prototype.toString.call(Symbol('d'))
+                """));
+        assertEquals("[object Object]", strOf("""
+                const p = Promise.resolve();
+                delete Promise.prototype[Symbol.toStringTag];
+                Object.prototype.toString.call(p)
+                """));
     }
 }

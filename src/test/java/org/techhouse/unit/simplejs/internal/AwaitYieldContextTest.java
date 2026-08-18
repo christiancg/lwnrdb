@@ -88,6 +88,17 @@ public class AwaitYieldContextTest {
         rejectsParse("var async; for (async of [7]) ;");
     }
 
+    // `await` is a reserved word only in a context where an AwaitExpression could appear (an actual
+    // Module goal symbol, or inside async code) - unlike a genuine future-reserved word, so an
+    // escaped spelling is a legal binding identifier at the top level of a script, including as a
+    // class name and as an object-literal shorthand property inside a class static block (which can
+    // never itself contain an AwaitExpression)
+    @Test
+    public void test_escaped_await_is_a_legal_binding_identifier() {
+        assertEquals(1, num("class aw\\u0061it {} 1"));
+        assertEquals(1, num("class C { static { (() => ({ await })); } } 1"));
+    }
+
     // the new parser contexts do not change tick() accounting: a script near the budget still aborts
     @Test
     public void test_instruction_budget_still_aborts() {

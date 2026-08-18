@@ -182,7 +182,8 @@ public final class Interpreter {
             if (target instanceof JsObject || isNullish(target)) {
                 return ObjectBuiltins.getPrototypeOf(List.of(target));
             }
-            if (target instanceof JsClass && target.getProto() != null) {
+            if ((target instanceof JsClass || target instanceof JsGenerator || target instanceof JsAsyncGenerator)
+                    && target.getProto() != null) {
                 return target.getProto();
             }
             return intrinsics.protoFor(target);
@@ -527,7 +528,7 @@ public final class Interpreter {
 
     public boolean hasMember(JsValue container, JsValue keyValue) {
         return switch (container) {
-            case JsProxy proxy -> proxies.has(proxy, keyValue);
+            case JsProxy proxy -> proxies.has(proxy, JsCoercion.toPropertyKey(keyValue, ops));
             case JsGlobalObject global -> global.getEnv().isDeclared(JsCoercion.toStr(keyValue));
             case JsObject object when keyValue instanceof JsSymbol symbol -> hasSymbolMember(object, symbol);
             case JsObject object -> hasStringMember(object, JsCoercion.toStr(keyValue));
@@ -695,7 +696,7 @@ public final class Interpreter {
     // the key is ever coerced, then ToPropertyKey - which may run a user toString.
     public JsValue getMemberByKey(JsValue target, JsValue keyValue) {
         if (target instanceof JsProxy proxy) {
-            return proxies.get(proxy, keyValue);
+            return proxies.get(proxy, JsCoercion.toPropertyKey(keyValue, ops));
         }
         requireObjectCoercible(target);
         final var key = JsCoercion.toPropertyKey(keyValue, ops);
@@ -708,10 +709,9 @@ public final class Interpreter {
     // A reference that is both read and written - a compound assignment or an update - coerces its key
     // exactly once, so the caller resolves it up front and passes the result to both halves.
     public JsValue referenceKey(JsValue target, JsValue rawKey) {
-        if (target instanceof JsProxy) {
-            return rawKey;
+        if (!(target instanceof JsProxy)) {
+            requireObjectCoercible(target);
         }
-        requireObjectCoercible(target);
         return JsCoercion.toPropertyKey(rawKey, ops);
     }
 
@@ -724,7 +724,7 @@ public final class Interpreter {
 
     public JsValue getMemberByKey(JsValue target, JsValue keyValue, JsValue receiver) {
         if (target instanceof JsProxy proxy) {
-            return proxies.get(proxy, keyValue, receiver);
+            return proxies.get(proxy, JsCoercion.toPropertyKey(keyValue, ops), receiver);
         }
         if (keyValue instanceof JsSymbol symbol) {
             return members.getSymbolMember(target, symbol);
@@ -754,7 +754,7 @@ public final class Interpreter {
 
     public boolean setMemberByKey(JsValue target, JsValue rawKey, JsValue value) {
         if (target instanceof JsProxy proxy) {
-            return proxies.set(proxy, rawKey, value);
+            return proxies.set(proxy, JsCoercion.toPropertyKey(rawKey, ops), value);
         }
         requireObjectCoercible(target);
         final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
@@ -791,7 +791,7 @@ public final class Interpreter {
 
     public boolean setMemberByKey(JsValue target, JsValue rawKey, JsValue value, JsValue receiver) {
         if (target instanceof JsProxy proxy) {
-            return proxies.set(proxy, rawKey, value, receiver);
+            return proxies.set(proxy, JsCoercion.toPropertyKey(rawKey, ops), value, receiver);
         }
         requireObjectCoercible(target);
         final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
@@ -930,7 +930,16 @@ public final class Interpreter {
             return fallback;
         }
         final var proto = getMemberByKey(newTarget, new JsString("prototype"));
-        return isObjectLike(proto) ? proto : fallback;
+        if (isObjectLike(proto)) {
+            return proto;
+        }
+        // GetFunctionRealm: a revoked proxy has no realm to fall back to, so the "prototype" read
+        // observing the revocation (a `get` trap that revokes as a side effect, e.g.) must surface as
+        // a TypeError instead of silently defaulting.
+        if (newTarget instanceof JsProxy proxy && proxy.isRevoked()) {
+            throw new TypeErrorException("Cannot perform 'get' on a proxy that has been revoked");
+        }
+        return fallback;
     }
 
     private List<JsValue> boundArgs(JsNativeFunction nativeFunction, List<JsValue> args) {
@@ -964,6 +973,10 @@ public final class Interpreter {
             case JsProxy proxy -> proxies.apply(proxy, thisArg, args);
             case JsFunction function -> callFunction(function, thisArg, args);
             case JsNativeFunction nativeFunction -> nativeFunction.invoke(thisArg, args);
+            // %Function.prototype% is itself callable per spec (accepts any arguments, returns
+            // undefined) despite being an ordinary JsObject rather than a JsFunction/JsNativeFunction,
+            // since it must stay exposed as a JsObject for GlobalScope/getMember call sites.
+            case JsObject object when object == intrinsics.functionProto() -> JsUndefined.getInstance();
             default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
         };
     }
@@ -1092,7 +1105,10 @@ public final class Interpreter {
             currentCoroutine.set(coroutine);
             return runFunctionBody(function, activation);
         });
-        return new JsGenerator(coroutine);
+        final var generator = new JsGenerator(coroutine);
+        final var proto = function.getPrototype();
+        generator.setProto(proto instanceof JsObject object ? object : intrinsics.iteratorProto());
+        return generator;
     }
 
     private JsValue runAsync(JsFunction function, Environment activation, List<JsValue> args) {
@@ -1125,6 +1141,8 @@ public final class Interpreter {
             currentCoroutine.set(coroutine);
             return runFunctionBody(function, activation);
         });
+        final var proto = function.getPrototype();
+        generator.setProto(proto instanceof JsObject object ? object : intrinsics.asyncIteratorProto());
         return generator;
     }
 
@@ -1150,6 +1168,11 @@ public final class Interpreter {
 
     public JsPromise toPromise(JsValue value) {
         if (value instanceof JsPromise promise) {
+            // PromiseResolve(%Promise%, x): even though x is already a promise, its "constructor" is
+            // still read for the SameValue(xConstructor, C) check - an observable Get whose result is
+            // otherwise unused here (this engine has one Promise implementation, so x is always
+            // returned as-is), but a throwing accessor must still propagate.
+            getMemberByKey(promise, new JsString("constructor"));
             return promise;
         }
         final var promise = new JsPromise(eventLoop);

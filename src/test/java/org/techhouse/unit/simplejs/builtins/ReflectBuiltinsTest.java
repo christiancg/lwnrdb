@@ -311,4 +311,38 @@ public class ReflectBuiltinsTest {
                 Reflect.set(target, "p", 2, {})
                 """));
     }
+
+    // Reflect.set on a typed array target with a canonical numeric index that is not a valid
+    // integer index (out of range, or fractional) is a silent success that never coerces the value
+    // and never walks the prototype chain - it must not reach a setter installed on the per-kind
+    // prototype (10.4.5.5 [[Set]] step 3.b.ii).
+    @Test
+    public void test_set_typed_array_invalid_index_short_circuits() {
+        assertTrue(bool("""
+                let reached = false;
+                Object.defineProperty(Int32Array.prototype, "100", {
+                    set() { reached = true; },
+                    configurable: true
+                });
+                const target = new Int32Array(1);
+                const receiver = {};
+                const ok = Reflect.set(target, 100, { valueOf() { reached = true; return 1; } }, receiver);
+                delete Int32Array.prototype["100"];
+                ok && !reached && !receiver.hasOwnProperty("100")
+                """));
+    }
+
+    // A valid index with a foreign receiver still falls through to the generic OrdinarySet path
+    // (unaffected by the typed-array short-circuit): the write lands on the receiver, the target
+    // itself is untouched.
+    @Test
+    public void test_set_typed_array_valid_index_with_foreign_receiver() {
+        assertEquals("5:7", str("""
+                const target = new Int32Array(1);
+                target[0] = 5;
+                const receiver = {};
+                Reflect.set(target, 0, 7, receiver);
+                target[0] + ":" + receiver[0]
+                """));
+    }
 }

@@ -87,12 +87,19 @@ public final class TypedArrayBuiltins {
 
     // GetPrototypeFromConstructor's Get(newTarget, "prototype") is observable, and every one of these
     // constructors runs it only once its arguments have been validated, so a throwing prototype
-    // accessor must not pre-empt the TypeError or RangeError.
-    private static <T> T withObservedPrototype(T constructed, InterpreterOps ops) {
+    // accessor must not pre-empt the TypeError or RangeError. Returns the observed value (or null
+    // when there is no new.target to observe) so a caller that still has re-validation left to do
+    // can apply it afterwards instead of losing it.
+    private static JsValue observePrototype(InterpreterOps ops) {
         final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops != null && newTarget != null && !(newTarget instanceof JsUndefined)) {
-            ops.getMember(newTarget, new JsString("prototype"));
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return null;
         }
+        return ops.getMember(newTarget, new JsString("prototype"));
+    }
+
+    private static <T> T withObservedPrototype(T constructed, InterpreterOps ops) {
+        observePrototype(ops);
         return constructed;
     }
 
@@ -104,7 +111,13 @@ public final class TypedArrayBuiltins {
         if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
             return constructed;
         }
-        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        return wrapWithObservedPrototype(constructed, ops.getMember(newTarget, new JsString("prototype")), ops);
+    }
+
+    // Shared tail of OrdinaryCreateFromConstructor once Get(newTarget, "prototype") has already run
+    // (some callers, like DataView, must observe it before a later re-validation step rather than
+    // right before wrapping, so the Get and the wrap are split into two calls sharing this one).
+    private static JsValue wrapWithObservedPrototype(JsValue constructed, JsValue proto, InterpreterOps ops) {
         if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
             return constructed;
         }
@@ -149,10 +162,12 @@ public final class TypedArrayBuiltins {
     }
 
     public static JsNativeFunction dataView(InterpreterOps ops) {
-        return new JsNativeFunction("DataView", (thisArg, args) -> {
+        final var ctor = new JsNativeFunction("DataView", (thisArg, args) -> {
             requireNewTarget("DataView", thisArg);
             return constructDataView(args, ops);
         });
+        ctor.setLength(1);
+        return ctor;
     }
 
     // The abstract %TypedArray% intrinsic: not directly constructable (mirrors IteratorBuiltins'
@@ -226,21 +241,26 @@ public final class TypedArrayBuiltins {
         }
         // OrdinaryCreateFromConstructor sits here in the spec, between the argument checks and the
         // slot assignment, and its Get(newTarget, "prototype") is observable: an accessor that
-        // detaches or resizes the buffer must still be caught by the re-check below.
-        withObservedPrototype(null, ops);
+        // detaches or resizes the buffer must still be caught by the re-check below. The observed
+        // value is applied to the constructed view further down, once every RangeError has had its
+        // chance to fire first.
+        final var observedProto = observePrototype(ops);
         if (buffer.isDetached()) {
             throw new TypeErrorException("Cannot construct a DataView over a detached ArrayBuffer");
         }
         if (byteOffset > buffer.byteLength()) {
             throw new RangeErrorException("Start offset is outside the bounds of the buffer");
         }
+        final JsValue view;
         if (!explicitLength) {
-            return new JsDataView(buffer, byteOffset, buffer.byteLength() - byteOffset, buffer.isResizable());
+            view = new JsDataView(buffer, byteOffset, buffer.byteLength() - byteOffset, buffer.isResizable());
+        } else {
+            if (byteOffset + requested > buffer.byteLength()) {
+                throw new RangeErrorException("Invalid DataView length");
+            }
+            view = new JsDataView(buffer, byteOffset, requested);
         }
-        if (byteOffset + requested > buffer.byteLength()) {
-            throw new RangeErrorException("Invalid DataView length");
-        }
-        return new JsDataView(buffer, byteOffset, requested);
+        return wrapWithObservedPrototype(view, observedProto, ops);
     }
 
     private static JsValue constructTyped(JsTypedArray.Kind kind, List<JsValue> args, IterableToList iterableToList,

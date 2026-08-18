@@ -27,11 +27,13 @@ import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.ObjectPattern;
+import org.techhouse.simplejs.nodes.PrivateIdentifier;
 import org.techhouse.simplejs.nodes.Property;
 import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -327,6 +329,7 @@ public final class BindingEvaluator {
         for (final var member : pattern.getProperties()) {
             if (member instanceof RestElement rest) {
                 final var restObject = new JsObject();
+                restObject.setProto(interp.intrinsics().objectProto());
                 if (value instanceof JsObject object) {
                     for (final var key : object.keys()) {
                         if (!taken.contains(key) && object.isEnumerable(key)) {
@@ -334,7 +337,20 @@ public final class BindingEvaluator {
                         }
                     }
                     for (final var symbol : object.symbolKeys()) {
-                        restObject.setSymbol(symbol, object.getSymbol(symbol));
+                        if (object.ownProperties().getSymbolFlags(symbol).enumerable()) {
+                            restObject.setSymbol(symbol, ownSymbolValue(object, symbol));
+                        }
+                    }
+                } else if (value instanceof JsString string) {
+                    // CopyDataProperties(target, ToObject(source), excluded): a string's exotic own
+                    // keys are its (enumerable) character indices - `length` is not enumerable, so it
+                    // is deliberately excluded here.
+                    final var text = string.getValue();
+                    for (var i = 0; i < text.length(); i++) {
+                        final var key = Integer.toString(i);
+                        if (!taken.contains(key)) {
+                            restObject.set(key, new JsString(String.valueOf(text.charAt(i))));
+                        }
                     }
                 }
                 destructure(rest.getArgument(), restObject, env, leaf);
@@ -342,11 +358,26 @@ public final class BindingEvaluator {
             }
             final var property = (Property) member;
             final var key = property.isComputed()
-                    ? JsCoercion.toStr(interp.eval(property.getKey(), env))
+                    ? JsCoercion.toStr(interp.eval(property.getKey(), env), interp.ops())
                     : staticKeyName(property.getKey());
             taken.add(key);
-            destructure(property.getValue(), members.getMember(value, key), env, leaf);
+            // KeyedDestructuringAssignmentEvaluation resolves the target reference (lref) before
+            // reading the source property's value: a leaf target (identifier/member expression) must
+            // be prepared first, so a getter on the source object is never observed to run before the
+            // target's own base/key expressions (e.g. `this` in a derived constructor's TDZ).
+            final var target = prepareTarget(property.getValue(), env, leaf);
+            target.put(members.getMember(value, key));
         }
+    }
+
+    // An object-rest's copied symbol-keyed accessor must be read through its getter, mirroring
+    // ownValue's treatment of string-keyed accessors - JsObject cannot invoke its own accessors.
+    private JsValue ownSymbolValue(JsObject object, JsSymbol symbol) {
+        if (object.hasSymbolAccessor(symbol)) {
+            final var getter = object.getSymbolAccessorGetter(symbol);
+            return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, object, List.of());
+        }
+        return object.getSymbol(symbol);
     }
 
     private LeafBinder declarationLeaf(String kind) {
@@ -367,7 +398,12 @@ public final class BindingEvaluator {
                 if (leaf instanceof Identifier id) {
                     env.assign(id.getName(), value);
                 } else if (leaf instanceof MemberExpression member) {
-                    members.setMember(interp.eval(member.getObject(), env), interp.memberKey(member, env), value);
+                    final var object = interp.eval(member.getObject(), env);
+                    if (member.getProperty() instanceof PrivateIdentifier priv) {
+                        interp.setPrivateMember(object, priv.getName(), value, env);
+                    } else {
+                        members.setMember(object, interp.memberKey(member, env), value);
+                    }
                 } else {
                     throw new UnsupportedNodeException(leaf.getType().name());
                 }
@@ -377,8 +413,14 @@ public final class BindingEvaluator {
             public PreparedTarget prepare(JsNode leaf, Environment env) {
                 if (leaf instanceof MemberExpression member) {
                     final var target = interp.eval(member.getObject(), env);
-                    final var key = interp.memberKey(member, env);
-                    return value -> members.setMember(target, key, value);
+                    if (member.getProperty() instanceof PrivateIdentifier priv) {
+                        return value -> interp.setPrivateMember(target, priv.getName(), value, env);
+                    }
+                    // The reference keeps the raw key: ToPropertyKey is part of PutValue, so it must
+                    // run when the value is finally put (after the source value has been read), not
+                    // when the reference itself is created.
+                    final var rawKey = interp.memberKeyValue(member, env);
+                    return value -> members.setMember(target, JsCoercion.toStr(rawKey, interp.ops()), value);
                 }
                 return value -> bind(leaf, value, env);
             }

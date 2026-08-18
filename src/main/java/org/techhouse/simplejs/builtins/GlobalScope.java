@@ -61,10 +61,11 @@ public final class GlobalScope {
         constructor(global, "Set", SetBuiltins.create(ops, false), intrinsics.setProto());
         constructor(global, "WeakSet", SetBuiltins.create(ops, true), intrinsics.weakSetProto());
         constructor(global, "Date", DateBuiltins.create(ops), intrinsics.dateProto());
-        constructor(global, "DisposableStack", DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false),
+        constructor(global, "DisposableStack",
+                DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false, ops),
                 intrinsics.disposableStackProto());
         constructor(global, "AsyncDisposableStack",
-                DisposableStackBuiltins.create(intrinsics.asyncDisposableStackProto(), true),
+                DisposableStackBuiltins.create(intrinsics.asyncDisposableStackProto(), true, ops),
                 intrinsics.asyncDisposableStackProto());
         namespace(global, "Reflect", ReflectBuiltins.create(ops), intrinsics);
         final var proxyCtor = ProxyBuiltins.create();

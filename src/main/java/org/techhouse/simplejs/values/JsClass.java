@@ -347,8 +347,11 @@ public final class JsClass extends JsValue {
         return staticOwner.get(key);
     }
 
+    // HasOwnProperty is true for an accessor-only key (even setter-only) as much as a data one; a
+    // caller reading via `getStaticProp` on such a key still gets `undefined` safely (PropertyTable
+    // has no value slot for it), so widening this does not need a parallel readability check.
     public boolean hasStaticProp(String key) {
-        return staticOwner.has(key);
+        return staticOwner.has(key) || staticOwner.hasAccessor(key);
     }
 
     private JsClass staticOwnerFor(String key) {

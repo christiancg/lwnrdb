@@ -12,6 +12,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -71,6 +72,13 @@ public final class ReflectBuiltins {
             JsValue receiver) {
         if (target instanceof JsProxy) {
             return ops.setMemberWithReceiver(target, key, value, receiver);
+        }
+        // Integer-Indexed [[Set]] short-circuits before OrdinarySet: a canonical numeric key that is
+        // not a valid index on this view is a silent no-op (no coercion, no prototype walk), and a
+        // valid one handled directly here never reaches a setter the receiver would otherwise inherit
+        // from a per-kind prototype further up the chain.
+        if (target instanceof JsTypedArray typed && typed.setExoticIndex(key, value, receiver)) {
+            return true;
         }
         if (!(ops.getOwnPropertyDescriptor(target, key) instanceof JsObject own)) {
             final var parent = ops.getPrototypeOf(target);

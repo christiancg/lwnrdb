@@ -2,10 +2,12 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
@@ -16,6 +18,13 @@ public class InterpreterGeneratorTest {
 
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
+    }
+
+    private static boolean bool() {
+        return ((JsBoolean) Interpreter.run("""
+                function* g() {}
+                Object.getPrototypeOf(g()) === g.prototype
+                """)).getValue();
     }
 
     // next() drives a generator through its yields to a done result
@@ -137,4 +146,25 @@ public class InterpreterGeneratorTest {
         assertEquals("2,4", str("function* g() { yield 1; yield 2; } g().map(x => x * 2).toArray().join(',')"));
     }
 
+    // Properties of Generator Function Instances: a generator function's own `prototype` object has
+    // no own properties at all (unlike an ordinary function, whose `prototype.constructor` is own) -
+    // the `constructor` back-link instead lives on the shared %GeneratorPrototype%.
+    @Test
+    public void test_generator_function_prototype_has_no_own_properties() {
+        assertEquals(0, num("function* g() {} Object.getOwnPropertyNames(g.prototype).length"));
+    }
+
+    // A generator instance's [[Prototype]] is its function's own `prototype` object, one level below
+    // the shared %GeneratorPrototype% - so a double Object.getPrototypeOf lands on the intrinsic that
+    // actually carries @@toStringTag "Generator", and instanceof/patching resolve through the same
+    // per-function link.
+    @Test
+    public void test_generator_instance_prototype_is_one_level_below_the_shared_intrinsic() {
+        assertEquals("Generator", str("""
+                function* g() {}
+                let generatorPrototype = Object.getPrototypeOf(Object.getPrototypeOf(g()));
+                generatorPrototype[Symbol.toStringTag]
+                """));
+        assertTrue(bool());
+    }
 }

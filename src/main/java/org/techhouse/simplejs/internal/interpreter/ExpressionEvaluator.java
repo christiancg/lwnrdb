@@ -174,7 +174,10 @@ public final class ExpressionEvaluator {
             final var scope = accessor || "method".equals(property.getKind()) ? homeScope : env;
             final var concise = accessor || "method".equals(property.getKind());
             if (property.isComputed()) {
-                final var keyValue = interp.eval(property.getKey(), env);
+                // ToPropertyKey runs on the key as soon as it is evaluated (before the property's
+                // own value), and must observe a user-defined toString/valueOf/Symbol.toPrimitive
+                // rather than the data-only "[object Object]" fallback.
+                final var keyValue = JsCoercion.toPropertyKey(interp.eval(property.getKey(), env), interp.ops());
                 final var evaluated = markIfMethod(interp.eval(value, scope), concise);
                 nameMember(property, value, evaluated,
                         keyValue instanceof JsSymbol symbol
@@ -529,9 +532,7 @@ public final class ExpressionEvaluator {
     private JsValue assignToSuperMember(MemberExpression member, AssignmentExpression assignment, Environment env) {
         final var operator = assignment.getOperator();
         if ("=".equals(operator)) {
-            final var value = interp.eval(assignment.getValue(), env);
-            classes.evalSuperMemberWrite(member, value, env);
-            return value;
+            return classes.evalSuperMemberAssign(member, assignment.getValue(), env);
         }
         final var current = classes.evalSuperMemberRead(member, env);
         if (LOGICAL_ASSIGN.contains(operator)) {
