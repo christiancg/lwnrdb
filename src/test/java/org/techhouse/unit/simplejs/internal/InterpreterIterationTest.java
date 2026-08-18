@@ -121,6 +121,29 @@ public class InterpreterIterationTest {
         assertEquals("y", str("let k; let last = ''; for (k in {x: 1, y: 2}) last = k; last"));
     }
 
+    // for-in's key list is a snapshot: a key deleted by an earlier iteration's body (before its own
+    // turn comes up) is skipped rather than re-fetched as undefined
+    @Test
+    public void test_for_in_skips_key_deleted_during_iteration() {
+        final var source = """
+                let obj = {aa: 1, ba: 2, ca: 3};
+                let out = '';
+                for (const key in obj) {
+                    if (key === 'aa') delete obj.ba;
+                    out += key + obj[key];
+                }
+                out
+                """;
+        assertEquals("aa1ca3", str(source));
+    }
+
+    // classic for-loop with a `const` binding keeps the per-iteration copy non-writable, so the
+    // update expression assigning to it still throws
+    @Test
+    public void test_for_const_binding_update_throws_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("for (const i = 0; i < 1; i++) {}"));
+    }
+
     // spread expands a generator into an array literal
     @Test
     public void test_spread_generator_into_array() {

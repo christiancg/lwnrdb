@@ -98,11 +98,6 @@ public final class TypedArrayBuiltins {
         return ops.getMember(newTarget, new JsString("prototype"));
     }
 
-    private static <T> T withObservedPrototype(T constructed, InterpreterOps ops) {
-        observePrototype(ops);
-        return constructed;
-    }
-
     // OrdinaryCreateFromConstructor: a new.target whose `prototype` is not this kind's intrinsic one
     // (Reflect.construct with a foreign constructor) produces an ordinary object carrying the view
     // as its wrapped primitive, which is how every builtin with internal state is subclassed here.
@@ -130,7 +125,7 @@ public final class TypedArrayBuiltins {
     public static JsNativeFunction arrayBuffer(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("ArrayBuffer", (thisArg, args) -> {
             requireNewTarget("ArrayBuffer", thisArg);
-            return withObservedPrototype(constructArrayBuffer(args, ops), ops);
+            return withNewTargetPrototype(constructArrayBuffer(args, ops), ops);
         });
         ctor.setProperty("isView", new JsNativeFunction("isView", (_, args) -> JsBoolean.of(isView(arg(args, 0)))));
         return ctor;

@@ -147,6 +147,17 @@ public class GlobalProgramTest {
         assertEquals("function", str("typeof globalThis.hasOwnProperty"));
     }
 
+    // A top-level let/const/class binding is instantiated in the Global Environment Record's
+    // declarative (lexical) part, not as a property of the Global Object Record - so it must not be
+    // reported as an own property of globalThis, unlike a var/function declaration.
+    @Test
+    public void test_lexical_top_level_bindings_are_not_own_properties_of_global_this() {
+        assertFalse(bool("let topLevelLet = 1; this.hasOwnProperty('topLevelLet')"));
+        assertFalse(bool("const topLevelConst = 1; this.hasOwnProperty('topLevelConst')"));
+        assertFalse(bool("class TopLevelClass {} this.hasOwnProperty('TopLevelClass')"));
+        assertTrue(bool("var topLevelVar2 = 1; this.hasOwnProperty('topLevelVar2')"));
+    }
+
     private static String str(String source) {
         return ((org.techhouse.simplejs.values.JsString) Interpreter.run(source)).getValue();
     }

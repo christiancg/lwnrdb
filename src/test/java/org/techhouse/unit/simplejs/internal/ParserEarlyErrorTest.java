@@ -105,4 +105,70 @@ public class ParserEarlyErrorTest {
         assertEquals(1, parse("// comment\rvar x = 1;").getBody().size());
         assertThrows(UnexpectedTokenException.class, () -> parse("// comment" + lineSeparator + "?"));
     }
+
+    // ArrowFunction : ArrowParameters => ConciseBody - a Syntax Error if ArrowParameters Contains a
+    // YieldExpression or an AwaitExpression: the cover-grammar parse of the parenthesized head still
+    // inherits the enclosing [Yield]/[Await] parameter even though the arrow itself resets both for
+    // its own body, so `yield`/`await` in a default parameter value is rejected here rather than
+    // silently falling back to an identifier reference.
+    @Test
+    public void test_arrow_parameters_containing_yield_or_await_is_syntax_error() {
+        assertThrows(SyntaxErrorException.class, () -> parse("function *g() { (x = yield) => {}; }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("async() => { (a = await 1) => {}; };"));
+        // a default value with no yield/await containment still parses normally
+        assertEquals(1, parse("function *g() { (x = 1) => x; }").getBody().size());
+    }
+
+    // An escaped contextual keyword (`async`, here) is never treated as the keyword: it is only ever
+    // an ordinary identifier reference, so it neither triggers the async-arrow/async-function-call
+    // production nor is rejected as a reserved word.
+    @Test
+    public void test_escaped_async_is_an_ordinary_identifier() {
+        assertEquals(1, parse("\\u0061sync;").getBody().size());
+        assertEquals(1, parse("for (\\u0061sync of [7]);").getBody().size());
+    }
+
+    // ConditionalExpression[In] : LogicalORExpression[?In] ? AssignmentExpression[+In] :
+    // AssignmentExpression[?In] - the consequent branch always allows `in`, even inside the noIn
+    // production of a classic for-loop header, unlike the alternate branch.
+    @Test
+    public void test_conditional_consequent_allows_in_inside_for_header() {
+        assertEquals(1, parse("for (true ? '' in {} : 0; false; ) ;").getBody().size());
+    }
+
+    // `async [no LineTerminator here] function` at statement position: a line break between the two
+    // demotes `async` to a plain identifier reference followed by a separate function declaration,
+    // exactly as it already does at expression position.
+    @Test
+    public void test_async_function_declaration_rejects_line_terminator() {
+        assertEquals(2, parse("async\nfunction foo() {}").getBody().size());
+        assertEquals(1, parse("async function foo() {}").getBody().size());
+    }
+
+    // A LabelIdentifier is exactly as permissive as an IdentifierReference: `await`/`async`/`of`,
+    // unescaped, lex as KEYWORD tokens rather than IDENTIFIER, but remain legal labels in non-module,
+    // non-async code, wherever they are legal identifiers.
+    @Test
+    public void test_contextual_keywords_are_legal_labels() {
+        assertEquals(1, parse("await: 1;").getBody().size());
+        assertEquals(1, parse("async: 1;").getBody().size());
+        assertEquals(1, parse("of: 1;").getBody().size());
+    }
+
+    // The `using of` lookahead restriction that disambiguates a for-of head only applies there; a
+    // classic for-loop (and a plain statement) may declare a `using` binding literally named `of`.
+    @Test
+    public void test_using_declaration_may_bind_the_name_of() {
+        assertEquals(1, parse("for (using of = null;;) break;").getBody().size());
+        assertEquals(1, parse("{ using of = null; }").getBody().size());
+    }
+
+    // A shorthand destructuring-pattern property's key doubles as a binding IdentifierReference, so a
+    // contextual keyword such as `await` (outside a reserved context) is as eligible as a genuine
+    // identifier token there, the same way it already is for an object *expression*'s shorthand.
+    @Test
+    public void test_destructuring_shorthand_accepts_contextual_keyword_name() {
+        assertEquals(1, parse("(() => { var {await} = {}; });").getBody().size());
+        assertEquals(1, parse("var {of} = {};").getBody().size());
+    }
 }

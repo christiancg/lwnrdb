@@ -385,7 +385,11 @@ public final class Parser {
                         return parseFunctionDeclaration(false);
                     }
                     case "async" -> {
-                        if (peek().getType() == JsType.KEYWORD && "function".equals(((JsKeyword) peek()).getValue())) {
+                        // `async [no LineTerminator here] function`: a line break between the two
+                        // demotes `async` to a plain (undeclared, in always-strict code) identifier
+                        // reference, followed by a separate ordinary function declaration.
+                        if (!newlineBeforePeek() && peek().getType() == JsType.KEYWORD
+                                && "function".equals(((JsKeyword) peek()).getValue())) {
                             advance();
                             return parseFunctionDeclaration(true);
                         }
@@ -423,8 +427,11 @@ public final class Parser {
             if (isAwaitUsingDeclarationStart()) {
                 return parseAwaitUsingDeclaration();
             }
-            if (current().getType() == JsType.IDENTIFIER && peek().getType() == JsType.OPERATOR
-                    && ":".equals(((JsOperator) peek()).getValue())) {
+            // A LabelIdentifier is exactly as permissive as an IdentifierReference: `await`/`async`/`of`
+            // written unescaped lex as KEYWORD tokens, not IDENTIFIER, but are legal labels wherever
+            // they are legal identifiers (`keywordIsIdentifier` already carries that distinction).
+            if ((current().getType() == JsType.IDENTIFIER || keywordIsIdentifier())
+                    && peek().getType() == JsType.OPERATOR && ":".equals(((JsOperator) peek()).getValue())) {
                 return parseLabeledStatement();
             }
             return parseExpressionStatement();
@@ -432,10 +439,13 @@ public final class Parser {
 
         // `using x = e` — contextual: a declaration only when `using` is directly followed by a binding
         // identifier (so `using`, `using.foo()`, `using = 1`, `let using = 1` still parse as expressions).
-        // `using of` never begins a declaration: the for-of head carries that lookahead restriction so
-        // `for (using of of x)` reads `using` as the loop's own target.
+        // `using of` never begins a *for-of* declaration: that head carries its own lookahead
+        // restriction so `for (using of of x)` reads `using` as the loop's own target. Outside that
+        // ambiguity - including a classic `for (using of = e;;)` or a plain `using of = e;` statement -
+        // `of` is an ordinary bound name, told apart from the for-of case by the `=` that follows it.
         private boolean isUsingDeclarationStart() {
-            return isContextualKeyword("using") && identifierLikeAt(1) && isNotKeywordAt(1);
+            return isContextualKeyword("using") && identifierLikeAt(1) && (isNotKeywordAt(1)
+                    || peekAt(2).getType() == JsType.OPERATOR && "=".equals(((JsOperator) peekAt(2)).getValue()));
         }
 
         // `await using x = e` — three-token lookahead; otherwise `await` stays an AwaitExpression.
@@ -1358,6 +1368,14 @@ public final class Parser {
                 return new Property(key, parseBindingElement(), true, false);
             }
             final var t = current();
+            // A shorthand binding's key doubles as an IdentifierReference, so a contextual keyword
+            // (`async`/`of`, or `await` outside a reserved context) is as eligible as a genuine
+            // identifier token - checked here, before advancing past it, the same way the object
+            // *expression* shorthand at `parseProperty` already does. A contextual keyword is, by
+            // definition, never subject to the reserved-word binding check below, matching
+            // `parseBindingIdentifier`'s identical carve-out.
+            final var contextualKeyword = t.getType() == JsType.KEYWORD && keywordIsIdentifier();
+            final var shorthandIdentifier = t.getType() == JsType.IDENTIFIER || contextualKeyword;
             final Expression key = switch (t.getType()) {
                 case STRING -> new StringLiteral(((JsString) t).getValue());
                 case NUMBER -> new NumberLiteral(((JsNumber) t).getValue());
@@ -1370,11 +1388,13 @@ public final class Parser {
             if (matchOperator(":")) {
                 return new Property(key, parseBindingElement(), false, false);
             }
-            if (t.getType() != JsType.IDENTIFIER) {
+            if (!shorthandIdentifier) {
                 throw error();
             }
             assert key instanceof Identifier;
-            validateBindingName(((Identifier) key).getName());
+            if (!contextualKeyword) {
+                validateBindingName(((Identifier) key).getName());
+            }
             if (matchOperator("=")) {
                 return new Property(key, new AssignmentPattern(key, parseAssignment()), false, true);
             }
@@ -1447,7 +1467,11 @@ public final class Parser {
         private Expression parseConditional() {
             final var test = parseBinary(0);
             if (matchOperator("?")) {
-                final var consequent = parseAssignment();
+                // ConditionalExpression[In] : LogicalORExpression[?In] ? AssignmentExpression[+In] :
+                // AssignmentExpression[?In] - the consequent always allows `in` even inside a noIn
+                // production (a classic for-loop header), unlike the alternate, which keeps the
+                // outer restriction.
+                final var consequent = withInAllowed(this::parseAssignment);
                 expectOperator(":");
                 final var alternate = parseAssignment();
                 return new ConditionalExpression(test, consequent, alternate);
@@ -1831,7 +1855,10 @@ public final class Parser {
             // An IdentifierReference is never a reserved word: `with`, `debugger`, `enum` and the
             // strict future-reserved words reach the parser as identifier tokens but are not usable.
             // `eval`/`arguments` are restricted only as binding and assignment targets, not as reads.
-            if (Lexer.isReservedWord(t.getValue()) || ParserTables.STRICT_RESERVED.contains(t.getValue())) {
+            // A contextual keyword (`async`/`of`, or `await` outside a reserved context) is a genuine
+            // identifier here - `isEscapeReserved` already carries that distinction, unlike a blanket
+            // `Lexer.isReservedWord` check which would wrongly reject an escaped `async`/`of`.
+            if (isEscapeReserved(t.getValue()) || ParserTables.STRICT_RESERVED.contains(t.getValue())) {
                 throw new SyntaxErrorException("'" + t.getValue() + "' cannot be used as an identifier in strict mode");
             }
             if (peek().getType() == JsType.OPERATOR && "=>".equals(((JsOperator) peek()).getValue())) {
@@ -2237,6 +2264,51 @@ public final class Parser {
             };
         }
 
+        // ArrowParameters Contains YieldExpression/AwaitExpression, approximated: recurse through
+        // binding patterns and ordinary expressions, but treat a nested function/class/arrow as an
+        // opaque boundary - a nested arrow already rejects its own params via this same check when
+        // it was parsed, and a nested ordinary/generator/async function never contains a YieldExpression
+        // or AwaitExpression scoped to the outer arrow's context in the first place.
+        private static boolean containsYieldOrAwait(JsNode node) {
+            return switch (node) {
+                case null -> false;
+                case YieldExpression ignored -> true;
+                case AwaitExpression ignored -> true;
+                case AssignmentPattern pattern ->
+                    containsYieldOrAwait(pattern.getLeft()) || containsYieldOrAwait(pattern.getRight());
+                case ArrayPattern pattern -> pattern.getElements().stream().anyMatch(State::containsYieldOrAwait);
+                case ObjectPattern pattern -> pattern.getProperties().stream().anyMatch(State::containsYieldOrAwait);
+                case RestElement rest -> containsYieldOrAwait(rest.getArgument());
+                case Property prop ->
+                    (prop.isComputed() && containsYieldOrAwait(prop.getKey())) || containsYieldOrAwait(prop.getValue());
+                case AssignmentExpression assign ->
+                    containsYieldOrAwait(assign.getTarget()) || containsYieldOrAwait(assign.getValue());
+                case BinaryExpression bin ->
+                    containsYieldOrAwait(bin.getLeft()) || containsYieldOrAwait(bin.getRight());
+                case LogicalExpression log ->
+                    containsYieldOrAwait(log.getLeft()) || containsYieldOrAwait(log.getRight());
+                case ConditionalExpression cond -> containsYieldOrAwait(cond.getTest())
+                        || containsYieldOrAwait(cond.getConsequent()) || containsYieldOrAwait(cond.getAlternate());
+                case UnaryExpression unary -> containsYieldOrAwait(unary.getArgument());
+                case UpdateExpression update -> containsYieldOrAwait(update.getArgument());
+                case SequenceExpression seq -> seq.getExpressions().stream().anyMatch(State::containsYieldOrAwait);
+                case SpreadElement spread -> containsYieldOrAwait(spread.getArgument());
+                case ArrayExpression array -> array.getElements().stream().anyMatch(State::containsYieldOrAwait);
+                case ObjectExpression obj -> obj.getProperties().stream().anyMatch(State::containsYieldOrAwait);
+                case CallExpression call -> containsYieldOrAwait(call.getCallee())
+                        || call.getArguments().stream().anyMatch(State::containsYieldOrAwait);
+                case NewExpression newExpr -> containsYieldOrAwait(newExpr.getCallee())
+                        || newExpr.getArguments().stream().anyMatch(State::containsYieldOrAwait);
+                case MemberExpression member -> containsYieldOrAwait(member.getObject())
+                        || (member.isComputed() && containsYieldOrAwait(member.getProperty()));
+                case TemplateLiteral template ->
+                    template.getExpressions().stream().anyMatch(State::containsYieldOrAwait);
+                case TaggedTemplateExpression tagged ->
+                    containsYieldOrAwait(tagged.getTag()) || containsYieldOrAwait(tagged.getQuasi());
+                default -> false;
+            };
+        }
+
         private StaticBlock parseStaticBlock() {
             return inFunctionScope(List.of(), () -> inBreakableBoundary(() -> {
                 inStaticBlock = true;
@@ -2420,6 +2492,14 @@ public final class Parser {
         }
 
         private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
+            // ArrowFunction : ArrowParameters => ConciseBody - it is a Syntax Error if ArrowParameters
+            // Contains YieldExpression/AwaitExpression: the cover grammar parses the parenthesized
+            // head with the enclosing [Yield]/[Await] parameter still in effect (arrows never reset
+            // it themselves), so a `yield`/`await` there is parsed as those expressions whenever the
+            // surrounding generator/async context allows it, and is rejected only afterwards, here.
+            if (params.stream().anyMatch(State::containsYieldOrAwait)) {
+                throw new SyntaxErrorException("Arrow parameters may not contain 'yield' or 'await' expressions");
+            }
             final var wasInFunctionBody = inFunctionBody;
             final var wasAwaitReserved = awaitReserved;
             inFunctionBody = true;

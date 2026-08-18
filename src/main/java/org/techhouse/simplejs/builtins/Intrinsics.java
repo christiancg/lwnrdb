@@ -107,6 +107,16 @@ public final class Intrinsics {
         functionProto = prototypeOf(FunctionProtoBuiltins.NAMES, "Function.prototype", (receiver,
                 name) -> FunctionProtoBuiltins.getMethod(requireCallable(receiver, name), name, invoker, ops));
         installFunctionHasInstance(functionProto);
+        // Function.prototype is itself a (no-op) callable object per spec, with its own "length"/
+        // "name" (immediately adjacent in own-key order, per CreateBuiltinFunction's Set order) and
+        // an [object Function] toString brand - installed as a real @@toStringTag rather than a
+        // brand() case, since Function.prototype's runtime type is a plain JsObject, not JsFunction/
+        // JsNativeFunction/JsClass.
+        functionProto.defineValue("length", new JsNumber(0));
+        functionProto.setFlags("length", new PropertyFlags(false, false, true));
+        functionProto.defineValue("name", new JsString(""));
+        functionProto.setFlags("name", new PropertyFlags(false, false, true));
+        defineToStringTag(functionProto, "Function");
         arrayProto = arrayPrototype();
         stringProto = prototypeOf(StringBuiltins.NAMES, "String.prototype",
                 (receiver, name) -> StringBuiltins.isGeneric(name)
@@ -153,6 +163,9 @@ public final class Intrinsics {
                 (receiver, name) -> TypedArrayBuiltins.dataViewMethod(requireView(receiver, name), name, ops));
         typedArrayProto = prototypeOf(TypedArrayBuiltins.NAMES, "TypedArray.prototype", (receiver,
                 name) -> TypedArrayBuiltins.getMethod(requireTypedArray(receiver, name), name, invoker, ops));
+        // Per spec, %TypedArray%.prototype.toString is the very same (fully generic) function object
+        // as Array.prototype.toString, not an independently-built brand-checked wrapper.
+        define(typedArrayProto, "toString", arrayProto.get("toString"));
         // Per spec, %TypedArray%.prototype[Symbol.iterator] is the very same function object as
         // %TypedArray%.prototype.values (not just an equivalent one).
         defineSymbol(typedArrayProto, JsSymbol.ITERATOR, typedArrayProto.get("values"));

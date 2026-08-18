@@ -49,7 +49,7 @@ public final class ArrayBuiltins {
 
     public static JsNativeFunction create(Invoker invoker, EventLoop eventLoop, InterpreterOps ops,
             Intrinsics intrinsics) {
-        final var array = new JsNativeFunction("Array", (_, args) -> construct(args));
+        final var array = new JsNativeFunction("Array", (thisArg, args) -> construct(thisArg, args, ops));
         array.setProperty("isArray",
                 new JsNativeFunction("isArray", (_, args) -> JsBoolean.of(isArray(arg(args, 0), intrinsics))));
         array.setProperty("from", new JsNativeFunction("from", (receiver, args) -> from(receiver, args, invoker, ops)));
@@ -62,7 +62,11 @@ public final class ArrayBuiltins {
     }
 
     // IsArray: a proxy answers for its target (and a revoked one is a TypeError), and the intrinsic
-    // Array.prototype is itself an array exotic object even though it is stored as a plain object.
+    // Array.prototype is itself an array exotic object even though it is stored as a plain object. A
+    // subclassed Array instance (`class MyArray extends Array {}`, or new.target-driven construction
+    // via Reflect.construct/a forwarded Proxy construct trap) is kept as a JsObject wrapping the real
+    // JsArray in its primitive slot (mirroring Map/Set/Date/typed-array subclassing), so IsArray must
+    // unwrap it too.
     static boolean isArray(JsValue value) {
         if (value instanceof JsProxy proxy) {
             if (proxy.isRevoked()) {
@@ -70,7 +74,10 @@ public final class ArrayBuiltins {
             }
             return isArray(proxy.getTarget());
         }
-        return value instanceof JsArray;
+        if (value instanceof JsArray) {
+            return true;
+        }
+        return value instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsArray;
     }
 
     private static boolean isArray(JsValue value, Intrinsics intrinsics) {
@@ -203,15 +210,45 @@ public final class ArrayBuiltins {
     }
 
     // Array(len) allocates holes, not undefined elements: a callback method must not visit them.
-    private static JsValue construct(List<JsValue> args) {
+    private static JsValue construct(JsValue thisArg, List<JsValue> args, InterpreterOps ops) {
+        final JsValue constructed;
         if (args.size() == 1 && args.getFirst() instanceof JsNumber number) {
             final var length = number.getValue();
             if (length < 0 || length != Math.floor(length) || length > 4294967295D) {
                 throw new RangeErrorException("Invalid array length");
             }
-            return newArray((long) length);
+            constructed = newArray((long) length);
+        } else {
+            constructed = new JsArray(new ArrayList<>(args));
         }
-        return new JsArray(new ArrayList<>(args));
+        // A super() call from `class Sub extends Array {}` invokes this native function directly with
+        // the instance under construction as thisArg (ClassEvaluator.applyNativeSuper), not through
+        // [[Construct]] - it must get the raw JsArray back so it can adopt it as the instance's
+        // wrapped primitive; wrapping it here too would make ClassEvaluator.adoptConstructed take the
+        // "plain object" branch instead (copying the wrapper's - empty - own keys) and lose the array
+        // entirely. Only a genuine new/Reflect.construct call (thisArg undefined) consults new.target.
+        return thisArg instanceof JsUndefined ? withNewTargetPrototype(constructed, ops) : constructed;
+    }
+
+    // ArrayCreate's OrdinaryCreateFromConstructor: a foreign new.target (e.g. through
+    // Reflect.construct or a construct trap forwarded via Proxy) links the result to new.target's
+    // own "prototype" instead of the intrinsic Array.prototype. JsArray has no [[Prototype]]-carrying
+    // wrapper of its own reachable from a native-function construct call, so - exactly like the other
+    // builtins with internal state (Map/Set/Date/typed arrays) - it is kept as the instance's wrapped
+    // JsObject.primitive, which the member-access seam already knows to unwrap.
+    private static JsValue withNewTargetPrototype(JsValue constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return constructed;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
+            return constructed;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(constructed);
+        wrapper.setProto(requested);
+        return wrapper;
     }
 
     public static JsNativeFunction getMethod(JsValue receiver, String name, Invoker invoker, InterpreterOps ops) {

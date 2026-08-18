@@ -189,13 +189,18 @@ public final class ReflectBuiltins {
         return list;
     }
 
-    // A proxy's [[DefineOwnProperty]] reports a refusing trap through its return value and reserves
-    // the TypeError for a violated invariant, so that one must propagate; the ordinary path has only
-    // the throw to signal a rejected definition, which Reflect has to turn back into false.
+    // A proxy's own [[DefineOwnProperty]] reports a refusing trap through its return value and
+    // reserves the throw for a violated invariant (checked against the trap's result once the trap
+    // itself has run) - that throw must always propagate. But per spec, a trap-less proxy's
+    // [[DefineOwnProperty]] is a pure passthrough to the target's own [[DefineOwnProperty]] (no
+    // invariant check at all), and *that* ordinary path is where our engine's own divergence lives:
+    // it throws instead of returning false for an ordinary (non-invariant) rejection, which Reflect
+    // must turn back into false. So only a proxy target with no "defineProperty" trap gets the
+    // catch-and-convert treatment; one with a real trap lets a TypeError propagate untouched.
     private static JsValue defineProperty(InterpreterOps ops, List<JsValue> args) {
         final var target = target(args, "defineProperty");
         final var key = key(ops, args);
-        if (target instanceof JsProxy) {
+        if (target instanceof JsProxy proxy && hasDefinePropertyTrap(ops, proxy)) {
             return JsBoolean.of(ops.defineProperty(target, key, arg(args, 2)));
         }
         try {
@@ -203,6 +208,11 @@ public final class ReflectBuiltins {
         } catch (TypeErrorException ignored) {
             return JsBoolean.FALSE;
         }
+    }
+
+    private static boolean hasDefinePropertyTrap(InterpreterOps ops, JsProxy proxy) {
+        final var trap = ops.getMember(proxy.getHandler(), new JsString("defineProperty"));
+        return !(trap instanceof JsUndefined) && !(trap instanceof JsNull);
     }
 
     private static JsValue target(List<JsValue> args, String method) {

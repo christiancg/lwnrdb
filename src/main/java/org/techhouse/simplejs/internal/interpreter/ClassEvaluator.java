@@ -5,7 +5,9 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObj
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.staticKeyName;
 
 import java.util.ArrayList;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -46,8 +48,31 @@ import org.techhouse.simplejs.values.JsValue;
 public final class ClassEvaluator {
     private final Interpreter interp;
 
+    // Our storage model has no home for a Proxy's own private-field table (unlike the spec, where a
+    // Proxy exotic object genuinely carries its own [[PrivateElements]] slot): a base constructor
+    // that returns `new Proxy(this, ...)` makes InitializeInstanceElements install fields directly on
+    // the unwrapped target instead (see unwrapForFieldInit). That target is reachable through *this
+    // specific proxy identity* only - an unrelated `new Proxy(target, {})` created later, wrapping the
+    // very same target, must NOT also see it (private fields are keyed by exact object identity, not
+    // by "wraps the same target"). Every proxy layer peeled during field initialisation is recorded
+    // here against the storage it resolved to, and a private access consults this map instead of
+    // re-deriving the answer by unwrapping again - which would treat any proxy over that target as
+    // equally entitled.
+    private final Map<JsValue, JsObject> privateStorageBridges = new IdentityHashMap<>();
+
     public ClassEvaluator(Interpreter interp) {
         this.interp = interp;
+    }
+
+    // The single choke point Interpreter.getPrivateMember/setPrivateMember use to resolve a private
+    // access target to its backing storage: a plain object is its own storage, a bridged proxy layer
+    // resolves to what it was recorded against, and anything else (an unrelated/unbridged proxy, a
+    // primitive) resolves to null.
+    public JsObject resolvePrivateStorage(JsValue target) {
+        if (target instanceof JsObject object) {
+            return object;
+        }
+        return privateStorageBridges.get(target);
     }
 
     public Completion evalClassDeclaration(ClassDeclaration declaration, Environment env) {
@@ -350,13 +375,23 @@ public final class ClassEvaluator {
     // which may be a Proxy when a base constructor in the chain returned one (PrivateFieldAdd and
     // CreateDataPropertyOrThrow both act on the object directly, bypassing any [[DefineProperty]]
     // trap) - our private-member storage lives on the concrete JsObject, so the field lands on the
-    // proxy's (possibly nested) target rather than being silently skipped.
-    private static JsObject unwrapForFieldInit(JsValue self) {
+    // proxy's (possibly nested) target rather than being silently skipped. Every peeled proxy layer
+    // is bridged to that target in privateStorageBridges, so a later private access reaching this
+    // exact proxy identity (not just anything wrapping the same target) can resolve it.
+    private JsObject unwrapForFieldInit(JsValue self) {
+        final var layers = new ArrayList<JsValue>();
         var current = self;
         while (current instanceof JsProxy proxy) {
+            layers.add(current);
             current = proxy.getTarget();
         }
-        return current instanceof JsObject object ? object : null;
+        if (!(current instanceof JsObject object)) {
+            return null;
+        }
+        for (final var layer : layers) {
+            privateStorageBridges.put(layer, object);
+        }
+        return object;
     }
 
     // A non-class heritage: a user function is invoked as an ordinary [[Construct]] against the
@@ -384,7 +419,14 @@ public final class ClassEvaluator {
     // instance and the instance is linked to the native prototype for method lookup and instanceof.
     // The instance under construction is passed as thisArg (a plain `new NativeCtor()` passes
     // JsUndefined instead), giving an abstract native constructor like Iterator's a signal to
-    // distinguish a super() call from a subclass from direct construction.
+    // distinguish a super() call from a subclass from direct construction. Deliberately NOT threading
+    // the active new.target through to `invoke`: several natives (TypedArray/DataView/ArrayBuffer)
+    // use JsNativeFunction.currentNewTarget() to decide whether to wrap their result for
+    // Reflect.construct-style foreign-prototype subclassing, a decision that does not apply here -
+    // the instance's own prototype is already linked from new.target one level up in
+    // JsClass.construct, and `adoptConstructed` below expects the raw internal-state value, not a
+    // wrapper. A native that must reject *any* construction, direct or via super() (Symbol), tells
+    // the two apart via `thisArg` instead (present here, undefined on a bare call).
     private void applyNativeSuper(JsNativeFunction nativeSuper, JsObject instance, List<JsValue> args) {
         adoptConstructed(nativeSuper.invoke(instance, args), instance);
     }
@@ -512,13 +554,59 @@ public final class ClassEvaluator {
         // itself, so its GetSuperBase() is the class's own (dynamic) [[Prototype]] - a class heritage,
         // a non-class constructor, or %Function.prototype% by default - not the instance chain.
         final var start = thisArg instanceof JsClass cls ? cls.getProto() : superProtoStart(env);
-        final var key = interp.memberKey(member, env);
+        final var rawKey = interp.memberKeyValue(member, env);
         final var args = interp.evalArguments(call.getArguments(), env);
-        final var value = superProtoRead(start, key, thisArg);
+        final var value = superRead(start, rawKey, thisArg);
         if (isCallable(value)) {
             return interp.callValue(value, thisArg, args);
         }
-        throw new TypeErrorException("(intermediate value).super." + key + " is not a function");
+        throw new TypeErrorException("(intermediate value).super." + keyDisplay(rawKey) + " is not a function");
+    }
+
+    // A computed super key may evaluate to a Symbol (e.g. `super[Symbol.replace](...)`), which
+    // ToPropertyKey/ToString would reject outright - route a Symbol key through the object's symbol
+    // table instead of stringifying it, mirroring the string-keyed path below.
+    private JsValue superRead(JsValue start, JsValue rawKey, JsValue receiver) {
+        if (rawKey instanceof JsSymbol symbol) {
+            return superProtoSymbolRead(start, symbol, receiver);
+        }
+        return superProtoRead(start, JsCoercion.toStr(rawKey, interp.ops()), receiver);
+    }
+
+    private String keyDisplay(JsValue rawKey) {
+        return rawKey instanceof JsSymbol symbol
+                ? "Symbol(" + (symbol.getDescription() == null ? "" : symbol.getDescription()) + ")"
+                : JsCoercion.toStr(rawKey, interp.ops());
+    }
+
+    // GetSuperBase's proto-chain walk for a Symbol key: each link's own symbol table is consulted
+    // (accessor first, then a plain value) before advancing to its [[Prototype]] - the same shape as
+    // MemberEvaluator's private chainSymbolMember, reimplemented here against the object's public
+    // symbol accessors since that chain walker isn't reachable from this class. A non-JsObject link
+    // (a native super's own prototype, reached at most once) falls back to its realm-intrinsic
+    // prototype, same as the string-keyed walk.
+    private JsValue superProtoSymbolRead(JsValue start, JsSymbol symbol, JsValue receiver) {
+        var link = start;
+        var synthesised = false;
+        while (link != null) {
+            if (link instanceof JsObject object) {
+                if (object.hasSymbolAccessor(symbol)) {
+                    final var getter = object.getSymbolAccessorGetter(symbol);
+                    return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, receiver, List.of());
+                }
+                if (object.hasSymbol(symbol)) {
+                    return object.getSymbol(symbol);
+                }
+            }
+            final var next = link.getProto();
+            if (next == null && !synthesised && !(link instanceof JsObject)) {
+                link = interp.intrinsics().protoFor(link);
+                synthesised = true;
+                continue;
+            }
+            link = next;
+        }
+        return JsUndefined.getInstance();
     }
 
     // PutValue on a super reference is Set(GetSuperBase(), key, value, thisValue): the receiver is
@@ -584,8 +672,8 @@ public final class ClassEvaluator {
     public JsValue evalSuperMemberRead(MemberExpression member, Environment env) {
         final var thisArg = env.resolveThis();
         final var start = thisArg instanceof JsClass cls ? cls.getProto() : superProtoStart(env);
-        final var key = interp.memberKey(member, env);
-        return superProtoRead(start, key, thisArg);
+        final var rawKey = interp.memberKeyValue(member, env);
+        return superRead(start, rawKey, thisArg);
     }
 
     private JsValue superProtoRead(JsValue start, String key, JsValue thisArg) {

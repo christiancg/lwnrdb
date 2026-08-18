@@ -113,6 +113,23 @@ public class ScopeProgramTest {
         assertEquals("in|ReferenceError", str(source));
     }
 
+    // the switch discriminant evaluates in the outer scope, before the block environment holding the
+    // cases' lexical declarations is created - a closure captured there sees the outer binding, while
+    // one captured by a case test (which runs inside the block environment) sees the inner one
+    @Test
+    public void test_switch_discriminant_evaluates_outside_the_case_block_scope() {
+        final var source = """
+                let x = 'outside';
+                var probeExpr, probeSelector;
+                switch (probeExpr = function() { return x; }, null) {
+                    case probeSelector = function() { return x; }, null:
+                        let x = 'inside';
+                }
+                probeExpr() + '|' + probeSelector()
+                """;
+        assertEquals("outside|inside", str(source));
+    }
+
     // for-in walks the prototype chain, own keys first, and a shadowing own name appears once
     @Test
     public void test_for_in_walks_the_prototype_chain() {

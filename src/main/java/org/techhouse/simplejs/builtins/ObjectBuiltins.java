@@ -159,7 +159,8 @@ public final class ObjectBuiltins {
             case JsTypedArray typed ->
                 "length".equals(key) || typedHasIndex(typed, key) || hasTableAccessor(target, key)
                         || (target.ownProperties() != null && target.ownProperties().has(key));
-            case JsGlobalObject global -> global.getEnv().isDeclared(key) || global.ownProperties().hasAccessor(key);
+            case JsGlobalObject global ->
+                global.getEnv().hasGlobalProperty(key) || global.ownProperties().hasAccessor(key);
             case JsArguments arguments -> arguments.hasOwnKey(new JsString(key));
             case JsCallableProperties callable -> callable.hasProperty(key)
                     || OrdinaryProperties.metadataKey(callable, key) || hasTableAccessor(target, key);
@@ -258,6 +259,8 @@ public final class ObjectBuiltins {
             throw new TypeErrorException("Object.groupBy: callback is not a function");
         }
         final var result = new JsObject();
+        // Object.groupBy is OrdinaryObjectCreate(null): the result has no prototype at all.
+        result.setProto(null);
         final var items = source instanceof JsArray array ? array.getElements() : iterableToList.drain(source);
         for (var i = 0; i < items.size(); i++) {
             final var rawKey = invoker.call(callback, JsUndefined.getInstance(),
@@ -554,9 +557,9 @@ public final class ObjectBuiltins {
             throw new TypeErrorException("Object prototype may only be an Object or null: " + JsCoercion.toStr(proto));
         }
         final var object = new JsObject();
-        if (InterpreterUtils.isObjectLike(proto)) {
-            object.setProto(proto);
-        }
+        // Always routed through setProto - even for the null case - so the object is marked as
+        // deliberately proto-less rather than merely "never resolved" (see JsObject.setProto).
+        object.setProto(InterpreterUtils.isObjectLike(proto) ? proto : null);
         if (args.size() > 1 && !(args.get(1) instanceof JsUndefined)) {
             if (args.get(1) instanceof JsNull) {
                 throw new TypeErrorException("Cannot convert undefined or null to object");

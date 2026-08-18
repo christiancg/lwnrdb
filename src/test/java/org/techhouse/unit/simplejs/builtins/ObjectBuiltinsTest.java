@@ -1887,4 +1887,43 @@ public class ObjectBuiltinsTest {
                         log
                         """));
     }
+
+    // Object.create(null)'s null [[Prototype]] is the real, terminal answer: no Object.prototype
+    // method should be synthesised for it (the ambiguity between "never linked" and "deliberately
+    // null" that used to collapse both cases into the same ordinary-object default).
+    @Test
+    public void createNullHasNoInheritedObjectPrototypeMembers() {
+        assertTrue(flag("Object.create(null).hasOwnProperty === undefined"));
+        assertTrue(flag("typeof Object.create(null).toString === 'undefined'"));
+    }
+
+    // Object.setPrototypeOf(o, null) marks o just as deliberately proto-less as Object.create(null).
+    @Test
+    public void setPrototypeOfNullAlsoDropsInheritedMembers() {
+        assertTrue(flag("let o = {}; Object.setPrototypeOf(o, null); o.hasOwnProperty === undefined"));
+    }
+
+    // A plain object's own auto-created prototype-less object (e.g. a fresh {} that never had its
+    // proto touched) still falls back to the intrinsic Object.prototype default - only the
+    // deliberately-nulled case opts out.
+    @Test
+    public void ordinaryObjectStillInheritsObjectPrototype() {
+        assertTrue(flag("typeof ({}).hasOwnProperty === 'function'"));
+    }
+
+    // ToPropertyKey/ToNumber on a null-proto object with no reachable valueOf/toString throws,
+    // instead of silently finding Object.prototype.toString.
+    @Test
+    public void nullProtoObjectCannotBeCoercedToAPrimitive() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("''.charAt(Object.create(null))"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("class C { get [Object.create(null)]() {} }"));
+    }
+
+    // Object.groupBy returns a genuinely null-prototype object (OrdinaryObjectCreate(null)).
+    @Test
+    public void groupByResultHasNullPrototype() {
+        assertInstanceOf(org.techhouse.simplejs.values.JsNull.class,
+                Interpreter.run("Object.getPrototypeOf(Object.groupBy([1, 2, 3], x => x % 2))"));
+        assertTrue(flag("Object.groupBy([1], x => x).hasOwnProperty === undefined"));
+    }
 }

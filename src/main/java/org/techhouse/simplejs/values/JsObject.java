@@ -16,6 +16,7 @@ public final class JsObject extends JsValue {
     private Map<PrivateName, JsValue> privateFields;
     private Set<JsClass> privateBrands;
     private JsValue proto;
+    private boolean protoExplicitlyNull;
     private JsValue primitive;
 
     @Override
@@ -191,9 +192,22 @@ public final class JsObject extends JsValue {
         return proto;
     }
 
+    // A plain JsObject's proto field is Java null in two distinct situations that every reader has
+    // to be able to tell apart: never explicitly linked (the common case - a plain function's own
+    // auto-created "prototype" object, a freshly-built helper/result object - where the correct
+    // reading is "not yet resolved, fall back to the realm's intrinsic default") versus deliberately
+    // nulled out (Object.create(null), Object.setPrototypeOf(o, null), `{ __proto__: null }`, where
+    // null is the real, terminal answer). setProto is the single choke point every one of those call
+    // sites already goes through, so recording whether the last call passed null is enough to
+    // disambiguate without auditing every "new JsObject()" site in the codebase.
     @Override
     public void setProto(JsValue proto) {
         this.proto = proto;
+        this.protoExplicitlyNull = proto == null;
+    }
+
+    public boolean isProtoExplicitlyNull() {
+        return protoExplicitlyNull;
     }
 
     public void defineAccessor(String key, JsValue getter, JsValue setter) {

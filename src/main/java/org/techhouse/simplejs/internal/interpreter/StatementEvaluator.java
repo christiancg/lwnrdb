@@ -202,10 +202,12 @@ public final class StatementEvaluator {
     private Completion runFor(ForStatement statement, Environment env, Environment loopEnv, String label) {
         final var init = statement.getInit();
         final var perIterationNames = new ArrayList<String>();
+        var perIterationKind = "let";
         if (init instanceof VariableDeclaration declaration) {
             interp.hoist(List.of(declaration), loopEnv);
             interp.evalVariableDeclaration(declaration, loopEnv);
             if (LEXICAL_KINDS.contains(declaration.getKind())) {
+                perIterationKind = declaration.getKind();
                 for (final var declarator : declaration.getDeclarations()) {
                     collectBoundNames(declarator.getId(), perIterationNames);
                 }
@@ -213,7 +215,9 @@ public final class StatementEvaluator {
         } else if (init instanceof Expression expression) {
             interp.eval(expression, loopEnv);
         }
-        var current = perIterationNames.isEmpty() ? loopEnv : copyForwardLoopEnv(env, loopEnv, perIterationNames);
+        var current = perIterationNames.isEmpty()
+                ? loopEnv
+                : copyForwardLoopEnv(env, loopEnv, perIterationNames, perIterationKind);
         while (statement.getTest() == null || JsCoercion.toBoolean(interp.eval(statement.getTest(), current))) {
             interp.tick();
             final var completion = interp.evalStatement(statement.getBody(), current);
@@ -225,7 +229,7 @@ public final class StatementEvaluator {
                 break;
             }
             if (!perIterationNames.isEmpty()) {
-                current = copyForwardLoopEnv(env, current, perIterationNames);
+                current = copyForwardLoopEnv(env, current, perIterationNames, perIterationKind);
             }
             if (statement.getUpdate() != null) {
                 interp.eval(statement.getUpdate(), current);
@@ -234,10 +238,13 @@ public final class StatementEvaluator {
         return Completion.empty();
     }
 
-    private Environment copyForwardLoopEnv(Environment parent, Environment source, List<String> names) {
+    // CreatePerIterationEnvironment re-declares each bound name with its original declaration kind -
+    // a `const` loop variable stays non-writable in every per-iteration copy, so `i++` in the update
+    // expression (or anywhere in the body) still throws, matching a single-scope `const` loop.
+    private Environment copyForwardLoopEnv(Environment parent, Environment source, List<String> names, String kind) {
         final var next = parent.child();
         for (final var name : names) {
-            next.declareLexical(name, "let");
+            next.declareLexical(name, kind);
             next.initialize(name, source.get(name));
         }
         return next;
@@ -348,9 +355,11 @@ public final class StatementEvaluator {
 
     // ForIn/OfHeadEvaluation: the head's lexically declared names exist, uninitialised, while the
     // source expression runs, so `for (let x of [x])` is a ReferenceError rather than a lookup of an
-    // outer `x`.
+    // outer `x`. `using`/`await using` are ForDeclaration bindings too (of-only), so they get the
+    // same TDZ treatment as `let`/`const`.
     private JsValue evalIterationSource(JsNode left, Expression right, Environment env) {
-        if (!(left instanceof VariableDeclaration declaration) || !LEXICAL_KINDS.contains(declaration.getKind())) {
+        if (!(left instanceof VariableDeclaration declaration)
+                || !(LEXICAL_KINDS.contains(declaration.getKind()) || USING_KINDS.contains(declaration.getKind()))) {
             return interp.eval(right, env);
         }
         final var headEnv = env.child();
@@ -366,8 +375,19 @@ public final class StatementEvaluator {
 
     public Completion evalForIn(ForInStatement statement, Environment env, String label) {
         final var target = evalIterationSource(statement.getLeft(), statement.getRight(), env);
+        // A snapshot of target's own keys at enumeration time, so a later re-check only ever asks
+        // "does target still have this key" about a key that was target's own to begin with -
+        // never about one inherited from a prototype (out of scope here) or re-derived via a
+        // different trap (a Proxy's `has`, which need not agree with its `ownKeys`/gOPD pair).
+        final var targetOwnKeys = target instanceof JsObject object ? object.keys() : null;
         for (final var key : enumerateKeys(target)) {
             interp.tick();
+            // The key list is a snapshot; a key deleted by an earlier iteration's body before its own
+            // turn comes up must be skipped rather than re-fetched as undefined.
+            if (target instanceof JsObject object && targetOwnKeys.contains(key) && !object.has(key)
+                    && !object.hasAccessor(key)) {
+                continue;
+            }
             final var iterationEnv = env.child();
             interp.bindForTarget(statement.getLeft(), new JsString(key), iterationEnv);
             final var completion = evalIterationBody(statement.getBody(), iterationEnv);
@@ -531,12 +551,15 @@ public final class StatementEvaluator {
         return result;
     }
 
+    // The switch Expression is evaluated in the outer environment, before the block environment
+    // (whose lexical declarations spans every case) is created - only CaseBlockEvaluation (the case
+    // tests and consequents) runs inside it.
     public Completion evalSwitch(SwitchStatement statement, Environment env, String label) {
+        final var discriminant = interp.eval(statement.getDiscriminant(), env);
         final var switchEnv = env.child();
         for (final var switchCase : statement.getCases()) {
             interp.hoist(switchCase.getConsequent(), switchEnv);
         }
-        final var discriminant = interp.eval(statement.getDiscriminant(), switchEnv);
         final var cases = statement.getCases();
         var start = -1;
         var defaultIndex = -1;

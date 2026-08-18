@@ -845,4 +845,22 @@ public class TypedArrayProgramTest {
         assertTrue(bool("typeof Uint8Array.fromBase64 === 'function'"));
         assertTrue(bool("Uint16Array.fromBase64 === undefined"));
     }
+
+    // An own "length"/"byteLength"/"byteOffset"/"buffer"/"BYTES_PER_ELEMENT" property installed via
+    // Object.defineProperty shadows the exotic computed value, exactly like it would for any other
+    // ordinary key - these are only "exotic" in that nothing installs them by default.
+    @Test
+    public void test_own_length_property_shadows_computed_length() {
+        assertEquals(4000, num("""
+                const ta = new Uint8Array(1);
+                Object.defineProperty(ta, 'length', { value: 4000 });
+                ta.length
+                """));
+    }
+
+    // Without an own override the computed value still reports the real length.
+    @Test
+    public void test_length_without_own_override_is_computed() {
+        assertEquals(3, num("new Uint8Array(3).length"));
+    }
 }

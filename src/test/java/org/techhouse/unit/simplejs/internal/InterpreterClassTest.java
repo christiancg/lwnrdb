@@ -1031,4 +1031,115 @@ public class InterpreterClassTest {
                 """;
         assertEquals("[true,true]", str(source));
     }
+
+    // A class function inherits the poisoned caller/arguments accessor pair from
+    // %Function.prototype% just like any ordinary function: neither a base nor a derived class has
+    // its own "caller"/"arguments", and assigning to either must throw rather than silently create a
+    // new own static property (the inherited-accessor check setMember's JsClass branch used to skip).
+    @Test
+    public void test_class_static_caller_and_arguments_are_poisoned_inherited_accessors() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("class C {} C.caller = {}"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("class C {} C.arguments = {}"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("class B {} class D extends B {} D.caller = {}"));
+        assertFalse(bool("class C {} C.hasOwnProperty('caller')"));
+    }
+
+    // A plain own static property write still lands normally alongside the poisoned pair.
+    @Test
+    public void test_class_static_ordinary_property_write_still_works() {
+        assertEquals(5, num("class C {} C.x = 5; C.x"));
+    }
+
+    // A concise method/getter/setter (kind "method") never gets an own "prototype", unlike a normal
+    // class constructor or a normal function
+    @Test
+    public void test_prototype_absent_on_methods_getters_setters() {
+        final var source = """
+                class C {
+                    method() {}
+                    get accessor() { return 1; }
+                    set accessor(v) {}
+                }
+                var methodDesc = Object.getOwnPropertyDescriptor(C.prototype, 'method');
+                var accessorDesc = Object.getOwnPropertyDescriptor(C.prototype, 'accessor');
+                JSON.stringify([
+                    'prototype' in methodDesc.value,
+                    'prototype' in accessorDesc.get,
+                    'prototype' in accessorDesc.set,
+                    'prototype' in C
+                ])
+                """;
+        assertEquals("[false,false,false,true]", str(source));
+    }
+
+    // A base constructor that overrides `this` by explicitly returning an object is what a derived
+    // constructor's implicit (no explicit return) completion must resolve to - not the freshly
+    // allocated instance discarded by that override
+    @Test
+    public void test_derived_constructor_implicit_return_resolves_base_override() {
+        final var source = """
+                class Base { constructor(obj) { return obj; } }
+                class C extends Base {
+                    #val;
+                    constructor(obj) { super(obj); this.#val = 42; }
+                    static val(obj) { return obj.#val; }
+                }
+                var t = new C({});
+                C.val(t)
+                """;
+        assertEquals(42, num(source));
+    }
+
+    // Private field/getter/method access reaches through a Proxy wrapping the real instance (the
+    // base constructor returned the Proxy, so private storage lives on its target)
+    @Test
+    public void test_private_member_access_through_proxy() {
+        final var fieldSource = """
+                class Base { constructor() { return new Proxy(this, { get: (o, p) => o[p] }); } }
+                class C extends Base { #f = 3; method() { return this.#f; } }
+                new C().method()
+                """;
+        assertEquals(3, num(fieldSource));
+
+        final var getterSource = """
+                class Base { constructor() { return new Proxy(this, { get: (o, p) => o[p] }); } }
+                class C extends Base { get #f() { return 5; } method() { return this.#f; } }
+                new C().method()
+                """;
+        assertEquals(5, num(getterSource));
+
+        final var methodSource = """
+                class Base { constructor() { return new Proxy(this, { get: (o, p) => o[p] }); } }
+                class C extends Base { #f() { return 7; } method() { return this.#f(); } }
+                new C().method()
+                """;
+        assertEquals(7, num(methodSource));
+    }
+
+    // The Symbol constructor must reject being reached via `new`, including a subclass's super()
+    // call (which never invokes the plain-call path)
+    @Test
+    public void test_symbol_subclass_super_call_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new (class extends Symbol {})()"));
+        final var source = """
+                class S extends Symbol { constructor() { super(); } }
+                new S()
+                """;
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
+    }
+
+    // A computed super-member key that evaluates to a Symbol dispatches through the symbol table
+    // instead of being stringified (which would throw for a Symbol)
+    @Test
+    public void test_super_computed_symbol_key_dispatches_to_symbol_method() {
+        final var source = """
+                class RE extends RegExp {
+                    [Symbol.replace](str, replacement) {
+                        return super[Symbol.replace](str, replacement);
+                    }
+                }
+                new RE('a', 'g')[Symbol.replace]('banana', 'o')
+                """;
+        assertEquals("bonono", str(source));
+    }
 }

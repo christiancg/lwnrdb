@@ -594,7 +594,11 @@ public final class Interpreter {
         if (callable.hasProperty(key) || FunctionProtoBuiltins.metadata((JsValue) callable, key) != null) {
             return true;
         }
-        if (callable instanceof JsFunction && "prototype".equals(key)) {
+        // MakeConstructor installs an own "prototype" for a normal or generator function, but an
+        // arrow, a concise method/getter/setter (kind "method"), and a plain async function never
+        // get one.
+        if (callable instanceof JsFunction function && "prototype".equals(key) && !function.isArrow()
+                && !function.isMethod() && !(function.isAsync() && !function.isGenerator())) {
             return true;
         }
         return members.chainHasKey(intrinsics.protoFor((JsValue) callable), key);
@@ -1031,6 +1035,11 @@ public final class Interpreter {
                     throw new ReferenceErrorException(
                             "Must call super constructor before returning from a derived class constructor");
                 }
+                // [[Construct]] step 13: an implicit/undefined return yields the constructor
+                // environment's `this` binding (whatever super() bound it to - a base constructor
+                // that returned an object overrides the freshly allocated instance), not the literal
+                // completion value of the body.
+                return isObjectLike(result) ? result : activation.resolveThis();
             }
             return result;
         } finally {
@@ -1260,7 +1269,8 @@ public final class Interpreter {
                 return owner.getPrivateStaticField(privateName);
             }
         }
-        if (owner != null && target instanceof JsObject object) {
+        final var object = owner == null ? null : classes.resolvePrivateStorage(target);
+        if (object != null) {
             if (object.hasPrivate(privateName)) {
                 return object.getPrivate(privateName);
             }
@@ -1268,7 +1278,9 @@ public final class Interpreter {
             final var method = owner.getPrivateInstanceMethod(privateName);
             requirePrivateBrand(object, owner, name, getter != null || method != null);
             if (getter != null) {
-                return callFunction(getter, object, List.of());
+                // PrivateFieldGet calls the accessor with the original base (a Proxy is invoked as
+                // itself, not as the unwrapped storage object it was resolved through).
+                return callFunction(getter, target, List.of());
             }
             if (method != null) {
                 return method;
@@ -1296,13 +1308,16 @@ public final class Interpreter {
                 return;
             }
         }
-        if (owner != null && target instanceof JsObject object) {
+        final var object = owner == null ? null : classes.resolvePrivateStorage(target);
+        if (object != null) {
             final var setter = owner.getPrivateInstanceSetter(privateName);
             final var readOnly = owner.getPrivateInstanceGetter(privateName) != null
                     || owner.getPrivateInstanceMethod(privateName) != null;
             requirePrivateBrand(object, owner, name, setter != null || readOnly);
             if (setter != null) {
-                callFunction(setter, object, List.of(value));
+                // PrivateFieldSet calls the accessor with the original base, same rationale as the
+                // getter path above.
+                callFunction(setter, target, List.of(value));
                 return;
             }
             if (readOnly) {

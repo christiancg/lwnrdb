@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.host.ResourceLimits;
@@ -137,6 +138,15 @@ public class InterpreterUsingTest {
         final var source = "let log=[]; for (using r of [" + dispose("log.push('x')") + "," + dispose("log.push('y')")
                 + "]) { log.push('i'); } log.join(',')";
         assertEquals("i,x,i,y", str(source));
+    }
+
+    // a for-of head's `using` bound name is in TDZ while the source expression evaluates, so a
+    // reference to it there (even the loop's own iterable) is a ReferenceError, not a lookup of an
+    // outer binding of the same name
+    @Test
+    public void test_for_of_using_head_bound_name_is_tdz_during_source_evaluation() {
+        final var source = "let x = { [Symbol.dispose](){} }; for (using x of [x]) {}";
+        assertThrows(ReferenceErrorException.class, () -> Interpreter.run(source));
     }
 
     // a using at function-body top level disposes when the function returns

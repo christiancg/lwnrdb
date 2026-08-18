@@ -1,12 +1,12 @@
 package org.techhouse.unit.simplejs.internal;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.values.JsNumber;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class EnvironmentTest {
     // A var declaration can be assigned and read back

@@ -325,10 +325,15 @@ public final class MemberEvaluator {
             // Not intrinsicMember: that would re-walk from object.getProto() again (just tried
             // above and already failed), and an intermediate JsObject link with an uninitialised
             // (not deliberately null) own proto stops the walk before reaching Object.prototype -
-            // the realm's type-default is the correct last resort here, unconditionally.
-            final var intrinsic = orUndefined(chainMember(interp.intrinsics().protoFor(object), key, object));
-            if (!(intrinsic instanceof JsUndefined)) {
-                return intrinsic;
+            // the realm's type-default is the correct last resort here. But only when this object's
+            // own proto was never explicitly resolved: Object.create(null)/setPrototypeOf(o, null)
+            // leave the same Java-null getProto(), and for those the type-default must NOT be
+            // synthesised - a null [[Prototype]] is the real, terminal answer for them.
+            if (!object.isProtoExplicitlyNull()) {
+                final var intrinsic = orUndefined(chainMember(interp.intrinsics().protoFor(object), key, object));
+                if (!(intrinsic instanceof JsUndefined)) {
+                    return intrinsic;
+                }
             }
             if (AsyncIteratorBuiltins.isHelperName(key) && isAsyncIteratorLike(object)) {
                 return AsyncIteratorBuiltins.helper(interp.ops(), eventLoop, key);
@@ -478,23 +483,30 @@ public final class MemberEvaluator {
     }
 
     private JsValue typedArrayMember(JsTypedArray typed, String key) {
-        switch (key) {
-            case "length" -> {
-                return new JsNumber(typed.length());
-            }
-            case "byteLength" -> {
-                return new JsNumber(typed.byteLength());
-            }
-            case "byteOffset" -> {
-                return new JsNumber(typed.byteOffset());
-            }
-            case "buffer" -> {
-                return typed.getBuffer();
-            }
-            case "BYTES_PER_ELEMENT" -> {
-                return new JsNumber(typed.kind().bytesPerElement());
-            }
-            default -> {
+        final var table = typed.ownProperties();
+        // These five keys are ordinarily exotic/computed, but they are still ordinary string-keyed
+        // properties apart from canonical numeric indices - an own property (most commonly installed
+        // via Object.defineProperty, e.g. to give a typed array a fake "length") shadows the computed
+        // value exactly like it would for any other object.
+        if (!table.has(key) && !table.hasAccessor(key)) {
+            switch (key) {
+                case "length" -> {
+                    return new JsNumber(typed.length());
+                }
+                case "byteLength" -> {
+                    return new JsNumber(typed.byteLength());
+                }
+                case "byteOffset" -> {
+                    return new JsNumber(typed.byteOffset());
+                }
+                case "buffer" -> {
+                    return typed.getBuffer();
+                }
+                case "BYTES_PER_ELEMENT" -> {
+                    return new JsNumber(typed.kind().bytesPerElement());
+                }
+                default -> {
+                }
             }
         }
         final var index = arrayIndex(key);
@@ -508,7 +520,6 @@ public final class MemberEvaluator {
         if (InterpreterUtils.isCanonicalNumericIndexString(key)) {
             return JsUndefined.getInstance();
         }
-        final var table = typed.ownProperties();
         if (table.hasAccessor(key)) {
             final var getter = table.getAccessorGetter(key);
             return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, typed, List.of());
@@ -669,7 +680,18 @@ public final class MemberEvaluator {
                 final var setter = cls.findStaticSetter(key);
                 if (setter != null) {
                     interp.callFunction(setter, cls, List.of(value));
+                } else if (hasStaticPropInHierarchy(cls, key)) {
+                    cls.setStaticProp(key, value);
                 } else {
+                    // Neither an accessor nor a data property anywhere in the class's own static
+                    // hierarchy: the class's real [[Prototype]] (cls.getProto(), reaching a native
+                    // superclass or %Function.prototype%) may still hold an inherited accessor - the
+                    // poisoned caller/arguments pair every class function inherits, for one - which
+                    // has to intercept the write before an own property is created.
+                    final var outcome = setThroughChain(cls, key, cls, value);
+                    if (outcome.handled()) {
+                        yield outcome.result();
+                    }
                     cls.setStaticProp(key, value);
                 }
                 yield true;
@@ -729,6 +751,18 @@ public final class MemberEvaluator {
                 yield table == null || setTableMember(target, table, key, value);
             }
         };
+    }
+
+    // Mirrors the manual per-level walk Interpreter.getStaticMember already does for reads: true when
+    // some class in the static hierarchy (cls or an ancestor reached via getSuperClass()) owns key as
+    // a data or accessor property, so a plain own-property write on cls is the right outcome.
+    private static boolean hasStaticPropInHierarchy(JsClass cls, String key) {
+        for (var current = cls; current != null; current = current.getSuperClass()) {
+            if (current.hasStaticProp(key)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean setTableMember(JsValue target, PropertyTable table, String key, JsValue value) {

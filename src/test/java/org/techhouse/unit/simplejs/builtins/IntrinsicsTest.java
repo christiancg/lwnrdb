@@ -422,7 +422,11 @@ public class IntrinsicsTest {
     // a subclass of Symbol wraps the produced primitive for Symbol.prototype methods
     @Test
     public void test_symbol_subclass_unwraps() {
-        assertEquals("Symbol(x)", run("class S extends Symbol { constructor(d) { super(d); } } new S('x').toString()"));
+        // Unlike every other subclassable builtin exercised in this file, the Symbol constructor is
+        // explicitly spec'd to reject any invocation via `new` - including a subclass's super() call,
+        // which still carries the active new.target through to it.
+        assertThrows(TypeErrorException.class,
+                () -> run("class S extends Symbol { constructor(d) { super(d); } } new S('x').toString()"));
     }
 
     // a subclass of RegExp wraps the produced primitive for RegExp.prototype methods

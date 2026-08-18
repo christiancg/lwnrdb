@@ -26,10 +26,20 @@ public final class SymbolBuiltins {
         // Interpreter run) rather than JVM-global: a static map would grow unbounded across
         // script runs and would leak symbol identities between different users' scripts.
         final Map<String, JsSymbol> registry = new ConcurrentHashMap<>();
-        final var symbol = new JsNativeFunction("Symbol",
-                (_, args) -> new JsSymbol(args.isEmpty() || args.getFirst() instanceof JsUndefined
-                        ? null
-                        : JsCoercion.toStr(args.getFirst(), ops)));
+        final var symbol = new JsNativeFunction("Symbol", (thisArg, args) -> {
+            // The Symbol constructor is not intended to be subclassed: any invocation via `new`
+            // must throw before a symbol is ever created. A direct `new Symbol()` carries a
+            // new.target; a subclass's `super()` call instead arrives with the instance under
+            // construction as `thisArg` (the applyNativeSuper convention every other constructible
+            // builtin here relies on, since new.target is deliberately not threaded through that
+            // path - see ClassEvaluator.applyNativeSuper).
+            if (JsNativeFunction.currentNewTarget() != null || !(thisArg instanceof JsUndefined)) {
+                throw new TypeErrorException("Symbol is not a constructor");
+            }
+            return new JsSymbol(args.isEmpty() || args.getFirst() instanceof JsUndefined
+                    ? null
+                    : JsCoercion.toStr(args.getFirst(), ops));
+        });
         wellKnown(symbol, "dispose", JsSymbol.DISPOSE);
         wellKnown(symbol, "asyncDispose", JsSymbol.ASYNC_DISPOSE);
         wellKnown(symbol, "iterator", JsSymbol.ITERATOR);
