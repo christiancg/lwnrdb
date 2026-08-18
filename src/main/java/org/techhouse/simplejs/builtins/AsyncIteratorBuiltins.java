@@ -140,9 +140,17 @@ public final class AsyncIteratorBuiltins {
             throw new TypeErrorException("Array.fromAsync requires an array-like or iterable object");
         }
         final var length = arrayLikeLength(ops, items);
-        final var target = InterpreterUtils.isConstructor(receiver)
-                ? ops.construct(receiver, List.of(new JsNumber(length)))
-                : new JsArray();
+        final JsValue target;
+        if (InterpreterUtils.isConstructor(receiver)) {
+            target = ops.construct(receiver, List.of(new JsNumber(length)));
+        } else {
+            // Mirrors ArrayCreate's length check: without it, a too-long array-like would drive
+            // arrayLikeStep through billions of promise hops instead of failing fast.
+            if (length > 4294967295L) {
+                throw new RangeErrorException("Invalid array length");
+            }
+            target = new JsArray();
+        }
         arrayLikeStep(ops, loop, target, items, mapper, mapThis, new long[]{0}, length, out);
     }
 

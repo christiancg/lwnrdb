@@ -216,7 +216,8 @@ public final class DateBuiltins {
             case "toLocaleString", "toLocaleDateString", "toLocaleTimeString" ->
                 new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(receiver, name)));
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(
-                    receiver.isValid() ? -localOffset(receiver.getTime()) / MS_PER_MINUTE : Double.NaN));
+                    // 0.0 - x (not unary -x) so a zero offset stays +0, matching SameValue expectations.
+                    receiver.isValid() ? (0.0 - localOffset(receiver.getTime())) / MS_PER_MINUTE : Double.NaN));
             default -> setter(receiver, name, ops);
         };
     }

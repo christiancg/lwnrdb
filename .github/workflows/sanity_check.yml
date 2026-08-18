@@ -199,7 +199,10 @@ jobs:
       - name: Driver self-test
         run: python3 test_utils/test262.py --self-test
       - name: Run conformance
-        run: python3 test_utils/test262.py --gate baseline --require-corpus
+        # 20s (vs the 10s local default): shared runners see CPU steal/oversubscription that can
+        # inflate a CPU-heavy-but-finite test (e.g. the decodeURI/decodeURIComponent RFC 3629
+        # combinatorial tests, ~2s warm-JVM locally) by 10x+, flagging it as a false HANG.
+        run: python3 test_utils/test262.py --gate baseline --require-corpus --timeout 20
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
