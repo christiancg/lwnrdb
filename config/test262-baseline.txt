@@ -1,7 +1,7 @@
 # test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline
 # corpus: 3655e7464de3d52643ecddd4b5f9f4f3e7f62398
 # generated: 2026-08-19
-# entries: 37
+# entries: 36
 FAIL  built-ins/Array/prototype/exotic-array.js
 FAIL  built-ins/Function/prototype/toString/method-computed-property-name.js
 FAIL  built-ins/Function/prototype/toString/symbol-named-builtins.js
@@ -38,4 +38,3 @@ FAIL  built-ins/String/prototype/match/duplicate-named-groups-properties.js
 FAIL  built-ins/String/prototype/match/duplicate-named-indices-groups-properties.js
 FAIL  built-ins/String/prototype/match/regexp-prototype-match-v-u-flag.js
 FAIL  built-ins/TypedArray/prototype/sort/sort-tonumber.js
-FAIL  language/statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js

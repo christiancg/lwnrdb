@@ -398,4 +398,39 @@ public class AsyncIterationProgramTest {
                 out
                 """));
     }
+
+    // Regression test for a follow-up Wave 9 fix on top of the two tests above (test262 language/
+    // statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js): the
+    // two `constructor` property reads (PromiseResolve on the step's `value` when it is itself a
+    // promise, and PromiseResolve on the outer `nextResult` wrapper from the loop's own Await) must
+    // happen synchronously, back to back, before either promise's settlement queues a tick - not
+    // with a tick interleaved between them. An earlier version of the two-tick fix above only built
+    // `nextResult` *after* the first await had already parked, which read the second `constructor`
+    // one tick too late. `Promise.prototype.constructor` is redefined (mirroring the corpus test)
+    // rather than on the value itself, since `nextResult` is an internal promise the script cannot
+    // reach directly - only the shared prototype getter observes every PromiseResolve alike.
+    @Test
+    @Timeout(5)
+    public void test_for_await_reads_both_constructors_before_any_tick_then_one_more_on_completion() {
+        assertEquals("pre,constructor,constructor,tick1,tick2,loop,constructor,tick3,tick4,post", joined("""
+                let out = [];
+                async function main() {
+                    const p = Promise.resolve(0);
+                    out.push('pre');
+                    for await (const v of [p]) { out.push('loop'); }
+                    out.push('post');
+                }
+                Promise.resolve(0)
+                    .then(() => out.push('tick1'))
+                    .then(() => out.push('tick2'))
+                    .then(() => out.push('tick3'))
+                    .then(() => out.push('tick4'));
+                Object.defineProperty(Promise.prototype, 'constructor', {
+                    get() { out.push('constructor'); return Promise; },
+                    configurable: true
+                });
+                main();
+                out
+                """));
+    }
 }

@@ -780,6 +780,10 @@ public final class Interpreter {
         return intrinsics;
     }
 
+    public EventLoop eventLoop() {
+        return eventLoop;
+    }
+
     public MemberEvaluator members() {
         return members;
     }
