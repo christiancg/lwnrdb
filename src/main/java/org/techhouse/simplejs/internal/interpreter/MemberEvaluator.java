@@ -8,8 +8,10 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.stepR
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
 
 import java.util.List;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.AsyncIteratorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.IteratorBuiltins;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
@@ -424,23 +426,29 @@ public final class MemberEvaluator {
             final var getter = table.getAccessorGetter(key);
             return getter == null ? JsUndefined.getInstance() : interp.callValue(getter, function, List.of());
         }
+        var metadataDeleted = false;
         switch (function) {
             case JsCallableProperties callable when callable.hasProperty(key) -> {
                 return callable.getProperty(key);
             }
-            case JsFunction fn when "prototype".equals(key) -> {
+            // A plain function's `prototype` is only lazily materialised for a constructible or
+            // generator function (OrdinaryFunctionCreate/MakeConstructor); an async or plain method
+            // function has none of its own and must fall through to Function.prototype instead.
+            case JsFunction fn when "prototype".equals(key) && (fn.isConstructor() || fn.isGenerator()) -> {
                 return fn.getPrototype();
             }
             case JsNativeFunction nf when "prototype".equals(key) -> {
                 return orUndefined(nf.getPrototype());
             }
-            case JsCallableProperties callable when callable.isMetadataDeleted(key) -> {
-                return JsUndefined.getInstance();
-            }
+            // A deleted "name"/"length" must not re-materialise as this function's own metadata (which
+            // FunctionProtoBuiltins.metadata below would otherwise unconditionally recompute), but it
+            // still has to fall through to the ordinary prototype chain (Function.prototype's own
+            // length=0/name=""), not answer undefined directly.
+            case JsCallableProperties callable when callable.isMetadataDeleted(key) -> metadataDeleted = true;
             default -> {
             }
         }
-        final var metadata = FunctionProtoBuiltins.metadata(function, key);
+        final var metadata = metadataDeleted ? null : FunctionProtoBuiltins.metadata(function, key);
         if (metadata != null) {
             return metadata;
         }
@@ -618,6 +626,15 @@ public final class MemberEvaluator {
                     }
                     interp.callValue(accessor.setter(), receiver, List.of(value));
                     return true;
+                }
+                // OrdinarySetWithOwnDescriptor: a non-writable data property found anywhere up the
+                // chain rejects the whole write outright, rather than letting the loop reach the end
+                // and create a new own property on the receiver as if nothing were found at all. A
+                // writable one is deliberately not special-cased - the loop just keeps walking, and
+                // the eventual "create an own property on the receiver" fallback below is exactly the
+                // spec's outcome for that case too.
+                if (protoOwnsNonWritableData(chain.link(), key)) {
+                    return false;
                 }
             }
         }
@@ -820,8 +837,21 @@ public final class MemberEvaluator {
             if (accessor != null) {
                 return ChainSetOutcome.of(writeThroughAccessor(receiver, accessor, value));
             }
+            if (protoOwnsNonWritableData(chain.link(), key)) {
+                return ChainSetOutcome.of(false);
+            }
         }
         return ChainSetOutcome.NOT_HANDLED;
+    }
+
+    // OrdinarySetWithOwnDescriptor: a non-writable data property found anywhere up the chain rejects
+    // the whole write outright rather than letting the walk reach the end and create a new own
+    // property on the receiver as if nothing were found. A writable one is deliberately not
+    // special-cased here - the walk just keeps going, and the eventual "create an own property on
+    // the receiver" outcome is exactly the spec's result for that case too.
+    private static boolean protoOwnsNonWritableData(JsValue proto, String key) {
+        final var descriptor = proto.getOwnProperty(new JsString(key));
+        return descriptor != null && !descriptor.isAccessorDescriptor() && !descriptor.writableOr(true);
     }
 
     // An inherited accessor takes the write; a getter-only one rejects it.
@@ -866,7 +896,7 @@ public final class MemberEvaluator {
 
     private boolean setArrayMember(JsArray array, String key, JsValue value) {
         if ("length".equals(key)) {
-            return array.setLength(requireLength(value));
+            return array.setLength(requireLength(value, interp.ops()));
         }
         if (array.hasPropAccessor(key)) {
             final var setter = array.getPropAccessorSetter(key);
@@ -883,30 +913,39 @@ public final class MemberEvaluator {
             }
             return true;
         }
+        // A canonical index at or past Integer.MAX_VALUE (still below the spec's own 2^32-1
+        // ceiling) can never live in the int-keyed dense/sparse storage arrayIndex's fast path
+        // covers, but it is still a real array index: JsArray.setWideIndex stores it as an ordinary
+        // named property and bumps `length`, mirroring what Object.defineProperty already does for
+        // the same range via canonicalArrayIndexWide.
+        final var wideIndex = index == null ? InterpreterUtils.canonicalArrayIndexWide(key) : null;
         if (!arrayOwnsKey(array, key, index)) {
             final var outcome = setThroughChain(array, key, array, value);
             if (outcome.handled()) {
                 return outcome.result();
             }
         }
-        return index == null ? array.setProperty(key, value) : array.set(index, value);
+        if (index != null) {
+            return array.set(index, value);
+        }
+        return wideIndex != null ? array.setWideIndex(wideIndex, value) : array.setProperty(key, value);
     }
 
     private static boolean arrayOwnsKey(JsArray array, String key, Integer index) {
         return index == null ? array.hasProperty(key) : index < array.length() && !array.isHole(index);
     }
 
-    private static long requireLength(JsValue value) {
-        final var length = JsCoercion.toNumber(value);
-        // Was `(int) length`, which silently wraps a too-large length down to Integer.MAX_VALUE
-        // instead of rejecting it - harmless while JsArray's own dense cap rejected anything past
-        // Integer.MAX_VALUE anyway, but a real bug now that setLength(long) accepts up to the spec's
-        // own 2^32-1 ceiling: the wrapped value used to land safely outside every cap and now lands
-        // safely inside one.
-        if (Double.isNaN(length) || length < 0 || length != Math.floor(length) || length > JsArray.MAX_ARRAY_LENGTH) {
+    // ArraySetLength ( A, Desc ) steps 3-5: newLen is ToUint32(Desc.[[Value]]) and numberLen is a
+    // SEPARATE ToNumber(Desc.[[Value]]) - two independent coercions of the same value, so a
+    // Symbol.toPrimitive/valueOf on it observes two calls even though only one numeric result is
+    // ultimately used. A single toNumber(value, ops) here would call it only once.
+    private static long requireLength(JsValue value, InterpreterOps ops) {
+        final var newLen = NumberFormatter.toUint32(JsCoercion.toNumber(value, ops));
+        final var numberLen = JsCoercion.toNumber(value, ops);
+        if (newLen != numberLen) {
             throw new RangeErrorException("Invalid array length");
         }
-        return (long) length;
+        return newLen;
     }
 
     private JsValue generatorMethod(JsGenerator generator, String key) {

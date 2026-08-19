@@ -185,6 +185,30 @@ public final class JsArray extends JsValue {
         }
     }
 
+    // Full-width counterpart to set(int, JsValue): the ordinary [[Set]] fast path
+    // (MemberEvaluator.setArrayMember) recognises the same [0, MAX_ARRAY_LENGTH) canonical index
+    // range as canonicalArrayIndexWide, so an index past Integer.MAX_VALUE - which can never live in
+    // the int-keyed elements/sparseValues storage - is kept as an ordinary named property in `table`
+    // instead (mirroring defineOwnProperty's wide branch), while still enforcing frozen/extensible/
+    // writable exactly like set(int) does.
+    public boolean setWideIndex(long index, JsValue value) {
+        if (index <= Integer.MAX_VALUE) {
+            return set((int) index, value);
+        }
+        if (frozen || (!table.isExtensible() && index >= length)) {
+            return false;
+        }
+        final var name = Long.toString(index);
+        if (table.has(name) && !table.getFlags(name).writable()) {
+            return false;
+        }
+        table.set(name, value);
+        if (index + 1 > length) {
+            length = index + 1;
+        }
+        return true;
+    }
+
     public void defineIndexAccessor(int index, JsValue getter, JsValue setter) {
         if (getter != null) {
             if (indexGetters == null) {
@@ -347,10 +371,14 @@ public final class JsArray extends JsValue {
 
     // ArraySetLength steps 16-17: the tail is deleted one index at a time in descending order and the
     // walk stops at the first non-configurable index, leaving length just above it and answering false.
-    // Sparse (>= MAX_DENSE_LENGTH) entries are always numerically above every dense one, so walking
-    // them first and then the dense tail is exactly the spec's single descending walk, never a mix.
+    // A wide (> Integer.MAX_VALUE) index setWideIndex stored as an ordinary named property in `table`
+    // is always numerically above every sparse one, which is in turn always above every dense one, so
+    // walking wide-then-sparse-then-dense is exactly the spec's single descending walk, never a mix.
     private boolean truncateTo(long newLength) {
         if (newLength < length) {
+            if (!removeWideTailDown(newLength)) {
+                return false;
+            }
             if (!removeSparseTailDown(newLength)) {
                 return false;
             }
@@ -361,6 +389,35 @@ public final class JsArray extends JsValue {
         length = newLength;
         if (length <= MAX_DENSE_LENGTH) {
             padTo((int) length);
+        }
+        return true;
+    }
+
+    // The counterpart to removeSparseTailDown for indices setWideIndex stored past Integer.MAX_VALUE
+    // as ordinary named properties (never in sparseValues) - table.keys() is scanned rather than
+    // walked from a maintained index set because a wide index is expected to be rare.
+    private boolean removeWideTailDown(long newLength) {
+        final var wideKeys = new ArrayList<Long>();
+        for (final var key : table.keys()) {
+            final var wide = InterpreterUtils.canonicalArrayIndexWide(key);
+            if (wide != null && wide > Integer.MAX_VALUE) {
+                wideKeys.add(wide);
+            }
+        }
+        if (wideKeys.isEmpty()) {
+            return true;
+        }
+        wideKeys.sort(Collections.reverseOrder());
+        for (final var wideKey : wideKeys) {
+            if (wideKey < newLength) {
+                continue;
+            }
+            final var name = Long.toString(wideKey);
+            if (!getPropFlags(name).configurable()) {
+                length = wideKey + 1L;
+                return false;
+            }
+            deleteProperty(name);
         }
         return true;
     }
@@ -658,6 +715,12 @@ public final class JsArray extends JsValue {
             return super.deleteOwnProperty(key);
         }
         final var name = OrdinaryProperties.keyName(key);
+        // "length" is never absent (unlike every other own key checked below, which falls through to
+        // "not present, so deletion trivially succeeds"), and it is always non-configurable, so a
+        // delete of it must always fail rather than reporting success by never being reached.
+        if ("length".equals(name)) {
+            return lengthFlags.configurable();
+        }
         final var index = InterpreterUtils.arrayIndex(name);
         if (index != null) {
             if (isHole(index)) {

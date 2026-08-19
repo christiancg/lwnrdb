@@ -35,6 +35,16 @@ public class FunctionNameInferenceTest {
         assertEquals("b", str("var b; b ||= () => {}; b.name"));
     }
 
+    // A parenthesized left-hand side is a CoverParenthesizedExpression, not a bare IdentifierRef, so
+    // NamedEvaluation must NOT apply even though the parser resolves the same Identifier target
+    // (language/expressions/assignment/fn-name-lhs-cover.js)
+    @Test
+    public void test_parenthesized_assignment_target_suppresses_naming() {
+        assertEquals("", str("var fn; (fn) = function(){}; fn.name"));
+        assertEquals("", str("var fn; (fn) ||= function(){}; fn.name"));
+        assertEquals("fn", str("var fn; fn = function(){}; fn.name"));
+    }
+
     // Object-literal shorthand methods, accessors and plain properties are all named
     @Test
     public void test_object_literal_members_are_named() {

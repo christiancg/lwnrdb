@@ -86,6 +86,7 @@ public final class Intrinsics {
     private final JsObject generatorFunctionProto;
     private final JsObject asyncGeneratorFunctionProto;
     private final JsObject asyncFunctionProto;
+    private final Map<String, JsNativeFunction> functionKindCtors = new LinkedHashMap<>();
     private JsValue defaultHasInstance;
     private JsValue defaultArrayIterator;
     private JsValue defaultStringIterator;
@@ -218,7 +219,11 @@ public final class Intrinsics {
 
     // %GeneratorFunction.prototype% and friends: the [[Prototype]] a generator/async function object
     // gets instead of Function.prototype, carrying the `constructor` a script reaches
-    // %GeneratorFunction% through (calling it throws — there is no runtime code generation).
+    // %GeneratorFunction% through (calling it throws — there is no runtime code generation). Per spec
+    // %GeneratorFunction%/%AsyncGeneratorFunction%/%AsyncFunction% are themselves subclasses of
+    // %Function% ([[Prototype]] = Function, not Function.prototype); the real Function constructor
+    // doesn't exist yet this early in realm construction, so the own-[[Prototype]] link is deferred to
+    // linkFunctionKindConstructors (same pattern as linkIteratorPrototypes below).
     private JsObject functionKindPrototype(String name, JsObject instancePrototype) {
         final var proto = new JsObject();
         proto.setProto(functionProto);
@@ -228,7 +233,7 @@ public final class Intrinsics {
         ctor.setLength(1);
         ctor.markConstructor();
         ctor.setPrototype(proto);
-        ctor.setOwnProto(functionProto);
+        functionKindCtors.put(name, ctor);
         define(proto, "constructor", ctor);
         proto.setFlags("constructor", new PropertyFlags(false, false, true));
         if (instancePrototype != null) {
@@ -242,6 +247,14 @@ public final class Intrinsics {
         }
         defineToStringTag(proto, name);
         return proto;
+    }
+
+    // GlobalScope hands the real %Function% constructor back here once it exists (mirrors
+    // linkIteratorPrototypes: both close a circular-construction gap in the realm bootstrap).
+    public void linkFunctionKindConstructors(JsValue functionConstructor) {
+        for (final var ctor : functionKindCtors.values()) {
+            ctor.setOwnProto(functionConstructor);
+        }
     }
 
     // %ThrowTypeError%: one anonymous, frozen, non-extensible function per realm, shared by every

@@ -18,6 +18,8 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.PropertyDescriptor;
 
+import java.util.Objects;
+
 public class JsArrayLengthTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
@@ -299,4 +301,180 @@ public class JsArrayLengthTest {
         assertEquals("length", ((JsString) keys.get(2)).getValue());
     }
 
+    // setWideIndex is the ordinary [[Set]] fast path's counterpart to canonicalArrayIndexWide: an
+    // index past Integer.MAX_VALUE cannot live in the int-keyed elements/sparseValues storage, so it
+    // is kept as an ordinary named property in `table` instead, while still bumping `length` exactly
+    // like the int-keyed set(int) does.
+    @Test
+    public void test_set_wide_index_stores_as_named_property_and_bumps_length() {
+        final var array = new JsArray();
+        final var wideIndex = 2_147_483_648L; // 2^31, past Integer.MAX_VALUE
+        assertTrue(array.setWideIndex(wideIndex, new JsNumber(42)));
+        assertEquals(wideIndex + 1, array.length());
+        assertTrue(array.hasProperty(Long.toString(wideIndex)));
+        assertEquals(42, ((JsNumber) Objects.requireNonNull(array.getProperty(Long.toString(wideIndex)))).getValue());
+    }
+
+    // setWideIndex delegates to the ordinary set(int) path below Integer.MAX_VALUE, rather than ever
+    // storing a small index as a named property.
+    @Test
+    public void test_set_wide_index_below_integer_max_delegates_to_dense_set() {
+        final var array = new JsArray();
+        assertTrue(array.setWideIndex(5, new JsNumber(1)));
+        assertEquals(6, array.length());
+        assertEquals(1, ((JsNumber) array.get(5)).getValue());
+        assertFalse(array.hasProperty("5"));
+    }
+
+    // A frozen array rejects a wide-index write exactly like it rejects an ordinary one.
+    @Test
+    public void test_set_wide_index_rejected_when_frozen() {
+        final var array = new JsArray();
+        array.freeze();
+        assertFalse(array.setWideIndex(2_147_483_648L, new JsNumber(1)));
+    }
+
+    // A non-extensible (but not frozen) array rejects a *new* wide index at or past the current
+    // length, mirroring set(int)'s equivalent extensibility check.
+    @Test
+    public void test_set_wide_index_rejected_when_non_extensible_and_growing() {
+        final var array = new JsArray();
+        array.preventExtensions();
+        assertFalse(array.setWideIndex(2_147_483_648L, new JsNumber(1)));
+        assertEquals(0, array.length());
+    }
+
+    // A non-writable *existing* wide-indexed property rejects an overwrite, mirroring set(int)'s
+    // hasValueAt/writable check for the dense/sparse region.
+    @Test
+    public void test_set_wide_index_overwrite_rejected_when_not_writable() {
+        final var array = new JsArray();
+        final var wideIndex = 2_147_483_648L;
+        array.defineOwnProperty(new JsString(Long.toString(wideIndex)),
+                new PropertyDescriptor(new JsNumber(1), null, null, false, true, true));
+        assertFalse(array.setWideIndex(wideIndex, new JsNumber(2)));
+        assertEquals(1, ((JsNumber) Objects.requireNonNull(array.getProperty(Long.toString(wideIndex)))).getValue());
+    }
+
+    // Writing to an already-covered wide index (one below the current length) does not re-bump
+    // length - the "no growth" side of the length-bump check.
+    @Test
+    public void test_set_wide_index_within_existing_length_does_not_rebump_length() {
+        final var array = new JsArray();
+        final var lower = 2_147_483_648L;
+        final var upper = 2_147_483_700L;
+        array.setWideIndex(upper, new JsNumber(1));
+        assertEquals(upper + 1, array.length());
+        assertTrue(array.setWideIndex(lower, new JsNumber(2)));
+        assertEquals(upper + 1, array.length());
+    }
+
+    // "length" is always non-configurable, so deleting it must always fail - not silently succeed by
+    // falling through the "absent key" path the way an ordinary named property does.
+    @Test
+    public void test_delete_length_always_fails() {
+        final var array = array(2);
+        assertFalse(array.deleteOwnProperty(new JsString("length")));
+        assertEquals(2, array.length());
+    }
+
+    // The JS-visible counterpart: Reflect.deleteProperty on an array's "length" must report false.
+    @Test
+    public void test_reflect_delete_length_reports_false() {
+        assertFalse(((JsBoolean) Interpreter.run("Reflect.deleteProperty([1, 2], 'length')")).getValue());
+    }
+
+    // Shrinking length past a wide (> Integer.MAX_VALUE) index deletes it, mirroring the sparse/dense
+    // tail removal - the ArraySetLength boundary test this closes (S15.4.5.2_A3_T4).
+    @Test
+    public void test_shrinking_past_a_wide_index_removes_it() {
+        final var array = new JsArray();
+        final var wideIndex = 4_294_967_294L; // 2^32 - 2, the largest legal array index
+        array.setWideIndex(wideIndex, new JsNumber(1));
+        assertTrue(array.setLength(2));
+        assertEquals(2, array.length());
+        assertFalse(array.hasProperty(Long.toString(wideIndex)));
+    }
+
+    // A non-configurable wide index stops the descending truncation walk exactly like a non-
+    // configurable sparse/dense one does, leaving length just above it.
+    @Test
+    public void test_shrinking_past_a_non_configurable_wide_index_is_rejected() {
+        final var array = new JsArray();
+        final var wideIndex = 4_294_967_294L;
+        array.defineOwnProperty(new JsString(Long.toString(wideIndex)),
+                new PropertyDescriptor(new JsNumber(1), null, null, true, true, false));
+        assertFalse(array.setLength(2));
+        assertEquals(wideIndex + 1, array.length());
+    }
+
+    // removeWideTailDown's descending walk skips a wide index that is still below the new length
+    // (the "continue" branch) while still removing one at or past it, in the same truncation call.
+    @Test
+    public void test_shrinking_skips_a_surviving_wide_index_but_removes_a_later_one() {
+        final var array = new JsArray();
+        final var surviving = 2_147_483_700L;
+        final var removed = 2_147_483_800L;
+        array.setWideIndex(surviving, new JsNumber(1));
+        array.setWideIndex(removed, new JsNumber(2));
+        assertTrue(array.setLength(surviving + 1));
+        assertEquals(surviving + 1, array.length());
+        assertTrue(array.hasProperty(Long.toString(surviving)));
+        assertFalse(array.hasProperty(Long.toString(removed)));
+    }
+
+    // A symbol-keyed delete on an array falls through to the ordinary JsValue path (arrays have no
+    // exotic symbol-keyed behaviour), rather than the array-index-specific branches above it.
+    @Test
+    public void test_delete_symbol_keyed_property() {
+        final var array = new JsArray();
+        final var symbol = new org.techhouse.simplejs.values.JsSymbol("s");
+        array.defineOwnProperty(symbol, PropertyDescriptor.data(new JsNumber(1), JsObject.PropertyFlags.DEFAULT));
+        assertTrue(array.hasOwnKey(symbol));
+        assertTrue(array.deleteOwnProperty(symbol));
+        assertFalse(array.hasOwnKey(symbol));
+    }
+
+    // End-to-end through the interpreter: an ordinary assignment past Integer.MAX_VALUE (the array-
+    // length fast-path gap the master plan called the "Former hard blocker on 100%") now bumps
+    // length exactly like Object.defineProperty already did.
+    @Test
+    public void test_ordinary_assignment_past_integer_max_value_bumps_length_through_interpreter() {
+        assertEquals(2147483649.0, num("const x = []; x[2147483648] = 1; x.length"));
+        assertEquals(4294967295.0, num("const x = []; x[2147483648] = 1; x[4294967294] = 1; x.length"));
+    }
+
+    // setWideIndex honours frozen/non-extensible exactly like set(int) does: a brand-new wide index
+    // (past the current length) cannot be added to a non-extensible array.
+    @Test
+    public void test_wide_index_write_rejected_on_a_non_extensible_array() {
+        final var array = new JsArray();
+        array.preventExtensions();
+        assertFalse(array.setWideIndex(4_294_967_294L, new JsNumber(1)));
+        assertEquals(0, array.length());
+    }
+
+    // setWideIndex also honours an existing non-writable named property at that wide index, the same
+    // way an ordinary [[Set]] would.
+    @Test
+    public void test_wide_index_write_rejected_when_existing_property_is_non_writable() {
+        final var array = new JsArray();
+        final var wideIndex = 4_294_967_294L;
+        array.defineOwnProperty(new JsString(Long.toString(wideIndex)),
+                new PropertyDescriptor(new JsNumber(1), null, null, false, true, true));
+        assertFalse(array.setWideIndex(wideIndex, new JsNumber(2)));
+        assertEquals(1, ((JsNumber) Objects.requireNonNull(array.getProperty(Long.toString(wideIndex)))).getValue());
+    }
+
+    // removeWideTailDown's descending walk must skip (not touch) a wide key still below the new
+    // length rather than rejecting or removing it.
+    @Test
+    public void test_shrinking_skips_a_wide_key_still_below_the_new_length() {
+        final var array = new JsArray();
+        final var keep = 5_000_000_000L;
+        array.setWideIndex(keep, new JsNumber(1));
+        assertTrue(array.setLength(keep + 100));
+        assertTrue(array.hasProperty(Long.toString(keep)));
+        assertEquals(keep + 100, array.length());
+    }
 }

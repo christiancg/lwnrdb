@@ -90,7 +90,12 @@ public final class ObjectProtoBuiltins {
         if (!ops.isExtensible(receiver)) {
             throw new TypeErrorException("Cannot set prototype of a non-extensible object");
         }
-        ops.setPrototypeOf(receiver, proto);
+        // OrdinarySetPrototypeOf can also answer false for a cycle or an immutable-prototype exotic
+        // object (%Object.prototype%) - both real rejections the Annex B setter must surface as a
+        // TypeError too, not just the extensibility case checked above.
+        if (!ops.setPrototypeOf(receiver, proto)) {
+            throw new TypeErrorException("Cannot set prototype: rejected for '" + JsCoercion.toStr(proto) + "'");
+        }
         return JsUndefined.getInstance();
     }
 

@@ -93,10 +93,12 @@ public class InterpreterMemberTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("undefined.foo"));
     }
 
-    // A deleted builtin-function metadata property (name/length) reads back as undefined
+    // A deleted builtin-function metadata property (name/length) falls through to Function.prototype's
+    // own name=""/length=0 instead of answering undefined directly (functionMember's isMetadataDeleted
+    // branch used to hard-return undefined rather than continuing past FunctionProtoBuiltins.metadata).
     @Test
-    public void test_deleted_function_metadata_reads_undefined() {
-        assertEquals("undefined", str("delete parseInt.name; typeof parseInt.name"));
+    public void test_deleted_function_metadata_falls_through_to_function_prototype() {
+        assertEquals("string,", str("delete parseInt.name; typeof parseInt.name + ',' + parseInt.name"));
     }
 
     // A typed array exposes BYTES_PER_ELEMENT per its kind
@@ -381,5 +383,47 @@ public class InterpreterMemberTest {
                 String(threw)
                 """;
         assertEquals("true", str(source));
+    }
+
+    // A deleted "length"/"name" on a native function must fall through to Function.prototype's own
+    // length=0/name="" (not answer undefined directly) - functionMember's isMetadataDeleted branch
+    // used to hard-return undefined instead of continuing past FunctionProtoBuiltins.metadata.
+    @Test
+    public void test_deleted_native_function_length_falls_through_to_function_prototype() {
+        final var source = """
+                delete decodeURI.length;
+                var lengthIsDefined = decodeURI.length !== undefined;
+                var lengthValue = decodeURI.length;
+                delete decodeURI.name;
+                var nameIsDefined = decodeURI.name !== undefined;
+                lengthIsDefined + ',' + lengthValue + ',' + nameIsDefined + ',' + decodeURI.name
+                """;
+        assertEquals("true,0,true,", str(source));
+    }
+
+    // A plain function's "prototype" is only lazily materialised for a constructible or generator
+    // function - an async (non-generator) function has no own prototype at all.
+    @Test
+    public void test_async_function_prototype_is_undefined() {
+        final var source = """
+                async function foo() {}
+                String(foo.prototype)
+                """;
+        assertEquals("undefined", str(source));
+    }
+
+    // A non-writable data property found on the prototype chain rejects the whole write outright,
+    // rather than letting it fall through and create a new own property on the receiver.
+    @Test
+    public void test_inherited_non_writable_data_property_rejects_the_write() {
+        final var source = """
+                function foo() {}
+                Object.defineProperty(foo.prototype, "bar", {value: "unwritable"});
+                var o = new foo();
+                var threw = false;
+                try { o.bar = "overridden"; } catch (e) { threw = e instanceof TypeError; }
+                threw + ',' + o.bar + ',' + o.hasOwnProperty('bar')
+                """;
+        assertEquals("true,unwritable,false", str(source));
     }
 }

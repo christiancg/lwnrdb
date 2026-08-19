@@ -1490,9 +1490,15 @@ public final class Parser {
                     // installs (so the assignment reaches Environment.assign and throws its own
                     // TypeError, exactly like any other non-writable global).
                     final var resolvedLeft = left instanceof UndefinedLiteral ? new Identifier("undefined") : left;
+                    // Parentheses make the left-hand side not an IdentifierReference production per
+                    // spec (it's a CoverParenthesizedExpression instead), even though the parser's
+                    // "parens are transparent" cover-grammar reinterpretation still yields the same
+                    // Identifier/MemberExpression target node - so NamedEvaluation must be suppressed
+                    // for `(fn) = function(){}` even though `fn = function(){}` gets it.
+                    final var targetParenthesized = parenthesised.contains(left);
                     final var target = patterns.resolveAssignmentTarget(resolvedLeft, op);
                     advance();
-                    return new AssignmentExpression(op, target, parseAssignment());
+                    return new AssignmentExpression(op, target, parseAssignment(), targetParenthesized);
                 }
             }
             if (duplicateProto.contains(left)) {

@@ -36,7 +36,7 @@ public final class ObjectBuiltins {
 
     public static JsNativeFunction create(IterableToList iterableToList, InterpreterOps ops, Invoker invoker,
             Intrinsics intrinsics) {
-        final var object = new JsNativeFunction("Object", (_, args) -> coerceToObject(args, intrinsics));
+        final var object = new JsNativeFunction("Object", (thisArg, args) -> coerceToObject(thisArg, args, intrinsics));
         // GetOwnPropertyKeys and its neighbours start at ToObject(O), so a primitive argument is
         // boxed here rather than in each helper: a String wrapper then contributes its code units.
         object.setProperty("keys", new JsNativeFunction("keys", (_, args) -> keys(boxed(args, intrinsics), ops)));
@@ -115,7 +115,18 @@ public final class ObjectBuiltins {
         return boxed;
     }
 
-    private static JsValue coerceToObject(List<JsValue> args, Intrinsics intrinsics) {
+    private static JsValue coerceToObject(JsValue thisArg, List<JsValue> args, Intrinsics intrinsics) {
+        // Object ( [ value ] ) step 1: "If NewTarget is neither undefined nor the active function,
+        // return ? OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")" - the value
+        // argument is ignored entirely whenever this is reached through a subclass's super() call.
+        // applyNativeSuper (ClassEvaluator) is the only caller that supplies the instance under
+        // construction as thisArg - a plain call or a direct `new Object(x)` never does (the latter
+        // is special-cased in full by Interpreter.constructNative, which never reaches this lambda) -
+        // so an object-like thisArg is exactly that signal, and the instance already carries the
+        // right prototype from OrdinaryCreateFromConstructor one level up.
+        if (thisArg instanceof JsObject instance) {
+            return instance;
+        }
         final var value = first(args);
         if (InterpreterUtils.isNullish(value)) {
             final var created = new JsObject();
@@ -618,38 +629,42 @@ public final class ObjectBuiltins {
         return proto == null ? JsNull.getInstance() : proto;
     }
 
-    public static JsValue setPrototypeOf(List<JsValue> args) {
-        final var target = first(args);
-        // RequireObjectCoercible(O), then the Type(proto) check - both run before step 4 asks
-        // whether O is even an object, so a primitive target still rejects a bad proto argument.
+    // The real OrdinarySetPrototypeOf(V) boolean, consumed by every real caller (Object.setPrototypeOf,
+    // Reflect.setPrototypeOf, a Proxy's default [[SetPrototypeOf]]) so each can report failure without
+    // an exception, exactly like every other [[SetPrototypeOf]] rejection reason. Argument validation
+    // (nullish target, a non-object/non-null proto) still throws unconditionally - those are
+    // TypeError regardless of which caller asks.
+    public static boolean trySetPrototypeOf(JsValue target, JsValue protoArg, Intrinsics intrinsics) {
         if (InterpreterUtils.isNullish(target)) {
             throw new TypeErrorException("Object.setPrototypeOf called on null or undefined");
         }
-        final var protoArg = argAt(args, 1);
         if (!InterpreterUtils.isObjectLike(protoArg) && !(protoArg instanceof JsNull)) {
             throw new TypeErrorException(
                     "Object prototype may only be an Object or null: " + JsCoercion.toStr(protoArg));
         }
-        if (InterpreterUtils.isObjectLike(target)) {
-            final var proto = InterpreterUtils.isObjectLike(protoArg) ? protoArg : null;
-            // OrdinarySetPrototypeOf step 2: SameValue(V, current) is a no-op even when the target
-            // is non-extensible.
-            if (proto != target.getProto()) {
-                // Step 4: rejected before the cyclic walk, which is otherwise the only signal a
-                // non-extensible target ever gives - it would silently "succeed" without this.
-                if (!target.isExtensible()) {
-                    throw new TypeErrorException("Object.setPrototypeOf called on non-extensible object");
-                }
-                // Step 8: a cycle would make every later chain walk unbounded.
-                for (var walk = proto; walk != null; walk = walk.getProto()) {
-                    if (walk == target) {
-                        throw new TypeErrorException("Cyclic __proto__ value");
-                    }
-                }
-                target.setProto(proto);
+        if (!InterpreterUtils.isObjectLike(target)) {
+            return true;
+        }
+        final var proto = InterpreterUtils.isObjectLike(protoArg) ? protoArg : null;
+        if (proto == target.getProto()) {
+            return true;
+        }
+        // 9.4.7.1 [[SetPrototypeOf]] (V) for an immutable-prototype exotic object (%Object.prototype%
+        // is the only one a script can reach): any V that isn't SameValue as the current prototype is
+        // rejected outright, independent of extensibility or cycles.
+        if (intrinsics != null && target == intrinsics.objectProto()) {
+            return false;
+        }
+        if (!target.isExtensible()) {
+            return false;
+        }
+        for (var walk = proto; walk != null; walk = walk.getProto()) {
+            if (walk == target) {
+                return false;
             }
         }
-        return target;
+        target.setProto(proto);
+        return true;
     }
 
     public static JsValue defineProperty(List<JsValue> args, InterpreterOps ops) {

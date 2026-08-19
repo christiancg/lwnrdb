@@ -36,6 +36,7 @@ import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
@@ -89,6 +90,32 @@ public class IntrinsicsTest {
         for (final var kind : JsTypedArray.Kind.values()) {
             assertSame(realm.typedArrayProto(kind), realm.protoFor(new JsTypedArray(kind, buffer, 0, 0)));
         }
+    }
+
+    // %AsyncFunction%/%GeneratorFunction%/%AsyncGeneratorFunction% are subclasses of %Function% per
+    // spec (Object.getPrototypeOf(AsyncFunction) === Function): the real Function constructor doesn't
+    // exist yet when Intrinsics builds these function-kind constructors, so the own-[[Prototype]]
+    // link starts unset and is wired later by linkFunctionKindConstructors, mirroring
+    // linkIteratorPrototypes's realm-bootstrap handoff.
+    @Test
+    public void test_link_function_kind_constructors_wires_own_prototype() {
+        final var realm = intrinsics();
+        final var asyncFn = new JsFunction("f", List.of(), null, false, false, true, false, null);
+        final var generatorFn = new JsFunction("g", List.of(), null, false, false, false, true, null);
+        final var asyncGeneratorFn = new JsFunction("ag", List.of(), null, false, false, true, true, null);
+        final var asyncCtor = (JsNativeFunction) realm.protoFor(asyncFn).get("constructor");
+        final var generatorCtor = (JsNativeFunction) realm.protoFor(generatorFn).get("constructor");
+        final var asyncGeneratorCtor = (JsNativeFunction) realm.protoFor(asyncGeneratorFn).get("constructor");
+        assertNull(asyncCtor.getOwnProto());
+        assertNull(generatorCtor.getOwnProto());
+        assertNull(asyncGeneratorCtor.getOwnProto());
+
+        final var functionCtor = new JsNativeFunction("Function", (_, _) -> JsUndefined.getInstance());
+        realm.linkFunctionKindConstructors(functionCtor);
+
+        assertSame(functionCtor, asyncCtor.getOwnProto());
+        assertSame(functionCtor, generatorCtor.getOwnProto());
+        assertSame(functionCtor, asyncGeneratorCtor.getOwnProto());
     }
 
     // Each family's NAMES list agrees exactly with the keys installed on its prototype

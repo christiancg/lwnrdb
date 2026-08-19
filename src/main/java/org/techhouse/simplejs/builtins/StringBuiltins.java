@@ -322,8 +322,8 @@ public final class StringBuiltins {
             });
             case "toUpperCase" ->
                 new JsNativeFunction("toUpperCase", (_, _) -> new JsString(value.toUpperCase(Locale.ROOT)));
-            case "toLowerCase" ->
-                new JsNativeFunction("toLowerCase", (_, _) -> new JsString(value.toLowerCase(Locale.ROOT)));
+            case "toLowerCase" -> new JsNativeFunction("toLowerCase",
+                    (_, _) -> new JsString(toLowerCaseWithFinalSigma(value, Locale.ROOT)));
             case "trim" -> new JsNativeFunction("trim", (_, _) -> new JsString(trim(value, true, true)));
             case "includes" -> new JsNativeFunction("includes", (_, args) -> {
                 requireNotRegExp(args, "includes", ops);
@@ -363,7 +363,7 @@ public final class StringBuiltins {
             case "toLocaleUpperCase" -> new JsNativeFunction("toLocaleUpperCase",
                     (_, _) -> new JsString(value.toUpperCase(Locale.getDefault())));
             case "toLocaleLowerCase" -> new JsNativeFunction("toLocaleLowerCase",
-                    (_, _) -> new JsString(value.toLowerCase(Locale.getDefault())));
+                    (_, _) -> new JsString(toLowerCaseWithFinalSigma(value, Locale.getDefault())));
             case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> new JsString(trim(value, true, false)));
             case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> new JsString(trim(value, false, true)));
             default -> null;
@@ -403,6 +403,80 @@ public final class StringBuiltins {
             }
         }
         return result.toString();
+    }
+
+    private static final int GREEK_CAPITAL_SIGMA = 0x03A3;
+    private static final int GREEK_SMALL_SIGMA = 0x03C3;
+    private static final int GREEK_SMALL_FINAL_SIGMA = 0x03C2;
+
+    /**
+     * Applies the Unicode Default Case Algorithm's context-dependent {@code Final_Sigma} rule
+     * (Unicode Standard Annex #44 / SpecialCasing.txt) on top of the JDK's ordinary lower-casing,
+     * which does not implement it: a capital sigma preceded by a cased letter (skipping any
+     * intervening case-ignorable characters) and not followed by a cased letter (skipping any
+     * intervening case-ignorable characters) lower-cases to the final form (U+03C2) rather than the
+     * medial form (U+03C3).
+     */
+    private static String toLowerCaseWithFinalSigma(String value, Locale locale) {
+        if (value.indexOf(GREEK_CAPITAL_SIGMA) < 0) {
+            return value.toLowerCase(locale);
+        }
+        final var codePoints = value.codePoints().toArray();
+        final var result = new StringBuilder(value.length());
+        for (var i = 0; i < codePoints.length; i++) {
+            final var codePoint = codePoints[i];
+            if (codePoint == GREEK_CAPITAL_SIGMA) {
+                result.appendCodePoint(
+                        isFinalSigmaContext(codePoints, i) ? GREEK_SMALL_FINAL_SIGMA : GREEK_SMALL_SIGMA);
+            } else {
+                result.append(new String(Character.toChars(codePoint)).toLowerCase(locale));
+            }
+        }
+        return result.toString();
+    }
+
+    private static boolean isFinalSigmaContext(int[] codePoints, int index) {
+        final var before = firstNonIgnorableBefore(codePoints, index);
+        if (before < 0 || isNotCased(codePoints[before])) {
+            return false;
+        }
+        final var after = firstNonIgnorableAfter(codePoints, index);
+        return after < 0 || isNotCased(codePoints[after]);
+    }
+
+    private static int firstNonIgnorableBefore(int[] codePoints, int index) {
+        var i = index - 1;
+        while (i >= 0 && isCaseIgnorable(codePoints[i])) {
+            i--;
+        }
+        return i;
+    }
+
+    private static int firstNonIgnorableAfter(int[] codePoints, int index) {
+        var i = index + 1;
+        while (i < codePoints.length && isCaseIgnorable(codePoints[i])) {
+            i++;
+        }
+        return i < codePoints.length ? i : -1;
+    }
+
+    private static boolean isNotCased(int codePoint) {
+        return !Character.isUpperCase(codePoint) && !Character.isLowerCase(codePoint)
+                && Character.getType(codePoint) != Character.TITLECASE_LETTER;
+    }
+
+    private static boolean isCaseIgnorable(int codePoint) {
+        final var type = Character.getType(codePoint);
+        if (type == Character.NON_SPACING_MARK || type == Character.ENCLOSING_MARK || type == Character.FORMAT
+                || type == Character.MODIFIER_LETTER || type == Character.MODIFIER_SYMBOL) {
+            return true;
+        }
+        return switch (codePoint) {
+            case 0x0027, 0x002E, 0x003A, 0x00B7, 0x0387, 0x055F, 0x05F4, 0x2018, 0x2019, 0x2024, 0x2027, 0xFE13, 0xFE52,
+                    0xFE55, 0xFF07, 0xFF0E, 0xFF1A ->
+                true;
+            default -> false;
+        };
     }
 
     private static JsValue charCodeAt(String value, List<JsValue> args, InterpreterOps ops) {

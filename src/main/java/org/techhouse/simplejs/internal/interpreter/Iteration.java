@@ -15,6 +15,7 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArguments;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
@@ -177,7 +178,19 @@ public final class Iteration {
                 || iterable instanceof JsTypedArray)) {
             return false;
         }
-        return interp.intrinsics().isDefaultIterator(iterable, interp.getMemberByKey(iterable, JsSymbol.ITERATOR));
+        final var candidate = interp.getMemberByKey(iterable, JsSymbol.ITERATOR);
+        if (!interp.intrinsics().isDefaultIterator(iterable, candidate)) {
+            return false;
+        }
+        // isDefaultIterator only confirms @@iterator itself is untouched; the shared
+        // %ArrayIteratorPrototype%/%StringIteratorPrototype%'s `next` can still be monkey-patched
+        // (e.g. `Object.getPrototypeOf([].values()).next = fn`), which the fast path would then
+        // silently bypass. A user-authored replacement is never a JsNativeFunction (only the host ever
+        // installs one), and probing a throwaway instance is cheap and side-effect-free - the default
+        // iterator is lazy, so constructing it does not read any elements - so this is the only way to
+        // observe the patch without a stored reference to compare against.
+        final var probe = interp.callValue(candidate, iterable, List.of());
+        return interp.getMember(probe, "next") instanceof JsNativeFunction;
     }
 
     private JsValue openIterator(JsValue iterable) {

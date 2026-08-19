@@ -182,8 +182,12 @@ public final class Interpreter {
             if (target instanceof JsObject || isNullish(target)) {
                 return ObjectBuiltins.getPrototypeOf(List.of(target));
             }
-            if ((target instanceof JsClass || target instanceof JsGenerator || target instanceof JsAsyncGenerator)
-                    && target.getProto() != null) {
+            // An explicit [[Prototype]] (Object.setPrototypeOf(arr, other)) wins over the realm's
+            // intrinsic default for the type - JsArray carries its own proto slot the same way
+            // JsClass/JsGenerator/JsAsyncGenerator do, but was missing here, so Object.getPrototypeOf
+            // on an array with an explicit prototype wrongly reported Array.prototype instead.
+            if ((target instanceof JsClass || target instanceof JsGenerator || target instanceof JsAsyncGenerator
+                    || target instanceof JsArray) && target.getProto() != null) {
                 return target.getProto();
             }
             return intrinsics.protoFor(target);
@@ -194,8 +198,7 @@ public final class Interpreter {
             if (target instanceof JsProxy proxy) {
                 return proxies.setPrototypeOf(proxy, proto);
             }
-            ObjectBuiltins.setPrototypeOf(List.of(target, proto));
-            return true;
+            return ObjectBuiltins.trySetPrototypeOf(target, proto, intrinsics);
         }
 
         @Override

@@ -29,7 +29,12 @@ public final class GlobalScope {
         ErrorBuiltins.install(global, intrinsics, ops, iterableToList);
         constructor(global, "Object", ObjectBuiltins.create(iterableToList, ops, invoker, intrinsics),
                 intrinsics.objectProto());
-        constructor(global, "Function", functionConstructor(), intrinsics.functionProto());
+        final var functionCtor = functionConstructor();
+        constructor(global, "Function", functionCtor, intrinsics.functionProto());
+        // %GeneratorFunction%/%AsyncGeneratorFunction%/%AsyncFunction% are subclasses of %Function%
+        // per spec ([[Prototype]] = Function itself), but Function doesn't exist yet when
+        // functionKindPrototype builds them - stitch the link now that it does.
+        intrinsics.linkFunctionKindConstructors(functionCtor);
         constructor(global, "Array", ArrayBuiltins.create(invoker, eventLoop, ops, intrinsics),
                 intrinsics.arrayProto());
         constructor(global, "String", StringBuiltins.create(ops), intrinsics.stringProto());

@@ -117,6 +117,16 @@ public class PrototypeProgramTest {
         assertEquals("true", run("const o = {a: 1}; return new Object(o) === o"));
     }
 
+    // Object ( [ value ] ) step 1: when NewTarget is a subclass (not the active function), the value
+    // argument is ignored entirely and a fresh instance is produced instead of wrapping/returning it -
+    // unlike a direct `new Object(x)` (test_new_object_with_object_argument above), which still
+    // returns the argument unchanged.
+    @Test
+    public void test_extends_object_ignores_constructor_argument() {
+        assertEquals("[true,true]", run("class O extends Object {} const o = new O({a: 1});"
+                + " return [o.a === undefined, Object.getPrototypeOf(o) === O.prototype]"));
+    }
+
     // Intrinsic entries are non-enumerable, so enumeration and serialisation are unaffected
     @Test
     public void test_intrinsics_are_not_enumerable() {

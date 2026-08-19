@@ -340,7 +340,8 @@ public final class ArrayBuiltins {
 
         JsValue get(long index) {
             final var dense = dense();
-            if (dense != null && index >= 0 && index < dense.length() && !dense.isHole((int) index)) {
+            if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()
+                    && !dense.isHole((int) index)) {
                 return dense.get((int) index);
             }
             final var element = getKey(key(index));
@@ -349,7 +350,8 @@ public final class ArrayBuiltins {
 
         boolean has(long index) {
             final var dense = dense();
-            if (dense != null && index >= 0 && index < dense.length() && !dense.isHole((int) index)) {
+            if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()
+                    && !dense.isHole((int) index)) {
                 return true;
             }
             if (ops == null) {
@@ -386,8 +388,12 @@ public final class ArrayBuiltins {
                 return true;
             }
             final var dense = dense();
-            if (dense != null) {
-                return index <= Integer.MAX_VALUE && dense.set((int) index, element);
+            // A dense JsArray whose index is past the int-keyed storage's reach (still below the
+            // spec's 2^32-1 length ceiling) cannot take the (int) fast path, but it is a real target
+            // for the write - falling through to the ops-based path (below) reaches
+            // JsArray.setWideIndex through the ordinary [[Set]] seam instead of failing outright.
+            if (dense != null && index <= Integer.MAX_VALUE) {
+                return dense.set((int) index, element);
             }
             if (ops == null) {
                 return true;
@@ -448,7 +454,7 @@ public final class ArrayBuiltins {
         void delete(long index) {
             if (ops == null) {
                 final var dense = dense();
-                if (dense != null && index >= 0 && index < dense.length()) {
+                if (dense != null && index >= 0 && index <= Integer.MAX_VALUE && index < dense.length()) {
                     dense.clearIndexToHole((int) index);
                 }
                 return;

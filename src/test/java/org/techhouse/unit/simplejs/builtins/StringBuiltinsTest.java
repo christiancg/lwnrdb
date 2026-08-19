@@ -405,6 +405,26 @@ public class StringBuiltinsTest {
         assertEquals("abc", str("'ABC'.toLocaleLowerCase()"));
     }
 
+    // Greek capital sigma lower-cases to the context-dependent final form (U+03C2) at the end of a
+    // cased-letter run, and to the ordinary medial form (U+03C3) everywhere else (Unicode Default
+    // Case Algorithm's Final_Sigma condition, SpecialCasing.txt)
+    @Test
+    public void test_to_lower_case_final_sigma() {
+        assertEquals("σ", str("'\\u03A3'.toLowerCase()"));
+        assertEquals("aς", str("'A\\u03A3'.toLowerCase()"));
+        assertEquals("a.ς", str("'A.\\u03A3'.toLowerCase()"));
+        assertEquals("a­ς", str("'A\\u00AD\\u03A3'.toLowerCase()"));
+        assertEquals("a𝉂ς", str("'A\\uD834\\uDE42\\u03A3'.toLowerCase()"));
+        assertEquals("ͅσ", str("'\\u0345\\u03A3'.toLowerCase()"));
+        assertEquals("ᾳς", str("'\\u0391\\u0345\\u03A3'.toLowerCase()"));
+        assertEquals("aσb", str("'A\\u03A3B'.toLowerCase()"));
+        assertEquals("aσ.b", str("'A\\u03A3.b'.toLowerCase()"));
+        assertEquals("aςͅ", str("'A\\u03A3\\u0345'.toLowerCase()"));
+        assertEquals("aσͅα", str("'A\\u03A3\\u0345\\u0391'.toLowerCase()"));
+        assertEquals("aς", str("'A\\u03A3'.toLocaleLowerCase()"));
+        assertEquals("aσb", str("'A\\u03A3B'.toLocaleLowerCase()"));
+    }
+
     // String(symbol) returns the descriptive string instead of throwing
     @Test
     public void test_string_of_symbol_returns_descriptive_string() {

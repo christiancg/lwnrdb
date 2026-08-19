@@ -571,13 +571,19 @@ public final class ExpressionEvaluator {
 
     private JsValue assignToIdentifier(String name, AssignmentExpression assignment, Environment env) {
         final var operator = assignment.getOperator();
+        // NamedEvaluation only applies when the left-hand side is a bare IdentifierReference; a
+        // parenthesized target (`(fn) = function(){}`) is a CoverParenthesizedExpression instead, so
+        // the assigned anonymous function/class must keep its default (empty) name.
+        final var named = !assignment.isTargetParenthesized();
         if ("=".equals(operator)) {
             // The target reference is resolved (ResolveBinding) before the right-hand side is
             // evaluated, so an assignment that becomes resolvable only as a side effect of
             // evaluating the right-hand side (`undeclared = (this.undeclared = 5)`) still throws:
             // PutValue acts on the resolution captured up front, not a re-resolution afterwards.
             final var resolvable = env.isDeclared(name);
-            final var value = interp.evalNamed(assignment.getValue(), env, name);
+            final var value = named
+                    ? interp.evalNamed(assignment.getValue(), env, name)
+                    : interp.eval(assignment.getValue(), env);
             if (!resolvable) {
                 throw new ReferenceErrorException(name + " is not defined");
             }
@@ -589,7 +595,9 @@ public final class ExpressionEvaluator {
             if (shouldNotApplyLogical(operator, current)) {
                 return current;
             }
-            final var value = interp.evalNamed(assignment.getValue(), env, name);
+            final var value = named
+                    ? interp.evalNamed(assignment.getValue(), env, name)
+                    : interp.eval(assignment.getValue(), env);
             env.assign(name, value);
             return value;
         }
