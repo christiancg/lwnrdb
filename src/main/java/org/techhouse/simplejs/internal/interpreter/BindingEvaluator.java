@@ -115,10 +115,7 @@ public final class BindingEvaluator {
             final var init = declarator.getInit();
             if (id instanceof Identifier identifier) {
                 final var name = identifier.getName();
-                final var value = init == null ? JsUndefined.getInstance() : interp.eval(init, env);
-                if (init != null) {
-                    InterpreterUtils.applyInferredName(init, value, name);
-                }
+                final var value = init == null ? JsUndefined.getInstance() : interp.evalNamed(init, env, name);
                 if (LEXICAL_KINDS.contains(kind)) {
                     env.initialize(name, value);
                 } else if (init != null) {
@@ -135,8 +132,7 @@ public final class BindingEvaluator {
     private Completion evalUsingDeclaration(VariableDeclaration declaration, Environment env, boolean async) {
         for (final var declarator : declaration.getDeclarations()) {
             final var name = ((Identifier) declarator.getId()).getName();
-            final var value = interp.eval(declarator.getInit(), env);
-            InterpreterUtils.applyInferredName(declarator.getInit(), value, name);
+            final var value = interp.evalNamed(declarator.getInit(), env, name);
             env.initialize(name, value);
             registerUsingResource(env, value, async);
         }
@@ -269,11 +265,10 @@ public final class BindingEvaluator {
         if (!(value instanceof JsUndefined)) {
             return value;
         }
-        final var resolved = interp.eval(pattern.getRight(), env);
         if (pattern.getLeft() instanceof Identifier id) {
-            InterpreterUtils.applyInferredName(pattern.getRight(), resolved, id.getName());
+            return interp.evalNamed(pattern.getRight(), env, id.getName());
         }
-        return resolved;
+        return interp.eval(pattern.getRight(), env);
     }
 
     private void destructureArray(ArrayPattern pattern, JsValue value, Environment env, LeafBinder leaf) {

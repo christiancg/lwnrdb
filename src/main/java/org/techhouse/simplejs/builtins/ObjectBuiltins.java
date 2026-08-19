@@ -66,11 +66,22 @@ public final class ObjectBuiltins {
             return ops.getPrototypeOf(intrinsics.toObject(first(args)));
         }));
         object.setProperty("setPrototypeOf", new JsNativeFunction("setPrototypeOf", (_, args) -> {
-            ops.setPrototypeOf(first(args), argAt(args, 1));
+            // [[SetPrototypeOf]] can fail without throwing (a Proxy trap answering false, a
+            // non-extensible target, ...); Object.setPrototypeOf must turn that false into a
+            // TypeError instead of silently reporting success.
+            if (!ops.setPrototypeOf(first(args), argAt(args, 1))) {
+                throw new TypeErrorException("Object.setPrototypeOf: trap returned falsish for property '"
+                        + JsCoercion.toStr(argAt(args, 1)) + "'");
+            }
             return first(args);
         }));
         object.setProperty("defineProperty", new JsNativeFunction("defineProperty", (_, args) -> {
-            ops.defineProperty(first(args), argAt(args, 1), argAt(args, 2));
+            // Same rejection-without-throw case as setPrototypeOf above: [[DefineOwnProperty]]
+            // (notably a Proxy's trap) can answer false, which Object.defineProperty must reject.
+            if (!ops.defineProperty(first(args), argAt(args, 1), argAt(args, 2))) {
+                throw new TypeErrorException("Object.defineProperty: trap returned falsish for property '"
+                        + JsCoercion.toStr(argAt(args, 1)) + "'");
+            }
             return first(args);
         }));
         object.setProperty("defineProperties",
@@ -152,7 +163,12 @@ public final class ObjectBuiltins {
         return switch (target) {
             case JsProxy proxy ->
                 ops != null && !(ops.getOwnPropertyDescriptor(proxy, new JsString(key)) instanceof JsUndefined);
-            case JsObject object -> object.hasOwnKey(new JsString(key)) || object.hasAccessor(key);
+            // A builtin-subclass instance (`class R extends RegExp {}`) wraps its native state as
+            // `object.getPrimitive()` rather than holding it in the instance's own table (see
+            // MemberEvaluator's getMember delegation for the read side), so an own key that lives on
+            // the wrapped primitive (e.g. RegExp's own `lastIndex`) must be consulted there too.
+            case JsObject object -> object.hasOwnKey(new JsString(key)) || object.hasAccessor(key)
+                    || (object.getPrimitive() != null && hasOwnKey(object.getPrimitive(), key, ops));
             case JsClass cls -> cls.getStaticOwner().has(key) || cls.getStaticOwner().hasAccessor(key);
             case JsArray array -> "length".equals(key) || arrayHasIndex(array, key);
             case JsString string -> "length".equals(key) || stringHasIndex(string, key);
@@ -335,7 +351,7 @@ public final class ObjectBuiltins {
                 }
             }
             case JsCallableProperties callable -> {
-                for (final var key : callable.enumerablePropertyKeys()) {
+                for (final var key : orderedEnumerableCallableKeys(callable)) {
                     result.push(new JsString(key));
                 }
             }
@@ -382,7 +398,7 @@ public final class ObjectBuiltins {
                 }
             }
             case JsCallableProperties callable -> {
-                for (final var key : callable.enumerablePropertyKeys()) {
+                for (final var key : orderedEnumerableCallableKeys(callable)) {
                     result.push(callable.getProperty(key));
                 }
             }
@@ -429,7 +445,7 @@ public final class ObjectBuiltins {
                 }
             }
             case JsCallableProperties callable -> {
-                for (final var key : callable.enumerablePropertyKeys()) {
+                for (final var key : orderedEnumerableCallableKeys(callable)) {
                     result.push(new JsArray(List.of(new JsString(key), callable.getProperty(key))));
                 }
             }
@@ -437,6 +453,31 @@ public final class ObjectBuiltins {
             }
         }
         return result;
+    }
+
+    // A function's length/name/prototype are synthesised into its table lazily, on first touch
+    // (e.g. a defineProperty redefine) rather than at creation - so JsFunction/JsNativeFunction's
+    // enumerablePropertyKeys(), which just filters the table in physical insertion order, can report
+    // one materialised late (after a user-added key) in the wrong position. OrdinaryOwnPropertyKeys
+    // treats these as created before any own property a script adds, so once redefined enumerable
+    // they must sort to the front (in their fixed length/name/prototype order) ahead of everything
+    // else, which keeps its existing relative order.
+    private static final List<String> METADATA_KEY_ORDER = List.of("length", "name", "prototype");
+
+    private static List<String> orderedEnumerableCallableKeys(JsCallableProperties callable) {
+        final var raw = callable.enumerablePropertyKeys();
+        final var ordered = new ArrayList<String>(raw.size());
+        for (final var metaKey : METADATA_KEY_ORDER) {
+            if (raw.contains(metaKey)) {
+                ordered.add(metaKey);
+            }
+        }
+        for (final var key : raw) {
+            if (!METADATA_KEY_ORDER.contains(key)) {
+                ordered.add(key);
+            }
+        }
+        return ordered;
     }
 
     // Object.assign, spec-general rather than special-cased per source/target shape: ToObject the
@@ -754,7 +795,13 @@ public final class ObjectBuiltins {
         if (InterpreterUtils.isNullish(target)) {
             throw new TypeErrorException("Cannot convert undefined or null to object");
         }
-        final var descriptor = target.getOwnProperty(argAt(args, 1));
+        final var key = argAt(args, 1);
+        var descriptor = target.getOwnProperty(key);
+        // A builtin-subclass instance's own state (e.g. RegExp's `lastIndex`) lives on the wrapped
+        // primitive rather than the instance's own table; see hasOwnKey's matching fallback.
+        if (descriptor == null && target instanceof JsObject wrapper && wrapper.getPrimitive() != null) {
+            descriptor = wrapper.getPrimitive().getOwnProperty(key);
+        }
         return descriptor == null ? JsUndefined.getInstance() : describe(descriptor);
     }
 

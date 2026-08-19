@@ -48,11 +48,13 @@ public class ScopeProgramTest {
         assertEquals(1, num(source));
     }
 
-    // a simple parameter list keeps one environment, which is what makes `arguments` mapped
+    // a simple parameter list still keeps one environment (params and body share it), but that no
+    // longer implies `arguments` is mapped: the engine is always-strict, so `arguments` is always
+    // the unmapped form regardless of how simple the parameter list is.
     @Test
     public void test_simple_parameters_keep_one_environment() {
-        assertEquals(9, num("function f(a) { arguments[0] = 9; return a; } f(1)"));
-        assertEquals(9, num("function f(a) { a = 9; return arguments[0]; } f(1)"));
+        assertEquals(1, num("function f(a) { arguments[0] = 9; return a; } f(1)"));
+        assertEquals(1, num("function f(a) { a = 9; return arguments[0]; } f(1)"));
         assertEquals(1, num("function f(a = 1) { arguments[0] = 9; return a; } f()"));
     }
 

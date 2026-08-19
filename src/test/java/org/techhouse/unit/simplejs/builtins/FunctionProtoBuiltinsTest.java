@@ -165,4 +165,15 @@ public class FunctionProtoBuiltinsTest {
     public void test_bind_rejects_non_callable() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Function.prototype.bind.call({}, null)"));
     }
+
+    // ExpectedArgumentCount: a plain BindingPattern parameter with no initializer still counts like
+    // any other parameter - only a default value (AssignmentPattern) or a rest parameter stops the
+    // count.
+    @Test
+    public void test_length_counts_plain_pattern_but_stops_at_default_or_rest() {
+        assertEquals(2, num("(function(a, {b}) {}).length"));
+        assertEquals(2, num("(function(a, [b, c]) {}).length"));
+        assertEquals(1, num("(function(a, b = 1) {}).length"));
+        assertEquals(1, num("(function(a, ...rest) {}).length"));
+    }
 }

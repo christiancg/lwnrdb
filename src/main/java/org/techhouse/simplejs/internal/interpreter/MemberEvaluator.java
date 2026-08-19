@@ -82,14 +82,20 @@ public final class MemberEvaluator {
     }
 
     // Fallback for value types with no dedicated case above (JsRegExp, JsDate, JsPromise, numeric/
-    // boolean wrappers, ...): an own symbol-keyed property first, then the realm's intrinsic prototype
-    // chain, mirroring what intrinsicMember already does for string-keyed lookups.
+    // boolean wrappers, generator/async-generator instances, ...): an own symbol-keyed property
+    // first, then the prototype chain - starting at the value's own explicit [[Prototype]] when it
+    // has one (protoChainStart; a generator instance is linked to its function's own `prototype`,
+    // one level below the shared %GeneratorPrototype%), falling back to the realm's intrinsic
+    // default only when there is none. Calling protoFor(target) directly here (as this used to)
+    // skipped that own-prototype link entirely, so a defineProperty override of e.g.
+    // Symbol.toStringTag on a generator function's own `.prototype` was invisible - resolution kept
+    // finding the inherited %GeneratorPrototype% tag instead.
     private JsValue intrinsicSymbolMember(JsValue target, JsSymbol symbol) {
         final var own = target.getOwnProperty(symbol);
         if (own != null) {
             return fromDescriptor(own, target);
         }
-        return orUndefined(chainSymbolMember(interp.intrinsics().protoFor(target), symbol, target));
+        return orUndefined(chainSymbolMember(protoChainStart(target), symbol, target));
     }
 
     // A [[Prototype]] chain walker. A link may be any object-like value; one that is not a plain
@@ -615,12 +621,12 @@ public final class MemberEvaluator {
                 }
             }
         }
-        // A proxy receiver would need its own [[DefineOwnProperty]] here; routing there turns a
-        // rejected define into a thrown TypeError where OrdinarySet owes the caller a false, so the
-        // write stays on the object it resolved against.
-        return receiver == object || receiver instanceof JsProxy
-                ? object.set(key, value)
-                : setOnReceiver(receiver, key, value);
+        // A Proxy receiver still needs its own [[GetOwnProperty]]/[[DefineOwnProperty]] consulted
+        // every time (setOnReceiver already special-cases JsProxy via setOnProxyReceiver, which
+        // returns a clean false rather than throwing for an ordinary rejected define - only a real
+        // invariant violation throws, which is correct here) - so only a receiver identical to the
+        // object itself takes the direct-write shortcut.
+        return receiver == object ? object.set(key, value) : setOnReceiver(receiver, key, value);
     }
 
     // OrdinarySet lands the write on the receiver, not on the object whose chain answered the lookup:
@@ -890,12 +896,17 @@ public final class MemberEvaluator {
         return index == null ? array.hasProperty(key) : index < array.length() && !array.isHole(index);
     }
 
-    private static int requireLength(JsValue value) {
+    private static long requireLength(JsValue value) {
         final var length = JsCoercion.toNumber(value);
-        if (Double.isNaN(length) || length < 0 || length != Math.floor(length)) {
+        // Was `(int) length`, which silently wraps a too-large length down to Integer.MAX_VALUE
+        // instead of rejecting it - harmless while JsArray's own dense cap rejected anything past
+        // Integer.MAX_VALUE anyway, but a real bug now that setLength(long) accepts up to the spec's
+        // own 2^32-1 ceiling: the wrapped value used to land safely outside every cap and now lands
+        // safely inside one.
+        if (Double.isNaN(length) || length < 0 || length != Math.floor(length) || length > JsArray.MAX_ARRAY_LENGTH) {
             throw new RangeErrorException("Invalid array length");
         }
-        return (int) length;
+        return (long) length;
     }
 
     private JsValue generatorMethod(JsGenerator generator, String key) {

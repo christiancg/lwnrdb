@@ -246,6 +246,14 @@ public final class Interpreter {
     private long instructionsRemaining;
     private final long deadlineNanos;
     private int depth;
+    // Set once by runModule (one Interpreter per script run/realm). GetBindingValue on a Global
+    // Environment Record consults HasProperty/Get on the global object itself, not just its
+    // declared var/function bindings - a property added directly on globalThis via
+    // Object.defineProperty/defineProperties (in particular an accessor, which JsGlobalObject keeps
+    // in its own PropertyTable rather than as an Environment binding - see
+    // JsGlobalObject.defineOwnProperty) is reachable as a bare identifier even though
+    // Environment.isDeclared answers false for it.
+    private JsGlobalObject globalObjectValue;
 
     private Interpreter(HostBindings host) {
         this.host = host;
@@ -296,6 +304,7 @@ public final class Interpreter {
         final var globalThis = GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList,
                 host.console(), ops, host.network(), host.limits(), intrinsics);
         env.defineThis(globalThis);
+        globalObjectValue = globalThis;
         for (final var statement : program.getBody()) {
             if (statement instanceof ImportDeclaration importDeclaration) {
                 modules.bindImport(importDeclaration, env);
@@ -481,6 +490,24 @@ public final class Interpreter {
 
     public Completion evalBlock(BlockStatement block, Environment env) {
         return statements.evalBlock(block, env);
+    }
+
+    // NamedEvaluation, but for the one case where timing is observable: a class expression's
+    // static field initializers/static blocks run as part of ClassDefinitionEvaluation itself, so
+    // an anonymous class's inferred name has to be set *before* that (ClassEvaluator.buildClass
+    // applies it right after member installation, before runStaticInit) rather than patched on
+    // after the value comes back - a plain SetFunctionName post-evaluation (what applyInferredName
+    // does) is too late for `var C = class { static f = this.name }`. A function expression's
+    // inferred name has no such observer (it is only readable once the function is later called),
+    // so every other NamedEvaluation site keeps going through the ordinary eval + applyInferredName
+    // path below.
+    public JsValue evalNamed(Expression expression, Environment env, String name) {
+        if (name != null && expression instanceof ClassExpression classExpr && classExpr.getId() == null) {
+            return classes.evalClassExpression(classExpr, env, name);
+        }
+        final var value = eval(expression, env);
+        applyInferredName(expression, value, name);
+        return value;
     }
 
     public JsValue eval(Expression expression, Environment env) {
@@ -790,6 +817,9 @@ public final class Interpreter {
             final var table = target.ownProperties();
             return table == null || table.setSymbol(symbol, value);
         }
+        if (!isObjectLike(target)) {
+            return setPrimitiveMember(target, ((JsString) keyValue).getValue(), value, target);
+        }
         return members.setMember(target, ((JsString) keyValue).getValue(), value);
     }
 
@@ -802,7 +832,41 @@ public final class Interpreter {
         if (keyValue instanceof JsSymbol) {
             return setMemberByKey(target, keyValue, value);
         }
+        if (!isObjectLike(target)) {
+            return setPrimitiveMember(target, ((JsString) keyValue).getValue(), value, receiver);
+        }
         return members.setMember(target, ((JsString) keyValue).getValue(), value, receiver);
+    }
+
+    // PutValue on a primitive base (OrdinarySetWithOwnDescriptor's "If Receiver is not an Object,
+    // return false" step): a data-property write can never succeed on a primitive receiver, no
+    // matter how far up the prototype chain the key resolves or whether it is writable there -
+    // there is nowhere to create or overwrite an own property. Only a setter found somewhere along
+    // the chain is invoked (with `this` bound to the receiver, per GetThisValue), and a Proxy
+    // encountered along the way runs its own "set" trap instead of being walked past
+    // (put-value-prop-base-primitive.js relies on exactly this - MemberEvaluator.setMember's
+    // `default` arm wrongly treats every primitive target's null ownProperties() as "nothing to do,
+    // report success").
+    private boolean setPrimitiveMember(JsValue target, String key, JsValue value, JsValue receiver) {
+        final var keyValue = new JsString(key);
+        for (JsValue link = intrinsics.protoFor(target); link != null;) {
+            if (link instanceof JsProxy proxy) {
+                return proxies.set(proxy, keyValue, value, receiver);
+            }
+            if (!(link instanceof JsObject object)) {
+                return false;
+            }
+            if (object.hasAccessor(key)) {
+                final var setter = object.getAccessorSetter(key);
+                if (setter == null) {
+                    return false;
+                }
+                callValue(setter, receiver, List.of(value));
+                return true;
+            }
+            link = object.getProto();
+        }
+        return false;
     }
 
     // A named function expression gets its own scope holding an immutable binding for that name, so
@@ -1007,7 +1071,7 @@ public final class Interpreter {
                     activation.defineThis(thisArg);
                 }
                 activation.defineNewTarget(newTarget);
-                activation.declareFunction("arguments", makeArguments(function.getParams(), args, activation));
+                activation.declareFunction("arguments", makeArguments(args));
             }
             // An async function's parameter list runs inside the returned promise, so a throwing
             // default rejects it instead of escaping to the caller synchronously.
@@ -1189,22 +1253,12 @@ public final class Interpreter {
         return promise;
     }
 
-    private JsArguments makeArguments(List<JsNode> params, List<JsValue> args, Environment activation) {
-        var mapped = true;
-        for (final var param : params) {
-            if (!(param instanceof Identifier)) {
-                mapped = false;
-                break;
-            }
-        }
-        if (!mapped) {
-            return withOwnProperties(new JsArguments(args, null, null));
-        }
-        final var names = new ArrayList<String>();
-        for (final var param : params) {
-            names.add(((Identifier) param).getName());
-        }
-        return withOwnProperties(new JsArguments(args, names, activation));
+    // CreateMappedArgumentsObject only ever applies to sloppy-mode function code with a simple
+    // parameter list; this engine is always-strict (no sloppy mode exists at all - see CLAUDE.md/
+    // docs/simplejs.md), so `arguments` must always be the unmapped form, never aliasing a named
+    // parameter regardless of how simple the parameter list looks.
+    private JsArguments makeArguments(List<JsValue> args) {
+        return withOwnProperties(new JsArguments(args, null, null));
     }
 
     // CreateUnmappedArgumentsObject's non-index properties: "callee" is the poison-pill accessor pair
@@ -1251,6 +1305,29 @@ public final class Interpreter {
         // Otherwise the class object is an ordinary function object, so its [[Prototype]] chain ends
         // at Function.prototype and Object.prototype - `C.hasOwnProperty(…)` has to resolve there.
         return getMember(intrinsics.functionProto(), key);
+    }
+
+    // Last-resort identifier lookup for a name Environment has no binding for at all: the Global
+    // Environment Record's object-record half answers via HasProperty/Get(globalObj, name), which
+    // reaches a globalThis-only accessor (added via Object.defineProperty/defineProperties, never a
+    // declared var/function binding) that Environment.isDeclared cannot see. Returns null - not
+    // JsUndefined - when the global object has no such own property either, so the caller can still
+    // tell "genuinely unresolvable" apart from "resolves to undefined".
+    public JsValue globalPropertyValue(String name) {
+        if (globalObjectValue == null) {
+            return null;
+        }
+        final var descriptor = globalObjectValue.getOwnProperty(new JsString(name));
+        if (descriptor == null) {
+            return null;
+        }
+        if (descriptor.isAccessorDescriptor()) {
+            final var getter = descriptor.getter();
+            return getter == null || getter instanceof JsUndefined
+                    ? JsUndefined.getInstance()
+                    : callValue(getter, globalObjectValue, List.of());
+        }
+        return descriptor.value();
     }
 
     public JsValue getPrivateMember(JsValue target, String name, Environment env) {
@@ -1374,7 +1451,17 @@ public final class Interpreter {
 
     private boolean deleteMemberValue(JsValue target, JsValue rawKey) {
         final var keyValue = JsCoercion.toPropertyKey(rawKey, ops);
-        return target instanceof JsProxy proxy ? proxies.delete(proxy, keyValue) : target.deleteOwnProperty(keyValue);
+        if (target instanceof JsProxy proxy) {
+            return proxies.delete(proxy, keyValue);
+        }
+        // Mirrors ExpressionEvaluator.evalDelete's JsArray arm: the generic JsValue.deleteOwnProperty
+        // does not know "length" is special, so a delete reaching an array through this path (e.g. a
+        // no-trap Proxy forwarding to an array target) must go through the same array-aware helper or
+        // it would let a non-configurable "length" be deleted.
+        if (target instanceof JsArray array && !(keyValue instanceof JsSymbol)) {
+            return deleteArrayElement(array, JsCoercion.toStr(keyValue));
+        }
+        return target.deleteOwnProperty(keyValue);
     }
 
     private List<JsValue> iterableToList(JsValue iterable) {

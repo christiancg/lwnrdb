@@ -855,7 +855,7 @@ commands above; the limitations below are the ones that need an explanation rath
 |---|---|---|
 | 1 | **`\k<name>` on a duplicated group name resolves to the first alias** | A duplicated name (`/(?<y>a)\|(?<y>b)/`) compiles by renaming the repeats and resolving `groups.y`/`$<y>` to whichever alias participated, but `java.util.regex` cannot express "whichever alias participated" in a *backreference*, so `\k<y>` always refers to the first one. |
 | 2 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
-| 3 | **An array's `length` is capped at 2^24, not 2^32-1** | `JsArray` stores one slot per index (`MAX_DENSE_LENGTH` = 2^24), so a `length` at or near the spec's 2^32-1 limit cannot be represented. `ArraySetLength` is otherwise implemented (invalid length → `RangeError`, a blocked write → `TypeError`, truncation deleting top-down and stopping at the first non-configurable index), and `Array.prototype` is fully generic, but the boundary tests (`built-ins/Object/defineProperty/15.2.3.6-4-*`, `harness/propertyhelper-verifywritable-array-length`) need a sparse/virtual-length representation. Closing this is a storage change, not a fix. |
+| 3 | **A canonical array index at or past `Integer.MAX_VALUE` is only reachable through `Object.defineProperty`, not through ordinary `arr[i] = v`** | `JsArray` backs indices at or beyond `MAX_DENSE_LENGTH` (2^24) with a sparse map instead of a dense list (keyed by the same `int` index every consumer already used), so a `length` up to the spec's 2^32-1 ceiling is now representable and `new Array(4294967295)`, `arr.length = N`, `Object.defineProperty(arr, "length", {value: N})` and `Object.defineProperty(arr, String(hugeIndex), desc)` all work for the full range. One narrower gap remains: the interpreter's ordinary array `[[Set]]` fast path (`internal/interpreter/MemberEvaluator`) resolves an index via `InterpreterUtils.arrayIndex`, which returns a Java `int` and so never recognises an index at or past 2^31 as a canonical array index — `arr[i] = v` for such an `i` lands as an ordinary named property instead of updating `length` (a storage change alone cannot fix this; it needs `arrayIndex` to widen to `long`, which ripples into every caller). A second, unrelated gap: `Object.defineProperty`/`defineProperties` coercing a non-primitive `length` value (one whose `toString`/`valueOf` must be invoked) throws `RangeError` instead, because `defineOwnProperty` has no route to invoke user code for that coercion — `values/JsValue.defineOwnProperty`'s signature would need to thread an `InterpreterOps` through, cascading into every override. |
 | 4 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
 | 5 | **`e.stack` is one synthetic frame** and `Function.prototype.toString` retains no source | No interpreter call stack or source text is kept. `toString` emits the spec's `NativeFunction` form for user functions too, which is legal precisely because no source is retained (`HostHasSourceTextAvailable` is false), so the output is conformant while the underlying gap remains. |
 | 6 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
@@ -1003,7 +1003,19 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   own helper. This is a measurement decision (the tests are unrunnable here), not a claim that
   resizable buffers are unimplemented — they are, including length-tracking views.
   `fnGlobalObject.js` is the second such helper: it returns `Function("return this;")()`, so its own
-  `harness/` self-test cannot run.
+  `harness/` self-test cannot run. `wellKnownIntrinsicObjects.js` is a third: it populates every
+  `WellKnownIntrinsicObjects` entry via `new Function("return " + source)()`, silently leaving each
+  `value` `undefined` here. Most tests that `includes` it only consult an optional/secondary entry
+  behind a guard and still pass in full, so — unlike the other two helpers — this one is **not**
+  `include:`-excluded wholesale; only the two tests with no such fallback are excluded by exact path:
+  `harness/wellKnownIntrinsicObjects.js` itself (its own self-test hard-asserts `%Array%`) and
+  `language/expressions/async-arrow-function/prototype.js` (hard-asserts `%AsyncFunction%`).
+  `language/comments/hashbang/function-constructor.js` is excluded for the same underlying reason from
+  a different angle: it asserts that `Function`/`GeneratorFunction`/`AsyncFunction`/
+  `AsyncGeneratorFunction` throw a `SyntaxError` specifically about a hashbang in a constructed body —
+  which needs the body to actually be parsed — but those constructors here throw `TypeError`
+  unconditionally (no codegen at all), so the expected `SyntaxError` is unreachable regardless of
+  hashbang handling.
 - **Indirect `eval`** — `(0, eval)("…")` and `var e = eval; e("…")` are the same code generation by
   another spelling, so `language/eval-code/indirect/` is excluded as a directory: no source pattern
   can recognise an alias, and the direct form's pattern does not fire on it.
@@ -1036,6 +1048,11 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   `language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js` in
   `config/test262-exclusions.txt`.
 - **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
+  `language/comments/hashbang/use-strict.js` (`flags: [raw]`) is excluded for the same reason from an
+  unusual angle: it is a *positive* test that a leading hashbang is not mistaken for a real `"use
+  strict"` Directive Prologue, proven by then running `with ({}) {}` — legal only in sloppy mode. This
+  engine has no sloppy mode at all (always-strict), so `with` always throws regardless of the
+  hashbang; there is no sloppy-mode code path left to make the point with.
 - **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
 - **Proposals outside the ES2026 snapshot** — `joint-iteration` (`Iterator.zip`/`zipKeyed`),
   `iterator-sequencing` (`Iterator.concat`), `json-parse-with-source` (`JSON.rawJSON`/`isRawJSON`),

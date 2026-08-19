@@ -380,12 +380,21 @@ public class ParserTest {
         assertEquals("true", ((Identifier) setTrue.getKey()).getName());
     }
 
+    // PropertyDefinition : CoverInitializedName is always a Syntax Error (12.2.6 Early Errors)
+    // unless the object literal is reinterpreted as an ObjectAssignmentPattern by an immediately
+    // following `=` - `({ a = 1 })` used as a bare expression statement is never reinterpreted, so it
+    // must throw rather than silently parse as an object literal with an assignment-valued shorthand
+    // property (see Parser.rejectCoverInitializedName).
     @Test
-    public void test_object_cover_initialized_shorthand_parses() {
-        final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ a = 1 })"));
-        final var prop = assertInstanceOf(Property.class, obj.getProperties().getFirst());
-        assertTrue(prop.isShorthand());
-        assertInstanceOf(AssignmentExpression.class, prop.getValue());
+    public void test_object_cover_initialized_shorthand_as_bare_expression_throws() {
+        assertThrows(SyntaxErrorException.class, () -> firstExpression("({ a = 1 })"));
+    }
+
+    // The same cover grammar IS legal - and reinterpreted into an ObjectPattern - when the whole
+    // object literal sits on the left of a plain `=`.
+    @Test
+    public void test_object_cover_initialized_shorthand_as_assignment_target_parses() {
+        assertInstanceOf(AssignmentExpression.class, firstExpression("({ a = 1 } = {})"));
     }
 
     @Test
@@ -750,9 +759,19 @@ public class ParserTest {
         assertThrows(UnexpectedTokenException.class, () -> parse("var \"s\""));
         assertThrows(UnexpectedTokenException.class, () -> parse("var true"));
         assertThrows(UnexpectedTokenException.class, () -> parse("var null"));
-        assertThrows(UnexpectedTokenException.class, () -> parse("var undefined"));
         assertThrows(UnexpectedTokenException.class, () -> parse("var /a/g"));
         assertThrows(UnexpectedTokenException.class, () -> parse("var `t`"));
+    }
+
+    // "undefined" is not a reserved word - `var undefined;` is legal (CreateGlobalVarBinding is a
+    // no-op against the existing, non-configurable global property), but `let`/`const undefined` is
+    // a SyntaxError in real engines (colliding with a restricted global) - this engine reaches that
+    // same SyntaxError outcome by simply never accepting "undefined" as a lexical BindingIdentifier.
+    @Test
+    public void test_var_undefined_parses_but_lexical_undefined_throws() {
+        assertDoesNotThrow(() -> parse("var undefined;"));
+        assertThrows(UnexpectedTokenException.class, () -> parse("let undefined;"));
+        assertThrows(UnexpectedTokenException.class, () -> parse("const undefined = 1;"));
     }
 
     @Test

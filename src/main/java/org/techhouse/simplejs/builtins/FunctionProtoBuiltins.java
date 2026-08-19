@@ -5,7 +5,8 @@ import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
-import org.techhouse.simplejs.nodes.Identifier;
+import org.techhouse.simplejs.nodes.AssignmentPattern;
+import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
@@ -78,9 +79,12 @@ public final class FunctionProtoBuiltins {
         if (!(target instanceof JsFunction fn)) {
             return 0;
         }
+        // ExpectedArgumentCount: a plain BindingPattern parameter (no initializer) still counts - only
+        // a parameter carrying a default value (AssignmentPattern) or the rest parameter stops the
+        // count, per FormalParameterList's HasInitializer-driven recursion.
         var count = 0;
         for (final var param : fn.getParams()) {
-            if (!(param instanceof Identifier)) {
+            if (param instanceof AssignmentPattern || param instanceof RestElement) {
                 break;
             }
             count++;

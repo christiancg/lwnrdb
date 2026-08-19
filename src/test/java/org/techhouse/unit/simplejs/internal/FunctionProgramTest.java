@@ -99,16 +99,18 @@ public class FunctionProgramTest {
         assertTrue(bool(source));
     }
 
-    // Mapped arguments: writing arguments[0] aliases the named simple parameter
+    // The engine is always-strict (no sloppy-mode function code exists), so `arguments` is always
+    // the unmapped form, even for a simple all-identifier parameter list: writing arguments[0] never
+    // aliases the named parameter.
     @Test
-    public void test_mapped_arguments_index_to_param() {
-        assertEquals(9, num("function f(a){ arguments[0] = 9; return a; } f(1)"));
+    public void test_unmapped_arguments_index_does_not_alias_param() {
+        assertEquals(1, num("function f(a){ arguments[0] = 9; return a; } f(1)"));
     }
 
-    // Mapped arguments: writing the named parameter aliases arguments[0]
+    // Symmetric case: writing the named parameter never aliases arguments[0] either.
     @Test
-    public void test_mapped_arguments_param_to_index() {
-        assertEquals(9, num("function f(a){ a = 9; return arguments[0]; } f(1)"));
+    public void test_unmapped_arguments_param_does_not_alias_index() {
+        assertEquals(1, num("function f(a){ a = 9; return arguments[0]; } f(1)"));
     }
 
     // A default parameter makes the arguments object unmapped, so there is no aliasing
@@ -135,7 +137,8 @@ public class FunctionProgramTest {
         assertEquals(5, num("function f(a){ arguments[1] = 5; return arguments[1]; } f(1, 2)"));
     }
 
-    // arguments is iterable with for-of, reflecting aliased values
+    // arguments is iterable with for-of; being unmapped (always-strict), it keeps the original
+    // passed-in values regardless of a later write to the named parameter.
     @Test
     public void test_arguments_for_of() {
         final var source = """
@@ -147,7 +150,7 @@ public class FunctionProgramTest {
                 }
                 f(1, 2)
                 """;
-        assertEquals(12, num(source));
+        assertEquals(3, num(source));
     }
 
     // arguments spreads into an array

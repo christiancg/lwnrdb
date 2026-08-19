@@ -616,7 +616,17 @@ public final class Parser {
             final var kind = ((JsKeyword) advance()).getValue();
             final var declarations = new ArrayList<VariableDeclarator>();
             do {
-                final var id = parseBindingTarget();
+                // "undefined" is not a reserved word - it is an ordinary IdentifierName whose
+                // special meaning comes only from the predefined, non-configurable global binding.
+                // `var undefined;` is legal (CreateGlobalVarBinding is a no-op against an existing
+                // property), but `let`/`const undefined` is a SyntaxError - GlobalDeclarationInstantiation
+                // step 5c/d, HasRestrictedGlobalProperty - so only "var" gets this carve-out; every
+                // other kind falls through to parseBindingTarget, which still rejects the UNDEFINED
+                // token as an unexpected token (the parse error keeps that case a SyntaxError, which
+                // is the right outcome even though a real restricted-global check is not implemented).
+                final var id = "var".equals(kind) && current().getType() == JsType.UNDEFINED
+                        ? consumeUndefinedAsIdentifier()
+                        : parseBindingTarget();
                 Expression init = null;
                 if (matchOperator("=")) {
                     init = parseAssignment();
@@ -1126,8 +1136,50 @@ public final class Parser {
 
         private ExpressionStatement parseExpressionStatement() {
             final var expr = parseExpression();
+            rejectCoverInitializedName(expr);
             consumeSemicolon();
             return new ExpressionStatement(expr);
+        }
+
+        // PropertyDefinition : CoverInitializedName is always a Syntax Error - the object-literal
+        // cover grammar exists only so a top-level `=` can reinterpret it as ObjectAssignmentPattern
+        // (PatternConverter.toAssignmentPattern). An expression statement's expression can never be
+        // reinterpreted that way (there is no following `=` to trigger it - the parenthesised
+        // `({ a = 1 });` form the corpus tests is exactly this), so any CoverInitializedName still
+        // standing once the statement's full expression is parsed is invalid. This only walks
+        // structurally through object/array literals and the comma operator - a CoverInitializedName
+        // nested inside a call argument, binary operand, etc. is not currently detected here.
+        private void rejectCoverInitializedName(Expression expr) {
+            switch (expr) {
+                case ObjectExpression object -> {
+                    for (final var member : object.getProperties()) {
+                        if (member instanceof SpreadElement spread) {
+                            rejectCoverInitializedName(spread.getArgument());
+                        } else if (member instanceof Property property) {
+                            if (property.isShorthand() && property.getValue() instanceof AssignmentExpression assign
+                                    && "=".equals(assign.getOperator())) {
+                                throw new SyntaxErrorException(
+                                        "Invalid shorthand property initializer in object literal");
+                            }
+                            if (property.getValue() instanceof Expression value) {
+                                rejectCoverInitializedName(value);
+                            }
+                        }
+                    }
+                }
+                case ArrayExpression array -> {
+                    for (final var element : array.getElements()) {
+                        if (element instanceof SpreadElement spread) {
+                            rejectCoverInitializedName(spread.getArgument());
+                        } else if (element != null) {
+                            rejectCoverInitializedName(element);
+                        }
+                    }
+                }
+                case SequenceExpression sequence -> sequence.getExpressions().forEach(this::rejectCoverInitializedName);
+                default -> {
+                }
+            }
         }
 
         private List<JsNode> parseParams() {
@@ -1245,6 +1297,15 @@ public final class Parser {
             }
             advance();
             return new Identifier(name);
+        }
+
+        // Only reached for a "var" declarator whose name is spelled "undefined" - see
+        // parseVariableDeclaration. Deliberately bypasses parseBindingIdentifier/parseIdentifier so
+        // every other binding position (let/const/class/function-name/catch-param/...) keeps
+        // rejecting the UNDEFINED token as a parse error.
+        private Identifier consumeUndefinedAsIdentifier() {
+            advance();
+            return new Identifier("undefined");
         }
 
         private JsNode parseBindingTarget() {
@@ -1422,7 +1483,14 @@ public final class Parser {
             if (current().getType() == JsType.OPERATOR) {
                 final var op = ((JsOperator) current()).getValue();
                 if (ParserTables.ASSIGNMENT_OPERATORS.contains(op)) {
-                    final var target = patterns.resolveAssignmentTarget(left, op);
+                    // "undefined" is not a reserved word (see parseIdentifier's UNDEFINED case) - it
+                    // parses to a dedicated UndefinedLiteral node for the common expression-value
+                    // reading, but as an assignment target it is really just IdentifierReference
+                    // "undefined", resolving through the non-writable global binding GlobalScope
+                    // installs (so the assignment reaches Environment.assign and throws its own
+                    // TypeError, exactly like any other non-writable global).
+                    final var resolvedLeft = left instanceof UndefinedLiteral ? new Identifier("undefined") : left;
+                    final var target = patterns.resolveAssignmentTarget(resolvedLeft, op);
                     advance();
                     return new AssignmentExpression(op, target, parseAssignment());
                 }
@@ -1665,7 +1733,7 @@ public final class Parser {
                     if (optionalChain) {
                         throw new SyntaxErrorException("Invalid tagged template on an optional chain");
                     }
-                    final var template = parseTemplate((JsTemplateString) advance());
+                    final var template = parseTemplate((JsTemplateString) advance(), true);
                     expr = new TaggedTemplateExpression(expr, template);
                 } else {
                     advancing = false;
@@ -1770,7 +1838,7 @@ public final class Parser {
                     expectSeparator(']');
                     expr = new MemberExpression(expr, property, true, false);
                 } else if (current().getType() == JsType.TEMPLATE_STRING) {
-                    final var template = parseTemplate((JsTemplateString) advance());
+                    final var template = parseTemplate((JsTemplateString) advance(), true);
                     expr = new TaggedTemplateExpression(expr, template);
                 } else {
                     advancing = false;
@@ -1837,7 +1905,7 @@ public final class Parser {
                 }
                 case TEMPLATE_STRING -> {
                     advance();
-                    return parseTemplate((JsTemplateString) t);
+                    return parseTemplate((JsTemplateString) t, false);
                 }
                 case IDENTIFIER -> {
                     // ContainsArguments: a class static block may not reference `arguments`, and the
@@ -2708,7 +2776,18 @@ public final class Parser {
                     && !((JsIdentifier) t).isEscaped();
         }
 
-        private TemplateLiteral parseTemplate(JsTemplateString template) {
+        // A NotEscapeSequence anywhere in an untagged template's quasis (the Lexer leaves that
+        // quasi's cooked value null rather than throwing - see Lexer.appendTemplateEscape) is a
+        // Syntax Error; a tagged template legitimately keeps it null (cooked undefined, raw intact),
+        // so only this call site's `tagged` flag decides whether to reject it.
+        private TemplateLiteral parseTemplate(JsTemplateString template, boolean tagged) {
+            if (!tagged) {
+                for (final var quasi : template.getQuasis()) {
+                    if (quasi == null) {
+                        throw new SyntaxErrorException("Invalid escape sequence in template literal");
+                    }
+                }
+            }
             final var expressions = new ArrayList<Expression>();
             for (final var expressionTokens : template.getExpressions()) {
                 expressions.add(forTemplateExpression(expressionTokens).parseTemplateExpression());

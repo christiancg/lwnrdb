@@ -101,7 +101,11 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         if (prototype == null) {
             final var created = new JsObject();
             if (!generator) {
-                created.set("constructor", this);
+                // {writable:true, enumerable:false, configurable:true} per
+                // OrdinaryFunctionCreate/MakeConstructor - a plain `.set` would default the new key
+                // to enumerable, which is wrong (a `for-in` over the prototype must not see it).
+                created.defineValue("constructor", this);
+                created.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
             }
             prototype = created;
         }
@@ -141,6 +145,30 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     @Override
     public boolean deleteProperty(String key) {
         return table.delete(key);
+    }
+
+    // The generic JsValue.deleteOwnProperty (reached when a delete arrives through a no-trap Proxy
+    // forwarding to this function rather than through ExpressionEvaluator.evalDelete's own dedicated
+    // JsCallableProperties handling) materialises "name"/"length"/"prototype" into the table and
+    // deletes the table entry, but never calls markMetadataDeleted - so a later hasOwnProperty still
+    // reports true via OrdinaryProperties.metadataKey, which trusts isMetadataDeleted as the sole
+    // source of truth for those keys rather than re-checking the table. Overriding here keeps both
+    // delete paths consistent, and rejects deleting "prototype" (always non-configurable) instead of
+    // silently reporting success.
+    @Override
+    public boolean deleteOwnProperty(JsValue key) {
+        if (key instanceof JsSymbol) {
+            return super.deleteOwnProperty(key);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        if (("name".equals(name) || "length".equals(name)) && !hasProperty(name)) {
+            markMetadataDeleted(name);
+            return true;
+        }
+        if ("prototype".equals(name) && !hasProperty(name) && (isConstructor() || isGenerator())) {
+            return false;
+        }
+        return super.deleteOwnProperty(key);
     }
 
     @Override

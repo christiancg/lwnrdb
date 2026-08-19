@@ -405,6 +405,92 @@ public class LexerTest {
         assertEquals(template.getQuasis(), template.getRawQuasis());
     }
 
+    // A NotEscapeSequence (legacy-octal-shaped digit escape) leaves the whole quasi's cooked value
+    // null rather than throwing - only a Syntax Error when the template turns out untagged (the
+    // Parser's job, see rejectCoverInitializedName's sibling check in Parser.parseTemplate); the raw
+    // text is captured verbatim regardless.
+    @Test
+    public void test_lex_template_invalid_octal_escape_nulls_cooked() {
+        var template = (JsTemplateString) Lexer.lex("`\\01`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\01", template.getRawQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\1`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\1", template.getRawQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\8`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\8", template.getRawQuasis().getFirst());
+    }
+
+    @Test
+    public void test_lex_template_invalid_hex_escape_nulls_cooked() {
+        var template = (JsTemplateString) Lexer.lex("`\\xg`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\xg", template.getRawQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\xAg`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\xAg", template.getRawQuasis().getFirst());
+    }
+
+    @Test
+    public void test_lex_template_valid_hex_escape_is_cooked() {
+        assertEquals(List.of("A"), ((JsTemplateString) Lexer.lex("`\\x41`").getFirst()).getQuasis());
+    }
+
+    @Test
+    public void test_lex_template_invalid_unicode_escape_nulls_cooked() {
+        var template = (JsTemplateString) Lexer.lex("`\\u0`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\u0g`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\u00g`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\u000g`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+    }
+
+    @Test
+    public void test_lex_template_valid_unicode_escape_is_cooked() {
+        assertEquals(List.of("A"), ((JsTemplateString) Lexer.lex("`\\u0041`").getFirst()).getQuasis());
+    }
+
+    @Test
+    public void test_lex_template_invalid_braced_unicode_escape_nulls_cooked() {
+        var template = (JsTemplateString) Lexer.lex("`\\u{g`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\u{g", template.getRawQuasis().getFirst());
+
+        template = (JsTemplateString) Lexer.lex("`\\u{0`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\u{0", template.getRawQuasis().getFirst());
+
+        // syntactically well-formed (a real closing brace) but out of the Unicode code point range
+        template = (JsTemplateString) Lexer.lex("`\\u{10FFFFF}`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\\u{10FFFFF}", template.getRawQuasis().getFirst());
+    }
+
+    @Test
+    public void test_lex_template_valid_braced_unicode_escape_is_cooked() {
+        assertEquals(List.of("A"), ((JsTemplateString) Lexer.lex("`\\u{41}`").getFirst()).getQuasis());
+    }
+
+    // Only the affected quasi's cooked value goes null; a later quasi in the same template with a
+    // valid escape is unaffected, and the invalid quasi's own trailing valid escape (after the bad
+    // one) still does not resurrect its cooked value.
+    @Test
+    public void test_lex_template_invalid_escape_is_scoped_to_its_own_quasi() {
+        final var template = (JsTemplateString) Lexer.lex("`\\1${1}\\n`").getFirst();
+        assertNull(template.getQuasis().getFirst());
+        assertEquals("\n", template.getQuasis().get(1));
+    }
+
     // Template interpolation containing object braces
     @Test
     public void test_lex_template_nested_braces() {

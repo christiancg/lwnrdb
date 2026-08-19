@@ -387,4 +387,18 @@ public class ObjectProtoBuiltinsTest {
                 Object.prototype.toString.call(p)
                 """));
     }
+
+    // propertyIsEnumerable on globalThis (a JsGlobalObject) must consult the real global property's
+    // flags rather than defaulting to true - a builtin binding (installed non-enumerable) answers
+    // false, while a top-level `var` (which GlobalScope installs as an enumerable binding) answers
+    // true.
+    @Test
+    public void test_property_is_enumerable_on_globalthis_builtin_is_false() {
+        assertFalse(bool("this.propertyIsEnumerable('parseInt')"));
+    }
+
+    @Test
+    public void test_property_is_enumerable_on_globalthis_user_var_is_true() {
+        assertTrue(bool("var g = 1; this.propertyIsEnumerable('g')"));
+    }
 }

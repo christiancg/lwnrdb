@@ -580,4 +580,74 @@ public class InterpreterProgramTest {
                 """;
         assertEquals("false", str(source));
     }
+
+    // GetBindingValue on a Global Environment Record consults HasProperty/Get(globalObj, name), not
+    // just declared var/function bindings - a globalThis-only accessor (added via
+    // Object.defineProperty, never a declared binding) is reachable as a bare identifier, and
+    // `typeof` on it invokes the getter exactly once.
+    @Test
+    public void test_typeof_reaches_globalthis_only_accessor() {
+        final var source = """
+                var count = 0;
+                Object.defineProperty(this, 'y', { get() { count++; return 1; } });
+                typeof y + ':' + count
+                """;
+        assertEquals("number:1", str(source));
+    }
+
+    // NamedEvaluation for an anonymous class expression threads the inferred name in before
+    // ClassDefinitionEvaluation runs its static field initializers/blocks, so `this.name` inside one
+    // already sees it - regardless of which syntactic position supplies the name (a variable
+    // declarator's init, or a plain assignment's right-hand side).
+    @Test
+    public void test_anonymous_class_name_visible_in_static_initializer_via_declarator() {
+        assertEquals("C", str("var C = class { static f = this.name; }; C.f"));
+    }
+
+    @Test
+    public void test_anonymous_class_name_visible_in_static_initializer_via_assignment() {
+        assertEquals("D", str("var D; D = class { static f = this.name; }; D.f"));
+    }
+
+    // PutValue on a primitive base: a data-property write can never succeed (there is nowhere to
+    // create an own property on a primitive receiver), but a setter found anywhere along the
+    // prototype chain is invoked with `this` bound to the primitive, exactly like any other
+    // receiver - including through a Proxy standing in the chain.
+    @Test
+    public void test_primitive_write_reaches_prototype_setter() {
+        final var source = """
+                var log = [];
+                Object.defineProperty(Number.prototype, 'tag', { set(v) { log.push(v); } });
+                (5).tag = 'x';
+                log.length + ':' + log[0]
+                """;
+        assertEquals("1:x", str(source));
+    }
+
+    @Test
+    public void test_primitive_write_reaches_proxy_in_prototype_chain() {
+        final var source = """
+                var count = 0;
+                var spy = new Proxy({}, { set: function() { count++; return true; } });
+                Object.setPrototypeOf(Boolean.prototype, spy);
+                true.flag = 1;
+                count
+                """;
+        assertEquals(1, num(source));
+    }
+
+    // A no-trap Proxy forwarding `delete` to an array target routes through the same array-aware
+    // helper (InterpreterUtils.deleteArrayElement) ExpressionEvaluator.evalDelete's own JsArray arm
+    // uses, rather than the generic JsValue.deleteOwnProperty - so an element delete through the
+    // proxy leaves a real hole exactly like a direct delete would.
+    @Test
+    public void test_proxy_delete_forwards_array_element_delete() {
+        final var source = """
+                var arr = [1, 2, 3];
+                var proxy = new Proxy(arr, {});
+                delete proxy[0];
+                (0 in arr) + ',' + arr.length
+                """;
+        assertEquals("false,3", str(source));
+    }
 }

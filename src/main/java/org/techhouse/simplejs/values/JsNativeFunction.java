@@ -147,6 +147,27 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
         return table.delete(key);
     }
 
+    // See JsFunction.deleteOwnProperty for why this override exists: the generic JsValue path
+    // (reached via a no-trap Proxy forwarding a delete here) never calls markMetadataDeleted, so
+    // hasOwnProperty would keep reporting "name"/"length" present regardless of what the table
+    // itself holds. "prototype" is rejected outright when this native function actually carries one
+    // (always non-configurable).
+    @Override
+    public boolean deleteOwnProperty(JsValue key) {
+        if (key instanceof JsSymbol) {
+            return super.deleteOwnProperty(key);
+        }
+        final var name = OrdinaryProperties.keyName(key);
+        if (("name".equals(name) || "length".equals(name)) && !hasProperty(name)) {
+            markMetadataDeleted(name);
+            return true;
+        }
+        if ("prototype".equals(name) && !hasProperty(name) && getPrototype() != null) {
+            return false;
+        }
+        return super.deleteOwnProperty(key);
+    }
+
     @Override
     public void markMetadataDeleted(String key) {
         if (deletedMetadataKeys == null) {

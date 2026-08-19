@@ -135,6 +135,33 @@ public final class InterpreterUtils {
         }
     }
 
+    // The full-width counterpart to arrayIndex: a canonical array index per the spec is any value in
+    // [0, 2^32-2] (ToString(ToUint32(P)) === P and ToUint32(P) !== 2^32-1), which overflows arrayIndex's
+    // `int` well before the spec's own ceiling - "2147483648" is a perfectly legal array index that
+    // Integer.parseInt rejects. This widened lookup is used only by JsArray itself (for
+    // Object.defineProperty/defineProperties, which reach it directly rather than through the
+    // int-bounded fast paths every other array-index consumer in the interpreter still uses), so
+    // widening it here carries none of the blast radius changing arrayIndex's own return type would.
+    public static Long canonicalArrayIndexWide(String key) {
+        if (key.isEmpty()) {
+            return null;
+        }
+        for (var i = 0; i < key.length(); i++) {
+            if (!Character.isDigit(key.charAt(i))) {
+                return null;
+            }
+        }
+        if (key.length() > 1 && key.charAt(0) == '0') {
+            return null;
+        }
+        try {
+            final var value = Long.parseLong(key);
+            return value >= 0 && value < 4_294_967_295L ? value : null;
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
+    }
+
     // Spec CanonicalNumericIndexString: a key that round-trips through Number->String is an
     // "integer-indexed" access on a typed array even when it isn't a valid array index (e.g.
     // "1.1", "-1", "-0", "NaN") - such keys must resolve via the exotic [[Get]]/[[Set]] (returning

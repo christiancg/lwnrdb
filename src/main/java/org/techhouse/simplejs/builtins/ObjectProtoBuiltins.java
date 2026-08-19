@@ -214,6 +214,10 @@ public final class ObjectProtoBuiltins {
             case JsObject object -> object.isEnumerable(key);
             case JsClass cls -> cls.getStaticOwner().isEnumerable(key);
             case JsCallableProperties callable -> callable.enumerablePropertyKeys().contains(key);
+            case JsGlobalObject global -> {
+                final var descriptor = global.getOwnProperty(new JsString(key));
+                yield descriptor != null && Boolean.TRUE.equals(descriptor.enumerable());
+            }
             default -> !"length".equals(key);
         };
     }

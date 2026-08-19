@@ -49,6 +49,7 @@ import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -420,7 +421,13 @@ public final class StatementEvaluator {
     private List<String> enumerateKeys(JsValue target) {
         final var result = new ArrayList<String>();
         final var seen = new HashSet<String>();
-        for (var current = target; current != null; current = current.getProto()) {
+        // Mirrors MemberEvaluator.Chain.advance(): an exotic value with no real [[Prototype]] slot of
+        // its own (JsRegExp/JsDate/JsMap/JsSet/JsPromise/...) answers getProto() as null forever, but
+        // its intrinsic prototype (RegExp.prototype, ...) still owns inherited enumerable properties
+        // that for-in must walk. Synthesised once per walk so the fallback proto's own real chain
+        // (up through Object.prototype) takes over from there instead of re-synthesising forever.
+        var synthesised = false;
+        for (var current = target; current != null;) {
             for (final var key : ownStringKeys(current)) {
                 if (seen.add(key) && isEnumerableOwn(current, key)) {
                     result.add(key);
@@ -429,6 +436,13 @@ public final class StatementEvaluator {
             // A proxy answers for its whole chain through its own ownKeys trap.
             if (current instanceof JsProxy || current instanceof JsGlobalObject) {
                 break;
+            }
+            final var next = current.getProto();
+            if (next == null && !synthesised && !(current instanceof JsObject)) {
+                current = interp.intrinsics().protoFor(current);
+                synthesised = true;
+            } else {
+                current = next;
             }
         }
         return result;
@@ -470,6 +484,17 @@ public final class StatementEvaluator {
             }
             return keys;
         }
+        if (target instanceof JsTypedArray typed) {
+            final var keys = new ArrayList<String>();
+            for (var i = 0; i < typed.length(); i++) {
+                keys.add(Integer.toString(i));
+            }
+            final var table = typed.ownProperties();
+            if (table != null) {
+                keys.addAll(table.keys());
+            }
+            return keys;
+        }
         if (target instanceof JsArguments arguments) {
             return arguments.enumerablePropertyKeys();
         }
@@ -486,6 +511,7 @@ public final class StatementEvaluator {
             case JsClass cls -> cls.getStaticOwner().isEnumerable(key);
             case JsObject object -> object.isEnumerable(key);
             case JsArray array -> arrayKeyEnumerable(array, key);
+            case JsTypedArray typed -> typedArrayKeyEnumerable(typed, key);
             default -> true;
         };
     }
@@ -493,6 +519,17 @@ public final class StatementEvaluator {
     private static boolean arrayKeyEnumerable(JsArray array, String key) {
         final var index = InterpreterUtils.arrayIndex(key);
         return index == null ? array.getPropFlags(key).enumerable() : array.getIndexFlags(index).enumerable();
+    }
+
+    // Canonical index keys are always enumerable (the fixed INDEX_FLAGS getOwnProperty answers with);
+    // any other own key was set through the ordinary PropertyTable, whose per-key flags govern it.
+    private static boolean typedArrayKeyEnumerable(JsTypedArray typed, String key) {
+        final var index = InterpreterUtils.arrayIndex(key);
+        if (index != null && index < typed.length()) {
+            return true;
+        }
+        final var table = typed.ownProperties();
+        return table != null && table.isEnumerable(key);
     }
 
     public Completion evalLabeled(LabeledStatement statement, Environment env) {

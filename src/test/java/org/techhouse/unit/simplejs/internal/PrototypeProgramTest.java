@@ -61,7 +61,11 @@ public class PrototypeProgramTest {
     // Function exists as a global with a prototype, but constructing from source is refused
     @Test
     public void test_function_prototype_and_instanceof() {
-        assertEquals("[true,\"object\"]",
+        // Function.prototype is itself a callable object per spec (a no-op call), so `typeof` must
+        // report "function" even though it is a plain JsObject rather than a JsFunction/
+        // JsNativeFunction - Interpreter.callValue and ExpressionEvaluator.typeOfValue both special-
+        // case it.
+        assertEquals("[true,\"function\"]",
                 run("return [(function () {}) instanceof Function, typeof Function.prototype]"));
         assertEquals("TypeError", errorName("Function('x')"));
         assertEquals("TypeError", errorName("new Function('x')"));
@@ -161,7 +165,10 @@ public class PrototypeProgramTest {
     // Rest and pattern parameters stop the length count
     @Test
     public void test_function_length_stops_at_rest() {
-        assertEquals("[1,1]", run("function f(a, ...rest) {} function g(a, {b}) {} return [f.length, g.length]"));
+        // ExpectedArgumentCount: a rest parameter stops the count (f.length is 1), but a plain
+        // BindingPattern parameter with no initializer still counts like any other parameter
+        // (g.length is 2) - only a default value or a rest parameter stops it.
+        assertEquals("[1,2]", run("function f(a, ...rest) {} function g(a, {b}) {} return [f.length, g.length]"));
     }
 
     // Error cause, stack and toString
@@ -302,5 +309,60 @@ public class PrototypeProgramTest {
     public void test_generator_prototype_falls_back_to_intrinsic_default() {
         assertEquals("true", run("function* g() {} const GeneratorPrototype = Object.getPrototypeOf(g).prototype;"
                 + " g.prototype = null; return Object.getPrototypeOf(g()) === GeneratorPrototype"));
+    }
+
+    // Object.defineProperty/setPrototypeOf must turn a Proxy trap's `false` return into a thrown
+    // TypeError instead of silently reporting success.
+    @Test
+    public void test_defineProperty_and_setPrototypeOf_reject_a_falsish_proxy_trap() {
+        assertEquals("TypeError", errorName("const p = new Proxy({}, { defineProperty() { return false; } });"
+                + " Object.defineProperty(p, 'x', { value: 1 });"));
+        assertEquals("TypeError", errorName(
+                "const p = new Proxy({}, { setPrototypeOf() { return false; } });" + " Object.setPrototypeOf(p, {});"));
+    }
+
+    // A builtin-subclass instance's own state (e.g. RegExp's lastIndex) lives on the wrapped
+    // primitive rather than the instance's own table; hasOwnProperty/getOwnPropertyDescriptor must
+    // still find it there.
+    @Test
+    public void test_builtin_subclass_own_key_delegates_to_wrapped_primitive() {
+        assertEquals("[true,\"number\"]",
+                run("class R extends RegExp {} const r = new R('a');" + " return [r.hasOwnProperty('lastIndex'),"
+                        + " typeof Object.getOwnPropertyDescriptor(r, 'lastIndex').value]"));
+    }
+
+    // A function's length/name/prototype are synthesised into its table lazily; once made
+    // enumerable they must sort ahead of an ordinary own key in Object.keys, not trail it in
+    // physical insertion order.
+    @Test
+    public void test_function_metadata_keys_sort_first_once_enumerable() {
+        assertEquals("[\"name\",\"extra\"]",
+                run("function f() {} Object.defineProperty(f, 'name', { enumerable: true });"
+                        + " f.extra = 1; return Object.keys(f)"));
+    }
+
+    // for-in over a typed array must list canonical numeric indices (always enumerable) plus any
+    // other own enumerable key, honouring an explicit non-enumerable own property.
+    @Test
+    public void test_for_in_over_typed_array_lists_indices_and_own_enumerable_keys() {
+        assertEquals("[\"0\",\"1\",\"extra\"]",
+                run("const t = new Uint8Array([1, 2]); t.extra = 5;"
+                        + " Object.defineProperty(t, 'hidden', { value: 9, enumerable: false });"
+                        + " const keys = []; for (const k in t) { keys.push(k); } return keys"));
+    }
+
+    // Object.setPrototypeOf(array, x) must be observable through Object.getPrototypeOf(array)
+    // afterward, not just through the array's own internal member resolution.
+    @Test
+    public void test_setPrototypeOf_on_array_is_observable_via_getPrototypeOf() {
+        assertEquals("true", run("const a = [1, 2, 3]; const proto = {};"
+                + " Object.setPrototypeOf(a, proto); return Object.getPrototypeOf(a) === proto"));
+    }
+
+    // A symbol-keyed own property set directly on a non-plain-object value (here a Date instance)
+    // must be readable back through the same fallback member path.
+    @Test
+    public void test_own_symbol_property_on_a_non_object_value() {
+        assertEquals("5", run("const d = new Date(); const s = Symbol('x'); d[s] = 5; return d[s]"));
     }
 }

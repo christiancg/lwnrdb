@@ -118,10 +118,13 @@ public class InterpreterMemberTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("undefined.x = 1;"));
     }
 
-    // Writing a property on an exotic primitive-backed value (no JsObject wrapper) is a silent no-op
+    // PutValue on a primitive base: OrdinarySetWithOwnDescriptor's "Receiver is not an Object" step
+    // means a data-property write to a primitive can never succeed (there is nowhere to create an
+    // own property), so in this always-strict engine it throws rather than silently no-opping -
+    // matching Number/String/Boolean/Symbol all consistently (see Interpreter.setPrimitiveMember).
     @Test
-    public void test_writing_property_on_number_is_noop() {
-        assertEquals("undefined", str("let n = 5; n.foo = 9; typeof n.foo"));
+    public void test_writing_property_on_number_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("let n = 5; n.foo = 9;"));
     }
 
     // A prototype-chain accessor setter must run even when the receiver is a callable: writing to
@@ -306,5 +309,77 @@ public class InterpreterMemberTest {
                 """;
         assertThrows(ScriptTimeoutException.class,
                 () -> Interpreter.run(source, new SimpleHostBindings(new JsonObject(), null, null, limits)));
+    }
+
+    // A function's own "prototype" metadata (synthesised from a dedicated field, not stored in the
+    // generic property table - see OrdinaryProperties.hasPrototypeProperty) is always non-
+    // configurable, so its delete must be rejected rather than silently succeeding because the table
+    // itself never held the key.
+    @Test
+    public void test_deleting_constructor_prototype_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("function F() {} delete F.prototype;"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("function* g() {} delete g.prototype;"));
+    }
+
+    // An arrow function is not a constructor and has no own "prototype" metadata at all, so deleting
+    // the (already absent) key is an ordinary no-op success, not a rejection - unlike a plain
+    // function or a generator, which do own one.
+    @Test
+    public void test_deleting_prototype_on_non_constructor_is_a_noop_success() {
+        assertEquals("true", str("String(delete (() => {}).prototype)"));
+    }
+
+    // A delete reaching a JsFunction/JsNativeFunction through a no-trap Proxy (rather than through
+    // ExpressionEvaluator.evalDelete's own dedicated JsCallableProperties branch) goes through the
+    // generic JsValue.deleteOwnProperty, which JsFunction/JsNativeFunction override to keep the two
+    // delete paths consistent: "name"/"length" mark the metadata deleted (so hasOwnProperty stops
+    // reporting them, not just the underlying table) and "prototype" is rejected outright when the
+    // callable actually owns one.
+    @Test
+    public void test_proxy_delete_of_function_length_clears_metadata() {
+        final var source = """
+                var func = function() {};
+                var funcTarget = new Proxy(func, {});
+                var funcProxy = new Proxy(funcTarget, {});
+                var deleted = delete funcProxy.length;
+                deleted + ',' + func.hasOwnProperty('length')
+                """;
+        assertEquals("true,false", str(source));
+    }
+
+    @Test
+    public void test_proxy_delete_of_function_prototype_is_rejected() {
+        final var source = """
+                var func = function() {};
+                var funcTarget = new Proxy(func, {});
+                var funcProxy = new Proxy(funcTarget, {});
+                var threw = false;
+                try { delete funcProxy.prototype; } catch (e) { threw = e instanceof TypeError; }
+                String(threw)
+                """;
+        assertEquals("true", str(source));
+    }
+
+    @Test
+    public void test_proxy_delete_of_native_function_length_clears_metadata() {
+        final var source = """
+                var nativeTarget = new Proxy(Math.max, {});
+                var nativeProxy = new Proxy(nativeTarget, {});
+                var deleted = delete nativeProxy.length;
+                deleted + ',' + Math.max.hasOwnProperty('length')
+                """;
+        assertEquals("true,false", str(source));
+    }
+
+    @Test
+    public void test_proxy_delete_of_native_constructor_prototype_is_rejected() {
+        final var source = """
+                var target = new Proxy(Array, {});
+                var proxy = new Proxy(target, {});
+                var threw = false;
+                try { delete proxy.prototype; } catch (e) { threw = e instanceof TypeError; }
+                String(threw)
+                """;
+        assertEquals("true", str(source));
     }
 }

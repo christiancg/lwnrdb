@@ -47,6 +47,7 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsCallableProperties;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
@@ -124,7 +125,7 @@ public final class ExpressionEvaluator {
         final var strings = new JsArray();
         final var raw = new JsArray();
         for (final var cooked : quasi.getQuasis()) {
-            strings.push(new JsString(cooked));
+            strings.push(cooked == null ? JsUndefined.getInstance() : new JsString(cooked));
         }
         for (final var rawQuasi : quasi.getRawQuasis()) {
             raw.push(new JsString(rawQuasi));
@@ -330,11 +331,27 @@ public final class ExpressionEvaluator {
     private JsValue evalTypeof(Expression argument, Environment env) {
         if (argument instanceof Identifier id) {
             if (!env.isDeclared(id.getName())) {
-                return new JsString("undefined");
+                // Not a declared var/function/lexical binding, but the Global Environment Record's
+                // object-record half still answers via HasProperty/Get(globalObj, name) - reaches a
+                // globalThis-only accessor (Object.defineProperty(globalThis, ...)) that never became
+                // an Environment binding. See Interpreter.globalPropertyValue.
+                final var globalValue = interp.globalPropertyValue(id.getName());
+                return new JsString(globalValue == null ? "undefined" : typeOfValue(globalValue));
             }
-            return new JsString(JsCoercion.typeOf(env.get(id.getName())));
+            return new JsString(typeOfValue(env.get(id.getName())));
         }
-        return new JsString(JsCoercion.typeOf(interp.eval(argument, env)));
+        return new JsString(typeOfValue(interp.eval(argument, env)));
+    }
+
+    // Function.prototype is a plain JsObject, not a JsFunction/JsNativeFunction/JsClass, but
+    // Interpreter.callValue special-cases it as callable (a spec-required no-op call) - so `typeof`
+    // has to recognise the same special case rather than let JsCoercion.typeOf fall through to
+    // "object" for it.
+    private String typeOfValue(JsValue value) {
+        if (value == interp.intrinsics().functionProto()) {
+            return "function";
+        }
+        return JsCoercion.typeOf(value);
     }
 
     private JsValue evalDelete(Expression argument, Environment env) {
@@ -369,7 +386,12 @@ public final class ExpressionEvaluator {
         }
         final var key = JsCoercion.toStr(keyValue, interp.ops());
         return switch (target) {
-            case JsProxy proxy -> JsBoolean.of(proxies.delete(proxy, new JsString(key)));
+            case JsProxy proxy -> {
+                if (!proxies.delete(proxy, new JsString(key))) {
+                    throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
+                }
+                yield JsBoolean.TRUE;
+            }
             case JsObject object -> {
                 if (!object.delete(key)) {
                     throw new TypeErrorException("Cannot delete property '" + key + "' of #<Object>");
@@ -399,6 +421,14 @@ public final class ExpressionEvaluator {
                     callable.markMetadataDeleted(key);
                     yield JsBoolean.TRUE;
                 }
+                // A callable's own "prototype" metadata (a constructor's or generator's linked
+                // object, synthesised from a dedicated field rather than stored in the generic
+                // property table - see OrdinaryProperties.hasPrototypeProperty/metadataDescriptor) is
+                // always non-configurable, so its delete must be rejected instead of silently
+                // succeeding because the table itself never held the key.
+                if ("prototype".equals(key) && !callable.hasProperty(key) && hasOwnPrototypeMetadata(callable)) {
+                    throw new TypeErrorException("Cannot delete property 'prototype' of #<Function>");
+                }
                 yield JsBoolean.of(callable.deleteProperty(key));
             }
             // Every remaining object-like type answers through its own [[Delete]] - notably the
@@ -414,6 +444,17 @@ public final class ExpressionEvaluator {
                 yield JsBoolean.TRUE;
             }
         };
+    }
+
+    // Mirrors OrdinaryProperties.hasPrototypeProperty (private there): a generator function owns a
+    // "prototype" property despite not being a constructor, and a native function only has one when
+    // JsNativeFunction.setPrototype was actually called for it (a plain arrow/non-constructor native
+    // has none, so deleting its absent "prototype" is an ordinary no-op success).
+    private static boolean hasOwnPrototypeMetadata(JsCallableProperties callable) {
+        if (callable instanceof JsFunction function) {
+            return function.isConstructor() || function.isGenerator();
+        }
+        return callable instanceof JsNativeFunction nativeFunction && nativeFunction.getPrototype() != null;
     }
 
     private JsValue deleteSymbolMember(JsValue target, JsSymbol symbol) {
@@ -536,8 +577,7 @@ public final class ExpressionEvaluator {
             // evaluating the right-hand side (`undeclared = (this.undeclared = 5)`) still throws:
             // PutValue acts on the resolution captured up front, not a re-resolution afterwards.
             final var resolvable = env.isDeclared(name);
-            final var value = interp.eval(assignment.getValue(), env);
-            InterpreterUtils.applyInferredName(assignment.getValue(), value, name);
+            final var value = interp.evalNamed(assignment.getValue(), env, name);
             if (!resolvable) {
                 throw new ReferenceErrorException(name + " is not defined");
             }
@@ -549,8 +589,7 @@ public final class ExpressionEvaluator {
             if (shouldNotApplyLogical(operator, current)) {
                 return current;
             }
-            final var value = interp.eval(assignment.getValue(), env);
-            InterpreterUtils.applyInferredName(assignment.getValue(), value, name);
+            final var value = interp.evalNamed(assignment.getValue(), env, name);
             env.assign(name, value);
             return value;
         }

@@ -182,7 +182,7 @@ public final class ArrayBuiltins {
 
     private static void setLengthOrThrow(JsValue target, long length, InterpreterOps ops) {
         if (target instanceof JsArray array) {
-            if (!array.setLength((int) length)) {
+            if (!array.setLength(length)) {
                 throw new TypeErrorException("Cannot assign to read only property 'length' of object");
             }
             return;
@@ -503,11 +503,13 @@ public final class ArrayBuiltins {
     }
 
     private static JsArray newArray(long length) {
-        if (length > Integer.MAX_VALUE) {
+        // ArrayCreate(length) throws RangeError past the spec's own ceiling (2^32-1) - not past
+        // Integer.MAX_VALUE, an implementation detail of how JsArray used to store its dense elements.
+        if (length > JsArray.MAX_ARRAY_LENGTH) {
             throw new RangeErrorException("Invalid array length");
         }
         final var result = new JsArray();
-        result.setLength((int) length);
+        result.setLength(length);
         return result;
     }
 
@@ -1127,10 +1129,20 @@ public final class ArrayBuiltins {
         return comparator;
     }
 
-    private static List<JsValue> sortIndexedProperties(ArrayLike target, long length, boolean readThroughHoles) {
+    // The spec's own length ceiling for a real Array is 2^32-1 (JsArray.MAX_ARRAY_LENGTH, needed so
+    // e.g. `arr.length = 4294967295` and a defineProperty near that boundary work), but a by-copy
+    // method that actually materialises `length` entries one at a time cannot practically go past
+    // this implementation's dense-storage ceiling without hanging/exhausting memory - every such
+    // method (sort/toSorted via sortIndexedProperties, toReversed, toSpliced, with) must reject a
+    // length beyond it instead of trying.
+    private static void requireMaterializableLength(long length) {
         if (length > Integer.MAX_VALUE) {
             throw new RangeErrorException("Invalid array length");
         }
+    }
+
+    private static List<JsValue> sortIndexedProperties(ArrayLike target, long length, boolean readThroughHoles) {
+        requireMaterializableLength(length);
         final var items = new ArrayList<JsValue>();
         for (var i = 0L; i < length; i++) {
             if (readThroughHoles || target.has(i)) {
@@ -1234,6 +1246,7 @@ public final class ArrayBuiltins {
 
     private static JsValue toReversed(ArrayLike target, InterpreterOps ops) {
         final var length = target.length();
+        requireMaterializableLength(length);
         final var result = newArray(length);
         for (var i = 0L; i < length; i++) {
             createDataPropertyOrThrow(result, i, target.get(length - i - 1), ops);
@@ -1257,6 +1270,7 @@ public final class ArrayBuiltins {
         if (newLength > MAX_SAFE_INTEGER) {
             throw new TypeErrorException("Invalid array length");
         }
+        requireMaterializableLength(newLength);
         final var result = newArray(newLength);
         var written = 0L;
         while (written < start) {
@@ -1284,6 +1298,7 @@ public final class ArrayBuiltins {
             throw new RangeErrorException("Invalid index : " + relative);
         }
         final var replacement = arg(args, 1);
+        requireMaterializableLength(length);
         final var result = newArray(length);
         for (var i = 0L; i < length; i++) {
             createDataPropertyOrThrow(result, i, i == (long) index ? replacement : target.get(i), ops);

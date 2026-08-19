@@ -76,7 +76,7 @@ public final class ClassEvaluator {
     }
 
     public Completion evalClassDeclaration(ClassDeclaration declaration, Environment env) {
-        final var cls = buildClass(declaration.getId(), declaration.getSuperClass(), declaration.getBody(), env);
+        final var cls = buildClass(declaration.getId(), declaration.getSuperClass(), declaration.getBody(), env, null);
         final var name = declaration.getId().getName();
         env.declareLexical(name, "let");
         env.initialize(name, cls);
@@ -84,10 +84,19 @@ public final class ClassEvaluator {
     }
 
     public JsValue evalClassExpression(ClassExpression expression, Environment env) {
-        return buildClass(expression.getId(), expression.getSuperClass(), expression.getBody(), env);
+        return buildClass(expression.getId(), expression.getSuperClass(), expression.getBody(), env, null);
     }
 
-    private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env) {
+    // NamedEvaluation for a class expression: the caller already knows (from its own syntactic
+    // position - a variable declarator's init, an assignment RHS, a default parameter, ...) that
+    // this anonymous class expression's name should be inferred, and passes it in so buildClass can
+    // set it before running static field initializers/blocks - see Interpreter.evalNamed.
+    public JsValue evalClassExpression(ClassExpression expression, Environment env, String inferredName) {
+        return buildClass(expression.getId(), expression.getSuperClass(), expression.getBody(), env, inferredName);
+    }
+
+    private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env,
+            String inferredName) {
         // ClassDefinitionEvaluation creates the class's own scope - with the class name bound but
         // uninitialized (TDZ) - and switches into it *before* evaluating ClassHeritage, so `class x
         // extends x {}` throws a ReferenceError from the TDZ read rather than resolving `x` in the
@@ -158,6 +167,12 @@ public final class ClassEvaluator {
                 case StaticBlock block -> staticInit.add(new StaticEntry(null, block, null));
                 default -> throw new UnsupportedNodeException(member.getType().name());
             }
+        }
+        // SetFunctionName runs before InitializeStaticElements in ClassDefinitionEvaluation, so a
+        // static field initializer/static block reading `this.name` must already see the inferred
+        // name - setInferredName no-ops if the class has its own id or an explicit "name" member.
+        if (inferredName != null) {
+            cls.setInferredName(inferredName);
         }
         runStaticInit(cls, staticInit);
         return cls;

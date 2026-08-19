@@ -39,7 +39,9 @@ public class JsArrayHoleTest {
         assertEquals(3, array.length());
         assertTrue(array.isHole(1));
         assertFalse(array.isHole(0));
-        assertFalse(array.isHole(5));
+        // isHole means "no own value lives here", which is also true past the current length - see
+        // isHole's own doc comment for why every caller wants that unified meaning.
+        assertTrue(array.isHole(5));
         assertInstanceOf(JsUndefined.class, array.get(1));
     }
 
@@ -241,10 +243,13 @@ public class JsArrayHoleTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("const a = [1]; Object.freeze(a); a.length = 0"));
     }
 
-    // the dense backing store is bounded, so an absurd length is a RangeError instead of an OOM
+    // A length within the sparse-representable range (past the old dense cap) now succeeds; only a
+    // length past the spec's own 2^32-1 ceiling is still a RangeError.
     @Test
     public void anOversizedLengthIsARangeError() {
-        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = []; a.length = 33554433"));
-        assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = []; a[33554433] = 1"));
+        assertEquals(33554433, num("const a = []; a.length = 33554433; a.length"));
+        assertEquals(33554434, num("const a = []; a[33554433] = 1; a.length"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("const a = []; a.length = " + JsArray.MAX_ARRAY_LENGTH + " + 1"));
     }
 }

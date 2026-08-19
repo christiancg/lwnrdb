@@ -1,6 +1,8 @@
 package org.techhouse.simplejs.values;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -11,13 +13,26 @@ import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 
 public final class JsArray extends JsValue {
     private static final JsValue HOLE = JsUndefined.getHole();
-    // Elements are stored densely, one slot per index, so a spec-legal length near 2^32 would have to
-    // be materialised hole by hole - hours of padding and gigabytes of list. Until the representation
-    // grows a sparse mode, a length that far out is refused rather than attempted.
+    // Elements at or beyond this cap are never materialised one slot per index - they are held in
+    // `sparseValues` instead (or, past Integer.MAX_VALUE, as an ordinary named property; see
+    // defineOwnProperty) - so a spec-legal length up to MAX_ARRAY_LENGTH never requires padding a
+    // dense list hole by hole all the way out.
     private static final int MAX_DENSE_LENGTH = 1 << 24;
+    // ECMA-262 array index/length ceiling: 2^32 - 1. A property named "4294967295" is not a canonical
+    // array index (ToUint32(P) must not equal 2^32-1), so this doubles as the maximum legal `length`.
+    public static final long MAX_ARRAY_LENGTH = 4_294_967_295L;
 
     private final List<JsValue> elements = new ArrayList<>();
     private final PropertyTable table = new PropertyTable();
+    // Indices at or beyond MAX_DENSE_LENGTH but still addressable as a Java int (i.e. <= Integer.MAX_VALUE)
+    // that have been explicitly set - reached via the same int-keyed get/set/isHole surface the dense
+    // region uses, so every existing caller (MemberEvaluator's array fast path, ArrayLike, etc.) keeps
+    // working unmodified while indices up to ~2^31 no longer hit the old hard dense cap. Indices beyond
+    // Integer.MAX_VALUE (up to MAX_ARRAY_LENGTH) are never reachable through this map or through get/set
+    // at all - defineOwnProperty is the only path that can address them (Object.defineProperty with a
+    // literal huge index/length), and it stores the value as an ordinary named property in `table`
+    // instead, since no int-keyed fast path could ever look it up anyway.
+    private Map<Integer, JsValue> sparseValues;
     private boolean frozen;
     private boolean sealed;
     // Per-property descriptor flags, consulted by Object.defineProperty/getOwnPropertyDescriptor -
@@ -30,6 +45,11 @@ public final class JsArray extends JsValue {
     // Spec: Array "length" is always non-enumerable, non-configurable; only writable is mutable.
     private JsObject.PropertyFlags lengthFlags = new JsObject.PropertyFlags(true, false, false);
     private JsValue proto;
+    // The canonical array length (ArraySetLength's stored value). Decoupled from elements.size() once
+    // it grows past MAX_DENSE_LENGTH; kept equal to elements.size() below that cap (see truncateTo),
+    // so every reader that still assumes "elements.size() == length" for an ordinarily-sized array
+    // (spread, enumeration, removeHoles, ...) keeps seeing exactly the value it always has.
+    private long length;
 
     public JsArray() {
     }
@@ -53,22 +73,48 @@ public final class JsArray extends JsValue {
 
     public JsArray(List<JsValue> initial) {
         elements.addAll(initial);
+        length = initial.size();
+    }
+
+    // True when a plain value (not a hole, not an accessor-only slot) is physically present at this
+    // index, whether in the dense list or the sparse overflow map.
+    private boolean hasValueAt(int index) {
+        if (index < elements.size()) {
+            return elements.get(index) != HOLE;
+        }
+        return sparseValues != null && sparseValues.containsKey(index);
     }
 
     public JsValue get(int index) {
-        if (index < 0 || index >= elements.size()) {
+        if (index < 0) {
             return JsUndefined.getInstance();
         }
-        return elements.get(index);
+        if (index < elements.size()) {
+            return elements.get(index);
+        }
+        final var sparse = sparseValues == null ? null : sparseValues.get(index);
+        return sparse == null ? JsUndefined.getInstance() : sparse;
     }
 
+    // "No own value lives here" - true both for an explicit hole *and* for an index at or past the
+    // current length, so every caller that means "is this index absent" (getOwnProperty,
+    // deleteOwnProperty, the indexSlot used by defineOwnProperty, and MemberEvaluator's own
+    // `index < array.length() && !array.isHole(index)` checks) can rely on this method alone instead
+    // of also re-deriving the out-of-range case itself.
     public boolean isHole(int index) {
-        return index >= 0 && index < elements.size() && elements.get(index) == HOLE;
+        if (index < 0 || index >= length) {
+            return true;
+        }
+        return !hasValueAt(index);
     }
 
     public void pushHole() {
         if (!frozen) {
-            padTo(elements.size() + 1);
+            final var newLength = length + 1;
+            if (newLength <= MAX_DENSE_LENGTH) {
+                padTo((int) newLength);
+            }
+            length = newLength;
         }
     }
 
@@ -78,6 +124,8 @@ public final class JsArray extends JsValue {
     public void clearIndexToHole(int index) {
         if (index >= 0 && index < elements.size()) {
             elements.set(index, HOLE);
+        } else if (sparseValues != null) {
+            sparseValues.remove(index);
         }
         clearIndexAccessor(index);
         if (indexFlags != null) {
@@ -94,18 +142,21 @@ public final class JsArray extends JsValue {
                 removed++;
             }
         }
+        // `length` is a separate field once it can outgrow `elements` (see the class-level doc
+        // comment), so compacting the dense list must shrink it by the same amount explicitly -
+        // it is never re-derived from elements.size() automatically.
+        length -= removed;
         return removed;
     }
 
     public boolean set(int index, JsValue value) {
-        if (frozen || (!table.isExtensible() && index >= elements.size())) {
+        if (frozen || (!table.isExtensible() && index >= length)) {
             return false;
         }
-        if (index < elements.size() && !getIndexFlags(index).writable()) {
+        if (hasValueAt(index) && !getIndexFlags(index).writable()) {
             return false;
         }
-        padToIndex(index);
-        elements.set(index, value);
+        storeIndexValue(index, value);
         return true;
     }
 
@@ -113,8 +164,25 @@ public final class JsArray extends JsValue {
     // Object.defineProperty can place a value regardless of the slot's current flags (the caller is
     // responsible for the extensibility/configurability checks the spec performs beforehand).
     public void defineIndexValue(int index, JsValue value) {
-        padToIndex(index);
-        elements.set(index, value);
+        storeIndexValue(index, value);
+    }
+
+    // Shared by set() and defineIndexValue(): below the dense cap the value lands in the padded list
+    // (exactly as before), at or beyond it in the sparse overflow map - either way the canonical
+    // length grows to cover it, matching ArraySetLength/CreateDataProperty's implicit length bump.
+    private void storeIndexValue(int index, JsValue value) {
+        if (index < MAX_DENSE_LENGTH) {
+            padToIndex(index);
+            elements.set(index, value);
+        } else {
+            if (sparseValues == null) {
+                sparseValues = new HashMap<>();
+            }
+            sparseValues.put(index, value);
+        }
+        if (index + 1L > length) {
+            length = index + 1L;
+        }
     }
 
     public void defineIndexAccessor(int index, JsValue getter, JsValue setter) {
@@ -180,8 +248,7 @@ public final class JsArray extends JsValue {
         if (frozen || !table.isExtensible()) {
             return false;
         }
-        checkDenseBound(elements.size() + 1);
-        elements.add(value);
+        storeIndexValue((int) Math.min(length, Integer.MAX_VALUE), value);
         return true;
     }
 
@@ -237,7 +304,8 @@ public final class JsArray extends JsValue {
     }
 
     public boolean isFrozen() {
-        return frozen || (!table.isExtensible() && elements.isEmpty() && table.isFrozen());
+        return frozen || (!table.isExtensible() && elements.isEmpty()
+                && (sparseValues == null || sparseValues.isEmpty()) && table.isFrozen());
     }
 
     public void seal() {
@@ -258,15 +326,15 @@ public final class JsArray extends JsValue {
         return table.isExtensible();
     }
 
-    public int length() {
-        return elements.size();
+    public long length() {
+        return length;
     }
 
-    public boolean setLength(int length) {
-        if (frozen || (sealed && length != elements.size())) {
+    public boolean setLength(long newLength) {
+        if (frozen || (sealed && newLength != length)) {
             return false;
         }
-        if (!table.isExtensible() && length > elements.size()) {
+        if (!table.isExtensible() && newLength > length) {
             return false;
         }
         // OrdinarySet rejects a write to a non-writable data property even when the value is
@@ -274,15 +342,57 @@ public final class JsArray extends JsValue {
         if (!lengthFlags.writable()) {
             return false;
         }
-        return truncateTo(length);
+        return truncateTo(newLength);
     }
 
     // ArraySetLength steps 16-17: the tail is deleted one index at a time in descending order and the
     // walk stops at the first non-configurable index, leaving length just above it and answering false.
-    private boolean truncateTo(int length) {
-        while (elements.size() > length) {
+    // Sparse (>= MAX_DENSE_LENGTH) entries are always numerically above every dense one, so walking
+    // them first and then the dense tail is exactly the spec's single descending walk, never a mix.
+    private boolean truncateTo(long newLength) {
+        if (newLength < length) {
+            if (!removeSparseTailDown(newLength)) {
+                return false;
+            }
+            if (!removeDenseTailDown(newLength)) {
+                return false;
+            }
+        }
+        length = newLength;
+        if (length <= MAX_DENSE_LENGTH) {
+            padTo((int) length);
+        }
+        return true;
+    }
+
+    private boolean removeSparseTailDown(long newLength) {
+        if (sparseValues == null || sparseValues.isEmpty()) {
+            return true;
+        }
+        final var keys = new ArrayList<>(sparseValues.keySet());
+        keys.sort(Collections.reverseOrder());
+        for (final var key : keys) {
+            if (key < newLength) {
+                continue;
+            }
+            if (!getIndexFlags(key).configurable()) {
+                length = key + 1L;
+                return false;
+            }
+            sparseValues.remove(key);
+            clearIndexAccessor(key);
+            if (indexFlags != null) {
+                indexFlags.remove(key);
+            }
+        }
+        return true;
+    }
+
+    private boolean removeDenseTailDown(long newLength) {
+        while (elements.size() > newLength) {
             final var last = elements.size() - 1;
             if (ownsIndex(last) && !getIndexFlags(last).configurable()) {
+                length = elements.size();
                 return false;
             }
             clearIndexAccessor(last);
@@ -291,7 +401,6 @@ public final class JsArray extends JsValue {
             }
             elements.removeLast();
         }
-        padTo(length);
         return true;
     }
 
@@ -302,25 +411,17 @@ public final class JsArray extends JsValue {
     // [[DefineOwnProperty]] on "length" bypasses the writable check for the value itself (only a
     // later [[Set]] respects it), matching ArraySetLength's "set newLenDesc's [[Value]] first, then
     // apply the writable attribute" order.
-    public boolean defineLength(int length) {
-        return truncateTo(length);
+    public boolean defineLength(long newLength) {
+        return truncateTo(newLength);
     }
 
     private void padToIndex(int index) {
-        checkDenseBound(index);
         padTo(index + 1);
     }
 
-    private void padTo(int length) {
-        checkDenseBound(length);
-        while (elements.size() < length) {
+    private void padTo(int denseLength) {
+        while (elements.size() < denseLength) {
             elements.add(HOLE);
-        }
-    }
-
-    private static void checkDenseBound(int length) {
-        if (length > MAX_DENSE_LENGTH) {
-            throw new RangeErrorException("Invalid array length");
         }
     }
 
@@ -335,6 +436,15 @@ public final class JsArray extends JsValue {
         for (var i = 0; i < elements.size(); i++) {
             if (!isHole(i)) {
                 keys.add(new JsString(Integer.toString(i)));
+            }
+        }
+        // Sparse (>= MAX_DENSE_LENGTH) indices are always numerically above every dense one, so a
+        // sorted append after the dense loop keeps the canonical ascending-index ordering intact.
+        if (sparseValues != null && !sparseValues.isEmpty()) {
+            final var sparseKeys = new ArrayList<>(sparseValues.keySet());
+            sparseKeys.sort(null);
+            for (final var sparseKey : sparseKeys) {
+                keys.add(new JsString(Integer.toString(sparseKey)));
             }
         }
         // "length" exists from the moment the array is created, so it precedes every later named key
@@ -356,7 +466,7 @@ public final class JsArray extends JsValue {
         }
         final var name = OrdinaryProperties.keyName(key);
         if ("length".equals(name)) {
-            return PropertyDescriptor.data(new JsNumber(elements.size()), lengthFlags);
+            return PropertyDescriptor.data(new JsNumber(length), lengthFlags);
         }
         final var index = InterpreterUtils.arrayIndex(name);
         if (index != null) {
@@ -364,9 +474,7 @@ public final class JsArray extends JsValue {
                 return PropertyDescriptor.accessor(getIndexAccessorGetter(index), getIndexAccessorSetter(index),
                         getIndexFlags(index));
             }
-            return index >= elements.size() || isHole(index)
-                    ? null
-                    : PropertyDescriptor.data(get(index), getIndexFlags(index));
+            return isHole(index) ? null : PropertyDescriptor.data(get(index), getIndexFlags(index));
         }
         if (hasPropAccessor(name)) {
             return PropertyDescriptor.accessor(getPropAccessorGetter(name), getPropAccessorSetter(name),
@@ -388,16 +496,33 @@ public final class JsArray extends JsValue {
             defineLengthFrom(name, descriptor);
             return true;
         }
-        final var index = InterpreterUtils.arrayIndex(name);
-        if (index == null) {
+        // arrayIndex (Integer, int range only) covers the fast path every other array-index consumer
+        // in the interpreter also uses; canonicalArrayIndexWide additionally recognises an index at or
+        // past 2^31 (Integer.parseInt's overflow point) so a huge literal index/length reaching
+        // Object.defineProperty/defineProperties directly - the only paths that call here rather than
+        // through the int-bounded fast paths - still updates "length" per ArrayDefineOwnProperty step 4.
+        final var wideIndex = InterpreterUtils.canonicalArrayIndexWide(name);
+        if (wideIndex == null) {
             return super.defineOwnProperty(key, descriptor);
         }
         // ArrayDefineOwnProperty step 4.d: an index at or past the current length can't be added
         // (growing the array) while "length" itself is non-writable.
-        if (index >= elements.size() && !lengthFlags.writable()) {
+        if (wideIndex >= length && !lengthFlags.writable()) {
             throw new TypeErrorException("Cannot define property " + name + ", length is not writable");
         }
-        OrdinaryProperties.validateAndApply(indexSlot(index), table.isExtensible(), name, descriptor);
+        if (wideIndex <= Integer.MAX_VALUE) {
+            OrdinaryProperties.validateAndApply(indexSlot(wideIndex.intValue()), table.isExtensible(), name,
+                    descriptor);
+        } else {
+            // Beyond Integer.MAX_VALUE, no int-keyed storage can ever address this index anyway (every
+            // other consumer reaches an array index through arrayIndex's int-only fast path, so it
+            // already treats a key this large as an ordinary named property) - store it the same way,
+            // as an ordinary property, and only apply the array-specific length bump below.
+            super.defineOwnProperty(key, descriptor);
+        }
+        if (wideIndex + 1 > length) {
+            length = wideIndex + 1;
+        }
         return true;
     }
 
@@ -434,7 +559,7 @@ public final class JsArray extends JsValue {
 
             @Override
             public boolean hasValue() {
-                return index < elements.size() && !isHole(index) && !hasIndexAccessor(index);
+                return !hasIndexAccessor(index) && !isHole(index);
             }
 
             @Override
@@ -504,7 +629,7 @@ public final class JsArray extends JsValue {
             setLengthWritable(writable);
             return;
         }
-        if (!lengthFlags.writable() && newLength != elements.size()) {
+        if (!lengthFlags.writable() && newLength != length) {
             throw new TypeErrorException("Cannot redefine property: length");
         }
         final var truncated = defineLength(newLength);
@@ -515,13 +640,13 @@ public final class JsArray extends JsValue {
     }
 
     private boolean ownsIndex(int index) {
-        return (index < elements.size() && !isHole(index)) || hasIndexAccessor(index);
+        return (index < length && !isHole(index)) || hasIndexAccessor(index);
     }
 
-    private static int requireArrayLength(JsValue value) {
+    private static long requireArrayLength(JsValue value) {
         final var number = JsCoercion.toNumber(value);
-        final var length = (int) number;
-        if (length != number || length < 0) {
+        final var length = (long) number;
+        if (length != number || length < 0 || length > MAX_ARRAY_LENGTH) {
             throw new RangeErrorException("Invalid array length");
         }
         return length;
@@ -535,7 +660,7 @@ public final class JsArray extends JsValue {
         final var name = OrdinaryProperties.keyName(key);
         final var index = InterpreterUtils.arrayIndex(name);
         if (index != null) {
-            if (index >= elements.size() || isHole(index)) {
+            if (isHole(index)) {
                 return true;
             }
             if (!getIndexFlags(index).configurable()) {
@@ -553,7 +678,51 @@ public final class JsArray extends JsValue {
         return deleteProperty(name);
     }
 
+    // A handful of foreign call sites (array-literal/spread construction in ExpressionEvaluator, most
+    // notably) mutate this list directly rather than going through push()/set() - a shortcut that
+    // relied on elements.size() doubling as the array's length before length became its own field.
+    // Delegating through this view instead of the bare backing list keeps that shortcut correct (every
+    // mutator here is exercised only while building a fresh, ordinarily-sized array, so staying densely
+    // backed is exactly right) without having to touch any of those call sites.
     public List<JsValue> getElements() {
-        return elements;
+        return new ElementsView();
+    }
+
+    private final class ElementsView extends java.util.AbstractList<JsValue> {
+        @Override
+        public JsValue get(int index) {
+            return elements.get(index);
+        }
+
+        @Override
+        public int size() {
+            return elements.size();
+        }
+
+        @Override
+        public JsValue set(int index, JsValue element) {
+            final var previous = elements.set(index, element);
+            if (index + 1L > length) {
+                length = index + 1L;
+            }
+            return previous;
+        }
+
+        @Override
+        public void add(int index, JsValue element) {
+            elements.add(index, element);
+            if (elements.size() > length) {
+                length = elements.size();
+            }
+        }
+
+        @Override
+        public JsValue remove(int index) {
+            final var removed = elements.remove(index);
+            if (length > elements.size()) {
+                length = elements.size();
+            }
+            return removed;
+        }
     }
 }

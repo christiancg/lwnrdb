@@ -499,6 +499,14 @@ public final class Intrinsics {
             method.setLength(BuiltinLengths.lengthOf("Array.prototype", name));
             define(proto, name, method);
         }
+        // %Array.prototype% is spec-shaped as a real Array exotic object with an own "length", but
+        // ArrayBuiltinsTest.test_is_array_covers_proxies_and_the_intrinsic_prototype documents why we
+        // deliberately don't give it one: a `class A extends Array` instance's "length" read falls
+        // through to this prototype when the wrapped-primitive delegation doesn't intercept it first,
+        // so an own length here shadowed the wrapped array's real length and broke six subclassing
+        // tests. Left without one; `"length" in Object.create(Array.prototype)` stays a known gap
+        // (`Reflect/has/trap-is-undefined.js`) until the wrapped-primitive delegation is made to take
+        // priority regardless of what the prototype carries.
         proto.setProto(objectProto);
         return proto;
     }
@@ -614,7 +622,22 @@ public final class Intrinsics {
         defineToStringTag(target, tag);
     }
 
+    // Interpreter.getPrototypeOf's default branch special-cases JsClass/JsGenerator/
+    // JsAsyncGenerator's real [[Prototype]] slot before falling back to this method, but never
+    // gained matching cases for JsArray/JsTypedArray (both of which do carry a real, settable slot -
+    // see their own getProto()/setProto() overrides), so Object.getPrototypeOf(array) kept reporting
+    // the intrinsic Array.prototype default even after Object.setPrototypeOf(array, x) changed the
+    // array's own slot. This check is deliberately scoped to just those two types rather than every
+    // JsObject: getObjectMember's plain-object fallback calls protoFor(object) specifically *after*
+    // walking object.getProto() has already failed to find the member (the Wave 3 fix for the
+    // Object.create(null) ambiguity - see its own call site), so re-consulting value.getProto() here
+    // for a general JsObject would re-walk that same already-exhausted chain instead of falling
+    // through to the real intrinsic default, reintroducing the "one link short of Object.prototype"
+    // regression that fix closed.
     public JsObject protoFor(JsValue value) {
+        if ((value instanceof JsArray || value instanceof JsTypedArray) && value.getProto() instanceof JsObject own) {
+            return own;
+        }
         return switch (value) {
             case JsArray ignored -> arrayProto;
             case JsString ignored -> stringProto;

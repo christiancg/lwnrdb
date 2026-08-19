@@ -39,6 +39,32 @@ dir:     language/statements/class/subclass/builtin-objects/Function/  # subclas
 dir:     language/statements/class/subclass/builtin-objects/GeneratorFunction/  # subclassing the derived generator constructor, which deliberately throws
 dir:     language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js  # ArrayBuffer.prototype.slice's species construction needs Symbol.species (deliberately unimplemented)
 #
+# harness/wellKnownIntrinsicObjects.js populates every WellKnownIntrinsicObjects entry via
+# `new Function("return " + source)()` (see test262/harness/wellKnownIntrinsicObjects.js), so every
+# entry's value is silently undefined under this engine's disabled Function constructor. Most tests
+# that `includes: [wellKnownIntrinsicObjects.js]` only consult an optional/secondary intrinsic that
+# way (e.g. Function/prototype/caller/prop-desc.js's %ThrowTypeError% check is behind an
+# `if (throwTypeError)` guard) and still pass in full - an `include:` line would wrongly stop
+# measuring those too, so only the two tests that hard-require an intrinsic obtained exactly this
+# way (no fallback) are excluded by exact path.
+dir:     harness/wellKnownIntrinsicObjects.js  # its own self-test asserts getWellKnownIntrinsicObject('%Array%') unconditionally
+dir:     language/expressions/async-arrow-function/prototype.js  # asserts getWellKnownIntrinsicObject('%AsyncFunction%') unconditionally, no fallback
+#
+# language/comments/hashbang/use-strict.js (flags: [raw]) is a positive test that a hashbang line
+# is not mistaken for a real "use strict" Directive Prologue, proven by then running `with ({}) {}`
+# - legal only in sloppy mode. This engine has no sloppy mode at all (always-strict, matching
+# CLAUDE.md/docs/simplejs.md), so `with` always throws regardless of the hashbang; there is no
+# sloppy-mode code path left to prove the point with.
+dir:     language/comments/hashbang/use-strict.js  # always-strict engine: no sloppy mode for `with` to be legal in
+#
+# language/comments/hashbang/function-constructor.js asserts that `Function('#!\n_')`/`new Function(...)`
+# throw a SyntaxError specifically about a hashbang appearing where a parsed function body doesn't
+# allow one - which requires actually parsing the constructed source, i.e. real runtime code
+# generation. The Function/GeneratorFunction/AsyncFunction/AsyncGeneratorFunction constructors here
+# instead throw TypeError unconditionally (no codegen at all), so the SyntaxError this test expects
+# is unreachable regardless of hashbang handling.
+dir:     language/comments/hashbang/function-constructor.js  # needs the disabled Function-family codegen to parse the constructed body at all
+#
 # The property-escapes pair is not a feature gap. With no ICU dependency our Unicode data is
 # whatever the JDK ships, and the project builds on both 25 (Unicode 16.0) and 26 (Unicode 17.0),
 # so those generated files disagree across supported build JDKs (new scripts such as Sidetic and
