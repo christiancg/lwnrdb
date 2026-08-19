@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Objects;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -17,8 +18,6 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.PropertyDescriptor;
-
-import java.util.Objects;
 
 public class JsArrayLengthTest {
     private static double num(String source) {
@@ -82,6 +81,73 @@ public class JsArrayLengthTest {
                 new PropertyDescriptor(new JsNumber(-1), null, null, null, null, true)));
         assertThrows(RangeErrorException.class, () -> array.defineOwnProperty(new JsString("length"),
                 new PropertyDescriptor(new JsNumber(Double.NaN), null, null, null, true, null)));
+    }
+
+    // ValidateAndApplyPropertyDescriptor: a non-writable "length" rejects an explicit
+    // writable:true even when the requested value equals the current one - the length-changed check
+    // alone is not enough, since the writable-toggle rejection is unconditional.
+    @Test
+    public void test_writable_true_on_non_writable_length_rejected_even_when_value_unchanged() {
+        final var array = array(2);
+        array.setLengthWritable(false);
+        assertThrows(TypeErrorException.class, () -> array.defineOwnProperty(new JsString("length"),
+                new PropertyDescriptor(new JsNumber(2), null, null, true, null, null)));
+        assertEquals(2, array.length());
+    }
+
+    // The JS-visible counterpart: Reflect.defineProperty reports false (not a thrown TypeError) for
+    // the same rejected writable-toggle-on-unchanged-value redefine.
+    @Test
+    public void test_reflect_define_property_writable_true_on_non_writable_length_returns_false() {
+        assertFalse(((JsBoolean) Interpreter
+                .run("const a = [1, 2];" + " Object.defineProperty(a, 'length', {writable: false});"
+                        + " Reflect.defineProperty(a, 'length', {value: 2, writable: true})"))
+                .getValue());
+    }
+
+    // ArraySetLength ( A, Desc ) steps 3-4: Desc.[[Value]]'s toString is invoked to compute the new
+    // length (no valueOf on the object, so ToPrimitive falls through to it) through the ops-aware
+    // coercion Object.defineProperty threads into JsArray via withLengthCoercionOps.
+    @Test
+    public void test_length_value_object_with_only_tostring_is_coerced_through_ops() {
+        assertEquals(2,
+                num("const a = []; Object.defineProperty(a, 'length', {value: {toString(){return '2'}}}); a.length"));
+    }
+
+    // 15.2.3.6-4-150 / 15.2.3.7-6-a-146: neither toString nor valueOf returns a primitive, so
+    // ToPrimitive throws a TypeError only after trying both (in valueOf, toString order).
+    @Test
+    public void test_length_value_object_with_no_primitive_conversion_throws_after_trying_both() {
+        assertEquals("TypeError true true",
+                str("let ts = false, vo = false; let name = null;" + " try { Object.defineProperty([], 'length',"
+                        + " {value: {toString(){ts=true;return {};}, valueOf(){vo=true;return {};}}}); }"
+                        + " catch (e) { name = e.name; }" + " name + ' ' + ts + ' ' + vo"));
+    }
+
+    // define-own-prop-length-coercion-order.js: ToUint32(Desc.[[Value]]) and ToNumber(Desc.[[Value]])
+    // are two SEPARATE coercions, so a valueOf that flips "length" to non-writable on its second call
+    // (skipping the first) is observed by the descriptor validation that runs after both - yielding a
+    // TypeError even though the numeric value itself never actually changes.
+    @Test
+    public void test_length_value_coercion_calls_value_of_twice_and_observes_second_calls_side_effect() {
+        final var source = "let calls = 0; const arr = [1, 2];" + " const length = { valueOf(){ calls++;"
+                + " if (calls !== 1) { Object.defineProperty(arr, 'length', {writable: false}); }"
+                + " return arr.length; } };" + " let name = null;"
+                + " try { Object.defineProperty(arr, 'length', {value: length, writable: true}); }"
+                + " catch (e) { name = e.name; }" + " name + ' ' + calls";
+        assertEquals("TypeError 2", str(source));
+    }
+
+    // The same scenario through Reflect.defineProperty: false instead of a thrown TypeError, and the
+    // coercion still runs exactly twice.
+    @Test
+    public void test_reflect_length_value_coercion_calls_value_of_twice_and_returns_false() {
+        final var source = "let calls = 0; const arr = [1, 2];" + " const length = { valueOf(){ calls++;"
+                + " if (calls !== 1) { Object.defineProperty(arr, 'length', {writable: false}); }"
+                + " return arr.length; } };"
+                + " const result = Reflect.defineProperty(arr, 'length', {value: length, writable: true});"
+                + " result + ' ' + calls";
+        assertEquals("false 2", str(source));
     }
 
     // "length" exists from creation, so it precedes any later named key in the own-key order

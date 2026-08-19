@@ -680,7 +680,11 @@ public final class ObjectBuiltins {
         }
         // The boolean answers only whether the target owns a definition at all (a proxy reaches here
         // through Object.defineProperties); a rejected definition is raised as a TypeError instead.
-        target.defineOwnProperty(propertyKey, toPropertyDescriptor(args.get(2), ops));
+        // This is the single call site reached by Object.defineProperty, Object.defineProperties
+        // (per key, via applyPropertiesFrom) and Reflect.defineProperty alike, so it is where
+        // JsArray's ArraySetLength coercion borrows the current ops (see withLengthCoercionOps).
+        final var descriptor = toPropertyDescriptor(args.get(2), ops);
+        JsArray.withLengthCoercionOps(ops, () -> target.defineOwnProperty(propertyKey, descriptor));
         return target;
     }
 

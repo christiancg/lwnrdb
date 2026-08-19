@@ -566,8 +566,10 @@ public final class Interpreter {
             case JsClass cls -> hasStaticMember(cls, JsCoercion.toStr(keyValue));
             case JsArray array when keyValue instanceof JsSymbol -> exoticHasMember(array, keyValue);
             case JsArray array -> arrayHasMember(array, JsCoercion.toStr(keyValue)) || exoticHasMember(array, keyValue);
-            case JsArguments arguments ->
-                indexInRange(keyValue, arguments.length()) || exoticHasMember(arguments, keyValue);
+            // Unlike JsArray/JsTypedArray, every argument index is written directly into the own
+            // property table at construction, so exoticHasMember alone already reflects a deletion
+            // correctly; an extra range check would resurrect a deleted index as "present".
+            case JsArguments arguments -> exoticHasMember(arguments, keyValue);
             // A canonical numeric index is answered only by the view itself: an out-of-range or
             // non-integral one is absent, never inherited from the prototype chain.
             case JsTypedArray typed when typed.hasCanonicalNumericIndex(keyValue) -> typed.hasOwnKey(keyValue);
@@ -972,10 +974,18 @@ public final class Interpreter {
     private JsValue constructNative(JsNativeFunction nativeFunction, List<JsValue> args, JsValue newTarget) {
         final var proto = nativeFunction.getPrototype();
         if (proto == intrinsics.objectProto()) {
+            // Object ( [ value ] ) step 1: when NewTarget is neither undefined nor the active
+            // function (i.e. a subclass constructed this, directly or via Reflect.construct), the
+            // value argument is ignored entirely and only OrdinaryCreateFromConstructor runs.
+            if (newTarget != nativeFunction) {
+                final var created = new JsObject();
+                created.setProto(protoFromNewTarget(newTarget, proto));
+                return created;
+            }
             final var argument = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
             if (isNullish(argument)) {
                 final var created = new JsObject();
-                created.setProto(protoFromNewTarget(newTarget, proto));
+                created.setProto(proto);
                 return created;
             }
             return intrinsics.toObject(argument);

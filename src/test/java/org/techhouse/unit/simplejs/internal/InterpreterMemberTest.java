@@ -426,4 +426,20 @@ public class InterpreterMemberTest {
                 """;
         assertEquals("true,unwritable,false", str(source));
     }
+
+    // An own non-writable data property on a callable (a native namespace's own static, not one
+    // reached through the prototype chain) must reject a plain assignment the same way: previously
+    // setMember's JsCallableProperties branch called setEnumerableProperty unconditionally and
+    // always reported success, so the write silently landed as a no-op instead of throwing.
+    @Test
+    public void test_callable_own_non_writable_data_property_rejects_the_write() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Number.MAX_VALUE = 42;"));
+        final var source = """
+                var before = Number.MAX_VALUE;
+                var threw = false;
+                try { Number.MAX_VALUE = 42; } catch (e) { threw = e instanceof TypeError; }
+                threw + ',' + (Number.MAX_VALUE === before)
+                """;
+        assertEquals("true,true", str(source));
+    }
 }

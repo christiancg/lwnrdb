@@ -1,30 +1,15 @@
 # test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline
 # corpus: 3655e7464de3d52643ecddd4b5f9f4f3e7f62398
 # generated: 2026-08-19
-# entries: 70
+# entries: 53
 FAIL  built-ins/Array/length/S15.4.4_A1.3_T1.js
-FAIL  built-ins/Array/length/define-own-prop-length-coercion-order.js
 FAIL  built-ins/Array/prototype/exotic-array.js
 FAIL  built-ins/Array/prototype/length.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-26.js
-FAIL  built-ins/Array/prototype/reduce/15.4.4.21-8-b-iii-1-27.js
 FAIL  built-ins/Array/prototype/toString/non-callable-join-string-tag.js
 FAIL  built-ins/Function/prototype/toString/method-computed-property-name.js
 FAIL  built-ins/Function/prototype/toString/symbol-named-builtins.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-142.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-143.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-144.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-145.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-146.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-147.js
 FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-243.js
 FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-246.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-146.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-147.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-148.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-149.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-150.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-151.js
 FAIL  built-ins/Object/defineProperty/15.2.3.6-4-243-2.js
 FAIL  built-ins/Object/defineProperty/15.2.3.6-4-254.js
 FAIL  built-ins/Object/defineProperty/15.2.3.6-4-430.js
@@ -33,7 +18,6 @@ FAIL  built-ins/Object/defineProperty/15.2.3.6-4-448.js
 FAIL  built-ins/Object/defineProperty/15.2.3.6-4-457.js
 FAIL  built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-4.js
 FAIL  built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js
-FAIL  built-ins/Object/subclass-object-arg.js
 FAIL  built-ins/Proxy/has/trap-is-undefined.js
 FAIL  built-ins/RegExp/S15.10.2.5_A1_T4.js
 FAIL  built-ins/RegExp/S15.10.2.8_A2_T1.js
@@ -65,7 +49,6 @@ FAIL  built-ins/String/prototype/match/duplicate-named-groups-properties.js
 FAIL  built-ins/String/prototype/match/duplicate-named-indices-groups-properties.js
 FAIL  built-ins/String/prototype/match/regexp-prototype-match-v-u-flag.js
 FAIL  built-ins/TypedArray/prototype/sort/sort-tonumber.js
-FAIL  language/expressions/assignment/11.13.1-4-14-s.js
 FAIL  language/statements/async-generator/return-undefined-implicit-and-explicit.js
 FAIL  language/statements/async-generator/yield-star-return-then-getter-ticks.js
 FAIL  language/statements/class/subclass/builtin-objects/Array/length.js

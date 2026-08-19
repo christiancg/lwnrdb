@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.ejson.internal.NumberFormatter;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -21,6 +23,13 @@ public final class JsArray extends JsValue {
     // ECMA-262 array index/length ceiling: 2^32 - 1. A property named "4294967295" is not a canonical
     // array index (ToUint32(P) must not equal 2^32-1), so this doubles as the maximum legal `length`.
     public static final long MAX_ARRAY_LENGTH = 4_294_967_295L;
+    // ArraySetLength's coercion of Desc.[[Value]] (see requireArrayLength) needs InterpreterOps to
+    // invoke a user-defined valueOf/toString, but [[DefineOwnProperty]]'s shared signature - used by
+    // every value type, several of which never need ops - carries none. ObjectBuiltins.defineProperty
+    // is the single call site reached by Object.defineProperty, Object.defineProperties (per key) and
+    // Reflect.defineProperty alike, so it stashes the current ops here for the duration of the call
+    // instead of widening the shared interface for this one array-specific need.
+    private static final ThreadLocal<InterpreterOps> LENGTH_COERCION_OPS = new ThreadLocal<>();
 
     private final List<JsValue> elements = new ArrayList<>();
     private final PropertyTable table = new PropertyTable();
@@ -665,11 +674,32 @@ public final class JsArray extends JsValue {
         };
     }
 
+    // Runs `action` with `ops` visible to a nested requireArrayLength coercion (see
+    // LENGTH_COERCION_OPS). Save/restore rather than a plain set/remove so a reentrant call - e.g. a
+    // Desc.[[Value]] valueOf that itself calls Object.defineProperty(array, "length", ...) - leaves
+    // the outer call's ops in place once the inner one returns.
+    public static void withLengthCoercionOps(InterpreterOps ops, Runnable action) {
+        final var previous = LENGTH_COERCION_OPS.get();
+        LENGTH_COERCION_OPS.set(ops);
+        try {
+            action.run();
+        } finally {
+            if (previous == null) {
+                LENGTH_COERCION_OPS.remove();
+            } else {
+                LENGTH_COERCION_OPS.set(previous);
+            }
+        }
+    }
+
     // ArraySetLength: the value is applied before the writable attribute, so a length redefine that
     // also clears writable still takes effect.
     private void defineLengthFrom(String key, PropertyDescriptor descriptor) {
         // ArraySetLength coerces (and range-checks) the new length before any descriptor validation,
-        // so an out-of-range value is a RangeError even when the redefine itself is illegal.
+        // so an out-of-range value is a RangeError even when the redefine itself is illegal - and the
+        // coercion's own side effects (e.g. a valueOf that flips "length" to non-writable) must be
+        // visible to the validation below, since it reads lengthFlags fresh after requireArrayLength
+        // returns rather than a value cached beforehand.
         final var newLength = descriptor.value() == null ? null : requireArrayLength(descriptor.value());
         if (!lengthFlags.configurable() && Boolean.TRUE.equals(descriptor.configurable())) {
             throw OrdinaryProperties.redefineError(key);
@@ -686,8 +716,11 @@ public final class JsArray extends JsValue {
             setLengthWritable(writable);
             return;
         }
-        if (!lengthFlags.writable() && newLength != length) {
-            throw new TypeErrorException("Cannot redefine property: length");
+        // ValidateAndApplyPropertyDescriptor, current.[[Writable]] false branch: reject either a
+        // Desc.[[Writable]] of true (regardless of whether the value itself changes) or a changed
+        // value - not just the latter.
+        if (!lengthFlags.writable() && (Boolean.TRUE.equals(descriptor.writable()) || newLength != length)) {
+            throw OrdinaryProperties.redefineError(key);
         }
         final var truncated = defineLength(newLength);
         setLengthWritable(writable);
@@ -700,13 +733,18 @@ public final class JsArray extends JsValue {
         return (index < length && !isHole(index)) || hasIndexAccessor(index);
     }
 
+    // ArraySetLength ( A, Desc ) steps 3-4: newLen is ToUint32(Desc.[[Value]]) and numberLen is a
+    // SEPARATE ToNumber(Desc.[[Value]]) - two independent coercions of the same value, so a
+    // valueOf/toString on it is observed twice even though only one numeric result is ultimately
+    // used (mirrors MemberEvaluator's plain-assignment `array.length = value` path).
     private static long requireArrayLength(JsValue value) {
-        final var number = JsCoercion.toNumber(value);
-        final var length = (long) number;
-        if (length != number || length < 0 || length > MAX_ARRAY_LENGTH) {
+        final var ops = LENGTH_COERCION_OPS.get();
+        final var newLen = NumberFormatter.toUint32(JsCoercion.toNumber(value, ops));
+        final var numberLen = JsCoercion.toNumber(value, ops);
+        if (newLen != numberLen) {
             throw new RangeErrorException("Invalid array length");
         }
-        return length;
+        return newLen;
     }
 
     @Override

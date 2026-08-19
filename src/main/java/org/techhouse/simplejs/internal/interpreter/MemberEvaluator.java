@@ -762,6 +762,12 @@ public final class MemberEvaluator {
                     if (outcome.handled()) {
                         yield outcome.result();
                     }
+                    // OrdinarySet's own-descriptor step: an own non-writable data property (e.g.
+                    // Number.MAX_VALUE, installed straight onto the table with writable=false)
+                    // rejects the whole write instead of falling through to setEnumerableProperty,
+                    // which has no return value to report the rejection through.
+                } else if (protoOwnsNonWritableData(target, key)) {
+                    yield false;
                 }
                 callable.setEnumerableProperty(key, value);
                 yield true;
