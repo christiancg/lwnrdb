@@ -501,14 +501,19 @@ public class ArrayBuiltinsTest {
     }
 
     // IsArray sees through a proxy to its target, recognises the intrinsic Array.prototype and rejects
-    // a revoked proxy. Array.prototype deliberately carries no own length: giving it one shadowed the
-    // wrapped array's length for `class A extends Array`, breaking six subclassing tests.
+    // a revoked proxy. Array.prototype carries a real own "length" (0, writable/non-enumerable/
+    // non-configurable per spec 22.1.3) - a prior attempt to add this shadowed a `class A extends
+    // Array` instance's own length, breaking six subclassing tests, because the prototype-chain walk
+    // in MemberEvaluator.getObjectMember found Array.prototype's own "length" before ever consulting
+    // the instance's wrapped primitive. Fixed by giving the wrapped-primitive delegation unconditional
+    // priority for "length" in both getObjectMember and setObjectMember (see the comments there and
+    // JsArrayLengthTest's subclassing coverage) rather than omitting the prototype's own length.
     @Test
     public void test_is_array_covers_proxies_and_the_intrinsic_prototype() {
         assertTrue(bool("Array.isArray(new Proxy([], {}))"));
         assertFalse(bool("Array.isArray(new Proxy({}, {}))"));
         assertTrue(bool("Array.isArray(Array.prototype)"));
-        assertTrue(bool("Array.prototype.length === undefined"));
+        assertTrue(bool("Array.prototype.length === 0"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("const h = Proxy.revocable([], {}); h.revoke(); Array.isArray(h.proxy)"));
     }

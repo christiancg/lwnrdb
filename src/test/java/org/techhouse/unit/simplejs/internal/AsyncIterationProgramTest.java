@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -342,6 +343,58 @@ public class AsyncIterationProgramTest {
                 async function* g() { try { yield 1; yield 2; } finally { out.push('closed'); } }
                 async function main() { for await (const v of g()) { out.push(v); break; } }
                 main();
+                out
+                """));
+    }
+
+    // Regression test for a Wave 9 fix: `for await` over a sync iterable (the
+    // %AsyncFromSyncIteratorPrototype% adapter) must apply TWO chained awaits per step - the
+    // inner AsyncFromSyncIteratorContinuation await of the step's `value`, and the outer
+    // `Await(nextResult)` that ForIn/OfBodyEvaluation (13.7.5.13) applies unconditionally whenever
+    // iteratorKind is async. A prior implementation collapsed both into a single await, so the loop
+    // body ran after only one queued microtask instead of two. Guarded by a timeout so a regression
+    // that reintroduces a hang (rather than just the wrong tick count) fails the build instead of
+    // hanging it.
+    @Test
+    @Timeout(5)
+    public void test_for_await_over_a_sync_iterable_needs_two_ticks_per_step() {
+        assertEquals("pre,t0,t1,loop,t2,t3,post", joined("""
+                let out = [];
+                async function main() {
+                    out.push('pre');
+                    for await (const v of [Promise.resolve(9)]) { out.push('loop'); }
+                    out.push('post');
+                }
+                Promise.resolve(0)
+                    .then(() => out.push('t0'))
+                    .then(() => out.push('t1'))
+                    .then(() => out.push('t2'))
+                    .then(() => out.push('t3'));
+                main();
+                out
+                """));
+    }
+
+    // Regression test for a Wave 9 fix: when AsyncFromSyncIteratorContinuation's own
+    // PromiseResolve(value) throws synchronously (here via a poisoned `constructor` accessor on an
+    // element that is itself a Promise), IfAbruptRejectPromise must still route the failure through
+    // the same two-tick chain (rather than throwing synchronously) before the surrounding async
+    // function's promise rejects - otherwise an already-attached `.catch` fires a whole tick too
+    // early relative to code that is merely counting elapsed ticks.
+    @Test
+    @Timeout(5)
+    public void test_for_await_over_a_sync_iterable_defers_a_poisoned_constructor_by_two_ticks() {
+        assertEquals("start,t0,t1,caught", joined("""
+                let out = [];
+                async function f() {
+                    var p = Promise.resolve(0);
+                    Object.defineProperty(p, "constructor", { get() { throw new Error(); } });
+                    out.push('start');
+                    for await (var x of [p]);
+                    out.push('never');
+                }
+                Promise.resolve(0).then(() => out.push('t0')).then(() => out.push('t1'));
+                f().catch(() => out.push('caught'));
                 out
                 """));
     }

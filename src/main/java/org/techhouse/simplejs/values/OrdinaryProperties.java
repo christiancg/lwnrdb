@@ -233,15 +233,11 @@ public final class OrdinaryProperties {
         if (descriptor.setter() != null && setter == null) {
             slot.clearSetter();
         }
-        if (getter != null || setter != null) {
-            slot.defineAccessor(getter, setter);
-        } else {
-            // 'get'/'set' were both present but neither was callable: still a real accessor
-            // property per spec (reads as undefined, rejects writes), approximated here as an
-            // inert always-undefined value since defineAccessor needs at least one callable
-            // function to register the key at all.
-            slot.defineValue(JsUndefined.getInstance());
-        }
+        // Reaching this method already means descriptor.isAccessorDescriptor() (the guard in
+        // validateAndApply), so it always installs a genuine accessor - even when both resolved
+        // sides are null, e.g. {get: undefined, set: undefined}: per spec that is still an
+        // accessor property (reads as undefined, rejects writes), not a data property.
+        slot.defineAccessor(getter, setter);
     }
 
     private static JsValue callableOrNull(JsValue value) {

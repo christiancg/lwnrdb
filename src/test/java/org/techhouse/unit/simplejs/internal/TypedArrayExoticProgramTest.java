@@ -66,6 +66,32 @@ public class TypedArrayExoticProgramTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Int8Array(-1)"));
     }
 
+    // An integer-indexed write on a `class extends TypedArray` instance must write through to the
+    // backing buffer with the element kind's own coercion (Uint8 wraparound here), not land as an
+    // ordinary named property on the subclass instance's wrapper object. Regression test: the
+    // wrapper's own [[Set]] used to pass the wrong receiver identity into the primitive's exotic
+    // [[Set]], which always took the foreign-receiver branch and silently dropped the write onto
+    // the wrapper as a plain (uncoerced) property instead of the buffer (test262
+    // language/statements/class/subclass/builtins.js).
+    @Test
+    public void test_typed_array_subclass_index_write_goes_through_to_the_buffer() {
+        final var source = """
+                class ExtendedUint8Array extends Uint8Array {
+                    constructor() {
+                        super(10);
+                        this[0] = 255;
+                        this[1] = 0xFFA;
+                    }
+                }
+                const eua = new ExtendedUint8Array();
+                [eua.length, eua[0], eua[1]]
+                """;
+        final var result = (org.techhouse.simplejs.values.JsArray) Interpreter.run(source);
+        assertEquals(10, ((JsNumber) result.get(0)).getValue());
+        assertEquals(255, ((JsNumber) result.get(1)).getValue());
+        assertEquals(250, ((JsNumber) result.get(2)).getValue());
+    }
+
     // A DataView over a detached buffer is a TypeError
     @Test
     public void test_data_view_rejects_a_detached_buffer() {

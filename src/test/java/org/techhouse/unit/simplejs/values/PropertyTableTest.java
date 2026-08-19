@@ -97,6 +97,68 @@ public class PropertyTableTest {
         assertTrue(table.hasSymbolAccessor(symbol));
     }
 
+    // A descriptor like {get: undefined, set: undefined} is still a genuine accessor property per
+    // spec, not a data property - defineAccessor must register the key even with neither side
+    // present, and getAccessorGetter/Setter must keep reporting null (not a callable) for each
+    // absent side, since callers rely on that null to know there is nothing to invoke.
+    @Test
+    public void test_accessor_with_both_sides_null_is_a_genuine_accessor() {
+        final var table = new PropertyTable();
+        table.defineAccessor("prop", null, null);
+        assertTrue(table.hasAccessor("prop"));
+        assertNull(table.getAccessorGetter("prop"));
+        assertNull(table.getAccessorSetter("prop"));
+        assertFalse(table.has("prop"));
+        assertTrue(table.keys().contains("prop"));
+    }
+
+    // Converting a no-sides accessor back into a data property (clearAccessor, mirroring
+    // OrdinaryProperties' data-branch) must drop the accessor registration, or hasAccessor would
+    // keep reporting true for what is now a plain data property.
+    @Test
+    public void test_clear_accessor_drops_the_no_sides_marker() {
+        final var table = new PropertyTable();
+        table.defineAccessor("prop", null, null);
+        table.clearAccessor("prop");
+        assertFalse(table.hasAccessor("prop"));
+        table.defineValue("prop", new JsNumber(1));
+        assertTrue(table.has("prop"));
+    }
+
+    // delete() must purge the no-sides accessor marker the same way it purges a real getter/setter,
+    // or a deleted-then-recreated data property at the same key would still read as an accessor.
+    @Test
+    public void test_delete_purges_the_no_sides_accessor_marker() {
+        final var table = new PropertyTable();
+        table.defineAccessor("prop", null, null);
+        assertTrue(table.delete("prop"));
+        assertFalse(table.hasAccessor("prop"));
+    }
+
+    // The symbol-keyed path mirrors the string-keyed one: {get: undefined, set: undefined} on a
+    // symbol key is a real accessor too, and clearSymbolAccessor/isNotDeleteSymbol must both drop it.
+    @Test
+    public void test_symbol_accessor_with_both_sides_null_is_a_genuine_accessor() {
+        final var table = new PropertyTable();
+        final var symbol = new JsSymbol("x");
+        table.defineSymbolAccessor(symbol, null, null);
+        assertTrue(table.hasSymbolAccessor(symbol));
+        assertNull(table.getSymbolAccessorGetter(symbol));
+        assertNull(table.getSymbolAccessorSetter(symbol));
+        assertTrue(table.symbolKeys().contains(symbol));
+        table.clearSymbolAccessor(symbol);
+        assertFalse(table.hasSymbolAccessor(symbol));
+    }
+
+    @Test
+    public void test_delete_symbol_purges_the_no_sides_accessor_marker() {
+        final var table = new PropertyTable();
+        final var symbol = new JsSymbol("x");
+        table.defineSymbolAccessor(symbol, null, null);
+        assertFalse(table.isNotDeleteSymbol(symbol));
+        assertFalse(table.hasSymbolAccessor(symbol));
+    }
+
     // a non-writable key rejects a write and a non-extensible table rejects a new key
     @Test
     public void test_non_writable_write_and_new_key_on_non_extensible_are_rejected() {

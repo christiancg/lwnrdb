@@ -326,6 +326,15 @@ public final class MemberEvaluator {
                     : JsUndefined.getInstance();
         }
         if (!object.has(key)) {
+            // A wrapped Array-exotic primitive (e.g. a `class A extends Array` instance) owns
+            // "length" unconditionally - a real array's length is never absent, so the spec's
+            // OrdinaryGet never consults [[Prototype]] for it. That has to be checked before the
+            // prototype walk below, not after: %Array.prototype% now carries its own real "length"
+            // (see Intrinsics.arrayPrototype), and without this priority check the chain walk would
+            // find and return that instead, shadowing the instance's actual length.
+            if ("length".equals(key) && object.getPrimitive() instanceof JsArray primitiveArray) {
+                return new JsNumber(primitiveArray.length());
+            }
             final var inherited = chainMember(object.getProto(), key, receiver);
             if (inherited != null) {
                 return inherited;
@@ -607,6 +616,30 @@ public final class MemberEvaluator {
     }
 
     private boolean setObjectMember(JsObject object, String key, JsValue value, JsValue receiver) {
+        // Symmetric with the read priority in getObjectMember: a wrapped Array-exotic primitive's
+        // "length" is always its own property, so [[Set]] must apply ArraySetLength directly on it -
+        // never walk the prototype chain (where %Array.prototype%'s own "length" would otherwise be
+        // found first) and never fall through to creating an ordinary "length" property on the
+        // wrapper object instead of truncating/growing the real array.
+        if (!object.has(key) && "length".equals(key) && receiver == object
+                && object.getPrimitive() instanceof JsArray primitiveArray) {
+            return primitiveArray.setLength(requireLength(value, interp.ops()));
+        }
+        // Mirrors getObjectMember's symmetric read-side unwrap: a wrapped TypedArray-exotic
+        // primitive (e.g. a `class A extends Uint8Array` instance) must answer an integer-indexed
+        // write through its own [[Set]] unconditionally - the prototype-chain walk below only ever
+        // sees `object`'s own proto links (plain JsObjects), never the wrapped primitive itself, so
+        // `chain.link() instanceof JsTypedArray` can never match here and the write would otherwise
+        // fall through to creating an ordinary named property on the wrapper instead of writing
+        // through to the backing buffer. setExoticIndex's own identity check (`receiver == this`)
+        // must see the *primitive*, not the wrapper, to actually coerce-and-store into the buffer -
+        // passing `receiver` through unchanged would always take its foreign-receiver branch.
+        if (!object.has(key) && object.getPrimitive() instanceof JsTypedArray primitiveTyped
+                && primitiveTyped.hasCanonicalNumericIndex(new JsString(key))) {
+            return receiver == object
+                    ? primitiveTyped.setExoticIndex(new JsString(key), value, primitiveTyped)
+                    : setOnReceiver(receiver, key, value);
+        }
         if (!object.has(key)) {
             for (var chain = new Chain(object); chain.hasLink(); chain.advance()) {
                 if (chain.link() instanceof JsProxy proxy) {

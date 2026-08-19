@@ -120,7 +120,11 @@ public final class YieldDelegation {
     private JsValue returnInto(JsValue sent) {
         final var returner = method("return");
         if (returner instanceof JsUndefined) {
-            throw new Coroutine.ReturnSignal(fromSync ? awaited(sent) : sent);
+            // Spec: the await here is gated on the *outer* generator's kind (GetGeneratorKind()),
+            // not on whether the inner iterable happened to be sync-adapted - `fromSync` answers a
+            // different question (AsyncFromSyncIteratorContinuation's own extra await) and was
+            // wrong here, skipping the await whenever the inner iterator was genuinely async.
+            throw new Coroutine.ReturnSignal(async ? awaited(sent) : sent);
         }
         return step(returner, sent);
     }

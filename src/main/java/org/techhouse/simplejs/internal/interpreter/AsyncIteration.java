@@ -10,6 +10,8 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Coroutine;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -60,10 +62,6 @@ public final class AsyncIteration {
         return opened;
     }
 
-    public JsValue getIterator() {
-        return iterator;
-    }
-
     public record Step(boolean done, JsValue value) {
     }
 
@@ -98,9 +96,15 @@ public final class AsyncIteration {
         return new Step(complete, interp.getMember(settled, "value"));
     }
 
-    // AsyncFromSyncIteratorContinuation: read `done` and `value` off the *synchronous* result, then
-    // await only the value; a rejection on a not-done step closes the sync iterator before it
-    // propagates.
+    // AsyncFromSyncIteratorContinuation, PLUS the outer `Await(nextResult)` that ForIn/OfBodyEvaluation
+    // (13.7.5.13) applies unconditionally whenever iteratorKind is async. These are two distinct
+    // promises: `%AsyncFromSyncIteratorPrototype%.next()` always returns a freshly constructed
+    // promise capability, wrapping (once the inner `value` await settles) a genuine IterResultObject
+    // - it is that wrapper promise, not `value` itself, that the loop's own Await(nextResult) awaits a
+    // second time. Collapsing both into one await (as a prior version of this method did) undercounts
+    // both the tick delay and the `constructor` lookups by one: the outer await's PromiseResolve
+    // always does a `constructor` Get (the wrapper is always a real Promise), while the inner one only
+    // does it when `value` itself is already a promise.
     private Step continuation(Coroutine coroutine, JsValue raw) {
         if (!isObjectLike(raw)) {
             done = true;
@@ -116,14 +120,55 @@ public final class AsyncIteration {
             throw error;
         }
         done = done || complete;
+
+        final JsValue nextResult;
         try {
-            return new Step(complete, coroutine.await(interp.toPromise(value)));
+            final var awaitedValue = coroutine.await(interp.toPromise(value));
+            nextResult = interp.toPromise(InterpreterUtils.stepResult(awaitedValue, complete));
+        } catch (SimpleJsRuntimeException error) {
+            // IfAbruptRejectPromise: computing (or awaiting) the inner value wrapper failed before a
+            // result object could even be built, so the outer promise capability settles straight to
+            // rejected with that same reason - modelled by awaiting a promise poisoned to reject with
+            // it, which still costs exactly the one remaining tick the outer Await(nextResult) would.
+            if (!complete) {
+                closeSyncQuietly();
+                done = true;
+            }
+            awaitRejected(coroutine, error);
+            throw error;
+        }
+        try {
+            final var settled = coroutine.await(interp.toPromise(nextResult));
+            if (!isObjectLike(settled)) {
+                throw new TypeErrorException("Iterator result is not an object");
+            }
+            return new Step(complete, interp.getMember(settled, "value"));
         } catch (SimpleJsRuntimeException error) {
             if (!complete) {
                 closeSyncQuietly();
                 done = true;
             }
             throw error;
+        }
+    }
+
+    // Awaits a promise that rejects with `error` the moment something reads its "then" property -
+    // exactly what `interp.toPromise` does internally when resolving a thenable whose "then" getter
+    // throws - so the caller gets the same single-tick-deferred throw a genuinely rejected wrapper
+    // promise would produce, without needing raw EventLoop access to construct one directly. The
+    // coroutine resumes by throwing `error` right back out of `coroutine.await`; that is swallowed
+    // here (it is always the same exception object the caller already has) so the caller's own
+    // `throw error` afterward is the one real, reachable throw instead of dead code following a
+    // call that can never return normally.
+    private void awaitRejected(Coroutine coroutine, SimpleJsRuntimeException error) {
+        final var poison = new JsObject();
+        poison.defineAccessor("then", new JsNativeFunction("then", (_, _) -> {
+            throw error;
+        }), null);
+        try {
+            coroutine.await(interp.toPromise(poison));
+        } catch (SimpleJsRuntimeException ignored) {
+            // expected: the poisoned thenable always rejects with `error`
         }
     }
 

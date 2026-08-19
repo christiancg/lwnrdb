@@ -175,9 +175,47 @@ public final class ObjectProtoBuiltins {
             case JsDataView ignored -> "DataView";
             case JsTypedArray typed -> typed.kind().ctorName();
             case JsGlobalObject ignored -> "global";
-            case JsProxy proxy -> brand(proxy.getTarget());
+            case JsProxy proxy -> proxyBrand(proxy);
             case JsObject object -> wrapperBrand(object);
             default -> "Object";
+        };
+    }
+
+    // Per spec, only two of step 14's builtin-tag checks are themselves proxy-transparent: IsArray
+    // (7.2.2 explicitly recurses into [[ProxyTarget]]) and [[Call]] presence (a Proxy exotic object
+    // literally has its own [[Call]] internal method whenever its target is callable - not an
+    // "unwrap", a real own internal method). Every other check (Boolean/Number/String/Date/RegExp/
+    // ErrorData) is a genuine internal slot the Proxy object itself never has, regardless of its
+    // target - so `new Proxy(new Date, {})` must answer "Object", not "Date" (test262 built-ins/
+    // Object/prototype/toString/non-callable-join-string-tag.js). A prior version of this method
+    // unwrapped to the target's own brand unconditionally, which happened to keep the Array/Function
+    // cases correct while silently reflecting every other internal-slot type through the proxy too.
+    private static String proxyBrand(JsProxy proxy) {
+        final var target = proxy.getTarget();
+        if (proxyResolvesToArray(target)) {
+            return "Array";
+        }
+        if (proxyResolvesToCallable(target)) {
+            return "Function";
+        }
+        return "Object";
+    }
+
+    private static boolean proxyResolvesToArray(JsValue value) {
+        return switch (value) {
+            case JsArray ignored -> true;
+            case JsProxy proxy -> proxyResolvesToArray(proxy.getTarget());
+            default -> false;
+        };
+    }
+
+    private static boolean proxyResolvesToCallable(JsValue value) {
+        return switch (value) {
+            case JsFunction ignored -> true;
+            case JsNativeFunction ignored -> true;
+            case JsClass ignored -> true;
+            case JsProxy proxy -> proxyResolvesToCallable(proxy.getTarget());
+            default -> false;
         };
     }
 

@@ -512,14 +512,16 @@ public final class Intrinsics {
             method.setLength(BuiltinLengths.lengthOf("Array.prototype", name));
             define(proto, name, method);
         }
-        // %Array.prototype% is spec-shaped as a real Array exotic object with an own "length", but
-        // ArrayBuiltinsTest.test_is_array_covers_proxies_and_the_intrinsic_prototype documents why we
-        // deliberately don't give it one: a `class A extends Array` instance's "length" read falls
-        // through to this prototype when the wrapped-primitive delegation doesn't intercept it first,
-        // so an own length here shadowed the wrapped array's real length and broke six subclassing
-        // tests. Left without one; `"length" in Object.create(Array.prototype)` stays a known gap
-        // (`Reflect/has/trap-is-undefined.js`) until the wrapped-primitive delegation is made to take
-        // priority regardless of what the prototype carries.
+        // %Array.prototype% has a real own "length" per spec (22.1.3): initial value 0, attributes
+        // {[[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false}. This is an ordinary
+        // data property on the plain JsObject %Array.prototype% is built from - not genuine Array
+        // exotic behaviour (an index write here does not bump it, unlike a real JsArray's "length");
+        // MemberEvaluator.getObjectMember/setObjectMember give a `class A extends Array` instance's
+        // wrapped-primitive length priority over this own property, so it is safe for a subclass
+        // instance's real length to never be shadowed by it (see the comment there and
+        // ArrayBuiltinsTest.test_is_array_covers_proxies_and_the_intrinsic_prototype).
+        proto.defineValue("length", new JsNumber(0));
+        proto.setFlags("length", new PropertyFlags(true, false, false));
         proto.setProto(objectProto);
         return proto;
     }

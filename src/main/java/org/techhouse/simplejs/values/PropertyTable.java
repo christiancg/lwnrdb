@@ -24,12 +24,18 @@ public final class PropertyTable {
     private boolean extensible = true;
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
+    // The source of truth for "is this key an accessor property", independent of whether either
+    // side actually holds a function - a descriptor like {get: undefined, set: undefined} is still
+    // a genuine accessor property per spec (reads as undefined, rejects writes), not a data
+    // property, even though neither accessor map above ever gets an entry for it.
+    private Set<String> accessorKeys;
     private Map<String, PropertyFlags> descriptors;
     private Set<JsSymbol> symbolKeyOrder;
     private Map<JsSymbol, JsValue> symbolProperties;
     private Map<JsSymbol, PropertyFlags> symbolFlags;
     private Map<JsSymbol, JsValue> symbolAccessorGetters;
     private Map<JsSymbol, JsValue> symbolAccessorSetters;
+    private Set<JsSymbol> symbolAccessorKeys;
 
     public JsValue get(String key) {
         final var value = properties.get(key);
@@ -78,6 +84,9 @@ public final class PropertyTable {
         }
         if (accessorSetters != null) {
             accessorSetters.remove(key);
+        }
+        if (accessorKeys != null) {
+            accessorKeys.remove(key);
         }
         if (descriptors != null) {
             descriptors.remove(key);
@@ -266,6 +275,9 @@ public final class PropertyTable {
         if (symbolAccessorSetters != null) {
             symbolAccessorSetters.remove(key);
         }
+        if (symbolAccessorKeys != null) {
+            symbolAccessorKeys.remove(key);
+        }
         return false;
     }
 
@@ -286,14 +298,16 @@ public final class PropertyTable {
     }
 
     public void defineAccessor(String key, JsValue getter, JsValue setter) {
-        if (getter != null || setter != null) {
-            keyOrder.add(key);
-            // A key transitioning from a data property to an accessor pair (e.g. a class
-            // installing `static set length(_) {}` over the constructor's own default "length"
-            // value) must drop the stale data value - has()/get() and the accessor tables are
-            // meant to be mutually exclusive for one key.
-            properties.remove(key);
-        }
+        // Always registers the key as a genuine accessor property, even when both getter and
+        // setter are null (e.g. a defineProperty descriptor of {get: undefined, set: undefined}):
+        // per spec that is still an accessor, not a data property, just one whose sides both read
+        // as undefined and reject writes. A key transitioning from a data property to an accessor
+        // (e.g. a class installing `static set length(_) {}` over the constructor's own default
+        // "length" value) must drop the stale data value - has()/get() and the accessor registry
+        // are meant to be mutually exclusive for one key.
+        keyOrder.add(key);
+        properties.remove(key);
+        registerAccessorKey(key);
         if (getter != null) {
             if (accessorGetters == null) {
                 accessorGetters = new LinkedHashMap<>();
@@ -321,6 +335,9 @@ public final class PropertyTable {
     public void clearAccessor(String key) {
         clearAccessorGetter(key);
         clearAccessorSetter(key);
+        if (accessorKeys != null) {
+            accessorKeys.remove(key);
+        }
     }
 
     // defineAccessor is intentionally additive (a null side is "leave as-is", relied on by object
@@ -340,9 +357,10 @@ public final class PropertyTable {
     }
 
     public void defineSymbolAccessor(JsSymbol key, JsValue getter, JsValue setter) {
-        if (getter != null || setter != null) {
-            registerSymbolKey(key);
-        }
+        // Mirrors defineAccessor's string-key behaviour: always registers the symbol as a genuine
+        // accessor, even when both sides are null.
+        registerSymbolKey(key);
+        registerSymbolAccessorKey(key);
         if (getter != null) {
             if (symbolAccessorGetters == null) {
                 symbolAccessorGetters = new LinkedHashMap<>();
@@ -380,16 +398,24 @@ public final class PropertyTable {
     public void clearSymbolAccessor(JsSymbol key) {
         clearSymbolAccessorGetter(key);
         clearSymbolAccessorSetter(key);
+        if (symbolAccessorKeys != null) {
+            symbolAccessorKeys.remove(key);
+        }
     }
 
     public boolean hasSymbolAccessor(JsSymbol key) {
-        return (symbolAccessorGetters != null && symbolAccessorGetters.containsKey(key))
-                || (symbolAccessorSetters != null && symbolAccessorSetters.containsKey(key));
+        return symbolAccessorKeys != null && symbolAccessorKeys.contains(key);
     }
 
     public boolean hasAccessor(String key) {
-        return (accessorGetters != null && accessorGetters.containsKey(key))
-                || (accessorSetters != null && accessorSetters.containsKey(key));
+        return accessorKeys != null && accessorKeys.contains(key);
+    }
+
+    private void registerAccessorKey(String key) {
+        if (accessorKeys == null) {
+            accessorKeys = new LinkedHashSet<>();
+        }
+        accessorKeys.add(key);
     }
 
     private void registerSymbolKey(JsSymbol key) {
@@ -397,5 +423,12 @@ public final class PropertyTable {
             symbolKeyOrder = new LinkedHashSet<>();
         }
         symbolKeyOrder.add(key);
+    }
+
+    private void registerSymbolAccessorKey(JsSymbol key) {
+        if (symbolAccessorKeys == null) {
+            symbolAccessorKeys = new LinkedHashSet<>();
+        }
+        symbolAccessorKeys.add(key);
     }
 }

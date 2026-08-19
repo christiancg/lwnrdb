@@ -4,8 +4,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -51,6 +53,12 @@ public final class JsArray extends JsValue {
     // Accessor storage, separate from the plain element value slots.
     private Map<Integer, JsValue> indexGetters;
     private Map<Integer, JsValue> indexSetters;
+    // The source of truth for "is this index an accessor property", independent of whether either
+    // side actually holds a function - a descriptor like {get: undefined, set: undefined} is still
+    // a genuine accessor property per spec (reads as undefined, rejects writes), not a data
+    // property, even though neither accessor map above ever gets an entry for it. Mirrors
+    // PropertyTable's accessorKeys registry.
+    private Set<Integer> indexAccessorKeys;
     // Spec: Array "length" is always non-enumerable, non-configurable; only writable is mutable.
     private JsObject.PropertyFlags lengthFlags = new JsObject.PropertyFlags(true, false, false);
     private JsValue proto;
@@ -219,6 +227,14 @@ public final class JsArray extends JsValue {
     }
 
     public void defineIndexAccessor(int index, JsValue getter, JsValue setter) {
+        // Always registers the index as a genuine accessor property, even when both getter and
+        // setter are null (e.g. a defineProperty descriptor of {get: undefined, set: undefined}):
+        // per spec that is still an accessor, not a data property, just one whose sides both read
+        // as undefined and reject writes.
+        if (indexAccessorKeys == null) {
+            indexAccessorKeys = new LinkedHashSet<>();
+        }
+        indexAccessorKeys.add(index);
         if (getter != null) {
             if (indexGetters == null) {
                 indexGetters = new LinkedHashMap<>();
@@ -242,12 +258,11 @@ public final class JsArray extends JsValue {
     }
 
     public boolean hasAnyIndexAccessor() {
-        return (indexGetters != null && !indexGetters.isEmpty()) || (indexSetters != null && !indexSetters.isEmpty());
+        return indexAccessorKeys != null && !indexAccessorKeys.isEmpty();
     }
 
     public boolean hasIndexAccessor(int index) {
-        return (indexGetters != null && indexGetters.containsKey(index))
-                || (indexSetters != null && indexSetters.containsKey(index));
+        return indexAccessorKeys != null && indexAccessorKeys.contains(index);
     }
 
     public void clearIndexAccessor(int index) {
@@ -256,6 +271,9 @@ public final class JsArray extends JsValue {
         }
         if (indexSetters != null) {
             indexSetters.remove(index);
+        }
+        if (indexAccessorKeys != null) {
+            indexAccessorKeys.remove(index);
         }
     }
 

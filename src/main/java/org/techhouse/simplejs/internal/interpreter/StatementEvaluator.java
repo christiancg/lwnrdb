@@ -561,7 +561,23 @@ public final class StatementEvaluator {
 
     public Completion evalReturn(ReturnStatement statement, Environment env) {
         final var argument = statement.getArgument();
-        return Completion.returnValue(argument == null ? JsUndefined.getInstance() : interp.eval(argument, env));
+        if (argument == null) {
+            return Completion.returnValue(JsUndefined.getInstance());
+        }
+        final var value = interp.eval(argument, env);
+        // Spec (AsyncGeneratorUnwrapYieldResumption / the async generator return path): an explicit
+        // `return <expr>;` inside an async generator must Await the expression's value before
+        // producing the Return completion; a bare `return;` (argument == null, handled above) must
+        // not. This can only be decided right here, while the AST still distinguishes "no argument"
+        // from "argument evaluates to undefined" - by the time a Completion carries just a JsValue,
+        // both look identical. A plain (non-generator) async function does not need this: its return
+        // value is already resolved through the function-call boundary's own promise machinery, so
+        // the await is gated on yieldAllowed (true only for a generator) as well as async.
+        final var coroutine = interp.currentCoroutine();
+        if (coroutine != null && coroutine.isAsync() && coroutine.isYieldAllowed()) {
+            return Completion.returnValue(coroutine.await(interp.toPromise(value)));
+        }
+        return Completion.returnValue(value);
     }
 
     public Completion evalTry(TryStatement statement, Environment env) {

@@ -1,24 +1,13 @@
 # test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline
 # corpus: 3655e7464de3d52643ecddd4b5f9f4f3e7f62398
 # generated: 2026-08-19
-# entries: 53
-FAIL  built-ins/Array/length/S15.4.4_A1.3_T1.js
+# entries: 37
 FAIL  built-ins/Array/prototype/exotic-array.js
-FAIL  built-ins/Array/prototype/length.js
-FAIL  built-ins/Array/prototype/toString/non-callable-join-string-tag.js
 FAIL  built-ins/Function/prototype/toString/method-computed-property-name.js
 FAIL  built-ins/Function/prototype/toString/symbol-named-builtins.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-243.js
-FAIL  built-ins/Object/defineProperties/15.2.3.7-6-a-246.js
 FAIL  built-ins/Object/defineProperty/15.2.3.6-4-243-2.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-254.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-430.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-439.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-448.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-457.js
 FAIL  built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-4.js
 FAIL  built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js
-FAIL  built-ins/Proxy/has/trap-is-undefined.js
 FAIL  built-ins/RegExp/S15.10.2.5_A1_T4.js
 FAIL  built-ins/RegExp/S15.10.2.8_A2_T1.js
 FAIL  built-ins/RegExp/dotall/without-dotall.js
@@ -49,9 +38,4 @@ FAIL  built-ins/String/prototype/match/duplicate-named-groups-properties.js
 FAIL  built-ins/String/prototype/match/duplicate-named-indices-groups-properties.js
 FAIL  built-ins/String/prototype/match/regexp-prototype-match-v-u-flag.js
 FAIL  built-ins/TypedArray/prototype/sort/sort-tonumber.js
-FAIL  language/statements/async-generator/return-undefined-implicit-and-explicit.js
-FAIL  language/statements/async-generator/yield-star-return-then-getter-ticks.js
-FAIL  language/statements/class/subclass/builtin-objects/Array/length.js
-FAIL  language/statements/class/subclass/builtins.js
-FAIL  language/statements/for-await-of/async-from-sync-iterator-continuation-abrupt-completion-get-constructor.js
 FAIL  language/statements/for-await-of/ticks-with-sync-iter-resolved-promise-and-constructor-lookup.js

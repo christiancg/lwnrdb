@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.values;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -206,6 +207,34 @@ public class JsArrayLengthTest {
         assertTrue(array.hasIndexAccessor(0));
         assertEquals(getter, array.getIndexAccessorGetter(0));
         assertFalse(array.getIndexFlags(0).enumerable());
+    }
+
+    // A descriptor like {get: undefined, set: undefined} on an array index is still a genuine
+    // accessor property per spec, not a data property - mirrors PropertyTable's own
+    // accessor-with-both-sides-undefined fix (values/PropertyTable.java) for the array-index
+    // storage. The getter/setter fields must be JsUndefined.getInstance() (present-but-undefined),
+    // not raw null (absent), or isAccessorDescriptor() never recognises this as an accessor.
+    @Test
+    public void test_index_accessor_with_both_sides_undefined_is_a_genuine_accessor() {
+        final var array = array(1);
+        array.defineOwnProperty(new JsString("0"),
+                new PropertyDescriptor(null, JsUndefined.getInstance(), JsUndefined.getInstance(), null, true, true));
+        assertTrue(array.hasIndexAccessor(0));
+        assertNull(array.getIndexAccessorGetter(0));
+        assertNull(array.getIndexAccessorSetter(0));
+    }
+
+    // Redefining a non-configurable no-sides accessor index with an identical no-sides descriptor
+    // must be accepted (SameValue on both undefined accessor sides), matching the plain-property
+    // compatibility check already covered above for a real getter/setter pair.
+    @Test
+    public void test_redefine_non_configurable_index_accessor_with_both_sides_undefined_is_allowed() {
+        final var array = array(1);
+        final var descriptor = new PropertyDescriptor(null, JsUndefined.getInstance(), JsUndefined.getInstance(), null,
+                false, false);
+        array.defineOwnProperty(new JsString("0"), descriptor);
+        array.defineOwnProperty(new JsString("0"), descriptor);
+        assertTrue(array.hasIndexAccessor(0));
     }
 
     // Formerly a documented restriction (see Hard blocker on 100%,
@@ -542,5 +571,50 @@ public class JsArrayLengthTest {
         assertTrue(array.setLength(keep + 100));
         assertTrue(array.hasProperty(Long.toString(keep)));
         assertEquals(keep + 100, array.length());
+    }
+
+    // %Array.prototype% carries a real own "length" per spec 22.1.3: initial value 0, attributes
+    // {writable:true, enumerable:false, configurable:false}.
+    @Test
+    public void test_array_prototype_has_a_real_own_length() {
+        assertEquals(0, num("Array.prototype.length"));
+        assertEquals("true,false,false", str("const d = Object.getOwnPropertyDescriptor(Array.prototype, 'length');"
+                + " d.writable + ',' + d.enumerable + ',' + d.configurable"));
+        assertTrue(((JsBoolean) Interpreter.run("'length' in Object.create(Array.prototype)")).getValue());
+    }
+
+    // The regression Wave 6's Stream V hit: `class A extends Array` wraps a real JsArray as the
+    // instance's primitive, and MemberEvaluator.getObjectMember must answer "length" from that
+    // primitive unconditionally - never from whatever %Array.prototype% itself carries (which is now
+    // a real own "length" of 0 per the test above) - or every subclass instance's length would be
+    // shadowed down to 0.
+    @Test
+    public void test_array_subclass_instance_length_is_not_shadowed_by_array_prototype_length() {
+        assertEquals(3, num("class A extends Array {} new A(1, 2, 3).length"));
+        assertEquals(0, num("Array.prototype.length"));
+        assertEquals(4, num("class A extends Array {} const a = new A(1, 2, 3); a.push(4); a.length"));
+    }
+
+    // Symmetric with the read side: setObjectMember must apply the wrapped primitive's ArraySetLength
+    // directly (truncating elements) rather than either (a) being deflected by %Array.prototype%'s own
+    // writable "length" data property found while walking the chain, or (b) falling through to
+    // creating an ordinary "length" property on the wrapper object that never touches the real array.
+    @Test
+    public void test_array_subclass_instance_length_assignment_truncates_the_real_array() {
+        assertEquals("[\"foo\",true]",
+                str("class Ar extends Array {}" + " const arr = new Ar('foo', 'bar'); arr.length = 1;"
+                        + " JSON.stringify([arr[0], arr[1] === undefined])"));
+        assertEquals(1, num("class A extends Array {} const a = new A(1, 2, 3); a.length = 1; a.length"));
+    }
+
+    // Object.getOwnPropertyDescriptor(subclassInstance, 'length') already delegates to the wrapped
+    // primitive (ObjectBuiltins, outside this stream's scope) and reports the real array's flags -
+    // the language/statements/class/subclass/builtin-objects/Array/length.js scenario end to end.
+    @Test
+    public void test_array_subclass_instance_length_descriptor_and_truncation_end_to_end() {
+        assertEquals("true,false,false,true",
+                str("class Ar extends Array {}" + " const arr = new Ar('foo', 'bar');"
+                        + " const d = Object.getOwnPropertyDescriptor(arr, 'length');" + " arr.length = 1;"
+                        + " d.writable + ',' + d.enumerable + ',' + d.configurable + ',' + (arr[1] === undefined)"));
     }
 }

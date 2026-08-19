@@ -82,6 +82,24 @@ public class ObjectProtoBuiltinsTest {
         assertEquals("[object Custom]", strOf("Object.prototype.toString.call({[Symbol.toStringTag]: 'Custom'})"));
     }
 
+    // Only IsArray and [[Call]] presence are proxy-transparent per spec (7.2.2 explicitly recurses
+    // for IsArray, and a Proxy's own [[Call]] genuinely exists whenever its target is callable) -
+    // every other builtin tag is a real internal slot the Proxy exotic object itself never has, so
+    // wrapping e.g. a Date must report "Object", not "Date". Regression test for a bug where the
+    // proxy case unwrapped to the target's brand unconditionally (test262 built-ins/Object/prototype/
+    // toString/non-callable-join-string-tag.js).
+    @Test
+    public void test_to_string_call_proxy_brands() {
+        assertEquals("[object Object]", strOf("Object.prototype.toString.call(new Proxy({}, {}))"));
+        assertEquals("[object Array]", strOf("Object.prototype.toString.call(new Proxy([], {}))"));
+        assertEquals("[object Array]", strOf("Object.prototype.toString.call(new Proxy(new Proxy([], {}), {}))"));
+        assertEquals("[object Function]", strOf("Object.prototype.toString.call(new Proxy(() => {}, {}))"));
+        assertEquals("[object Object]", strOf("Object.prototype.toString.call(new Proxy(new Date(), {}))"));
+        assertEquals("[object Object]", strOf("Object.prototype.toString.call(new Proxy(new Number(1), {}))"));
+        assertEquals("[object Object]", strOf("Object.prototype.toString.call(new Proxy(/x/, {}))"));
+        assertEquals("[object Object]", strOf("Object.prototype.toString.call(new Proxy(new Error('x'), {}))"));
+    }
+
     // hasOwnProperty accepts an array, string or number receiver
     @Test
     public void test_has_own_property_non_object_receivers() {

@@ -136,6 +136,39 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("cleanup,r:x:true", joined(source));
     }
 
+    // Per spec, `return <expr>;` inside an async generator body must Await the expression's value
+    // before completing - a `return` of a thenable resolves to its settled value, not the raw
+    // thenable object. Regression test: this await used to be entirely missing, since by the time
+    // the completion reached the function-body runner, an explicit `return undefined;` and a bare
+    // `return;` had already collapsed into the same value with no way to tell them apart - the fix
+    // has to live in the statement evaluator itself, where the AST still distinguishes them.
+    @Test
+    public void test_explicit_return_of_a_thenable_is_awaited() {
+        final var source = """
+                let out = [];
+                async function* g() { return Promise.resolve('resolved-value'); }
+                const it = g();
+                it.next().then(r => out.push(r.value + ':' + r.done));
+                out
+                """;
+        assertEquals("resolved-value:true", joined(source));
+    }
+
+    // A bare `return;` (no argument at all) must not attempt to await anything - it settles
+    // immediately with `undefined`, exercising the argument == null branch left untouched by the
+    // fix above.
+    @Test
+    public void test_bare_return_with_no_argument_settles_with_undefined() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 1; return; }
+                async function main() { for await (const x of g()) out.push(x); out.push('done'); }
+                main();
+                out
+                """;
+        assertEquals("1,done", joined(source));
+    }
+
     // an async generator class method works
     @Test
     public void test_async_generator_class_method() {
@@ -271,6 +304,35 @@ public class InterpreterAsyncGeneratorTest {
                 out
                 """;
         assertEquals("TypeError", joined(source));
+    }
+
+    // Per spec, a `yield*` return-completion into an inner async iterator that has no own `return`
+    // method must still Await the returned value when the *outer* generator is async - regardless
+    // of whether the inner iterable itself came from a sync-to-async adapter. Regression test for a
+    // bug where this await was gated on the wrong condition (fromSync instead of async), so a real
+    // async inner iterator without `return` skipped the await entirely and leaked an unresolved
+    // thenable instead of its resolved value.
+    @Test
+    public void test_yield_star_return_without_inner_return_method_awaits_the_value() {
+        final var source = """
+                let out = [];
+                async function* g() {
+                    yield* {
+                        [Symbol.asyncIterator]() {
+                            return { next() { return Promise.resolve({ value: 1, done: false }); } };
+                        }
+                    };
+                }
+                async function main() {
+                    const it = g();
+                    await it.next();
+                    const r = await it.return(Promise.resolve('done-value'));
+                    out.push(r.value);
+                }
+                main();
+                out
+                """;
+        assertEquals("done-value", joined(source));
     }
 
     // three next() calls made before any settles queue up and resolve in request order
