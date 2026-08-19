@@ -513,12 +513,15 @@ public final class Intrinsics {
             define(proto, name, method);
         }
         // %Array.prototype% has a real own "length" per spec (22.1.3): initial value 0, attributes
-        // {[[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false}. This is an ordinary
-        // data property on the plain JsObject %Array.prototype% is built from - not genuine Array
-        // exotic behaviour (an index write here does not bump it, unlike a real JsArray's "length");
-        // MemberEvaluator.getObjectMember/setObjectMember give a `class A extends Array` instance's
-        // wrapped-primitive length priority over this own property, so it is safe for a subclass
-        // instance's real length to never be shadowed by it (see the comment there and
+        // {[[Writable]]: true, [[Enumerable]]: false, [[Configurable]]: false}. It is an ordinary data
+        // property on the plain JsObject %Array.prototype% is built from, not a real JsArray - but
+        // MemberEvaluator.setObjectMember special-cases an index write on exactly this object to bump
+        // it the way a genuine Array exotic object's [[DefineOwnProperty]] would (see the comment
+        // there and ArrayBuiltinsTest.test_array_prototype_is_a_genuine_array_exotic_object), so the
+        // exotic behaviour is present without converting this object's Java type to JsArray.
+        // MemberEvaluator.getObjectMember/setObjectMember separately give a `class A extends Array`
+        // instance's wrapped-primitive length priority over this own property, so it is safe for a
+        // subclass instance's real length to never be shadowed by it (see the comment there and
         // ArrayBuiltinsTest.test_is_array_covers_proxies_and_the_intrinsic_prototype).
         proto.defineValue("length", new JsNumber(0));
         proto.setFlags("length", new PropertyFlags(true, false, false));

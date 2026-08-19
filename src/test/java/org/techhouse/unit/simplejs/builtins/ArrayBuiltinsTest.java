@@ -518,6 +518,19 @@ public class ArrayBuiltinsTest {
                 () -> Interpreter.run("const h = Proxy.revocable([], {}); h.revoke(); Array.isArray(h.proxy)"));
     }
 
+    // %Array.prototype% is a genuine Array exotic object per spec (22.1.3): an index write on it
+    // bumps "length" the way a real array's [[DefineOwnProperty]] would, and its own brand is
+    // "Array" (test262 built-ins/Array/prototype/exotic-array.js). Regression test for the follow-up
+    // fix that closed this without converting %Array.prototype%'s Java type away from JsObject - the
+    // subclassing coverage above must stay green alongside this, since both share the same "length"
+    // choke point in MemberEvaluator.
+    @Test
+    public void test_array_prototype_is_a_genuine_array_exotic_object() {
+        assertEquals(3,
+                num("Array.prototype[2] = 42; const len = Array.prototype.length; delete Array.prototype[2]; len"));
+        assertTrue(bool("Object.prototype.toString.call(Array.prototype) === '[object Array]'"));
+    }
+
     // Array.of/from honour a constructor `this`: the iterator path constructs with no arguments and
     // the array-like path with the length, and both finish by setting `length` on the result
     @Test

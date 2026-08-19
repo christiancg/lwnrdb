@@ -1,8 +1,7 @@
 # test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline
 # corpus: 3655e7464de3d52643ecddd4b5f9f4f3e7f62398
 # generated: 2026-08-19
-# entries: 36
-FAIL  built-ins/Array/prototype/exotic-array.js
+# entries: 35
 FAIL  built-ins/Function/prototype/toString/method-computed-property-name.js
 FAIL  built-ins/Function/prototype/toString/symbol-named-builtins.js
 FAIL  built-ins/Object/defineProperty/15.2.3.6-4-243-2.js

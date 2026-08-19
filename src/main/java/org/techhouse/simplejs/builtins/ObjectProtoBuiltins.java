@@ -46,7 +46,8 @@ public final class ObjectProtoBuiltins {
                     (_, args) -> JsBoolean.of(isPrototypeOf(receiver, args, ops, intrinsics)));
             case "propertyIsEnumerable" -> new JsNativeFunction("propertyIsEnumerable",
                     (_, args) -> JsBoolean.of(isEnumerable(receiver, args, ops)));
-            case "toString" -> new JsNativeFunction("toString", (_, _) -> new JsString(objectToString(receiver, ops)));
+            case "toString" ->
+                new JsNativeFunction("toString", (_, _) -> new JsString(objectToString(receiver, ops, intrinsics)));
             case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> toLocaleString(receiver, ops));
             // Object.prototype.valueOf: 1. Return ? ToObject(this value) - a primitive receiver must
             // come back as its wrapper object, not the bare primitive.
@@ -143,12 +144,12 @@ public final class ObjectProtoBuiltins {
         return value instanceof JsFunction || value instanceof JsNativeFunction || value instanceof JsClass;
     }
 
-    private static String objectToString(JsValue receiver, InterpreterOps ops) {
+    private static String objectToString(JsValue receiver, InterpreterOps ops, Intrinsics intrinsics) {
         if (ops != null && !(receiver instanceof JsUndefined) && !(receiver instanceof JsNull)
                 && ops.getMember(receiver, JsSymbol.TO_STRING_TAG) instanceof JsString tag) {
             return "[object " + tag.getValue() + "]";
         }
-        return "[object " + brand(receiver) + "]";
+        return "[object " + brand(receiver, intrinsics) + "]";
     }
 
     // ES2026 step 14's builtinTag switch names only Array/Function/Error/Boolean/Number/String/
@@ -157,7 +158,15 @@ public final class ObjectProtoBuiltins {
     // @@toStringTag property installed on its prototype (consulted above, before brand() runs) -
     // never from this builtin-tag fallback, so once that property is removed or answers a non-string
     // the fallback here must be "Object", not the type name.
-    private static String brand(JsValue receiver) {
+    private static String brand(JsValue receiver, Intrinsics intrinsics) {
+        // %Array.prototype% is an Array exotic object per spec (22.1.3), even though it is
+        // implemented here as an ordinary JsObject carrying a real own "length" (see
+        // Intrinsics.arrayPrototype) rather than a genuine JsArray - IsArray(Array.prototype) is
+        // spec-true, so the brand check must special-case this one object rather than fall through
+        // to wrapperBrand's "Object" default.
+        if (intrinsics != null && receiver == intrinsics.arrayProto()) {
+            return "Array";
+        }
         return switch (receiver) {
             case JsUndefined ignored -> "Undefined";
             case JsNull ignored -> "Null";

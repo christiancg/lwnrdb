@@ -671,12 +671,36 @@ public final class MemberEvaluator {
                 }
             }
         }
+        // %Array.prototype% is an Array exotic object per spec (22.1.3) even though it is
+        // implemented as an ordinary JsObject (see Intrinsics.arrayPrototype): a direct index write
+        // on it must still bump "length" the way a real JsArray's [[DefineOwnProperty]] would,
+        // rather than leaving length stuck at whatever it was (built-ins/Array/prototype/
+        // exotic-array.js). Scoped to exactly this one object - no other JsObject in the system
+        // pretends to be array-exotic, so this can't misfire on an ordinary object that merely has
+        // numeric-looking keys.
+        if (receiver == object && object == interp.intrinsics().arrayProto()) {
+            final var index = InterpreterUtils.arrayIndex(key);
+            if (index != null) {
+                final var wrote = object.set(key, value);
+                if (wrote) {
+                    growArrayPrototypeLength(object, index);
+                }
+                return wrote;
+            }
+        }
         // A Proxy receiver still needs its own [[GetOwnProperty]]/[[DefineOwnProperty]] consulted
         // every time (setOnReceiver already special-cases JsProxy via setOnProxyReceiver, which
         // returns a clean false rather than throwing for an ordinary rejected define - only a real
         // invariant violation throws, which is correct here) - so only a receiver identical to the
         // object itself takes the direct-write shortcut.
         return receiver == object ? object.set(key, value) : setOnReceiver(receiver, key, value);
+    }
+
+    private void growArrayPrototypeLength(JsObject arrayProto, int index) {
+        final var currentLength = (int) JsCoercion.toNumber(arrayProto.get("length"));
+        if (index + 1 > currentLength) {
+            arrayProto.set("length", new JsNumber(index + 1));
+        }
     }
 
     // OrdinarySet lands the write on the receiver, not on the object whose chain answered the lookup:
