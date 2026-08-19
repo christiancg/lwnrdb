@@ -951,8 +951,15 @@ public final class MemberEvaluator {
         if (target instanceof JsCallableProperties callable && isNonWritableMetadata(callable, name)) {
             return "Cannot assign to read only property '" + name + "' of object";
         }
-        if (target instanceof JsArray array && array.isFrozen()) {
-            return "Cannot assign to read only property '" + name + "' of object";
+        if (target instanceof JsArray array) {
+            final var index = arrayIndex(name);
+            if ((array.hasPropAccessor(name) && !isCallable(array.getPropAccessorSetter(name))) || (index != null
+                    && array.hasIndexAccessor(index) && !isCallable(array.getIndexAccessorSetter(index)))) {
+                return "Cannot set property " + name + " of #<Array> which has only a getter";
+            }
+            if (array.isFrozen()) {
+                return "Cannot assign to read only property '" + name + "' of object";
+            }
         }
         return "Cannot add property " + name + ", object is not extensible";
     }
@@ -962,18 +969,22 @@ public final class MemberEvaluator {
             return array.setLength(requireLength(value, interp.ops()));
         }
         if (array.hasPropAccessor(key)) {
+            // An accessor property with no setter (or a non-callable one) rejects the write outright
+            // rather than silently no-opping - mirrors writeThroughAccessor's own-property equivalent.
             final var setter = array.getPropAccessorSetter(key);
-            if (setter != null) {
-                interp.callValue(setter, array, List.of(value));
+            if (!isCallable(setter)) {
+                return false;
             }
+            interp.callValue(setter, array, List.of(value));
             return true;
         }
         final var index = arrayIndex(key);
         if (index != null && array.hasIndexAccessor(index)) {
             final var setter = array.getIndexAccessorSetter(index);
-            if (setter != null) {
-                interp.callValue(setter, array, List.of(value));
+            if (!isCallable(setter)) {
+                return false;
             }
+            interp.callValue(setter, array, List.of(value));
             return true;
         }
         // A canonical index at or past Integer.MAX_VALUE (still below the spec's own 2^32-1

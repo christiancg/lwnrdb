@@ -556,4 +556,50 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("[^]", "v", "\n"));
         assertFalse(matches("[]", "v", "a"));
     }
+
+    // Runtime Semantics: Canonicalize(rer, ch) folds the *candidate character* before testing
+    // set membership, not the compiled CharSet itself; for a negated case-related general
+    // category (\P{Lu}) those two orders disagree. java.util.regex's own UNICODE_CASE only ever
+    // folds the positive set, so a bare (?iu:\P{Lu}) still rejects "A" - it has to be recompiled
+    // as an explicit per-candidate-folded class instead.
+    @Test
+    public void ignoreCaseFoldsTheCandidateForANegatedCaseCategory() {
+        assertTrue(fullMatch("(?i:\\P{Lu})", "u", "A"));
+        assertTrue(fullMatch("(?i:\\P{Lu})", "u", "a"));
+        assertTrue(fullMatch("(?i:\\P{Lu})", "u", "Z"));
+        assertTrue(fullMatch("(?i:\\P{Lu})", "u", "z"));
+        assertTrue(fullMatch("(?i:\\P{Lu})", "u", "0"));
+    }
+
+    // Without ignoreCase (or without the property being case-related) the plain \p{}/\P{} path is
+    // unaffected: no per-candidate folding is applied.
+    @Test
+    public void nonIgnoreCasePropertyEscapesAreUnaffectedByFolding() {
+        assertFalse(fullMatch("\\P{Lu}", "u", "A"));
+        assertTrue(fullMatch("\\p{Lu}", "u", "A"));
+        assertTrue(fullMatch("(?i:\\P{Nd})", "u", "a"));
+        assertFalse(fullMatch("(?i:\\P{Nd})", "u", "5"));
+    }
+
+    // A handful of Unicode CaseFolding.txt "simple"/"common" pairs (precomposed Greek accented
+    // iotas/upsilons, the "st" ligatures) have no ordinary upper/lowercase relationship at all, so
+    // java's own UNICODE_CASE never joins them; a literal unicode escape naming one has to spell
+    // the match as the pair explicitly, both inside and outside a character class.
+    @Test
+    public void ignoreCaseJoinsExtraCaseFoldPairsWithoutOrdinaryCasing() {
+        assertTrue(fullMatch("[\\u0390]", "ui", "\u1fd3"));
+        assertTrue(fullMatch("[\\u1fd3]", "ui", "\u0390"));
+        assertTrue(fullMatch("[\\u03b0]", "ui", "\u1fe3"));
+        assertTrue(fullMatch("[\\u1fe3]", "ui", "\u03b0"));
+        assertTrue(fullMatch("[\\ufb05]", "ui", "\ufb06"));
+        assertTrue(fullMatch("[\\ufb06]", "ui", "\ufb05"));
+        assertTrue(fullMatch("\\u0390", "ui", "\u1fd3"));
+    }
+
+    // Without ignoreCase the extra fold table is inert: the escape names only its own codepoint.
+    @Test
+    public void extraCaseFoldPairsAreInertWithoutIgnoreCase() {
+        assertFalse(fullMatch("[\\u0390]", "u", "\u1fd3"));
+        assertTrue(fullMatch("[\\u0390]", "u", "\u0390"));
+    }
 }

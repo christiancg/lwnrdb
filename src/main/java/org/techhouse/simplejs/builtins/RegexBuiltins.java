@@ -58,6 +58,15 @@ public final class RegexBuiltins {
         final var regExp = new JsNativeFunction("RegExp", (_, args) -> construct(args, self[0], ops));
         self[0] = regExp;
         regExp.setProperty("escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(args))));
+        // %RegExp%[Symbol.species] returns the receiver unchanged - speciesConstructor's own
+        // Get(constructor, Symbol.species) lookup already falls back to %RegExp% when this is
+        // absent, so the accessor's only observable effect is making it discoverable via
+        // getOwnPropertyDescriptor (test262 built-ins/Function/prototype/toString/
+        // symbol-named-builtins.js asserts the getter itself is a function).
+        final var speciesGetter = new JsNativeFunction("get [Symbol.species]", (thisArg, _) -> thisArg);
+        speciesGetter.setLength(0);
+        regExp.ownProperties().defineSymbolAccessor(JsSymbol.SPECIES, speciesGetter, null);
+        regExp.ownProperties().setSymbolFlags(JsSymbol.SPECIES, new JsObject.PropertyFlags(false, false, true));
         return regExp;
     }
 

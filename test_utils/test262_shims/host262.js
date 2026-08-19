@@ -5,6 +5,13 @@
 var $262 = {
     global: globalThis,
     detachArrayBuffer: function (buffer) {
-        buffer.transfer(0);
+        // Idempotent: a real host's native detach is a no-op on an already-detached buffer, but
+        // `transfer(0)` throws in that case, since ArrayBuffer.prototype.transfer is a public API
+        // with its own single-detach contract. A test whose comparator (or other repeated callback)
+        // calls $262.detachArrayBuffer more than once on the same buffer must not see that as an
+        // engine bug.
+        if (!buffer.detached) {
+            buffer.transfer(0);
+        }
     }
 };

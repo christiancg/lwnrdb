@@ -10,6 +10,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
@@ -120,6 +121,92 @@ public final class RegexTranslator {
 
         private static List<String> get(String name) {
             return DATA.get(name);
+        }
+    }
+
+    /**
+     * Runtime Semantics: Canonicalize(rer, ch) folds a candidate character before testing set
+     * membership, rather than folding the compiled CharSet itself; for a case-related general
+     * category the two orders disagree for the *negated* form (e.g. {@code \P{Lu}} under {@code i}
+     * must accept "A", since Canonicalize("A") is "a" and "a" is not Lu — even though "A" itself
+     * plainly is). The positive form does not need this: java's own {@code (?iu)} already widens a
+     * plain {@code \p{Lu}} to both cases correctly, matching CompileToCharSet's closure over the
+     * un-negated CharSet. So only {@code \P{}} is intercepted here, and only for the handful of
+     * case-sensitive properties (digits, scripts, punctuation, ... are unaffected by folding and are
+     * left on the ordinary path). The replacement class contains every code point whose simple fold
+     * (approximated by {@link Character#toLowerCase(int)}) satisfies the raw (un-negated) category.
+     */
+    private static final class CaseFoldedProperties {
+        private static final Set<String> CASE_AFFECTED = Set.of("Lu", "Ll", "Lt", "IsUppercase", "IsLowercase");
+        private static final Map<String, String> CACHE = new ConcurrentHashMap<>();
+
+        private CaseFoldedProperties() {
+        }
+
+        private static boolean isCaseAffected(String javaProperty) {
+            return CASE_AFFECTED.contains(javaProperty);
+        }
+
+        private static String classFor(String javaProperty) {
+            return CACHE.computeIfAbsent(javaProperty, CaseFoldedProperties::compute);
+        }
+
+        // The class for \P{X}: every code point whose fold is NOT X (the raw, un-negated test).
+        private static String compute(String javaProperty) {
+            final var body = new StringBuilder();
+            var rangeStart = -1;
+            for (var cp = 0; cp <= Character.MAX_CODE_POINT; cp++) {
+                if (!rawMatches(Character.toLowerCase(cp), javaProperty)) {
+                    if (rangeStart < 0) {
+                        rangeStart = cp;
+                    }
+                } else if (rangeStart >= 0) {
+                    appendRange(body, rangeStart, cp - 1);
+                    rangeStart = -1;
+                }
+            }
+            if (rangeStart >= 0) {
+                appendRange(body, rangeStart, Character.MAX_CODE_POINT);
+            }
+            return "[" + body + "]";
+        }
+
+        private static void appendRange(StringBuilder out, int from, int to) {
+            out.append("\\x{").append(Integer.toHexString(from)).append('}');
+            if (to > from) {
+                out.append("-\\x{").append(Integer.toHexString(to)).append('}');
+            }
+        }
+
+        private static boolean rawMatches(int codePoint, String javaProperty) {
+            return switch (javaProperty) {
+                case "Lu" -> Character.getType(codePoint) == Character.UPPERCASE_LETTER;
+                case "Ll" -> Character.getType(codePoint) == Character.LOWERCASE_LETTER;
+                case "Lt" -> Character.getType(codePoint) == Character.TITLECASE_LETTER;
+                case "IsUppercase" -> Character.isUpperCase(codePoint);
+                case "IsLowercase" -> Character.isLowerCase(codePoint);
+                default -> throw new IllegalStateException("not a case-affected property: " + javaProperty);
+            };
+        }
+    }
+
+    /**
+     * A tiny, explicit slice of Unicode's CaseFolding.txt "simple"/"common" mappings that java's own
+     * {@code UNICODE_CASE} does not know: codepoints whose only relationship is that CaseFolding.txt
+     * folds them to the same target, without either being the other's {@link Character#toUpperCase}
+     * / {@link Character#toLowerCase}. Not an attempt at a general-purpose folding table — just the
+     * handful test262's {@code unicode_full_case_folding.js} exercises.
+     */
+    private static final class ExtraCaseFolds {
+        private static final Map<Integer, int[]> GROUPS = Map.of(0x0390, new int[]{0x0390, 0x1FD3}, 0x1FD3,
+                new int[]{0x0390, 0x1FD3}, 0x03B0, new int[]{0x03B0, 0x1FE3}, 0x1FE3, new int[]{0x03B0, 0x1FE3}, 0xFB05,
+                new int[]{0xFB05, 0xFB06}, 0xFB06, new int[]{0xFB05, 0xFB06});
+
+        private ExtraCaseFolds() {
+        }
+
+        private static int[] groupFor(int codePoint) {
+            return GROUPS.get(codePoint);
         }
     }
 
@@ -849,7 +936,16 @@ public final class RegexTranslator {
                 out.append(renderSet(stringPropertySet(body, kind)));
                 return;
             }
-            out.append('\\').append(kind).append('{').append(translateProperty(body)).append('}');
+            final var javaProperty = translateProperty(body);
+            // Only the negated form needs recomputing: java's own (?iu) already folds a *positive*
+            // \p{Lu}-style class correctly (it widens to both cases, matching the spec's closure
+            // behaviour for CompileToCharSet on the un-negated CharSet) - it is specifically the
+            // complement, resolved before folding per CompileAtom, that it gets wrong.
+            if (ignoreCase && kind == 'P' && CaseFoldedProperties.isCaseAffected(javaProperty)) {
+                out.append(CaseFoldedProperties.classFor(javaProperty));
+                return;
+            }
+            out.append('\\').append(kind).append('{').append(javaProperty).append('}');
         }
 
         private int propertyBodyEnd(char kind) {
@@ -898,7 +994,7 @@ public final class RegexTranslator {
                 }
                 case 'c' -> readControlEscape(inClass);
                 case 'x' -> readHexEscape();
-                case 'u' -> readUnicodeEscape();
+                case 'u' -> readUnicodeEscape(inClass);
                 case '0' -> readNullEscape();
                 case '1', '2', '3', '4', '5', '6', '7', '8', '9' -> readDecimalEscape(inClass);
                 case '-' -> {
@@ -956,7 +1052,7 @@ public final class RegexTranslator {
             return "\\x{78}";
         }
 
-        private String readUnicodeEscape() {
+        private String readUnicodeEscape(boolean inClass) {
             if (unicode && has(2) && source.charAt(pos + 2) == '{') {
                 final var close = source.indexOf('}', pos + 3);
                 if (close < 0 || close == pos + 3) {
@@ -973,18 +1069,52 @@ public final class RegexTranslator {
                     throw invalid("unicode escape out of range");
                 }
                 pos = close + 1;
-                return "\\x{" + Long.toHexString(value) + "}";
+                return foldableCodePointText((int) value, inClass);
             }
             if (hexRun(pos + 2, 4) == 4) {
-                final var value = source.substring(pos + 2, pos + 6);
+                final var hex = source.substring(pos + 2, pos + 6);
+                final var value = Integer.parseInt(hex, 16);
                 pos += 6;
-                return "\\u" + value;
+                // The plain 4-hex unicode escape form must keep java's own code-unit escape
+                // spelling, not a codepoint-brace escape: two adjacent lead/trail-surrogate escapes
+                // rely on java's own surrogate-pair combining to become one class member (or one
+                // atom) under /u, which a codepoint escape does not participate in. Only reroute
+                // through the extra-fold table when this exact codepoint actually needs it.
+                final var group = ignoreCase && unicode ? ExtraCaseFolds.groupFor(value) : null;
+                return group == null ? "\\u" + hex : foldGroupText(group, inClass);
             }
             if (unicode) {
                 throw invalid("invalid unicode escape");
             }
             pos += 2;
             return "\\x{75}";
+        }
+
+        // ExtraCaseFolds.groupFor: a handful of Unicode CaseFolding.txt "simple"/"common" pairs
+        // (see CaseFoldedProperties for why per-candidate folding, not per-set folding, is what the
+        // spec actually requires) that have no ordinary upper/lowercase relationship at all — java's
+        // own (?iu) case-insensitivity never joins them, so a literal unicode escape naming one of
+        // them has to spell the match as "either member of the group" itself.
+        private String foldableCodePointText(int codePoint, boolean inClass) {
+            final var group = ignoreCase && unicode ? ExtraCaseFolds.groupFor(codePoint) : null;
+            return group == null ? "\\x{" + Integer.toHexString(codePoint) + "}" : foldGroupText(group, inClass);
+        }
+
+        // A class member list may only concatenate literal alternatives; an atom needs the
+        // parenthesised-alternation spelling of "any member of the group".
+        private static String foldGroupText(int[] group, boolean inClass) {
+            if (inClass) {
+                final var body = new StringBuilder();
+                for (final var member : group) {
+                    body.append("\\x{").append(Integer.toHexString(member)).append('}');
+                }
+                return body.toString();
+            }
+            final var body = new StringBuilder("(?:");
+            for (var i = 0; i < group.length; i++) {
+                body.append(i == 0 ? "" : "|").append("\\x{").append(Integer.toHexString(group[i])).append('}');
+            }
+            return body.append(')').toString();
         }
 
         private int hexRun(int from, int wanted) {

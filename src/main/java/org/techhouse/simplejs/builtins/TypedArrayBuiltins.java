@@ -839,7 +839,7 @@ public final class TypedArrayBuiltins {
                 new JsNativeFunction("values", (_, _) -> liveIterator(validate(receiver), JsTypedArray::getElement));
             case "entries" -> new JsNativeFunction("entries", (_, _) -> liveIterator(validate(receiver), (view,
                     index) -> new JsArray(new ArrayList<>(List.of(new JsNumber(index), view.getElement(index))))));
-            case "sort" -> new JsNativeFunction("sort", (_, args) -> sort(receiver, args, invoker));
+            case "sort" -> new JsNativeFunction("sort", (_, args) -> sort(receiver, args, invoker, ops));
             case "toSorted" -> new JsNativeFunction("toSorted", (_, args) -> toSorted(receiver, args, invoker, ops));
             case "toReversed" -> new JsNativeFunction("toReversed", (_, _) -> toReversed(validate(receiver), ops));
             case "with" -> new JsNativeFunction("with", (_, args) -> with(validate(receiver), args, ops));
@@ -853,8 +853,8 @@ public final class TypedArrayBuiltins {
         };
     }
 
-    private static JsValue sort(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
-        final var sorted = sortedElements(receiver, args, invoker);
+    private static JsValue sort(JsTypedArray receiver, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
+        final var sorted = sortedElements(receiver, args, invoker, ops);
         for (var i = 0; i < sorted.size(); i++) {
             receiver.setElement(i, sorted.get(i));
         }
@@ -862,10 +862,11 @@ public final class TypedArrayBuiltins {
     }
 
     private static JsValue toSorted(JsTypedArray receiver, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
-        return fromItems(receiver.kind(), sortedElements(receiver, args, invoker), ops);
+        return fromItems(receiver.kind(), sortedElements(receiver, args, invoker, ops), ops);
     }
 
-    private static List<JsValue> sortedElements(JsTypedArray receiver, List<JsValue> args, Invoker invoker) {
+    private static List<JsValue> sortedElements(JsTypedArray receiver, List<JsValue> args, Invoker invoker,
+            InterpreterOps ops) {
         final var comparator = args.isEmpty() || args.getFirst() instanceof JsUndefined ? null : args.getFirst();
         // Spec order: the comparator is rejected before the receiver is validated.
         if (comparator != null && !InterpreterUtils.isCallable(comparator)) {
@@ -876,8 +877,11 @@ public final class TypedArrayBuiltins {
             items.sort(TypedArrayBuiltins::compareNumeric);
         } else {
             items.sort((a, b) -> {
+                // The ops-aware overload is required here: a non-primitive comparator result (e.g.
+                // one whose only conversion is [Symbol.toPrimitive]) must actually invoke it, not be
+                // silently treated as NaN by the data-only overload.
                 final var result = JsCoercion
-                        .toNumber(invoker.call(comparator, JsUndefined.getInstance(), List.of(a, b)));
+                        .toNumber(invoker.call(comparator, JsUndefined.getInstance(), List.of(a, b)), ops);
                 return Double.isNaN(result) ? 0 : (int) Math.signum(result);
             });
         }

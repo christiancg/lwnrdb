@@ -99,6 +99,7 @@ public final class GlobalScope {
         define(global, "parseFloat", NumberBuiltins.parseFloatFunction(ops));
         define(global, "isNaN", NumberBuiltins.isNaNFunction(ops));
         define(global, "isFinite", NumberBuiltins.isFiniteFunction(ops));
+        define(global, "eval", evalStub());
         GlobalFunctionsBuiltins.install(global, eventLoop, invoker, ops, intrinsics);
         FetchBuiltins.install(global, eventLoop, network, limits, intrinsics);
         define(global, "globalThis", globalThis);
@@ -150,6 +151,21 @@ public final class GlobalScope {
     private static JsNativeFunction booleanFunction() {
         return new JsNativeFunction("Boolean", (_, args) -> JsBoolean
                 .of(!args.isEmpty() && org.techhouse.simplejs.internal.JsCoercion.toBoolean(args.getFirst())));
+    }
+
+    // A real `eval` global exists structurally (own property, right descriptor shape, callable) so
+    // Object.getOwnPropertyNames(globalThis)/getOwnPropertyDescriptor(globalThis, "eval") see it -
+    // but calling it always throws, mirroring the Function-constructor stub above: no runtime code
+    // generation, so there is nothing it could safely evaluate. This intentionally reverses the prior
+    // "eval absent by design" stance (see docs/simplejs.md and config/test262-exclusions.txt's eval-
+    // pattern exclusions, which stay valid regardless - they match on the test's source text, not on
+    // whether eval exists at runtime).
+    private static JsNativeFunction evalStub() {
+        final var fn = new JsNativeFunction("eval", (_, _) -> {
+            throw new TypeErrorException("eval is not supported: SimpleJS has no runtime code generation");
+        });
+        fn.setLength(1);
+        return fn;
     }
 
     private static void constructor(Environment global, String name, JsNativeFunction value, JsObject proto) {

@@ -62,7 +62,6 @@ IGNORED_FLAGS = {"generated", "CanBlockIsFalse", "CanBlockIsTrue", "non-determin
 # The confirmed divergences the first run has to reproduce. A row that comes back all-green means the
 # filter, the prelude or the verdict logic is wrong — not that the engine improved.
 DIVERGENCES = [
-    ("descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor)", ["built-ins/Object/defineProperty/"]),
     ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
 ]
 # A row is deleted in the same commit that closes its divergence, naming the test id that now passes.
@@ -70,13 +69,16 @@ DIVERGENCES = [
 # "all green" is the expected state, not the alarm.
 # Rows are removed from the list above as their divergence is closed. A row only asserts that *some*
 # test under its prefix still fails, so a stale one keeps passing on an unrelated failure and quietly
-# becomes a false claim about the engine - the eight dropped so far (String(symbol) throwing,
+# becomes a false claim about the engine - the nine dropped so far (String(symbol) throwing,
 # Reflect.ownKeys omitting symbols, shallow primitive wrappers, typed arrays lacking the
 # integer-indexed internals, regex named-group limitations, Object.assign bypassing a setter,
 # instanceof surviving F.prototype reassignment - closed by primitive-prototype-with-primitive.js
-# passing, and tagged template strings now cached per call site - closed by
-# cache-same-site.js/cache-different-functions-same-site.js/cache-same-site-top-level.js passing)
-# were each verified fixed by probe first.
+# passing, tagged template strings now cached per call site - closed by
+# cache-same-site.js/cache-different-functions-same-site.js/cache-same-site-top-level.js passing,
+# and descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor) - the row's own proving test,
+# built-ins/Object/defineProperty/15.2.3.6-4-243-2.js, turned out to be a plain strict-mode
+# write-through-a-getter-only-array-index bug unrelated to descriptor coercion at all, fixed in
+# MemberEvaluator.setArrayMember) were each verified fixed by probe first.
 
 
 class HarnessError(RuntimeError):

@@ -1,12 +1,8 @@
 # test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline
 # corpus: 3655e7464de3d52643ecddd4b5f9f4f3e7f62398
 # generated: 2026-08-19
-# entries: 35
+# entries: 28
 FAIL  built-ins/Function/prototype/toString/method-computed-property-name.js
-FAIL  built-ins/Function/prototype/toString/symbol-named-builtins.js
-FAIL  built-ins/Object/defineProperty/15.2.3.6-4-243-2.js
-FAIL  built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-4.js
-FAIL  built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js
 FAIL  built-ins/RegExp/S15.10.2.5_A1_T4.js
 FAIL  built-ins/RegExp/S15.10.2.8_A2_T1.js
 FAIL  built-ins/RegExp/dotall/without-dotall.js
@@ -28,12 +24,9 @@ FAIL  built-ins/RegExp/prototype/Symbol.match/builtin-infer-unicode.js
 FAIL  built-ins/RegExp/prototype/exec/S15.10.6.2_A1_T6.js
 FAIL  built-ins/RegExp/prototype/exec/duplicate-named-groups-properties.js
 FAIL  built-ins/RegExp/prototype/exec/duplicate-named-indices-groups-properties.js
-FAIL  built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-upper-p.js
 FAIL  built-ins/RegExp/regexp-modifiers/changing-dotAll-flag-does-not-affect-dotAll-modifier.js
 FAIL  built-ins/RegExp/regexp-modifiers/nesting-remove-dotAll-within-add-dotAll.js
 FAIL  built-ins/RegExp/regexp-modifiers/remove-dotAll.js
-FAIL  built-ins/RegExp/unicode_full_case_folding.js
 FAIL  built-ins/String/prototype/match/duplicate-named-groups-properties.js
 FAIL  built-ins/String/prototype/match/duplicate-named-indices-groups-properties.js
 FAIL  built-ins/String/prototype/match/regexp-prototype-match-v-u-flag.js
-FAIL  built-ins/TypedArray/prototype/sort/sort-tonumber.js

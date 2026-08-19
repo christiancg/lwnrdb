@@ -669,6 +669,19 @@ public class RegexBuiltinsTest {
                 + " { get() { throw new Error('read'); } }); 'a1b'.match(1)[0]"));
     }
 
+    // %RegExp%[Symbol.species] is a real, discoverable getter accessor returning the receiver
+    // unchanged (test262 built-ins/Function/prototype/toString/symbol-named-builtins.js asserts the
+    // getter itself is a native function) - speciesConstructor's own fallback already produced this
+    // same result when the accessor was simply absent, so this only makes it observable via
+    // getOwnPropertyDescriptor, not a behavior change.
+    @Test
+    public void speciesIsADiscoverableGetterReturningTheReceiver() {
+        assertTrue(bool("typeof Object.getOwnPropertyDescriptor(RegExp, Symbol.species).get === 'function'"));
+        assertTrue(bool("RegExp[Symbol.species] === RegExp"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp, Symbol.species).enumerable"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(RegExp, Symbol.species).configurable"));
+    }
+
     @Test
     public void theSymbolMethodsAreNonEnumerableOnThePrototype() {
         assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.match).enumerable"));

@@ -18,6 +18,26 @@ public class GlobalProgramTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
+    // `eval` exists as a real global with the spec-mandated descriptor shape (writable, non-
+    // enumerable, configurable - test262 built-ins/Object/getOwnPropertyNames/15.2.3.4-4-1.js and
+    // getOwnPropertyDescriptor/15.2.3.3-4-4.js), but calling it always throws - there is no runtime
+    // code generation, so it has nothing safe to evaluate. A deliberate, narrow reversal of the
+    // engine's prior "eval absent by design" stance: only existence and descriptor shape are
+    // observable, never dynamic code execution.
+    @Test
+    public void test_eval_exists_with_correct_descriptor_but_throws_when_called() {
+        assertTrue(bool("typeof eval === 'function'"));
+        assertTrue(bool("""
+                const d = Object.getOwnPropertyDescriptor(globalThis, 'eval');
+                d.writable === true && d.enumerable === false && d.configurable === true && d.value === eval
+                """));
+        assertTrue(bool("""
+                let threw = false;
+                try { eval('1 + 1'); } catch (e) { threw = e instanceof TypeError; }
+                threw
+                """));
+    }
+
     // A top-level var is visible as a property of globalThis
     @Test
     public void test_top_level_var_visible_on_global_this() {
