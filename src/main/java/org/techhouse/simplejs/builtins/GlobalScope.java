@@ -66,6 +66,7 @@ public final class GlobalScope {
         constructor(global, "Set", SetBuiltins.create(ops, false), intrinsics.setProto());
         constructor(global, "WeakSet", SetBuiltins.create(ops, true), intrinsics.weakSetProto());
         constructor(global, "Date", DateBuiltins.create(ops), intrinsics.dateProto());
+        TemporalBuiltins.install(global, intrinsics, ops);
         constructor(global, "DisposableStack",
                 DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false, ops),
                 intrinsics.disposableStackProto());
