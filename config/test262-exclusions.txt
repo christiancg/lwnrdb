@@ -76,7 +76,6 @@ dir:     language/comments/hashbang/function-constructor.js  # needs the disable
 # and they answer identically on both JDKs since the translator rejects the property before
 # java.util.regex ever sees it.
 
-feature: Temporal                    # deliberate: Date is the only temporal type
 feature: SharedArrayBuffer           # deliberate: single-threaded per-request VM
 feature: Atomics                     # deliberate: ditto
 feature: Atomics.pause               # deliberate: ditto

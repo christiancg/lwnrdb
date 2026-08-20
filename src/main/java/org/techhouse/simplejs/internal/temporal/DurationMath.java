@@ -53,6 +53,24 @@ public final class DurationMath {
         return overallSign < 0 ? negate(decomposed) : decomposed;
     }
 
+    // Unlike balanceDuration (which re-normalizes an already-valid, uniform-sign Duration into a
+    // different largestUnit), this starts from an already-summed signed total - the shape AddDurations
+    // needs, since a raw per-field sum of two valid durations (e.g. {days:1} + {hours:-1}) can
+    // legitimately have mixed per-field signs before it is carried/decomposed, which sign(fields)
+    // would otherwise reject.
+    public static DurationFields balanceFromTotalNanoseconds(BigInteger totalNanoseconds, Unit largestUnit) {
+        if (largestUnit.isLargerThan(Unit.DAY)) {
+            throw new UnsupportedOperationException(
+                    largestUnit + ": year/month/week duration balancing is calendar-dependent (needs a relativeTo "
+                            + "date) and is not implemented in this phase");
+        }
+        if (totalNanoseconds.signum() == 0) {
+            return DurationFields.ZERO;
+        }
+        final var decomposed = decompose(totalNanoseconds.abs(), largestUnit);
+        return totalNanoseconds.signum() < 0 ? negate(decomposed) : decomposed;
+    }
+
     public static DurationFields roundDuration(DurationFields fields, Unit smallestUnit, long roundingIncrement,
             RoundingMode mode, Unit largestUnit) {
         requireCalendarIndependent(fields, smallestUnit);
@@ -68,7 +86,7 @@ public final class DurationMath {
         return roundedSigned.signum() < 0 ? negate(decomposed) : decomposed;
     }
 
-    private static void requireCalendarIndependent(DurationFields fields, Unit unit) {
+    public static void requireCalendarIndependent(DurationFields fields, Unit unit) {
         if (unit.isLargerThan(Unit.DAY)) {
             throw new UnsupportedOperationException(
                     unit + ": year/month/week duration balancing is calendar-dependent (needs a relativeTo date) "
@@ -86,7 +104,7 @@ public final class DurationMath {
                 fields.minutes(), fields.seconds(), fields.milliseconds(), fields.microseconds(), fields.nanoseconds()};
     }
 
-    private static BigInteger totalNanoseconds(DurationFields fields) {
+    public static BigInteger totalNanoseconds(DurationFields fields) {
         return BigInteger.valueOf((long) fields.days()).multiply(NANOS_PER_DAY)
                 .add(BigInteger.valueOf((long) fields.hours()).multiply(NANOS_PER_HOUR))
                 .add(BigInteger.valueOf((long) fields.minutes()).multiply(NANOS_PER_MINUTE))
@@ -96,7 +114,7 @@ public final class DurationMath {
                 .add(BigInteger.valueOf((long) fields.nanoseconds()));
     }
 
-    private static BigInteger nanosPerUnit(Unit unit) {
+    public static BigInteger nanosPerUnit(Unit unit) {
         return switch (unit) {
             case DAY -> NANOS_PER_DAY;
             case HOUR -> NANOS_PER_HOUR;

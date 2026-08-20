@@ -31,6 +31,7 @@ import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTemporalDuration;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -67,6 +68,7 @@ public final class Intrinsics {
     private final JsObject setProto;
     private final JsObject weakSetProto;
     private final JsObject dateProto;
+    private final JsObject temporalDurationProto;
     private final JsObject promiseProto;
     private final JsObject iteratorProto;
     private final JsObject asyncIteratorProto;
@@ -158,6 +160,7 @@ public final class Intrinsics {
         // Date.prototype[@@toPrimitive] is the one non-writable well-known-symbol method.
         installSymbolValue(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops),
                 new PropertyFlags(false, false, true));
+        temporalDurationProto = temporalDurationPrototype();
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -327,6 +330,7 @@ public final class Intrinsics {
         defineToStringTag(dataViewProto, "DataView");
         defineToStringTag(disposableStackProto, "DisposableStack");
         defineToStringTag(asyncDisposableStackProto, "AsyncDisposableStack");
+        defineToStringTag(temporalDurationProto, "Temporal.Duration");
         // %TypedArray%.prototype's tag is an accessor returning the *concrete* view's name, so
         // `Object.prototype.toString.call(new Int8Array())` reports Int8Array rather than a shared tag.
         final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> typedArrayTag(thisArg));
@@ -667,6 +671,7 @@ public final class Intrinsics {
             case JsMap map -> map.isWeak() ? weakMapProto : mapProto;
             case JsSet set -> set.isWeak() ? weakSetProto : setProto;
             case JsDate ignored -> dateProto;
+            case JsTemporalDuration ignored -> temporalDurationProto;
             case JsPromise ignored -> promiseProto;
             case JsGenerator ignored -> iteratorProto;
             case JsAsyncGenerator ignored -> asyncIteratorProto;
@@ -748,6 +753,10 @@ public final class Intrinsics {
 
     public JsObject dateProto() {
         return dateProto;
+    }
+
+    public JsObject temporalDurationProto() {
+        return temporalDurationProto;
     }
 
     public JsObject promiseProto() {
@@ -1010,6 +1019,37 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("Date.prototype." + method, receiver);
+    }
+
+    // Temporal.Duration.prototype mixes plain methods (dispatched through the generic wrapper, same
+    // as every other prototype here) with per-instance field accessors (years/months/.../sign/blank),
+    // which are getters rather than methods - so this prototype is built by hand instead of via the
+    // single-list prototypeOf helper every method-only prototype uses.
+    private JsObject temporalDurationPrototype() {
+        final var proto = new JsObject();
+        for (final var name : TemporalDurationBuiltins.ACCESSOR_NAMES) {
+            final var getter = new JsNativeFunction("get " + name, (thisArg, _) -> TemporalDurationBuiltins
+                    .fieldAccessor(requireTemporalDuration(thisArg, name), name));
+            getter.setLength(0);
+            proto.defineAccessor(name, getter, null);
+            proto.setFlags(name, HIDDEN);
+        }
+        for (final var name : TemporalDurationBuiltins.METHOD_NAMES) {
+            define(proto, name, wrapper(name, "Temporal.Duration.prototype", (receiver, key) -> TemporalDurationBuiltins
+                    .getMethod(requireTemporalDuration(receiver, key), key, ops)));
+        }
+        proto.setProto(objectProto);
+        return proto;
+    }
+
+    private JsTemporalDuration requireTemporalDuration(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalDuration duration) {
+            return duration;
+        }
+        if (unwrap(receiver) instanceof JsTemporalDuration wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.Duration.prototype." + method, receiver);
     }
 
     private JsArrayBuffer requireBuffer(JsValue receiver, String method) {

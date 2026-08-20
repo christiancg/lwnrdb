@@ -35,6 +35,7 @@ public final class EJsonInterop {
             case JsObject object -> objectToEjson(object, visited);
             case JsRegExp ignored -> new JsonObject();
             case JsDate date -> date.toISOString() == null ? JsonNull.INSTANCE : new JsonString(date.toISOString());
+            case JsTemporalDuration duration -> new JsonString(duration.toString());
             case JsMap ignored -> new JsonObject();
             case JsSet ignored -> new JsonObject();
             case JsTypedArray typed -> typedArrayToEjson(typed, visited);
