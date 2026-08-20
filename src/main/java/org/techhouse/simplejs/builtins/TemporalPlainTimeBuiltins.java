@@ -20,6 +20,8 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -63,8 +65,12 @@ public final class TemporalPlainTimeBuiltins {
             requireNewTarget("Temporal.PlainTime");
             return withNewTargetPrototype(new JsTemporalPlainTime(constructFields(args, ops)), ops);
         });
-        ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(args, ops)));
-        ctor.setProperty("compare", new JsNativeFunction("compare", (_, args) -> compareStatic(args, ops)));
+        final var from = new JsNativeFunction("from", (_, args) -> from(args, ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var compare = new JsNativeFunction("compare", (_, args) -> compareStatic(args, ops));
+        compare.setLength(2);
+        ctor.setProperty("compare", compare);
         return ctor;
     }
 
@@ -404,7 +410,7 @@ public final class TemporalPlainTimeBuiltins {
         if (isSince) {
             fields = negate(fields);
         }
-        return toDurationObject(fields);
+        return new JsTemporalDuration(fields);
     }
 
     private static RoundingMode negateRoundingMode(RoundingMode mode) {
@@ -420,21 +426,6 @@ public final class TemporalPlainTimeBuiltins {
     private static DurationFields negate(DurationFields f) {
         return new DurationFields(-f.years(), -f.months(), -f.weeks(), -f.days(), -f.hours(), -f.minutes(),
                 -f.seconds(), -f.milliseconds(), -f.microseconds(), -f.nanoseconds());
-    }
-
-    private static JsValue toDurationObject(DurationFields fields) {
-        final var result = new JsObject();
-        result.set("years", new JsNumber(fields.years()));
-        result.set("months", new JsNumber(fields.months()));
-        result.set("weeks", new JsNumber(fields.weeks()));
-        result.set("days", new JsNumber(fields.days()));
-        result.set("hours", new JsNumber(fields.hours()));
-        result.set("minutes", new JsNumber(fields.minutes()));
-        result.set("seconds", new JsNumber(fields.seconds()));
-        result.set("milliseconds", new JsNumber(fields.milliseconds()));
-        result.set("microseconds", new JsNumber(fields.microseconds()));
-        result.set("nanoseconds", new JsNumber(fields.nanoseconds()));
-        return result;
     }
 
     private static long readIncrementOption(JsValue options, InterpreterOps ops) {
@@ -520,7 +511,7 @@ public final class TemporalPlainTimeBuiltins {
         final var doubled = remainder.multiply(TWO);
         final var roundedQuotient = switch (mode) {
             case TRUNC, FLOOR -> quotient;
-            case CEIL -> quotient.add(BigInteger.ONE);
+            case CEIL, EXPAND -> quotient.add(BigInteger.ONE);
             case HALF_EXPAND, HALF_CEIL -> doubled.compareTo(increment) >= 0 ? quotient.add(BigInteger.ONE) : quotient;
             case HALF_TRUNC, HALF_FLOOR -> doubled.compareTo(increment) > 0 ? quotient.add(BigInteger.ONE) : quotient;
             case HALF_EVEN -> {
@@ -588,8 +579,6 @@ public final class TemporalPlainTimeBuiltins {
         return value < 10 ? "0" + value : Integer.toString(value);
     }
 
-    // Narrow: no Temporal.PlainDate type exists yet in this phase, so the date side is a duck-typed
-    // {year, month, day} object rather than a real PlainDate/PlainDateTime instance.
     private static JsValue toPlainDateTime(JsTemporalPlainTime receiver, JsValue dateLike, InterpreterOps ops) {
         if (!InterpreterUtils.isObjectLike(dateLike)) {
             throw new TypeErrorException("toPlainDateTime requires a date-like object with year, month and day");
@@ -598,20 +587,7 @@ public final class TemporalPlainTimeBuiltins {
         final var month = (int) toIntegerWithTruncation(requireMember(dateLike, "month", ops), ops);
         final var day = (int) toIntegerWithTruncation(requireMember(dateLike, "day", ops), ops);
         final var date = IsoCalendar.regulateDate(year, month, day, RegulateOverflow.REJECT);
-        final var fields = receiver.getFields();
-        final var iso = TemporalFormatter.formatDateTime(date, fields, null, TemporalFormatter.CalendarName.AUTO);
-        final var result = new JsObject();
-        result.set("year", new JsNumber(date.year()));
-        result.set("month", new JsNumber(date.month()));
-        result.set("day", new JsNumber(date.day()));
-        result.set("hour", new JsNumber(fields.hour()));
-        result.set("minute", new JsNumber(fields.minute()));
-        result.set("second", new JsNumber(fields.second()));
-        result.set("millisecond", new JsNumber(fields.millisecond()));
-        result.set("microsecond", new JsNumber(fields.microsecond()));
-        result.set("nanosecond", new JsNumber(fields.nanosecond()));
-        result.set("toString", new JsNativeFunction("toString", (_, _) -> new JsString(iso)));
-        return result;
+        return new JsTemporalPlainDateTime(date, receiver.getFields());
     }
 
     private static JsValue requireMember(JsValue obj, String name, InterpreterOps ops) {

@@ -63,8 +63,12 @@ public final class TemporalDurationBuiltins {
             requireNewTarget(thisArg);
             return construct(args, ops);
         });
-        ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops)));
-        ctor.setProperty("compare", new JsNativeFunction("compare", (_, args) -> compare(args, ops)));
+        final var from = new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var compare = new JsNativeFunction("compare", (_, args) -> compare(args, ops));
+        compare.setLength(2);
+        ctor.setProperty("compare", compare);
         return ctor;
     }
 

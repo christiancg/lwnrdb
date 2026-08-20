@@ -10,6 +10,7 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.internal.temporal.DurationFields;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
@@ -20,6 +21,7 @@ import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsTemporalDuration;
 import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -61,13 +63,21 @@ public final class TemporalInstantBuiltins {
             return withNewTargetPrototype(construct(args), ops);
         });
         ctor.setLength(1);
-        ctor.setProperty("from", new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops)));
-        ctor.setProperty("compare", new JsNativeFunction("compare",
-                (_, args) -> new JsNumber(compare(toInstant(arg(args, 0), ops), toInstant(arg(args, 1), ops)))));
-        ctor.setProperty("fromEpochMilliseconds", new JsNativeFunction("fromEpochMilliseconds",
-                (_, args) -> JsTemporalInstant.fromEpochMilliseconds(JsCoercion.toNumber(arg(args, 0), ops))));
-        ctor.setProperty("fromEpochNanoseconds", new JsNativeFunction("fromEpochNanoseconds",
-                (_, args) -> JsTemporalInstant.fromEpochNanoseconds(requireBigInt(arg(args, 0)))));
+        final var from = new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var compare = new JsNativeFunction("compare",
+                (_, args) -> new JsNumber(compare(toInstant(arg(args, 0), ops), toInstant(arg(args, 1), ops))));
+        compare.setLength(2);
+        ctor.setProperty("compare", compare);
+        final var fromEpochMilliseconds = new JsNativeFunction("fromEpochMilliseconds",
+                (_, args) -> JsTemporalInstant.fromEpochMilliseconds(JsCoercion.toNumber(arg(args, 0), ops)));
+        fromEpochMilliseconds.setLength(1);
+        ctor.setProperty("fromEpochMilliseconds", fromEpochMilliseconds);
+        final var fromEpochNanoseconds = new JsNativeFunction("fromEpochNanoseconds",
+                (_, args) -> JsTemporalInstant.fromEpochNanoseconds(requireBigInt(arg(args, 0))));
+        fromEpochNanoseconds.setLength(1);
+        ctor.setProperty("fromEpochNanoseconds", fromEpochNanoseconds);
         return ctor;
     }
 
@@ -204,7 +214,11 @@ public final class TemporalInstantBuiltins {
         final var other = toInstant(otherArg, ops);
         final var options = optionsArg instanceof JsObject opts ? opts : null;
         final var smallestUnit = unitOption(options, "smallestUnit", Unit.NANOSECOND, ops);
-        final var largestUnit = unitOption(options, "largestUnit", Unit.SECOND, ops);
+        // largestUnit defaults to (and "auto" resolves to) whichever of smallestUnit/second is
+        // coarser, so a smallestUnit larger than the usual "second" default (e.g. "hours") doesn't
+        // spuriously conflict with it.
+        final var largestUnitDefault = smallestUnit.isLargerThan(Unit.SECOND) ? smallestUnit : Unit.SECOND;
+        final var largestUnit = unitOptionOrAuto(options, "largestUnit", largestUnitDefault, ops);
         if (smallestUnit.isLargerThan(Unit.HOUR) || largestUnit.isLargerThan(Unit.HOUR)) {
             throw new RangeErrorException("Temporal.Instant.prototype.until/since only accept hour-and-smaller units");
         }
@@ -223,7 +237,7 @@ public final class TemporalInstantBuiltins {
         return decomposeDuration(deltaNanos, largestUnit);
     }
 
-    private static JsObject decomposeDuration(BigInteger signedNanos, Unit largestUnit) {
+    private static JsTemporalDuration decomposeDuration(BigInteger signedNanos, Unit largestUnit) {
         final var sign = signedNanos.signum();
         var remaining = signedNanos.abs();
         long hours = 0;
@@ -257,20 +271,8 @@ public final class TemporalInstantBuiltins {
             remaining = dm[1];
         }
         final var nanos = remaining.longValueExact();
-        final var result = new JsObject();
-        result.set("years", new JsNumber(0));
-        result.set("months", new JsNumber(0));
-        result.set("weeks", new JsNumber(0));
-        result.set("days", new JsNumber(0));
-        result.set("hours", new JsNumber(sign * hours));
-        result.set("minutes", new JsNumber(sign * minutes));
-        result.set("seconds", new JsNumber(sign * seconds));
-        result.set("milliseconds", new JsNumber(sign * millis));
-        result.set("microseconds", new JsNumber(sign * micros));
-        result.set("nanoseconds", new JsNumber(sign * nanos));
-        result.set("sign", new JsNumber(sign));
-        result.set("blank", JsBoolean.of(sign == 0));
-        return result;
+        return new JsTemporalDuration(new DurationFields(0, 0, 0, 0, sign * hours, sign * minutes, sign * seconds,
+                sign * millis, sign * micros, sign * nanos));
     }
 
     // round() accepts day-and-smaller units (unlike until/since above): a "day" is a fixed,
@@ -431,6 +433,18 @@ public final class TemporalInstantBuiltins {
         return Unit.parseTemporalUnit(JsCoercion.toStr(raw, ops));
     }
 
+    private static Unit unitOptionOrAuto(JsObject options, String key, Unit fallback, InterpreterOps ops) {
+        if (options == null) {
+            return fallback;
+        }
+        final var raw = ops.getMember(options, new JsString(key));
+        if (raw == null || raw instanceof JsUndefined) {
+            return fallback;
+        }
+        final var str = JsCoercion.toStr(raw, ops);
+        return "auto".equals(str) ? fallback : Unit.parseTemporalUnit(str);
+    }
+
     private static BigInteger nanosPerUnit(Unit unit) {
         return switch (unit) {
             case DAY -> NANOS_PER_DAY;
@@ -462,6 +476,7 @@ public final class TemporalInstantBuiltins {
             case TRUNC -> quotient;
             case CEIL -> sign > 0 ? quotient.add(BigInteger.ONE) : quotient;
             case FLOOR -> sign < 0 ? quotient.subtract(BigInteger.ONE) : quotient;
+            case EXPAND -> awayFromZero(quotient, sign);
             case HALF_EXPAND -> cmp >= 0 ? awayFromZero(quotient, sign) : quotient;
             case HALF_TRUNC -> cmp > 0 ? awayFromZero(quotient, sign) : quotient;
             case HALF_CEIL -> halfDirectional(quotient, cmp, sign, true);

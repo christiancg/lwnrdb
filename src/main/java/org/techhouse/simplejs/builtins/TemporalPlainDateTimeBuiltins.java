@@ -78,10 +78,13 @@ public final class TemporalPlainDateTimeBuiltins {
             return construct(args, ops);
         });
         ctor.setLength(3);
-        ctor.setProperty("from",
-                new JsNativeFunction("from", (_, args) -> toDateTime(arg(args, 0), arg(args, 1), ops)));
-        ctor.setProperty("compare", new JsNativeFunction("compare", (_, args) -> new JsNumber(
-                JsTemporalPlainDateTime.compare(toDateTime(arg(args, 0), ops), toDateTime(arg(args, 1), ops)))));
+        final var from = new JsNativeFunction("from", (_, args) -> toDateTime(arg(args, 0), arg(args, 1), ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var compare = new JsNativeFunction("compare", (_, args) -> new JsNumber(
+                JsTemporalPlainDateTime.compare(toDateTime(arg(args, 0), ops), toDateTime(arg(args, 1), ops))));
+        compare.setLength(2);
+        ctor.setProperty("compare", compare);
         return ctor;
     }
 
@@ -203,6 +206,14 @@ public final class TemporalPlainDateTimeBuiltins {
         installGetter(proto, "calendarId", r -> {
             requireReceiver(r, "calendarId");
             return new JsString("iso8601");
+        });
+        installGetter(proto, "era", r -> {
+            requireReceiver(r, "era");
+            return JsUndefined.getInstance();
+        });
+        installGetter(proto, "eraYear", r -> {
+            requireReceiver(r, "eraYear");
+            return JsUndefined.getInstance();
         });
     }
 
@@ -366,13 +377,13 @@ public final class TemporalPlainDateTimeBuiltins {
                 : RegulateOverflow.parse(JsCoercion.toStr(value, ops));
     }
 
-    private static Unit readLargestUnitOption(JsValue optionsArg, InterpreterOps ops) {
+    private static Unit readLargestUnitOption(JsValue optionsArg, Unit fallback, InterpreterOps ops) {
         final var value = optionOrUndefined(optionsArg, "largestUnit", ops);
         if (value instanceof JsUndefined) {
-            return Unit.DAY;
+            return fallback;
         }
         final var raw = JsCoercion.toStr(value, ops);
-        return "auto".equals(raw) ? Unit.DAY : Unit.parseTemporalUnit(raw);
+        return "auto".equals(raw) ? fallback : Unit.parseTemporalUnit(raw);
     }
 
     private static Unit readSmallestUnitOption(JsValue optionsArg, InterpreterOps ops) {
@@ -648,8 +659,12 @@ public final class TemporalPlainDateTimeBuiltins {
     private static JsValue difference(JsTemporalPlainDateTime receiver, JsValue otherArg, JsValue optionsArg,
             boolean isSince, InterpreterOps ops) {
         final var other = toDateTime(otherArg, ops);
-        final var largestUnit = readLargestUnitOption(optionsArg, ops);
         final var smallestUnit = readSmallestUnitOption(optionsArg, ops);
+        // largestUnit defaults to (and "auto" resolves to) whichever of smallestUnit/day is coarser,
+        // so a smallestUnit larger than the usual "day" default (e.g. "years") doesn't spuriously
+        // conflict with it.
+        final var largestUnitDefault = smallestUnit.isLargerThan(Unit.DAY) ? smallestUnit : Unit.DAY;
+        final var largestUnit = readLargestUnitOption(optionsArg, largestUnitDefault, ops);
         if (smallestUnit.ordinal() < largestUnit.ordinal()) {
             throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
         }
@@ -803,7 +818,7 @@ public final class TemporalPlainDateTimeBuiltins {
         final var doubled = remainder.multiply(TWO);
         final var roundedQuotient = switch (mode) {
             case TRUNC, FLOOR -> quotient;
-            case CEIL -> quotient.add(BigInteger.ONE);
+            case CEIL, EXPAND -> quotient.add(BigInteger.ONE);
             case HALF_EXPAND, HALF_CEIL -> doubled.compareTo(increment) >= 0 ? quotient.add(BigInteger.ONE) : quotient;
             case HALF_TRUNC, HALF_FLOOR -> doubled.compareTo(increment) > 0 ? quotient.add(BigInteger.ONE) : quotient;
             case HALF_EVEN -> {

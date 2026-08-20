@@ -191,17 +191,42 @@ public class TemporalPlainDateBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("+new Temporal.PlainDate(2020, 6, 15)"));
     }
 
-    // Narrow-gap projections: toPlainYearMonth/toPlainMonthDay/toPlainDateTime/toZonedDateTime return
-    // plain duck-typed objects (their real Temporal types land in later phases)
+    // toPlainYearMonth/toPlainMonthDay/toPlainDateTime/toZonedDateTime/until/since return real
+    // Temporal instances, not duck-typed plain objects
     @Test
-    public void test_narrow_gap_projections() {
+    public void test_real_type_projections() {
         assertEquals("2020-06", str("new Temporal.PlainDate(2020, 6, 15).toPlainYearMonth().toString()"));
-        assertEquals("--06-15", str("new Temporal.PlainDate(2020, 6, 15).toPlainMonthDay().toString()"));
+        assertEquals("06-15", str("new Temporal.PlainDate(2020, 6, 15).toPlainMonthDay().toString()"));
         assertEquals("2020-06-15T00:00:00", str("new Temporal.PlainDate(2020, 6, 15).toPlainDateTime().toString()"));
         assertEquals("2020-06-15T01:02:03", str("new Temporal.PlainDate(2020, 6, 15)"
                 + ".toPlainDateTime({hour: 1, minute: 2, second: 3}).toString()"));
         assertEquals("UTC", str("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime('UTC').timeZoneId"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime()"));
+        assertTrue(bool("new Temporal.PlainDate(2020, 6, 15).toPlainYearMonth() instanceof Temporal.PlainYearMonth"));
+        assertTrue(bool("new Temporal.PlainDate(2020, 6, 15).toPlainMonthDay() instanceof Temporal.PlainMonthDay"));
+        assertTrue(bool("new Temporal.PlainDate(2020, 6, 15).toPlainDateTime() instanceof Temporal.PlainDateTime"));
+        assertTrue(
+                bool("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime('UTC') instanceof Temporal.ZonedDateTime"));
+        assertTrue(bool("new Temporal.PlainDate(2020, 6, 15).until(new Temporal.PlainDate(2020, 6, 20)) instanceof "
+                + "Temporal.Duration"));
+    }
+
+    // era/eraYear are always undefined for the ISO-8601-only calendar this engine implements
+    @Test
+    public void test_era_and_era_year_are_undefined() {
+        assertTrue(bool("new Temporal.PlainDate(2020, 6, 15).era === undefined"));
+        assertTrue(bool("new Temporal.PlainDate(2020, 6, 15).eraYear === undefined"));
+    }
+
+    // toZonedDateTime accepts a {timeZone, plainTime} options object, with plainTime optional
+    @Test
+    public void test_to_zoned_date_time_with_options_object() {
+        assertEquals("2020-06-15T01:02:03+00:00[UTC]", str("new Temporal.PlainDate(2020, 6, 15)"
+                + ".toZonedDateTime({timeZone: 'UTC', plainTime: {hour: 1, minute: 2, second: 3}}).toString()"));
+        assertEquals("2020-06-15T00:00:00+00:00[UTC]",
+                str("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime({timeZone: 'UTC'}).toString()"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime({})"));
     }
 }

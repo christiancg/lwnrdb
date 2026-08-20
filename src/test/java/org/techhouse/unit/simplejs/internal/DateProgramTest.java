@@ -210,4 +210,22 @@ public class DateProgramTest {
     public void test_value_of() {
         assertEquals(1234, num("new Date(1234).valueOf()"));
     }
+
+    // toTemporalInstant converts a Date's epoch milliseconds to Temporal.Instant epoch nanoseconds
+    @Test
+    public void test_to_temporal_instant() {
+        assertTrue(bool("new Date(123456789).toTemporalInstant().epochNanoseconds === 123456789000000n"));
+    }
+
+    // toTemporalInstant on an invalid Date throws RangeError, mirroring the NumberToBigInt failure
+    @Test
+    public void test_to_temporal_instant_invalid_date_throws() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Date(NaN).toTemporalInstant()"));
+    }
+
+    // toTemporalInstant requires a Date receiver, called through Date.prototype like any other method
+    @Test
+    public void test_to_temporal_instant_wrong_receiver_throws() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Date.prototype.toTemporalInstant.call({})"));
+    }
 }

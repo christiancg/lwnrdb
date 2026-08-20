@@ -48,11 +48,15 @@ public final class TemporalPlainYearMonthBuiltins {
             requireNewTarget();
             return construct(args, ops);
         });
-        ctor.setProperty("from",
-                new JsNativeFunction("from", (_, args) -> toPlainYearMonth(arg(args, 0), arg(args, 1), ops)));
-        ctor.setProperty("compare", new JsNativeFunction("compare",
+        ctor.setLength(2);
+        final var from = new JsNativeFunction("from", (_, args) -> toPlainYearMonth(arg(args, 0), arg(args, 1), ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var compare = new JsNativeFunction("compare",
                 (_, args) -> new JsNumber(IsoCalendar.compareIsoDate(toPlainYearMonth(arg(args, 0), ops).fields(),
-                        toPlainYearMonth(arg(args, 1), ops).fields()))));
+                        toPlainYearMonth(arg(args, 1), ops).fields())));
+        compare.setLength(2);
+        ctor.setProperty("compare", compare);
         return ctor;
     }
 
@@ -92,6 +96,14 @@ public final class TemporalPlainYearMonthBuiltins {
         installGetter(proto, "calendarId", receiver -> {
             requireReceiver(receiver, "calendarId");
             return new JsString("iso8601");
+        });
+        installGetter(proto, "era", receiver -> {
+            requireReceiver(receiver, "era");
+            return JsUndefined.getInstance();
+        });
+        installGetter(proto, "eraYear", receiver -> {
+            requireReceiver(receiver, "eraYear");
+            return JsUndefined.getInstance();
         });
         installGetter(proto, "daysInMonth", receiver -> {
             final var ym = requireReceiver(receiver, "daysInMonth");
@@ -195,7 +207,7 @@ public final class TemporalPlainYearMonthBuiltins {
         return IsoCalendar.regulateDate(year, month, 1, overflow);
     }
 
-    private static int requiredIntegerField(JsObject obj, String name, InterpreterOps ops) {
+    private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
             throw new TypeErrorException(name + " is required");
@@ -284,29 +296,29 @@ public final class TemporalPlainYearMonthBuiltins {
         if (optionsArg == null || optionsArg instanceof JsUndefined) {
             return JsUndefined.getInstance();
         }
-        if (!(optionsArg instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(optionsArg)) {
             throw new TypeErrorException("options must be an object");
         }
-        return ops.getMember(obj, new JsString(key));
+        return ops.getMember(optionsArg, new JsString(key));
     }
 
     private static JsValue with(JsTemporalPlainYearMonth receiver, JsValue fieldsLike, JsValue optionsArg,
             InterpreterOps ops) {
-        if (!(fieldsLike instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(fieldsLike)) {
             throw new TypeErrorException("Temporal.PlainYearMonth.prototype.with argument must be an object");
         }
         final var overflow = readOverflowOption(optionsArg, ops);
-        final var year = fieldOrDefault(obj, "year", receiver.year(), ops);
-        final var month = resolveMonthWith(obj, receiver.month(), ops);
+        final var year = fieldOrDefault(fieldsLike, "year", receiver.year(), ops);
+        final var month = resolveMonthWith(fieldsLike, receiver.month(), ops);
         return new JsTemporalPlainYearMonth(IsoCalendar.regulateDate(year, month, 1, overflow));
     }
 
-    private static int fieldOrDefault(JsObject obj, String name, int defaultValue, InterpreterOps ops) {
+    private static int fieldOrDefault(JsValue obj, String name, int defaultValue, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         return value instanceof JsUndefined ? defaultValue : toIntegerField(value, name, ops);
     }
 
-    private static int resolveMonthWith(JsObject obj, int defaultMonth, InterpreterOps ops) {
+    private static int resolveMonthWith(JsValue obj, int defaultMonth, InterpreterOps ops) {
         final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
         if (!(monthCodeValue instanceof JsUndefined)) {
             return parseMonthCode(JsCoercion.toStr(monthCodeValue, ops));
@@ -409,11 +421,11 @@ public final class TemporalPlainYearMonthBuiltins {
     }
 
     private static JsValue toPlainDate(JsTemporalPlainYearMonth receiver, JsValue item, InterpreterOps ops) {
-        if (!(item instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(item)) {
             throw new TypeErrorException(
                     "Temporal.PlainYearMonth.prototype.toPlainDate requires an object with a day property");
         }
-        final var day = requiredIntegerField(obj, "day", ops);
+        final var day = requiredIntegerField(item, "day", ops);
         return new JsTemporalPlainDate(
                 IsoCalendar.regulateDate(receiver.year(), receiver.month(), day, RegulateOverflow.CONSTRAIN));
     }

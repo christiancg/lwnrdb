@@ -188,6 +188,7 @@ public final class DurationMath {
             case TRUNC -> quotient;
             case CEIL -> sign > 0 ? quotient.add(BigInteger.ONE) : quotient;
             case FLOOR -> sign < 0 ? quotient.subtract(BigInteger.ONE) : quotient;
+            case EXPAND -> awayFromZero(quotient, sign);
             case HALF_EXPAND -> isAtLeastHalf(remainderAbs, incrementNanos) ? awayFromZero(quotient, sign) : quotient;
             case HALF_TRUNC -> isMoreThanHalf(remainderAbs, incrementNanos) ? awayFromZero(quotient, sign) : quotient;
             case HALF_CEIL -> halfDirectional(quotient, remainderAbs, incrementNanos, sign, true);

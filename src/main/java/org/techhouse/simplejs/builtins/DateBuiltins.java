@@ -18,6 +18,7 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -28,7 +29,8 @@ public final class DateBuiltins {
             "getDate", "getUTCDate", "getDay", "getUTCDay", "getHours", "getUTCHours", "getMinutes", "getUTCMinutes",
             "getSeconds", "getUTCSeconds", "getMilliseconds", "getUTCMilliseconds", "setFullYear", "setUTCFullYear",
             "setMonth", "setUTCMonth", "setDate", "setUTCDate", "setHours", "setUTCHours", "setMinutes",
-            "setUTCMinutes", "setSeconds", "setUTCSeconds", "setMilliseconds", "setUTCMilliseconds");
+            "setUTCMinutes", "setSeconds", "setUTCSeconds", "setMilliseconds", "setUTCMilliseconds",
+            "toTemporalInstant");
 
     private static final double MS_PER_SECOND = 1000;
     private static final double MS_PER_MINUTE = 60_000;
@@ -239,6 +241,8 @@ public final class DateBuiltins {
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(
                     // 0.0 - x (not unary -x) so a zero offset stays +0, matching SameValue expectations.
                     receiver.isValid() ? (0.0 - localOffset(receiver.getTime())) / MS_PER_MINUTE : Double.NaN));
+            case "toTemporalInstant" ->
+                new JsNativeFunction(name, (_, _) -> JsTemporalInstant.fromEpochMilliseconds(receiver.getTime()));
             default -> setter(receiver, name, ops);
         };
     }

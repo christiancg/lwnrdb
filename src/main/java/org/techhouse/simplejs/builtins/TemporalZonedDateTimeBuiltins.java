@@ -84,7 +84,7 @@ public final class TemporalZonedDateTimeBuiltins {
     private static final BigInteger NANOS_PER_MICRO = BigInteger.valueOf(1_000L);
     private static final BigInteger TWO = BigInteger.valueOf(2);
 
-    private enum Disambiguation {
+    enum Disambiguation {
         COMPATIBLE, EARLIER, LATER, REJECT;
 
         static Disambiguation parse(String value) {
@@ -109,10 +109,13 @@ public final class TemporalZonedDateTimeBuiltins {
             return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(2);
-        ctor.setProperty("from",
-                new JsNativeFunction("from", (_, args) -> toZonedDateTime(arg(args, 0), arg(args, 1), ops)));
-        ctor.setProperty("compare", new JsNativeFunction("compare", (_, args) -> new JsNumber(
-                compare(toZonedDateTime(arg(args, 0), ops), toZonedDateTime(arg(args, 1), ops)))));
+        final var from = new JsNativeFunction("from", (_, args) -> toZonedDateTime(arg(args, 0), arg(args, 1), ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
+        final var compare = new JsNativeFunction("compare", (_,
+                args) -> new JsNumber(compare(toZonedDateTime(arg(args, 0), ops), toZonedDateTime(arg(args, 1), ops))));
+        compare.setLength(2);
+        ctor.setProperty("compare", compare);
         return ctor;
     }
 
@@ -156,7 +159,7 @@ public final class TemporalZonedDateTimeBuiltins {
         }
     }
 
-    private static ZoneId zoneOf(String identifier) {
+    static ZoneId zoneOf(String identifier) {
         if (!identifier.isEmpty() && (identifier.charAt(0) == '+' || identifier.charAt(0) == '-')) {
             return toZoneOffset(identifier);
         }
@@ -215,7 +218,7 @@ public final class TemporalZonedDateTimeBuiltins {
         };
     }
 
-    private static JsTemporalZonedDateTime resolveToZoned(Iso8601Fields date, IsoTimeFields time, ZoneId zone,
+    static JsTemporalZonedDateTime resolveToZoned(Iso8601Fields date, IsoTimeFields time, ZoneId zone,
             String timeZoneId, Disambiguation disambiguation) {
         final var nanoOfSecond = time.millisecond() * 1_000_000 + time.microsecond() * 1_000 + time.nanosecond();
         final LocalDateTime local;
@@ -281,6 +284,14 @@ public final class TemporalZonedDateTimeBuiltins {
         installGetter(proto, "calendarId", r -> {
             requireReceiver(r, "calendarId");
             return new JsString("iso8601");
+        });
+        installGetter(proto, "era", r -> {
+            requireReceiver(r, "era");
+            return JsUndefined.getInstance();
+        });
+        installGetter(proto, "eraYear", r -> {
+            requireReceiver(r, "eraYear");
+            return JsUndefined.getInstance();
         });
         installGetter(proto, "timeZoneId", r -> new JsString(requireReceiver(r, "timeZoneId").timeZoneId()));
         installGetter(proto, "epochMilliseconds",
@@ -551,13 +562,13 @@ public final class TemporalZonedDateTimeBuiltins {
 
     // ZonedDateTime.until/since default largestUnit is "hour" (unlike PlainDateTime's "day"), since a
     // "day" is not a fixed-length unit once a time zone is attached.
-    private static Unit readLargestUnitOption(JsValue optionsArg, InterpreterOps ops) {
+    private static Unit readLargestUnitOption(JsValue optionsArg, Unit fallback, InterpreterOps ops) {
         final var value = optionOrUndefined(optionsArg, "largestUnit", ops);
         if (value instanceof JsUndefined) {
-            return Unit.HOUR;
+            return fallback;
         }
         final var raw = JsCoercion.toStr(value, ops);
-        return "auto".equals(raw) ? Unit.HOUR : Unit.parseTemporalUnit(raw);
+        return "auto".equals(raw) ? fallback : Unit.parseTemporalUnit(raw);
     }
 
     private static Unit readSmallestUnitOption(JsValue optionsArg, InterpreterOps ops) {
@@ -851,8 +862,9 @@ public final class TemporalZonedDateTimeBuiltins {
     private static JsValue difference(JsTemporalZonedDateTime receiver, JsValue otherArg, JsValue optionsArg,
             boolean isSince, InterpreterOps ops) {
         final var other = toZonedDateTime(otherArg, ops);
-        final var largestUnit = readLargestUnitOption(optionsArg, ops);
         final var smallestUnit = readSmallestUnitOption(optionsArg, ops);
+        final var largestUnitDefault = smallestUnit.isLargerThan(Unit.HOUR) ? smallestUnit : Unit.HOUR;
+        final var largestUnit = readLargestUnitOption(optionsArg, largestUnitDefault, ops);
         if (largestUnit.isLargerThan(Unit.DAY)) {
             throw new RangeErrorException(CALENDAR_LIMITATION);
         }
@@ -965,7 +977,7 @@ public final class TemporalZonedDateTimeBuiltins {
         final var doubled = remainder.multiply(TWO);
         final var roundedQuotient = switch (mode) {
             case TRUNC, FLOOR -> quotient;
-            case CEIL -> quotient.add(BigInteger.ONE);
+            case CEIL, EXPAND -> quotient.add(BigInteger.ONE);
             case HALF_EXPAND, HALF_CEIL -> doubled.compareTo(increment) >= 0 ? quotient.add(BigInteger.ONE) : quotient;
             case HALF_TRUNC, HALF_FLOOR -> doubled.compareTo(increment) > 0 ? quotient.add(BigInteger.ONE) : quotient;
             case HALF_EVEN -> {
@@ -995,6 +1007,7 @@ public final class TemporalZonedDateTimeBuiltins {
             case TRUNC -> quotient;
             case CEIL -> sign > 0 ? quotient.add(BigInteger.ONE) : quotient;
             case FLOOR -> sign < 0 ? quotient.subtract(BigInteger.ONE) : quotient;
+            case EXPAND -> awayFromZero(quotient, sign);
             case HALF_EXPAND -> cmp >= 0 ? awayFromZero(quotient, sign) : quotient;
             case HALF_TRUNC -> cmp > 0 ? awayFromZero(quotient, sign) : quotient;
             case HALF_CEIL -> halfDirectional(quotient, cmp, sign, true);

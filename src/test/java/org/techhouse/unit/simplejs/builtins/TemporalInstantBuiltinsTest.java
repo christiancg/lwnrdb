@@ -225,6 +225,17 @@ public class TemporalInstantBuiltinsTest {
         assertEquals("-20", str(String.format(setup, -15, "halfExpand")));
     }
 
+    // "expand" rounds away from zero unconditionally, for both a positive and a negative instant
+    @Test
+    public void test_round_expand() {
+        assertEquals("86400000000000",
+                str("new Temporal.Instant(1n).round({smallestUnit: 'day', roundingMode: 'expand'})"
+                        + ".epochNanoseconds.toString()"));
+        assertEquals("-86400000000000",
+                str("new Temporal.Instant(-1n).round({smallestUnit: 'day', roundingMode: 'expand'})"
+                        + ".epochNanoseconds.toString()"));
+    }
+
     // round() accepts every fixed-length time unit through hour, plus the calendar-independent "day"
     @Test
     public void test_round_every_unit() {

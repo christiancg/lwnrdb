@@ -486,6 +486,21 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 .run("new Temporal.ZonedDateTime(0n, 'UTC').round({smallestUnit: 'hour', roundingIncrement: 0})"));
     }
 
+    // "expand" rounds away from zero unconditionally, unlike "halfExpand"'s tie-breaking
+    @Test
+    public void test_rounding_mode_expand() {
+        assertEquals("1970-01-01T01:00:00+00:00[UTC]",
+                str("new Temporal.ZonedDateTime(1000000000n, 'UTC').round({smallestUnit: 'hour', "
+                        + "roundingMode: 'expand'}).toString()"));
+    }
+
+    // era/eraYear are always undefined for the ISO-8601-only calendar this engine implements
+    @Test
+    public void test_era_and_era_year_are_undefined() {
+        assertTrue(bool("new Temporal.ZonedDateTime(0n, 'UTC').era === undefined"));
+        assertTrue(bool("new Temporal.ZonedDateTime(0n, 'UTC').eraYear === undefined"));
+    }
+
     @Test
     public void test_rounding_increment_validation_for_day_and_ms() {
         assertThrows(RangeErrorException.class, () -> Interpreter

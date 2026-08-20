@@ -227,4 +227,11 @@ public class TemporalPlainYearMonthBuiltinsTest {
         assertEquals("2020,2", str("var d = new Temporal.PlainYearMonth(2020, 1);"
                 + "var e = d.with({month: 2}, {overflow: 'reject'}); e.year + ',' + e.month"));
     }
+
+    // era/eraYear are always undefined for the ISO-8601-only calendar this engine implements
+    @Test
+    public void test_era_and_era_year_are_undefined() {
+        assertTrue(bool("new Temporal.PlainYearMonth(2020, 6).era === undefined"));
+        assertTrue(bool("new Temporal.PlainYearMonth(2020, 6).eraYear === undefined"));
+    }
 }

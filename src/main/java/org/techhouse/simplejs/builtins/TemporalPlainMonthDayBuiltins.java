@@ -5,6 +5,7 @@ import java.util.function.Function;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
@@ -42,8 +43,10 @@ public final class TemporalPlainMonthDayBuiltins {
             requireNewTarget();
             return construct(args, ops);
         });
-        ctor.setProperty("from",
-                new JsNativeFunction("from", (_, args) -> toPlainMonthDay(arg(args, 0), arg(args, 1), ops)));
+        ctor.setLength(2);
+        final var from = new JsNativeFunction("from", (_, args) -> toPlainMonthDay(arg(args, 0), arg(args, 1), ops));
+        from.setLength(1);
+        ctor.setProperty("from", from);
         return ctor;
     }
 
@@ -161,7 +164,7 @@ public final class TemporalPlainMonthDayBuiltins {
         return IsoCalendar.regulateDate(year, month, day, overflow);
     }
 
-    private static int requiredIntegerField(JsObject obj, String name, InterpreterOps ops) {
+    private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
             throw new TypeErrorException(name + " is required");
@@ -233,30 +236,30 @@ public final class TemporalPlainMonthDayBuiltins {
         if (optionsArg == null || optionsArg instanceof JsUndefined) {
             return JsUndefined.getInstance();
         }
-        if (!(optionsArg instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(optionsArg)) {
             throw new TypeErrorException("options must be an object");
         }
-        return ops.getMember(obj, new JsString(key));
+        return ops.getMember(optionsArg, new JsString(key));
     }
 
     private static JsValue with(JsTemporalPlainMonthDay receiver, JsValue fieldsLike, JsValue optionsArg,
             InterpreterOps ops) {
-        if (!(fieldsLike instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(fieldsLike)) {
             throw new TypeErrorException("Temporal.PlainMonthDay.prototype.with argument must be an object");
         }
         final var overflow = readOverflowOption(optionsArg, ops);
-        final var year = fieldOrDefault(obj, "year", receiver.referenceISOYear(), ops);
-        final var month = resolveMonthWith(obj, receiver.month(), ops);
-        final var day = fieldOrDefault(obj, "day", receiver.day(), ops);
+        final var year = fieldOrDefault(fieldsLike, "year", receiver.referenceISOYear(), ops);
+        final var month = resolveMonthWith(fieldsLike, receiver.month(), ops);
+        final var day = fieldOrDefault(fieldsLike, "day", receiver.day(), ops);
         return new JsTemporalPlainMonthDay(IsoCalendar.regulateDate(year, month, day, overflow));
     }
 
-    private static int fieldOrDefault(JsObject obj, String name, int defaultValue, InterpreterOps ops) {
+    private static int fieldOrDefault(JsValue obj, String name, int defaultValue, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         return value instanceof JsUndefined ? defaultValue : toIntegerField(value, name, ops);
     }
 
-    private static int resolveMonthWith(JsObject obj, int defaultMonth, InterpreterOps ops) {
+    private static int resolveMonthWith(JsValue obj, int defaultMonth, InterpreterOps ops) {
         final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
         if (!(monthCodeValue instanceof JsUndefined)) {
             return parseMonthCode(JsCoercion.toStr(monthCodeValue, ops));
@@ -273,11 +276,11 @@ public final class TemporalPlainMonthDayBuiltins {
     }
 
     private static JsValue toPlainDate(JsTemporalPlainMonthDay receiver, JsValue item, InterpreterOps ops) {
-        if (!(item instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(item)) {
             throw new TypeErrorException(
                     "Temporal.PlainMonthDay.prototype.toPlainDate requires an object with a year property");
         }
-        final var year = requiredIntegerField(obj, "year", ops);
+        final var year = requiredIntegerField(item, "year", ops);
         return new JsTemporalPlainDate(
                 IsoCalendar.regulateDate(year, receiver.month(), receiver.day(), RegulateOverflow.CONSTRAIN));
     }

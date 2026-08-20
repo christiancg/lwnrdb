@@ -58,6 +58,7 @@ public final class BuiltinLengths {
         installDate();
         installDataView();
         installStatics();
+        installTemporal();
     }
 
     private static void installStatics() {
@@ -96,10 +97,24 @@ public final class BuiltinLengths {
                 "toUTCString", "toLocaleString", "toLocaleDateString", "toLocaleTimeString", "getTimezoneOffset",
                 "getFullYear", "getUTCFullYear", "getMonth", "getUTCMonth", "getDate", "getUTCDate", "getDay",
                 "getUTCDay", "getHours", "getUTCHours", "getMinutes", "getUTCMinutes", "getSeconds", "getUTCSeconds",
-                "getMilliseconds", "getUTCMilliseconds");
+                "getMilliseconds", "getUTCMilliseconds", "toTemporalInstant");
         put("Date.prototype", 2, "setMonth", "setUTCMonth", "setSeconds", "setUTCSeconds");
         put("Date.prototype", 3, "setFullYear", "setUTCFullYear", "setMinutes", "setUTCMinutes");
         put("Date.prototype", 4, "setHours", "setUTCHours");
+    }
+
+    private static void installTemporal() {
+        zeroArg("Temporal.Duration.prototype", "abs", "negated", "toJSON", "toLocaleString", "toString", "valueOf");
+        zeroArg("Temporal.Instant.prototype", "toJSON", "toLocaleString", "toString", "valueOf");
+        zeroArg("Temporal.PlainDate.prototype", "toJSON", "toLocaleString", "toPlainDateTime", "toPlainMonthDay",
+                "toPlainYearMonth", "toString", "valueOf");
+        zeroArg("Temporal.PlainDateTime.prototype", "toJSON", "toLocaleString", "toPlainDate", "toPlainTime",
+                "toString", "valueOf", "withPlainTime");
+        zeroArg("Temporal.PlainMonthDay.prototype", "toJSON", "toLocaleString", "toString", "valueOf");
+        zeroArg("Temporal.PlainTime.prototype", "toJSON", "toLocaleString", "toString", "valueOf");
+        zeroArg("Temporal.PlainYearMonth.prototype", "toJSON", "toLocaleString", "toString", "valueOf");
+        zeroArg("Temporal.ZonedDateTime.prototype", "toInstant", "toJSON", "toLocaleString", "toPlainDate",
+                "toPlainDateTime", "toPlainTime", "toString", "valueOf", "withPlainTime");
     }
 
     private static void installDataView() {
