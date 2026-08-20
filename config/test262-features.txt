@@ -88,6 +88,7 @@ Symbol.split
 Symbol.toPrimitive
 Symbol.toStringTag
 Symbol.unscopables
+Temporal
 TypedArray
 TypedArray.prototype.at
 Uint16Array
