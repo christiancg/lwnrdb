@@ -76,6 +76,62 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC', 'hebrew')"));
     }
 
+    // A non-string timeZone/calendar argument is a TypeError, not a RangeError
+    @Test
+    public void test_constructor_non_string_arguments_are_type_errors() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 5)"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC', 5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').withCalendar(5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').withTimeZone(5)"));
+    }
+
+    // "UTC" is matched ASCII-case-insensitively, java.time's ZoneId.of is not
+    @Test
+    public void test_time_zone_utc_is_case_insensitive() {
+        assertEquals("utc", str("new Temporal.ZonedDateTime(0n, 'utc').timeZoneId"));
+        assertEquals(0, num("new Temporal.ZonedDateTime(0n, 'utc').offsetNanoseconds"));
+        assertEquals("Utc", str("new Temporal.ZonedDateTime(0n, 'Utc').timeZoneId"));
+    }
+
+    // A calendar annotation on an ISO string parsed by from() is validated the same way a bare
+    // identifier is
+    @Test
+    public void test_from_string_validates_calendar_annotation() {
+        assertEquals("iso8601",
+                str("Temporal.ZonedDateTime.from('1970-01-01T00:00:00+00:00[UTC][u-ca=iso8601]').calendarId"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from('1970-01-01T00:00:00+00:00[UTC][u-ca=hebrew]')"));
+    }
+
+    // The property-bag `timeZone` field accepts a full ISO date-time string carrying a bracketed
+    // time zone (ToTemporalTimeZoneIdentifier's flexible form), not just a bare identifier
+    @Test
+    public void test_from_fields_time_zone_field_flexible() {
+        assertEquals("America/New_York", str("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, "
+                + "timeZone: '2020-01-01T00:00:00-05:00[America/New_York]'}).timeZoneId"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 5})"));
+    }
+
+    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
+    // defaulting) a u-ca annotation, or a Temporal object (fast path)
+    @Test
+    public void test_from_fields_calendar_field_flexible() {
+        assertEquals("iso8601",
+                str("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 'UTC', calendar: 'iso8601'})"
+                        + ".calendarId"));
+        assertEquals("iso8601", str("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 'UTC', "
+                + "calendar: '2020-06-15[u-ca=iso8601]'}).calendarId"));
+        assertEquals("iso8601", str("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 'UTC', "
+                + "calendar: new Temporal.PlainDate(2020, 1, 1)}).calendarId"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run(
+                "Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 'UTC', calendar: 'hebrew'})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 'UTC', calendar: 5})"));
+    }
+
     @Test
     public void test_constructor_accepts_offset_time_zone() {
         assertEquals("+01:00", str("new Temporal.ZonedDateTime(0n, '+01:00').timeZoneId"));
@@ -203,6 +259,12 @@ public class TemporalZonedDateTimeBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').add(42)"));
     }
 
+    // A duration-like object with none of the ten recognized properties present is a TypeError
+    @Test
+    public void test_add_rejects_duration_like_with_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').add({})"));
+    }
+
     @Test
     public void test_add_across_dst_gap_calendar_vs_exact_time() {
         final var gap = findTransition(true);
@@ -224,6 +286,17 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 + ".since(new Temporal.ZonedDateTime(7200000000000n, 'UTC'), {largestUnit: 'hour'}).hours"));
         assertTrue(bool("new Temporal.ZonedDateTime(0n, 'UTC')"
                 + ".until(new Temporal.ZonedDateTime(7200000000000n, 'UTC')) instanceof Temporal.Duration"));
+    }
+
+    // until()/since() round a computed Duration, so a "day" increment greater than 1 is valid when
+    // largestUnit is not larger than "day" (unlike round(), which only ever accepts 1)
+    @Test
+    public void test_until_allows_day_increment_greater_than_one() {
+        final var tenDaysNanos = 10L * 24 * 3_600_000_000_000L;
+        assertEquals(10,
+                num("new Temporal.ZonedDateTime(0n, 'UTC')" + ".until(new Temporal.ZonedDateTime(" + tenDaysNanos
+                        + "n, 'UTC'), " + "{smallestUnit: 'day', largestUnit: 'day', roundingIncrement: 10, "
+                        + "roundingMode: 'floor'}).days"));
     }
 
     // Calendar-unit differencing (largestUnit above "day") is implemented via RelativeDurationMath on

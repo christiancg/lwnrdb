@@ -9,6 +9,7 @@ import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
+import org.techhouse.simplejs.internal.temporal.TemporalCalendarIdentifier;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.values.JsBoolean;
@@ -17,7 +18,10 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
+import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
+import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -111,7 +115,7 @@ public final class TemporalPlainMonthDayBuiltins {
         final var day = toIntegerField(arg(args, 1), "day", ops);
         final var calendarArg = arg(args, 2);
         if (!(calendarArg instanceof JsUndefined)) {
-            requireIso8601(JsCoercion.toStr(calendarArg, ops));
+            requireCalendarString(calendarArg);
         }
         final var referenceISOYearArg = arg(args, 3);
         final var referenceISOYear = referenceISOYearArg instanceof JsUndefined
@@ -121,11 +125,12 @@ public final class TemporalPlainMonthDayBuiltins {
                 IsoCalendar.regulateDate(referenceISOYear, month, day, RegulateOverflow.REJECT));
     }
 
-    private static void requireIso8601(String calendar) {
-        if (!"iso8601".equals(calendar)) {
-            throw new RangeErrorException(
-                    "Only the \"iso8601\" calendar is supported by this engine, got: " + calendar);
+    // Constructor argument: a bare calendar identifier only; a non-string value is a TypeError.
+    private static String requireCalendarString(JsValue calendarArg) {
+        if (!(calendarArg instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
         }
+        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     private static JsTemporalPlainMonthDay toPlainMonthDay(JsValue item, InterpreterOps ops) {
@@ -147,7 +152,7 @@ public final class TemporalPlainMonthDayBuiltins {
         if (item instanceof JsString s) {
             final var parsed = TemporalParser.parseMonthDay(s.getValue());
             if (parsed.calendar() != null) {
-                requireIso8601(parsed.calendar());
+                TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
             }
             return new JsTemporalPlainMonthDay(parsed.date());
         }
@@ -158,10 +163,30 @@ public final class TemporalPlainMonthDayBuiltins {
     }
 
     private static Iso8601Fields monthDayFromFields(JsObject obj, RegulateOverflow overflow, InterpreterOps ops) {
+        requireValidCalendarField(obj, ops);
         final var month = resolveMonth(obj, ops);
         final var day = requiredIntegerField(obj, "day", ops);
         final var year = fieldOrDefault(obj, "year", JsTemporalPlainMonthDay.DEFAULT_REFERENCE_ISO_YEAR, ops);
         return IsoCalendar.regulateDate(year, month, day, overflow);
+    }
+
+    // Property-bag `calendar` field: accepts a bare identifier or a full ISO string carrying (or
+    // defaulting) a u-ca annotation. A `calendar` that is itself a Temporal object is taken via its
+    // fast path (its calendar is implicitly "iso8601" in this ISO-only engine, so its
+    // `calendar`/`calendarId` getters are never read, matching ToTemporalCalendar's own
+    // internal-slot fast path).
+    private static void requireValidCalendarField(JsObject obj, InterpreterOps ops) {
+        final var calendarValue = ops.getMember(obj, new JsString("calendar"));
+        if (calendarValue instanceof JsUndefined || calendarValue instanceof JsTemporalPlainDate
+                || calendarValue instanceof JsTemporalPlainDateTime || calendarValue instanceof JsTemporalPlainMonthDay
+                || calendarValue instanceof JsTemporalPlainYearMonth
+                || calendarValue instanceof JsTemporalZonedDateTime) {
+            return;
+        }
+        if (!(calendarValue instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
+        }
+        TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
     private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {

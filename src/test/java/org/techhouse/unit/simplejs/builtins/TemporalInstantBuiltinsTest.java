@@ -115,6 +115,26 @@ public class TemporalInstantBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add({days: 1})"));
     }
 
+    // add()/subtract() also accept a real Temporal.Duration instance or an ISO 8601 duration string
+    @Test
+    public void test_add_accepts_duration_instance_and_string() {
+        assertEquals(1000, num("new Temporal.Instant(0n).add(Temporal.Duration.from({seconds: 1})).epochMilliseconds"));
+        assertEquals(1000, num("new Temporal.Instant(0n).add('PT1S').epochMilliseconds"));
+    }
+
+    // add()/subtract() reject an argument that is neither a Temporal.Duration, an ISO duration
+    // string, nor a duration-like object
+    @Test
+    public void test_add_rejects_non_duration_argument() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add(42)"));
+    }
+
+    // add()/subtract() reject a duration-like object with none of the ten recognized properties
+    @Test
+    public void test_add_rejects_duration_like_with_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add({})"));
+    }
+
     // equals() compares two instants for exact equality
     @Test
     public void test_equals() {
@@ -198,6 +218,12 @@ public class TemporalInstantBuiltinsTest {
                 () -> Interpreter.run("new Temporal.Instant(0n).toZonedDateTimeISO('Not/AZone')"));
     }
 
+    // toZonedDateTimeISO rejects a non-string timeZone argument
+    @Test
+    public void test_to_zoned_date_time_iso_non_string_zone() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).toZonedDateTimeISO(5)"));
+    }
+
     // round() sweeps every rounding mode on the positive side of a tie/non-tie remainder
     @Test
     public void test_round_all_modes_positive() {
@@ -212,6 +238,21 @@ public class TemporalInstantBuiltinsTest {
         assertEquals("10", str(String.format(setup, 15, "halfTrunc")));
         assertEquals("20", str(String.format(setup, 15, "halfEven")));
         assertEquals("20", str(String.format(setup, 25, "halfEven")));
+    }
+
+    // The halfCeil/halfFloor/halfEven modes' non-tie branches: a remainder clearly above half rounds
+    // away from zero regardless of mode, and a remainder clearly below half keeps the truncated
+    // quotient regardless of mode - only an exact tie (already covered elsewhere) distinguishes them
+    @Test
+    public void test_round_half_modes_non_tie_remainder() {
+        final var setup = "new Temporal.Instant(%dn).round({smallestUnit: 'nanosecond', roundingIncrement: 10, "
+                + "roundingMode: '%s'}).epochNanoseconds.toString()";
+        assertEquals("20", str(String.format(setup, 17, "halfCeil")));
+        assertEquals("10", str(String.format(setup, 12, "halfCeil")));
+        assertEquals("20", str(String.format(setup, 17, "halfFloor")));
+        assertEquals("10", str(String.format(setup, 12, "halfFloor")));
+        assertEquals("20", str(String.format(setup, 17, "halfEven")));
+        assertEquals("10", str(String.format(setup, 12, "halfEven")));
     }
 
     // round() sweeps ceil/floor/trunc on the negative side (asymmetric-toward-infinity behaviour)
@@ -310,6 +351,26 @@ public class TemporalInstantBuiltinsTest {
                 str("new Temporal.Instant(500999999n).toString({smallestUnit: 'second', roundingMode: 'ceil'})"));
     }
 
+    // toString's smallestUnit also accepts "microsecond" and "nanosecond"
+    @Test
+    public void test_to_string_smallest_unit_microsecond_and_nanosecond() {
+        assertEquals("1970-01-01T00:00:00.500499Z",
+                str("new Temporal.Instant(500499999n).toString({smallestUnit: 'microsecond'})"));
+        assertEquals("1970-01-01T00:00:00.500499999Z",
+                str("new Temporal.Instant(500499999n).toString({smallestUnit: 'nanosecond'})"));
+    }
+
+    // A method receiving a wrapped subclass instance (produced via Reflect.construct with a foreign
+    // newTarget) unwraps it back to the real Temporal.Instant through its wrapped primitive
+    @Test
+    public void test_wrapped_instant_argument_is_unwrapped() {
+        assertTrue(bool("""
+                var Ctor = function() {};
+                var wrapped = Reflect.construct(Temporal.Instant, [5n], Ctor);
+                Temporal.Instant.compare(wrapped, new Temporal.Instant(5n)) === 0
+                """));
+    }
+
     @Test
     public void test_to_string_smallest_unit_rejects_larger_than_second() {
         assertThrows(RangeErrorException.class,
@@ -358,6 +419,14 @@ public class TemporalInstantBuiltinsTest {
         assertTrue(bool("var d = Temporal.Instant.fromEpochMilliseconds(0)"
                 + ".until(Temporal.Instant.fromEpochMilliseconds(90000), {largestUnit: 'minute'}); "
                 + "d.minutes === 1 && d.seconds === 30"));
+    }
+
+    // A largestUnit of "hour" decomposes an hour-and-larger difference into an hours field
+    @Test
+    public void test_until_with_hour_largest_unit() {
+        assertTrue(bool("var d = Temporal.Instant.fromEpochMilliseconds(0)"
+                + ".until(Temporal.Instant.fromEpochMilliseconds(5400000), {largestUnit: 'hour'}); "
+                + "d.hours === 1 && d.minutes === 30"));
     }
 
     @Test
@@ -419,6 +488,9 @@ public class TemporalInstantBuiltinsTest {
     // A negative offset written with the Unicode minus sign parses the same as an ASCII hyphen
     @Test
     public void test_from_offset_unicode_minus() {
-        assertEquals(3600000, num("Temporal.Instant.from('1970-01-01T00:00:00−01:00').epochMilliseconds"));
+        // Every Temporal string sign is ASCII-only; U+2212 MINUS SIGN is rejected everywhere,
+        // including a UTC offset's sign, per test262.
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.Instant.from('1970-01-01T00:00:00−01:00')"));
     }
 }

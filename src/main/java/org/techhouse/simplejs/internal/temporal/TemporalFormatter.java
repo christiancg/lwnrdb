@@ -67,8 +67,14 @@ public final class TemporalFormatter {
         return formatYear(yearMonth.year()) + "-" + pad2(yearMonth.month());
     }
 
+    // TemporalYearMonthToString: the reference ISO day is only shown when the calendar annotation
+    // is forced on (showCalendar "always"/"critical") - otherwise it stays hidden, mirroring
+    // formatMonthDay's symmetric treatment of the reference year.
     public static String formatYearMonth(Iso8601Fields yearMonth, CalendarName calendarName) {
-        return formatYearMonth(yearMonth) + formatCalendarAnnotation(calendarName);
+        final var withDay = calendarName == CalendarName.ALWAYS || calendarName == CalendarName.CRITICAL
+                ? formatYearMonth(yearMonth) + "-" + pad2(yearMonth.day())
+                : formatYearMonth(yearMonth);
+        return withDay + formatCalendarAnnotation(calendarName);
     }
 
     // TemporalMonthDayToString: the reference year is only shown when the calendar annotation is

@@ -21,6 +21,7 @@ import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
 import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
+import org.techhouse.simplejs.internal.temporal.TemporalCalendarIdentifier;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.internal.temporal.Unit;
@@ -142,24 +143,34 @@ public final class TemporalZonedDateTimeBuiltins {
         if (timeZoneArg instanceof JsUndefined) {
             throw new TypeErrorException("Constructor Temporal.ZonedDateTime requires a timeZone argument");
         }
-        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneArg, ops));
+        if (!(timeZoneArg instanceof JsString timeZoneStr)) {
+            throw new TypeErrorException("timeZone must be a string");
+        }
+        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(timeZoneStr.getValue());
         final var calendarArg = arg(args, 2);
         if (!(calendarArg instanceof JsUndefined)) {
-            requireIso8601(JsCoercion.toStr(calendarArg, ops));
+            requireCalendarString(calendarArg);
         }
         return JsTemporalZonedDateTime.fromEpochNanoseconds(bigInt.getValue(), zoneOf(timeZoneId), timeZoneId);
     }
 
-    private static void requireIso8601(String calendar) {
-        if (!"iso8601".equals(calendar)) {
-            throw new RangeErrorException(
-                    "Only the \"iso8601\" calendar is supported by this engine, got: " + calendar);
+    // Constructor / withCalendar accept only a bare calendar identifier; a non-string value is a
+    // TypeError, not a RangeError.
+    private static String requireCalendarString(JsValue calendarArg) {
+        if (!(calendarArg instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
         }
+        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     static ZoneId zoneOf(String identifier) {
         if (!identifier.isEmpty() && (identifier.charAt(0) == '+' || identifier.charAt(0) == '-')) {
             return toZoneOffset(identifier);
+        }
+        // "UTC" is matched ASCII-case-insensitively (java.time's ZoneId.of is exact-case), matching
+        // TemporalCalendarIdentifier's own manual fold rather than a locale-sensitive one.
+        if (TemporalCalendarIdentifier.asciiEqualsIgnoreCase(identifier, "utc")) {
+            return ZoneOffset.UTC;
         }
         try {
             return ZoneId.of(identifier);
@@ -404,6 +415,9 @@ public final class TemporalZonedDateTimeBuiltins {
     // `prefer`/`ignore`/`reject`), which is not otherwise implemented.
     private static JsTemporalZonedDateTime fromIsoString(String text, Disambiguation disambiguation) {
         final var parsed = TemporalParser.parseZonedDateTime(text);
+        if (parsed.calendar() != null) {
+            TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
+        }
         final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(parsed.timeZoneId());
         final var zone = zoneOf(timeZoneId);
         final var date = parsed.date();
@@ -424,11 +438,15 @@ public final class TemporalZonedDateTimeBuiltins {
 
     private static JsTemporalZonedDateTime zonedDateTimeFromFields(JsValue obj, RegulateOverflow overflow,
             Disambiguation disambiguation, InterpreterOps ops) {
+        requireValidCalendarField(obj, ops);
         final var timeZoneRaw = ops.getMember(obj, new JsString("timeZone"));
         if (timeZoneRaw instanceof JsUndefined) {
             throw new TypeErrorException("timeZone is required");
         }
-        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneRaw, ops));
+        if (!(timeZoneRaw instanceof JsString timeZoneStr)) {
+            throw new TypeErrorException("timeZone must be a string");
+        }
+        final var timeZoneId = TemporalParser.parseTimeZoneIdentifierFlexible(timeZoneStr.getValue());
         final var zone = zoneOf(timeZoneId);
         final var year = requiredIntegerField(obj, "year", ops);
         final var month = resolveMonth(obj, ops);
@@ -619,6 +637,16 @@ public final class TemporalZonedDateTimeBuiltins {
             }
             return;
         }
+        validateRoundingIncrementForDuration(increment, unit);
+    }
+
+    // until()/since() round a computed Duration rather than a wall-clock reading, so "day" has no
+    // natural cycle length to divide evenly into and any increment in [1, 1e9] is valid; time units
+    // keep the same bounded-divisor rule as round()/toString().
+    private static void validateRoundingIncrementForDuration(long increment, Unit unit) {
+        if (unit == Unit.DAY) {
+            return;
+        }
         final var maximum = switch (unit) {
             case HOUR -> 24;
             case MINUTE, SECOND -> 60;
@@ -671,13 +699,32 @@ public final class TemporalZonedDateTimeBuiltins {
 
     // withCalendar only validates the argument in ISO-only mode - it is otherwise an identity op.
     private static JsValue withCalendar(JsTemporalZonedDateTime receiver, JsValue calendarArg, InterpreterOps ops) {
-        requireIso8601(JsCoercion.toStr(calendarArg, ops));
+        requireCalendarString(calendarArg);
         return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(), receiver.zone(),
                 receiver.timeZoneId());
     }
 
+    // Property-bag `calendar` field: accepts a bare identifier or a full ISO string carrying (or
+    // defaulting) a u-ca annotation.
+    private static void requireValidCalendarField(JsValue obj, InterpreterOps ops) {
+        final var calendarValue = ops.getMember(obj, new JsString("calendar"));
+        if (calendarValue instanceof JsUndefined || calendarValue instanceof JsTemporalPlainDate
+                || calendarValue instanceof JsTemporalPlainDateTime || calendarValue instanceof JsTemporalPlainMonthDay
+                || calendarValue instanceof JsTemporalPlainYearMonth
+                || calendarValue instanceof JsTemporalZonedDateTime) {
+            return;
+        }
+        if (!(calendarValue instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
+        }
+        TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
+    }
+
     private static JsValue withTimeZone(JsTemporalZonedDateTime receiver, JsValue timeZoneArg, InterpreterOps ops) {
-        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneArg, ops));
+        if (!(timeZoneArg instanceof JsString s)) {
+            throw new TypeErrorException("timeZone must be a string");
+        }
+        final var timeZoneId = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
         return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(), zoneOf(timeZoneId),
                 timeZoneId);
     }
@@ -767,12 +814,23 @@ public final class TemporalZonedDateTimeBuiltins {
             return fields;
         }
         if (InterpreterUtils.isObjectLike(value)) {
-            final var fields = new DurationFields(durationFieldOrZero(value, "years", ops),
-                    durationFieldOrZero(value, "months", ops), durationFieldOrZero(value, "weeks", ops),
-                    durationFieldOrZero(value, "days", ops), durationFieldOrZero(value, "hours", ops),
-                    durationFieldOrZero(value, "minutes", ops), durationFieldOrZero(value, "seconds", ops),
-                    durationFieldOrZero(value, "milliseconds", ops), durationFieldOrZero(value, "microseconds", ops),
-                    durationFieldOrZero(value, "nanoseconds", ops));
+            final var years = readDurationField(value, "years", ops);
+            final var months = readDurationField(value, "months", ops);
+            final var weeks = readDurationField(value, "weeks", ops);
+            final var days = readDurationField(value, "days", ops);
+            final var hours = readDurationField(value, "hours", ops);
+            final var minutes = readDurationField(value, "minutes", ops);
+            final var seconds = readDurationField(value, "seconds", ops);
+            final var milliseconds = readDurationField(value, "milliseconds", ops);
+            final var microseconds = readDurationField(value, "microseconds", ops);
+            final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+            if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
+                    && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
+                throw new TypeErrorException("Duration-like object must contain at least one recognized property");
+            }
+            final var fields = new DurationFields(orZeroDuration(years), orZeroDuration(months), orZeroDuration(weeks),
+                    orZeroDuration(days), orZeroDuration(hours), orZeroDuration(minutes), orZeroDuration(seconds),
+                    orZeroDuration(milliseconds), orZeroDuration(microseconds), orZeroDuration(nanoseconds));
             DurationMath.sign(fields);
             return fields;
         }
@@ -780,16 +838,20 @@ public final class TemporalZonedDateTimeBuiltins {
                 "Expected a Temporal.Duration, an ISO 8601 duration string, or a duration-like object");
     }
 
-    private static double durationFieldOrZero(JsValue obj, String name, InterpreterOps ops) {
+    private static Double readDurationField(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
-            return 0.0;
+            return null;
         }
         final var number = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)) {
             throw new RangeErrorException(name + " must be an integer");
         }
         return number;
+    }
+
+    private static double orZeroDuration(Double value) {
+        return value == null ? 0.0 : value;
     }
 
     private static DurationFields negate(DurationFields d) {
@@ -890,7 +952,7 @@ public final class TemporalZonedDateTimeBuiltins {
                     : DurationMath.balanceFromTotalNanoseconds(
                             other.epochNanoseconds().subtract(receiver.epochNanoseconds()), largestUnit);
             if (smallestUnit != Unit.NANOSECOND || increment != 1) {
-                validateRoundingIncrement(increment, smallestUnit);
+                validateRoundingIncrementForDuration(increment, smallestUnit);
                 fields = DurationMath.roundDuration(fields, smallestUnit, increment, mode, largestUnit);
             }
         }

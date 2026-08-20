@@ -42,6 +42,45 @@ public class TemporalPlainYearMonthBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 2, 'iso8601', 30)"));
     }
 
+    // A non-string calendar argument is a TypeError, not a RangeError
+    @Test
+    public void test_constructor_calendar_non_string_is_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 6, 5)"));
+    }
+
+    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
+    // defaulting) a u-ca annotation, or a Temporal object (fast path)
+    @Test
+    public void test_from_fields_calendar_field_flexible() {
+        assertEquals("iso8601",
+                str("Temporal.PlainYearMonth.from({year: 2020, month: 6, calendar: 'iso8601'}).calendarId"));
+        assertEquals("iso8601", str("Temporal.PlainYearMonth.from({year: 2020, month: 6, "
+                + "calendar: '2020-06-15[u-ca=iso8601]'}).calendarId"));
+        assertEquals("iso8601", str("Temporal.PlainYearMonth.from({year: 2020, month: 6, "
+                + "calendar: new Temporal.PlainDate(2020, 1, 1)}).calendarId"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainYearMonth.from({year: 2020, month: 6, calendar: 'hebrew'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainYearMonth.from({year: 2020, month: 6, calendar: 5})"));
+    }
+
+    // ToTemporalYearMonth's fast paths for PlainDate/PlainDateTime/ZonedDateTime arguments read the
+    // year+month directly, forcing referenceISODay to 1
+    @Test
+    public void test_from_plain_date_plain_date_time_and_zoned_date_time_fast_paths() {
+        assertEquals("2020-06", str("Temporal.PlainYearMonth.from(new Temporal.PlainDate(2020, 6, 15)).toString()"));
+        assertEquals("2020-06",
+                str("Temporal.PlainYearMonth.from(new Temporal.PlainDateTime(2020, 6, 15, 10)).toString()"));
+        assertEquals("2020-06", str("Temporal.PlainYearMonth.from("
+                + "Temporal.ZonedDateTime.from('2020-06-15T10:00:00-04:00[America/New_York]')).toString()"));
+    }
+
+    // A duration-like object with none of the ten recognized properties present is a TypeError
+    @Test
+    public void test_add_rejects_duration_like_with_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 6).add({})"));
+    }
+
     @Test
     public void test_type_identity() {
         assertEquals("object", str("typeof new Temporal.PlainYearMonth(2020, 6)"));
@@ -159,7 +198,7 @@ public class TemporalPlainYearMonthBuiltinsTest {
     @Test
     public void test_string_forms_and_iso_fields() {
         assertEquals("2020-06", str("new Temporal.PlainYearMonth(2020, 6).toString()"));
-        assertEquals("2020-06[u-ca=iso8601]",
+        assertEquals("2020-06-01[u-ca=iso8601]",
                 str("new Temporal.PlainYearMonth(2020, 6).toString({calendarName: 'always'})"));
         assertEquals("2020-06", str("new Temporal.PlainYearMonth(2020, 6).toJSON()"));
         assertEquals("2020-06", str("new Temporal.PlainYearMonth(2020, 6).toLocaleString()"));

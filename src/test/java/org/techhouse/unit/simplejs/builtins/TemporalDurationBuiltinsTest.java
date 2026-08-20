@@ -99,6 +99,25 @@ public class TemporalDurationBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Duration().with(1)"));
     }
 
+    // with rejects a duration-like object with none of the ten recognized properties present
+    @Test
+    public void test_with_rejects_empty_object() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Duration(0, 0, 0, 1).with({})"));
+    }
+
+    // add/subtract reject an argument that is neither a Temporal.Duration, an ISO duration string,
+    // nor a duration-like object
+    @Test
+    public void test_add_rejects_non_duration_argument() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Duration(0, 0, 0, 1).add(42)"));
+    }
+
+    // Accessing an unrecognized member returns undefined rather than throwing
+    @Test
+    public void test_unrecognized_member_is_undefined() {
+        assertTrue(bool("typeof new Temporal.Duration(0, 0, 0, 1).notAMethod === 'undefined'"));
+    }
+
     // add/subtract combine calendar-independent fields
     @Test
     public void test_add_subtract() {
@@ -119,6 +138,61 @@ public class TemporalDurationBuiltinsTest {
     public void test_round_requires_options() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Duration(0, 0, 0, 1).round()"));
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Duration(0, 0, 0, 1).round({})"));
+    }
+
+    // round rejects a smallestUnit coarser than largestUnit
+    @Test
+    public void test_round_rejects_smallest_larger_than_largest() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.Duration(0, 0, 0, 0, 1).round({smallestUnit: 'years', largestUnit: 'hours'})"));
+    }
+
+    // round rejects a roundingIncrement outside [1, 1e9]
+    @Test
+    public void test_round_rejects_increment_out_of_range() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.Duration(0, 0, 0, 0, 1).round({smallestUnit: 'hours', roundingIncrement: 0})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run(
+                "new Temporal.Duration(0, 0, 0, 0, 1).round({smallestUnit: 'hours', roundingIncrement: 2000000000})"));
+    }
+
+    // relativeTo rejects a value that is neither a Temporal object, an ISO string, nor a
+    // fields-like object
+    @Test
+    public void test_relative_to_rejects_invalid_type() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.Duration(1).round({smallestUnit: 'months', relativeTo: 42})"));
+    }
+
+    // A relativeTo fields object's `calendar` field must be a string when not a Temporal object
+    @Test
+    public void test_relative_to_fields_calendar_non_string_is_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Duration(1).round({"
+                + "smallestUnit: 'months', relativeTo: {year: 2020, month: 1, day: 1, calendar: 5}})"));
+    }
+
+    // A relativeTo fields object's `calendar` field accepts a full ISO string carrying (or
+    // defaulting) a u-ca annotation, not just a bare identifier
+    @Test
+    public void test_relative_to_fields_calendar_full_iso_string() {
+        assertEquals(1, num("new Temporal.Duration(0, 0, 0, 364).round({smallestUnit: 'years', relativeTo: "
+                + "{year: 2020, month: 1, day: 1, calendar: '2020-06-15[u-ca=iso8601]'}}).years"));
+    }
+
+    // A relativeTo fields object's `timeZone` field must be a string
+    @Test
+    public void test_relative_to_fields_time_zone_non_string_is_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Duration(1).round({"
+                + "smallestUnit: 'months', relativeTo: {year: 2020, month: 1, day: 1, timeZone: 5}})"));
+    }
+
+    // A relativeTo fields object's `monthCode` must match the "M" + two-digit-month shape
+    @Test
+    public void test_relative_to_fields_invalid_month_code() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Duration(1).round({"
+                + "smallestUnit: 'months', relativeTo: {year: 2020, monthCode: 'X01', day: 1}})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Duration(1).round({"
+                + "smallestUnit: 'months', relativeTo: {year: 2020, monthCode: 'M13', day: 1}})"));
     }
 
     // round to a unit rounds per roundingMode (default halfExpand)
@@ -220,8 +294,10 @@ public class TemporalDurationBuiltinsTest {
 
     // A seconds component with more than 9 fractional digits truncates rather than rounds
     @Test
-    public void test_from_string_truncates_excess_fraction_digits() {
-        assertEquals("PT1.123456789S", str("Temporal.Duration.from('PT1.123456789999S').toString()"));
+    public void test_from_string_rejects_excess_fraction_digits() {
+        // TemporalDecimalFraction is bounded to 1-9 digits; a 10th digit is a RangeError, not a
+        // value to silently truncate, per test262.
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.Duration.from('PT1.123456789999S')"));
     }
 
     // A seconds-looking component with no trailing designator, or a "." with no digits after it,

@@ -123,6 +123,16 @@ public class TemporalPlainTimeBuiltinsTest {
                 + "a !== b && a.equals(b)"));
     }
 
+    // ToTemporalTime's fast paths for PlainDateTime/ZonedDateTime arguments bypass the generic
+    // property-bag path entirely
+    @Test
+    public void test_from_plain_date_time_and_zoned_date_time_fast_paths() {
+        assertEquals("10:30:00",
+                str("Temporal.PlainTime.from(new Temporal.PlainDateTime(2020, 6, 15, 10, 30)).toString()"));
+        assertEquals("10:00:00", str("Temporal.PlainTime.from("
+                + "Temporal.ZonedDateTime.from('2020-06-15T10:00:00-04:00[America/New_York]')).toString()"));
+    }
+
     @Test
     public void test_from_object_default_overflow_constrains() {
         assertEquals(23, num("Temporal.PlainTime.from({hour: 25}).hour"));
@@ -425,5 +435,27 @@ public class TemporalPlainTimeBuiltinsTest {
     @Test
     public void test_add_requires_object_duration() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add(5)"));
+    }
+
+    // add()/subtract() now also accept a real Temporal.Duration instance or an ISO 8601 duration
+    // string, not just a plain duration-like object
+    @Test
+    public void test_add_accepts_duration_instance_and_string() {
+        assertEquals("03:00:00", str("new Temporal.PlainTime(1).add(Temporal.Duration.from({hours: 2})).toString()"));
+        assertEquals("03:00:00", str("new Temporal.PlainTime(1).add('PT2H').toString()"));
+        assertEquals("23:00:00", str("new Temporal.PlainTime(1).subtract('PT2H').toString()"));
+    }
+
+    // A date-unit carry (days and above) from the duration argument is silently discarded, not
+    // rejected, since PlainTime wraps around 24 hours with no date component
+    @Test
+    public void test_add_discards_date_unit_carry() {
+        assertEquals("01:00:00", str("new Temporal.PlainTime(1).add({days: 5}).toString()"));
+    }
+
+    // A duration-like object with none of the ten recognized properties present is a TypeError
+    @Test
+    public void test_add_rejects_duration_like_with_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({})"));
     }
 }

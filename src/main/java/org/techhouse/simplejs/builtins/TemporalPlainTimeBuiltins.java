@@ -23,6 +23,7 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalDuration;
 import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -215,6 +216,15 @@ public final class TemporalPlainTimeBuiltins {
         if (item instanceof JsTemporalPlainTime time) {
             return new JsTemporalPlainTime(time.getFields());
         }
+        // ToTemporalTime's fast paths for other Temporal types carrying an ISO time: a PlainDateTime's
+        // time fields are taken directly, and a ZonedDateTime's via the zone's local wall-clock
+        // reading - both bypass the generic property-bag path entirely (no Get calls on the argument).
+        if (item instanceof JsTemporalPlainDateTime dt) {
+            return new JsTemporalPlainTime(dt.time());
+        }
+        if (item instanceof JsTemporalZonedDateTime zdt) {
+            return new JsTemporalPlainTime(zdt.isoFieldsAtLocal().time());
+        }
         if (InterpreterUtils.isObjectLike(item)) {
             return fromTimeLikeObject(item, overflow, ops);
         }
@@ -330,34 +340,67 @@ public final class TemporalPlainTimeBuiltins {
         }
     }
 
-    // add/subtract wrap around 24 hours per spec (PlainTime has no date, so any day carry is
-    // discarded) - the duration argument duck-types hours..nanoseconds off any object (a real
-    // Temporal.Duration once it lands, or a plain duration-like object today).
+    // add/subtract wrap around 24 hours per spec (PlainTime has no date, so any date-unit carry from
+    // the duration argument is silently discarded, not rejected) - ToTemporalDuration accepts a real
+    // Temporal.Duration, an ISO 8601 duration string, or a plain duration-like object.
     private static JsValue addOrSubtract(JsTemporalPlainTime receiver, JsValue durationLike, int sign,
             InterpreterOps ops) {
-        if (!InterpreterUtils.isObjectLike(durationLike)) {
-            throw new TypeErrorException("Duration-like value must be an object");
-        }
-        final var durationFields = new DurationFields(0, 0, 0, 0, sign * numberField(durationLike, "hours", ops),
-                sign * numberField(durationLike, "minutes", ops), sign * numberField(durationLike, "seconds", ops),
-                sign * numberField(durationLike, "milliseconds", ops),
-                sign * numberField(durationLike, "microseconds", ops),
-                sign * numberField(durationLike, "nanoseconds", ops));
-        DurationMath.sign(durationFields);
+        final var duration = toDurationFields(durationLike, ops);
+        final var durationFields = new DurationFields(0, 0, 0, 0, sign * duration.hours(), sign * duration.minutes(),
+                sign * duration.seconds(), sign * duration.milliseconds(), sign * duration.microseconds(),
+                sign * duration.nanoseconds());
         final var total = toNanosOfDay(receiver.getFields()).add(toDurationNanos(durationFields)).mod(NANOS_PER_DAY);
         return new JsTemporalPlainTime(fromNanosOfDay(total.longValueExact()));
     }
 
-    private static double numberField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = member(obj, name, ops);
+    private static DurationFields toDurationFields(JsValue value, InterpreterOps ops) {
+        if (value instanceof JsTemporalDuration duration) {
+            return duration.getFields();
+        }
+        if (value instanceof JsString s) {
+            return TemporalParser.parseDuration(s.getValue());
+        }
+        if (!InterpreterUtils.isObjectLike(value)) {
+            throw new TypeErrorException("Invalid Temporal.Duration-like value");
+        }
+        final var years = readDurationField(value, "years", ops);
+        final var months = readDurationField(value, "months", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var days = readDurationField(value, "days", ops);
+        final var hours = readDurationField(value, "hours", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var microseconds = readDurationField(value, "microseconds", ops);
+        final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
+                && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
+            throw new TypeErrorException("Duration-like object must contain at least one recognized property");
+        }
+        final var fields = new DurationFields(orZeroDuration(years), orZeroDuration(months), orZeroDuration(weeks),
+                orZeroDuration(days), orZeroDuration(hours), orZeroDuration(minutes), orZeroDuration(seconds),
+                orZeroDuration(milliseconds), orZeroDuration(microseconds), orZeroDuration(nanoseconds));
+        DurationMath.sign(fields);
+        return fields;
+    }
+
+    // ToIntegerIfIntegral: a Duration-like field must already be an integer (no truncation). A
+    // missing property returns null (rather than defaulting to 0 here) so the caller can reject a
+    // duration-like value that has none of the ten recognized properties present.
+    private static Double readDurationField(JsValue obj, String name, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
-            return 0;
+            return null;
         }
         final var number = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)) {
             throw new RangeErrorException(name + " must be an integer");
         }
         return number;
+    }
+
+    private static double orZeroDuration(Double value) {
+        return value == null ? 0.0 : value;
     }
 
     private static BigInteger toDurationNanos(DurationFields f) {
