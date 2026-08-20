@@ -34,7 +34,11 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTemporalDuration;
 import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
+import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
+import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
+import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -75,6 +79,10 @@ public final class Intrinsics {
     private final JsObject temporalPlainTimeProto;
     private final JsObject temporalPlainDateProto;
     private final JsObject temporalInstantProto;
+    private final JsObject temporalPlainYearMonthProto;
+    private final JsObject temporalPlainMonthDayProto;
+    private final JsObject temporalPlainDateTimeProto;
+    private final JsObject temporalZonedDateTimeProto;
     private final JsObject promiseProto;
     private final JsObject iteratorProto;
     private final JsObject asyncIteratorProto;
@@ -177,6 +185,24 @@ public final class Intrinsics {
         temporalInstantProto = prototypeOf(TemporalInstantBuiltins.NAMES, "Temporal.Instant.prototype", (receiver,
                 name) -> TemporalInstantBuiltins.getMethod(requireTemporalInstant(receiver, name), name, ops));
         TemporalInstantBuiltins.installAccessors(temporalInstantProto);
+        temporalPlainYearMonthProto = prototypeOf(TemporalPlainYearMonthBuiltins.NAMES,
+                "Temporal.PlainYearMonth.prototype", (receiver, name) -> TemporalPlainYearMonthBuiltins
+                        .getMethod(requireTemporalPlainYearMonth(receiver, name), name, ops));
+        TemporalPlainYearMonthBuiltins.installAccessors(temporalPlainYearMonthProto);
+        defineToStringTag(temporalPlainYearMonthProto, "Temporal.PlainYearMonth");
+        temporalPlainMonthDayProto = prototypeOf(TemporalPlainMonthDayBuiltins.NAMES,
+                "Temporal.PlainMonthDay.prototype", (receiver, name) -> TemporalPlainMonthDayBuiltins
+                        .getMethod(requireTemporalPlainMonthDay(receiver, name), name, ops));
+        TemporalPlainMonthDayBuiltins.installAccessors(temporalPlainMonthDayProto);
+        defineToStringTag(temporalPlainMonthDayProto, "Temporal.PlainMonthDay");
+        temporalPlainDateTimeProto = prototypeOf(TemporalPlainDateTimeBuiltins.NAMES,
+                "Temporal.PlainDateTime.prototype", (receiver, name) -> TemporalPlainDateTimeBuiltins
+                        .getMethod(requireTemporalPlainDateTime(receiver, name), name, ops));
+        TemporalPlainDateTimeBuiltins.installAccessors(temporalPlainDateTimeProto);
+        temporalZonedDateTimeProto = prototypeOf(TemporalZonedDateTimeBuiltins.NAMES,
+                "Temporal.ZonedDateTime.prototype", (receiver, name) -> TemporalZonedDateTimeBuiltins
+                        .getMethod(requireTemporalZonedDateTime(receiver, name), name, ops));
+        TemporalZonedDateTimeBuiltins.installAccessors(temporalZonedDateTimeProto);
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -349,6 +375,8 @@ public final class Intrinsics {
         defineToStringTag(temporalDurationProto, "Temporal.Duration");
         defineToStringTag(temporalPlainDateProto, "Temporal.PlainDate");
         defineToStringTag(temporalInstantProto, "Temporal.Instant");
+        defineToStringTag(temporalPlainDateTimeProto, "Temporal.PlainDateTime");
+        defineToStringTag(temporalZonedDateTimeProto, "Temporal.ZonedDateTime");
         // %TypedArray%.prototype's tag is an accessor returning the *concrete* view's name, so
         // `Object.prototype.toString.call(new Int8Array())` reports Int8Array rather than a shared tag.
         final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> typedArrayTag(thisArg));
@@ -693,6 +721,10 @@ public final class Intrinsics {
             case JsTemporalPlainTime ignored -> temporalPlainTimeProto;
             case JsTemporalPlainDate ignored -> temporalPlainDateProto;
             case JsTemporalInstant ignored -> temporalInstantProto;
+            case JsTemporalPlainYearMonth ignored -> temporalPlainYearMonthProto;
+            case JsTemporalPlainMonthDay ignored -> temporalPlainMonthDayProto;
+            case JsTemporalPlainDateTime ignored -> temporalPlainDateTimeProto;
+            case JsTemporalZonedDateTime ignored -> temporalZonedDateTimeProto;
             case JsPromise ignored -> promiseProto;
             case JsGenerator ignored -> iteratorProto;
             case JsAsyncGenerator ignored -> asyncIteratorProto;
@@ -790,6 +822,22 @@ public final class Intrinsics {
 
     public JsObject temporalInstantProto() {
         return temporalInstantProto;
+    }
+
+    public JsObject temporalPlainYearMonthProto() {
+        return temporalPlainYearMonthProto;
+    }
+
+    public JsObject temporalPlainMonthDayProto() {
+        return temporalPlainMonthDayProto;
+    }
+
+    public JsObject temporalPlainDateTimeProto() {
+        return temporalPlainDateTimeProto;
+    }
+
+    public JsObject temporalZonedDateTimeProto() {
+        return temporalZonedDateTimeProto;
     }
 
     public JsObject promiseProto() {
@@ -1124,6 +1172,46 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("Temporal.Instant.prototype." + method, receiver);
+    }
+
+    private JsTemporalPlainYearMonth requireTemporalPlainYearMonth(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalPlainYearMonth yearMonth) {
+            return yearMonth;
+        }
+        if (unwrap(receiver) instanceof JsTemporalPlainYearMonth wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.PlainYearMonth.prototype." + method, receiver);
+    }
+
+    private JsTemporalPlainMonthDay requireTemporalPlainMonthDay(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalPlainMonthDay monthDay) {
+            return monthDay;
+        }
+        if (unwrap(receiver) instanceof JsTemporalPlainMonthDay wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.PlainMonthDay.prototype." + method, receiver);
+    }
+
+    private JsTemporalPlainDateTime requireTemporalPlainDateTime(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalPlainDateTime dt) {
+            return dt;
+        }
+        if (unwrap(receiver) instanceof JsTemporalPlainDateTime wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.PlainDateTime.prototype." + method, receiver);
+    }
+
+    private JsTemporalZonedDateTime requireTemporalZonedDateTime(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalZonedDateTime zdt) {
+            return zdt;
+        }
+        if (unwrap(receiver) instanceof JsTemporalZonedDateTime wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.ZonedDateTime.prototype." + method, receiver);
     }
 
     private JsArrayBuffer requireBuffer(JsValue receiver, String method) {

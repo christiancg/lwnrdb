@@ -39,6 +39,10 @@ public final class EJsonInterop {
             case JsTemporalPlainTime time -> new JsonString(time.toString());
             case JsTemporalPlainDate date -> new JsonString(date.toString());
             case JsTemporalInstant instant -> new JsonString(instant.toString());
+            case JsTemporalPlainYearMonth yearMonth -> new JsonString(yearMonth.toString());
+            case JsTemporalPlainMonthDay monthDay -> new JsonString(monthDay.toString());
+            case JsTemporalPlainDateTime dt -> new JsonString(dt.toString());
+            case JsTemporalZonedDateTime zdt -> new JsonString(zdt.toString());
             case JsMap ignored -> new JsonObject();
             case JsSet ignored -> new JsonObject();
             case JsTypedArray typed -> typedArrayToEjson(typed, visited);

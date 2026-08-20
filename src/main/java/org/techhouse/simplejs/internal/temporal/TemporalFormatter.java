@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import java.time.ZoneOffset;
+import java.util.Locale;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
 /**
@@ -57,6 +59,27 @@ public final class TemporalFormatter {
 
     public static String formatDate(Iso8601Fields date, CalendarName calendarName) {
         return formatDate(date) + formatCalendarAnnotation(calendarName);
+    }
+
+    // TemporalYearMonthToString: the "iso8601" calendar never appends the reference day, unlike a
+    // non-ISO calendar (out of scope for this engine - see the feature plan's scope-defining finding).
+    public static String formatYearMonth(Iso8601Fields yearMonth) {
+        return formatYear(yearMonth.year()) + "-" + pad2(yearMonth.month());
+    }
+
+    public static String formatYearMonth(Iso8601Fields yearMonth, CalendarName calendarName) {
+        return formatYearMonth(yearMonth) + formatCalendarAnnotation(calendarName);
+    }
+
+    // TemporalMonthDayToString: the reference year is only shown when the calendar annotation is
+    // forced on (showCalendar "always"/"critical") - otherwise (including "never") it stays hidden,
+    // since for the "iso8601" calendar the year plays no role in round-tripping a bare month-day.
+    public static String formatMonthDay(Iso8601Fields monthDay, CalendarName calendarName) {
+        final var monthDayText = pad2(monthDay.month()) + "-" + pad2(monthDay.day());
+        final var withYear = calendarName == CalendarName.ALWAYS || calendarName == CalendarName.CRITICAL
+                ? formatYear(monthDay.year()) + "-" + monthDayText
+                : monthDayText;
+        return withYear + formatCalendarAnnotation(calendarName);
     }
 
     public static String formatTime(IsoTimeFields time, Integer fractionalSecondDigits) {
@@ -188,7 +211,20 @@ public final class TemporalFormatter {
         return digits.substring(0, end);
     }
 
-    private static String formatCalendarAnnotation(CalendarName calendarName) {
+    // Shared by every Temporal type that renders a UTC offset (Instant, PlainDateTime, ZonedDateTime),
+    // replacing what used to be an identically duplicated private helper in each builtins class.
+    public static String formatOffset(ZoneOffset offset) {
+        final var totalSeconds = offset.getTotalSeconds();
+        final var sign = totalSeconds < 0 ? "-" : "+";
+        final var abs = Math.abs(totalSeconds);
+        final var hours = abs / 3600;
+        final var minutes = (abs % 3600) / 60;
+        final var seconds = abs % 60;
+        final var base = sign + String.format(Locale.US, "%02d:%02d", hours, minutes);
+        return seconds == 0 ? base : base + String.format(Locale.US, ":%02d", seconds);
+    }
+
+    public static String formatCalendarAnnotation(CalendarName calendarName) {
         return switch (calendarName) {
             case NEVER, AUTO -> "";
             case ALWAYS -> "[u-ca=iso8601]";

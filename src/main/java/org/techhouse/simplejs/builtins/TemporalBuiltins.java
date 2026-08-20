@@ -19,6 +19,21 @@ public final class TemporalBuiltins {
         installCtor(temporal, "PlainTime", TemporalPlainTimeBuiltins.create(ops), intrinsics.temporalPlainTimeProto());
         installCtor(temporal, "PlainDate", TemporalPlainDateBuiltins.create(ops), intrinsics.temporalPlainDateProto());
         installCtor(temporal, "Instant", TemporalInstantBuiltins.create(ops), intrinsics.temporalInstantProto());
+        installCtor(temporal, "PlainYearMonth", TemporalPlainYearMonthBuiltins.create(ops),
+                intrinsics.temporalPlainYearMonthProto());
+        installCtor(temporal, "PlainMonthDay", TemporalPlainMonthDayBuiltins.create(ops),
+                intrinsics.temporalPlainMonthDayProto());
+        installCtor(temporal, "PlainDateTime", TemporalPlainDateTimeBuiltins.create(ops),
+                intrinsics.temporalPlainDateTimeProto());
+        installCtor(temporal, "ZonedDateTime", TemporalZonedDateTimeBuiltins.create(ops),
+                intrinsics.temporalZonedDateTimeProto());
+        final var now = new JsObject();
+        now.setProto(intrinsics.objectProto());
+        TemporalNowBuiltins.install(now, ops);
+        Intrinsics.defineNamespaceTag(now, "Temporal.Now");
+        temporal.defineValue("Now", now);
+        temporal.setFlags("Now", new JsObject.PropertyFlags(true, false, true));
+        Intrinsics.defineNamespaceTag(temporal, "Temporal");
         global.declareBuiltin("Temporal", temporal);
         return temporal;
     }

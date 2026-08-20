@@ -706,7 +706,9 @@ answer differently across the two supported build JDKs for code points and scrip
 `built-ins/RegExp/property-escapes/generated/` — exhaustive per-code-point assertions generated
 from one UCD version — is excluded from the conformance gate rather than baselined; the
 hand-written property-escapes tests, which cover the translation and validation this class
-actually performs, stay measured. `Intl` and `Temporal` remain out of scope.
+actually performs, stay measured. `Intl` remains out of scope; `Temporal` is implemented (see
+*Temporal API* below) for the ISO 8601 calendar only, which is what `Intl`'s absence rules out for
+every other calendar system.
 
 **Automatic Semicolon Insertion.** The lexer records, parallel to the token stream, a
 `newlineBefore` flag per token (`Lexer.LexResult.newlineBefore`) — true when the trivia skipped
@@ -1118,7 +1120,13 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   intrinsics per script, which the per-`Interpreter` `Intrinsics` model does not provide.
 - **`Intl`** — the internationalization API is enormous; only ad-hoc `toLocaleString`/
   `localeCompare` defaults (backed by `java.text`) are provided.
-- **`Temporal`** — the date/time proposal is out of scope; `Date` is the only temporal type.
+- **`Temporal`** — implemented (see *Temporal API* below) for the ISO 8601 calendar only. Not
+  supported: non-ISO calendars (`gregory`/`hebrew`/`japanese`/etc. — delegated to the `Intl`
+  exclusion above, since every non-ISO-calendar test262 case lives under the already-excluded
+  `intl402/Temporal/` tree), `relativeTo`-based calendar-unit (year/month/week) duration balancing —
+  `Temporal.Duration`/`ZonedDateTime`/`PlainDateTime` operations that mix calendar and exact-time
+  units throw a `RangeError` asking for a `relativeTo` date instead of performing the balance — and
+  leap seconds (parsing a `:60` seconds component is rejected, per spec).
 - **`SharedArrayBuffer` + `Atomics`** (including `Atomics.pause`) — shared-memory multithreading is
   meaningless in a single-threaded per-connection VM.
 - **Immutable `ArrayBuffer`** (`transferToImmutable`/`sliceToImmutable`) — the proposal is not in the
@@ -1362,6 +1370,89 @@ defects, plus two more that a correct fix immediately unmasked:
   `this` was itself `undefined`, so a test comparing a passed-in `this` against `undefined` passed
   for the wrong reason. `Environment` gained a `writable` flag on bindings (`declareNonWritableBuiltin`,
   enforced in `assign`), and the five array methods now thread an actual `thisArg`.
+
+### Temporal API (2026-08-20)
+
+`Temporal` was the largest single gap in test262 conformance before this work (`built-ins/Temporal/`
+alone is around 4,600 tests) and shipped in nine sub-phases (T0 shared infrastructure through T8
+`Temporal.Now` + this closeout), following the exact "new value type → prototype → builtins →
+wiring" pattern every prior `simplejs/` addition uses (`JsDate`/`DateBuiltins`, `JsMap`/
+`MapBuiltins`, etc.) — additive to `simplejs/` only, no changes anywhere outside it. Scope is the
+`"iso8601"` calendar exclusively: every `built-ins/Temporal/**` test262 case only ever exercises
+`iso8601` (asserting `calendarId === "iso8601"`), while all non-ISO calendar arithmetic lives under
+the already-excluded `intl402/Temporal/` tree, so this mirrors the existing `Intl` exclusion
+rationale rather than fighting it.
+
+- **Shared infrastructure** (`internal/temporal/`, no `JsValue` involvement, unit-tested
+  standalone): `IsoCalendar` (leap years, days-in-month, `RegulateOverflow` reject/constrain,
+  year/month/day balancing), `TemporalParser` (a hand-written recursive-descent scanner for the
+  Temporal grammar — RFC 9557 / ISO 8601 extended with `[u-ca=iso8601]`/`[+01:00]` annotations —
+  covering `PlainDate`/`PlainTime`/`PlainDateTime`/`Duration`/`Instant`/`ZonedDateTime`/time-zone
+  identifier strings; malformed input is a `RangeError`, per spec, not a `SyntaxError`),
+  `TemporalFormatter` (the inverse canonical-string serializers, parameterized by
+  `fractionalSecondDigits`/`smallestUnit`/`roundingMode`/`calendarName`/`timeZoneName`/`offset`),
+  `DurationMath` (sign determination, balancing, and rounding against a `RoundingMode`/`Unit` pair
+  shared by every type's `round`/`since`/`until`), and the `Iso8601Fields`/`IsoTimeFields` plain
+  data records every type wraps.
+- **Eight new `values/` classes** (`JsTemporalPlainDate`, `PlainTime`, `PlainDateTime`,
+  `PlainYearMonth`, `PlainMonthDay`, `Duration`, `Instant`, `ZonedDateTime`), each a bare data
+  carrier mirroring `JsDate`'s shape — all arithmetic/option handling lives in the matching
+  `builtins/TemporalXBuiltins` class instead. `JsTemporalInstant`/`JsTemporalZonedDateTime` hold
+  exact time as a `(long epochSeconds, int nanoAdjustment)` pair rather than a `double` millis field
+  like `JsDate`, since a double's 53-bit mantissa cannot hold the nanosecond precision Temporal
+  requires; `epochNanoseconds()` materializes the spec's signed-nanoseconds representation as a
+  `BigInteger`/`JsBigInt` only at the API boundary. `JsTemporalZonedDateTime` additionally composes a
+  `java.time.ZoneId` (the JDK's bundled IANA tzdb, the same one `JsDate`/`DateBuiltins` already
+  reach into) plus the original time-zone identifier text, since `ZoneId` normalizes an offset
+  identifier's spelling and a `toString()` round trip needs the source text.
+- **Eight new `builtins/` classes**, each shaped like `DateBuiltins`: a `NAMES` list re-exported
+  through `Intrinsics.prototypeOf` (the same delegating-wrapper mechanism `Date.prototype`/
+  `Map.prototype` use, so e.g. `Temporal.PlainDate.prototype.toString = f` works normally); a
+  `create(ops)` constructor that throws `TypeError` when called without `new` (every Temporal
+  constructor is deliberately not callable as a plain function, unlike `Date`); a `getMethod`
+  dispatcher for prototype methods; and per-instance field accessors (`year`, `hour`,
+  `calendarId`, …) installed once on the shared prototype as real getter accessor properties
+  (`JsObject.defineAccessor`), each brand-checking its receiver before reading internal state.
+  `valueOf` throws `TypeError` unconditionally on every type (intentional upstream spec design to
+  stop silent cross-calendar `<`/`+` comparisons), which makes the ops-aware `toNumber` path throw
+  for free through the existing `OrdinaryToPrimitive` machinery. Each prototype carries a real
+  `[Symbol.toStringTag]` (e.g. `"Temporal.PlainDate"`), consulted by `Object.prototype.toString`
+  ahead of the brand-table fallback, mirroring `Map`/`Set`/`Promise`.
+- **`Temporal` is a namespace object whose own properties are themselves constructors**
+  (`builtins/TemporalBuiltins`) — a pattern not used anywhere else in the engine (`Math`/`JSON`/
+  `Reflect` are namespaces of functions only; `Number`/`Date`/etc. are constructors that are also
+  namespaces of statics, but never a namespace *containing other constructors*). `installCtor`
+  retargets `GlobalScope.constructor()`'s usual logic (`setPrototype`/`markConstructor`/
+  `proto.constructor` back-link) onto a `JsObject` property instead of an `Environment` binding.
+  `Temporal.Now` (T8, this phase) is installed differently, as a plain object of functions —
+  structurally the same as `Math`/`JSON`/`Reflect` — via `builtins/TemporalNowBuiltins.install`:
+  `instant()`, `plainDateISO`/`plainTimeISO`/`plainDateTimeISO`/`zonedDateTimeISO([temporalTimeZoneLike])`,
+  and `timeZoneId()`, all reading `System.currentTimeMillis()`/`ZoneId.systemDefault()` — the same
+  wall-clock source `Date.now()` already uses, deliberately not `java.time.Instant.now()`'s finer
+  platform-dependent precision, since consistency with the engine's one time source matters more
+  than sub-millisecond precision the JVM is not guaranteed to reliably provide. An omitted
+  `temporalTimeZoneLike` argument defaults to `ZoneId.systemDefault()`; a `Temporal.ZonedDateTime`
+  argument reuses its own time zone (`ToTemporalTimeZoneIdentifier`); anything else is coerced to a
+  string and parsed as a time-zone identifier. Both `Temporal` and `Temporal.Now` carry their own
+  `[Symbol.toStringTag]` (`"Temporal"` / `"Temporal.Now"`) via the same `defineNamespaceTag` helper
+  `Math`/`JSON`/`Reflect` use, closing the corpus's two-test `toStringTag` area.
+- **Real cross-type upgrades landed as later phases unblocked earlier ones**: `Temporal.Instant.
+  prototype.toZonedDateTimeISO` and `Temporal.PlainDateTime.prototype.toZonedDateTime` return a real
+  `Temporal.ZonedDateTime` instance once T7 merged (both were built before `ZonedDateTime` existed
+  and started out returning a plain descriptive object); `Temporal.PlainDateTime.prototype.
+  toPlainYearMonth`/`toPlainMonthDay` return real instances once T4 merged. One narrow gap was never
+  retrofitted the same way: `Temporal.PlainDate.prototype.toZonedDateTime` (built in T3, before
+  `Instant`/`ZonedDateTime` existed) still returns a plain `{year, month, day, timeZoneId,
+  calendarId}` object rather than a real `Temporal.ZonedDateTime` — a known, narrow divergence from
+  the otherwise-complete surface.
+- **Wiring touch points**, one arm each per type, mirroring the existing `JsDate` entries:
+  `MemberEvaluator.getMember` (a thin `intrinsicMember` passthrough per type, since state access
+  goes through the shared-prototype accessor mechanism above), `Intrinsics` (a proto field +
+  `prototypeOf` call + `protoFor` switch arm + `[Symbol.toStringTag]` per type), `EJsonInterop.
+  toEjson` (each type serializes to a plain `JsonString` of its `toString()`, exactly like `JsDate` —
+  no new custom EJson type, so a Temporal value saved via `db.save(...)` becomes a plain string
+  field), and `JsCoercion.toStrDataOnly` (one string-conversion arm per type; `toNumberDataOnly`
+  needs none, since every type's `valueOf` already throws).
 
 ## Testing conventions
 

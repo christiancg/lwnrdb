@@ -6,7 +6,6 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Locale;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -22,6 +21,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalInstant;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -36,9 +36,8 @@ import org.techhouse.simplejs.values.JsValue;
  * type lands in a different, concurrently-developed phase; a real {@code Temporal.Duration} instance
  * satisfies this duck type once it exists. {@code until}/{@code since} return the same kind of plain
  * duration-shaped object for the same reason (a genuine {@code Temporal.Duration} construction can
- * replace it once that type is merged). {@link #toZonedDateTimeISO} is a documented narrow gap for
- * the same reason: {@code Temporal.ZonedDateTime} (phase T7) does not exist yet, so it returns a
- * plain object approximation instead of a real instance.
+ * replace it once that type is merged). {@link #toZonedDateTimeISO} returns a real {@code
+ * Temporal.ZonedDateTime} (phase T7).
  */
 public final class TemporalInstantBuiltins {
     public static final List<String> NAMES = List.of("add", "subtract", "until", "since", "round", "equals", "toString",
@@ -317,7 +316,7 @@ public final class TemporalInstantBuiltins {
         final var zone = timeZoneOption(options, ops);
         final var offset = zone == null ? ZoneOffset.UTC : zone.getRules().getOffset(instant.toJavaInstant());
         final var fields = instant.isoFieldsAt(offset);
-        final var offsetText = zone == null ? "Z" : formatOffset(offset);
+        final var offsetText = zone == null ? "Z" : TemporalFormatter.formatOffset(offset);
         return new JsString(TemporalFormatter.formatDate(fields.date()) + "T"
                 + TemporalFormatter.formatTime(fields.time(), fractionDigits) + offsetText);
     }
@@ -369,41 +368,14 @@ public final class TemporalInstantBuiltins {
         }
     }
 
-    private static String formatOffset(ZoneOffset offset) {
-        final var totalSeconds = offset.getTotalSeconds();
-        final var sign = totalSeconds < 0 ? "-" : "+";
-        final var abs = Math.abs(totalSeconds);
-        final var hours = abs / 3600;
-        final var minutes = (abs % 3600) / 60;
-        final var seconds = abs % 60;
-        final var base = sign + String.format(Locale.US, "%02d:%02d", hours, minutes);
-        return seconds == 0 ? base : base + String.format(Locale.US, ":%02d", seconds);
-    }
-
-    // Temporal.ZonedDateTime (phase T7) does not exist in this phase, so this is a documented,
-    // narrower approximation: a plain object exposing the same epoch/offset/id data a real
-    // Temporal.ZonedDateTime would, rather than a genuine instance of that (not-yet-built) type.
+    // Temporal.ZonedDateTime (phase T7) - a real instance, fixed "iso8601" calendar per this method's
+    // own name.
     private static JsValue toZonedDateTimeISO(JsTemporalInstant receiver, JsValue timeZoneArg, InterpreterOps ops) {
         if (timeZoneArg == null || timeZoneArg instanceof JsUndefined) {
             throw new TypeErrorException("Temporal.Instant.prototype.toZonedDateTimeISO requires a timeZone argument");
         }
-        final var id = JsCoercion.toStr(timeZoneArg, ops);
-        final var zone = zoneOf(id);
-        final var offset = zone.getRules().getOffset(receiver.toJavaInstant());
-        final var fields = receiver.isoFieldsAt(offset);
-        final var offsetText = formatOffset(offset);
-        final var result = new JsObject();
-        result.set("epochMilliseconds", new JsNumber(receiver.epochMillisecondsLong()));
-        result.set("epochNanoseconds", new JsBigInt(receiver.epochNanoseconds()));
-        result.set("timeZoneId", new JsString(id));
-        result.set("calendarId", new JsString("iso8601"));
-        result.set("offset", new JsString(offsetText));
-        result.set("toString",
-                new JsNativeFunction("toString",
-                        (_, _) -> new JsString(TemporalFormatter.formatZonedDateTime(fields.date(), fields.time(), null,
-                                offsetText, id, TemporalFormatter.TimeZoneNameOption.AUTO,
-                                TemporalFormatter.OffsetOption.AUTO, TemporalFormatter.CalendarName.AUTO))));
-        return result;
+        final var id = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneArg, ops));
+        return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(), zoneOf(id), id);
     }
 
     private static long incrementOption(JsObject options, InterpreterOps ops) {

@@ -64,6 +64,97 @@ public final class TemporalParser {
         return result;
     }
 
+    public record ParsedYearMonth(Iso8601Fields date, String calendar) {
+    }
+
+    public record ParsedMonthDay(Iso8601Fields date, String calendar) {
+    }
+
+    // TemporalYearMonthString accepts either the reduced "YYYY-MM" form (referenceISODay defaults to
+    // 1, per CreateTemporalYearMonth) or a full date/date-time string (referenceISODay is whatever day
+    // it carries) - the reduced form is tried first and backtracks on failure rather than needing a
+    // separate grammar production.
+    public static ParsedYearMonth parseYearMonth(String input) {
+        final var cursor = new Cursor(input);
+        final var reduced = tryParseReducedYearMonth(cursor);
+        if (reduced != null) {
+            final var annotations = parseAnnotations(cursor);
+            requireEnd(cursor);
+            return new ParsedYearMonth(reduced, annotations.calendar);
+        }
+        cursor.pos = 0;
+        final var full = parseDateTimeCore(cursor);
+        requireEnd(cursor);
+        return new ParsedYearMonth(full.date(), full.calendar());
+    }
+
+    // TemporalMonthDayString accepts either the reduced "MM-DD"/"--MM-DD" form (referenceISOYear
+    // defaults to 1972, a leap year - so "02-29" parses - per CreateTemporalMonthDay) or a full
+    // date/date-time string (referenceISOYear is whatever year it carries).
+    public static ParsedMonthDay parseMonthDay(String input) {
+        final var cursor = new Cursor(input);
+        final var reduced = tryParseReducedMonthDay(cursor);
+        if (reduced != null) {
+            final var annotations = parseAnnotations(cursor);
+            requireEnd(cursor);
+            return new ParsedMonthDay(reduced, annotations.calendar);
+        }
+        cursor.pos = 0;
+        final var full = parseDateTimeCore(cursor);
+        requireEnd(cursor);
+        return new ParsedMonthDay(full.date(), full.calendar());
+    }
+
+    private static Iso8601Fields tryParseReducedYearMonth(Cursor cursor) {
+        final var savedPos = cursor.pos;
+        try {
+            var sign = 1;
+            var expanded = false;
+            if (!cursor.atEnd() && isSign(cursor.peek())) {
+                sign = cursor.peek() == '+' ? 1 : -1;
+                expanded = true;
+                cursor.advance();
+            }
+            final var year = sign * readDigits(cursor, expanded ? 6 : 4);
+            cursor.expect('-');
+            final var month = readDigits(cursor, 2);
+            if (!cursor.atEnd() && cursor.peek() == '-') {
+                cursor.pos = savedPos;
+                return null;
+            }
+            return IsoCalendar.regulateDate(year, month, 1, RegulateOverflow.REJECT);
+        } catch (RangeErrorException e) {
+            cursor.pos = savedPos;
+            return null;
+        }
+    }
+
+    private static Iso8601Fields tryParseReducedMonthDay(Cursor cursor) {
+        final var savedPos = cursor.pos;
+        try {
+            if (!cursor.atEnd() && cursor.peek() == '-') {
+                if (cursor.pos + 1 < cursor.source.length() && cursor.source.charAt(cursor.pos + 1) == '-') {
+                    cursor.advance();
+                    cursor.advance();
+                } else {
+                    cursor.pos = savedPos;
+                    return null;
+                }
+            }
+            final var month = readDigits(cursor, 2);
+            cursor.expect('-');
+            final var day = readDigits(cursor, 2);
+            if (!cursor.atEnd() && cursor.peek() == '-') {
+                cursor.pos = savedPos;
+                return null;
+            }
+            return IsoCalendar.regulateDate(1972, month, day, RegulateOverflow.REJECT);
+        } catch (RangeErrorException e) {
+            cursor.pos = savedPos;
+            return null;
+        }
+    }
+
     public static String parseTimeZoneIdentifier(String input) {
         final var cursor = new Cursor(input);
         if (!cursor.atEnd() && isSign(cursor.peek())) {

@@ -170,11 +170,12 @@ public class TemporalInstantBuiltinsTest {
                 "Object.getOwnPropertyDescriptor(Temporal.Instant.prototype," + " 'epochMilliseconds').get.call({})"));
     }
 
-    // toZonedDateTimeISO is a documented narrow approximation (no real Temporal.ZonedDateTime yet)
+    // toZonedDateTimeISO returns a real Temporal.ZonedDateTime (phase T7)
     @Test
-    public void test_to_zoned_date_time_iso_approximation() {
+    public void test_to_zoned_date_time_iso_real_instance() {
         assertEquals("UTC", str("new Temporal.Instant(0n).toZonedDateTimeISO('UTC').timeZoneId"));
         assertEquals("iso8601", str("new Temporal.Instant(0n).toZonedDateTimeISO('UTC').calendarId"));
+        assertTrue(bool("new Temporal.Instant(0n).toZonedDateTimeISO('UTC') instanceof Temporal.ZonedDateTime"));
     }
 
     // toZonedDateTimeISO requires a timeZone argument
@@ -183,7 +184,7 @@ public class TemporalInstantBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).toZonedDateTimeISO()"));
     }
 
-    // toZonedDateTimeISO's approximation carries a working toString() rendering offset + bracketed id
+    // toZonedDateTimeISO's result carries a working toString() rendering offset + bracketed id
     @Test
     public void test_to_zoned_date_time_iso_to_string() {
         assertEquals("1970-01-01T00:00:00+00:00[UTC]",
