@@ -48,6 +48,7 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsTypedArray;
@@ -303,6 +304,7 @@ public final class MemberEvaluator {
             case JsTemporalDuration duration -> intrinsicMember(duration, key);
             case JsTemporalPlainTime time -> intrinsicMember(time, key);
             case JsTemporalPlainDate date -> intrinsicMember(date, key);
+            case JsTemporalInstant instant -> intrinsicMember(instant, key);
             case JsTypedArray typed -> typedArrayMember(typed, key);
             case JsArrayBuffer buffer -> bufferMember(buffer, key);
             case JsDataView view -> dataViewMember(view, key);

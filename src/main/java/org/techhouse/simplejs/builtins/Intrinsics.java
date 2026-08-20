@@ -32,6 +32,7 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsTypedArray;
@@ -73,6 +74,7 @@ public final class Intrinsics {
     private final JsObject temporalDurationProto;
     private final JsObject temporalPlainTimeProto;
     private final JsObject temporalPlainDateProto;
+    private final JsObject temporalInstantProto;
     private final JsObject promiseProto;
     private final JsObject iteratorProto;
     private final JsObject asyncIteratorProto;
@@ -172,6 +174,9 @@ public final class Intrinsics {
         temporalPlainDateProto = prototypeOf(TemporalPlainDateBuiltins.NAMES, "Temporal.PlainDate.prototype", (receiver,
                 name) -> TemporalPlainDateBuiltins.getMethod(requireTemporalPlainDate(receiver, name), name, ops));
         TemporalPlainDateBuiltins.installAccessors(temporalPlainDateProto);
+        temporalInstantProto = prototypeOf(TemporalInstantBuiltins.NAMES, "Temporal.Instant.prototype", (receiver,
+                name) -> TemporalInstantBuiltins.getMethod(requireTemporalInstant(receiver, name), name, ops));
+        TemporalInstantBuiltins.installAccessors(temporalInstantProto);
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -343,6 +348,7 @@ public final class Intrinsics {
         defineToStringTag(asyncDisposableStackProto, "AsyncDisposableStack");
         defineToStringTag(temporalDurationProto, "Temporal.Duration");
         defineToStringTag(temporalPlainDateProto, "Temporal.PlainDate");
+        defineToStringTag(temporalInstantProto, "Temporal.Instant");
         // %TypedArray%.prototype's tag is an accessor returning the *concrete* view's name, so
         // `Object.prototype.toString.call(new Int8Array())` reports Int8Array rather than a shared tag.
         final var getter = new JsNativeFunction("get [Symbol.toStringTag]", (thisArg, _) -> typedArrayTag(thisArg));
@@ -686,6 +692,7 @@ public final class Intrinsics {
             case JsTemporalDuration ignored -> temporalDurationProto;
             case JsTemporalPlainTime ignored -> temporalPlainTimeProto;
             case JsTemporalPlainDate ignored -> temporalPlainDateProto;
+            case JsTemporalInstant ignored -> temporalInstantProto;
             case JsPromise ignored -> promiseProto;
             case JsGenerator ignored -> iteratorProto;
             case JsAsyncGenerator ignored -> asyncIteratorProto;
@@ -779,6 +786,10 @@ public final class Intrinsics {
 
     public JsObject temporalPlainDateProto() {
         return temporalPlainDateProto;
+    }
+
+    public JsObject temporalInstantProto() {
+        return temporalInstantProto;
     }
 
     public JsObject promiseProto() {
@@ -1103,6 +1114,16 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("Temporal.PlainDate.prototype." + method, receiver);
+    }
+
+    private JsTemporalInstant requireTemporalInstant(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalInstant instant) {
+            return instant;
+        }
+        if (unwrap(receiver) instanceof JsTemporalInstant wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.Instant.prototype." + method, receiver);
     }
 
     private JsArrayBuffer requireBuffer(JsValue receiver, String method) {
