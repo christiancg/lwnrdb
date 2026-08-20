@@ -32,6 +32,7 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -69,6 +70,7 @@ public final class Intrinsics {
     private final JsObject weakSetProto;
     private final JsObject dateProto;
     private final JsObject temporalDurationProto;
+    private final JsObject temporalPlainTimeProto;
     private final JsObject promiseProto;
     private final JsObject iteratorProto;
     private final JsObject asyncIteratorProto;
@@ -161,6 +163,10 @@ public final class Intrinsics {
         installSymbolValue(dateProto, JsSymbol.TO_PRIMITIVE, DateBuiltins.symbolToPrimitive(ops),
                 new PropertyFlags(false, false, true));
         temporalDurationProto = temporalDurationPrototype();
+        temporalPlainTimeProto = prototypeOf(TemporalPlainTimeBuiltins.NAMES, "Temporal.PlainTime.prototype", (receiver,
+                name) -> TemporalPlainTimeBuiltins.getMethod(requireTemporalPlainTime(receiver, name), name, ops));
+        installTemporalPlainTimeAccessors(temporalPlainTimeProto);
+        defineToStringTag(temporalPlainTimeProto, "Temporal.PlainTime");
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -672,6 +678,7 @@ public final class Intrinsics {
             case JsSet set -> set.isWeak() ? weakSetProto : setProto;
             case JsDate ignored -> dateProto;
             case JsTemporalDuration ignored -> temporalDurationProto;
+            case JsTemporalPlainTime ignored -> temporalPlainTimeProto;
             case JsPromise ignored -> promiseProto;
             case JsGenerator ignored -> iteratorProto;
             case JsAsyncGenerator ignored -> asyncIteratorProto;
@@ -757,6 +764,10 @@ public final class Intrinsics {
 
     public JsObject temporalDurationProto() {
         return temporalDurationProto;
+    }
+
+    public JsObject temporalPlainTimeProto() {
+        return temporalPlainTimeProto;
     }
 
     public JsObject promiseProto() {
@@ -1050,6 +1061,27 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("Temporal.Duration.prototype." + method, receiver);
+    }
+
+    // Real accessor properties (RegExp/TypedArray-geometry shaped), not method-shaped: `hour` etc.
+    // are getters on the shared prototype, not entries in TemporalPlainTimeBuiltins.NAMES.
+    private void installTemporalPlainTimeAccessors(JsObject proto) {
+        for (final var name : TemporalPlainTimeBuiltins.FIELD_ACCESSORS) {
+            final var getter = new JsNativeFunction("get " + name, (thisArg, _) -> TemporalPlainTimeBuiltins
+                    .fieldAccessor(requireTemporalPlainTime(thisArg, name), name));
+            proto.defineAccessor(name, getter, null);
+            proto.setFlags(name, HIDDEN);
+        }
+    }
+
+    private JsTemporalPlainTime requireTemporalPlainTime(JsValue receiver, String method) {
+        if (receiver instanceof JsTemporalPlainTime time) {
+            return time;
+        }
+        if (unwrap(receiver) instanceof JsTemporalPlainTime wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Temporal.PlainTime.prototype." + method, receiver);
     }
 
     private JsArrayBuffer requireBuffer(JsValue receiver, String method) {

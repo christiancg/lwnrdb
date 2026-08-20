@@ -7,7 +7,7 @@ import org.techhouse.simplejs.values.JsObject;
 // Temporal is a namespace object whose own properties are themselves constructors - unlike Math/
 // JSON/Reflect (namespaces of functions only) or Number/Date/etc. (constructors that are also
 // namespaces of statics). Each Temporal.* type lands here as one installCtor(...) call as its own
-// phase merges in; this phase (T1) wires only Duration.
+// phase merges in.
 public final class TemporalBuiltins {
     private TemporalBuiltins() {
     }
@@ -16,6 +16,7 @@ public final class TemporalBuiltins {
         final var temporal = new JsObject();
         temporal.setProto(intrinsics.objectProto());
         installCtor(temporal, "Duration", TemporalDurationBuiltins.create(ops), intrinsics.temporalDurationProto());
+        installCtor(temporal, "PlainTime", TemporalPlainTimeBuiltins.create(ops), intrinsics.temporalPlainTimeProto());
         global.declareBuiltin("Temporal", temporal);
         return temporal;
     }
