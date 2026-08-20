@@ -43,6 +43,28 @@ public class TemporalPlainMonthDayBuiltinsTest {
         assertEquals(1972, num("new Temporal.PlainMonthDay(11, 30).getISOFields().isoYear"));
     }
 
+    // A non-string calendar argument is a TypeError, not a RangeError
+    @Test
+    public void test_constructor_calendar_non_string_is_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainMonthDay(11, 30, 5)"));
+    }
+
+    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
+    // defaulting) a u-ca annotation, or a Temporal object (fast path)
+    @Test
+    public void test_from_fields_calendar_field_flexible() {
+        assertEquals("iso8601",
+                str("Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30, calendar: 'iso8601'}).calendarId"));
+        assertEquals("iso8601", str("Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30, "
+                + "calendar: '2020-11-30[u-ca=iso8601]'}).calendarId"));
+        assertEquals("iso8601", str("Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30, "
+                + "calendar: new Temporal.PlainDate(2020, 1, 1)}).calendarId"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30, calendar: 'hebrew'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30, calendar: 5})"));
+    }
+
     @Test
     public void test_type_identity() {
         assertEquals("object", str("typeof new Temporal.PlainMonthDay(11, 30)"));

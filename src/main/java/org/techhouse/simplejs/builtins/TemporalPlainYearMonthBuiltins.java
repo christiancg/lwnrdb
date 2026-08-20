@@ -14,6 +14,7 @@ import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
 import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
+import org.techhouse.simplejs.internal.temporal.TemporalCalendarIdentifier;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.internal.temporal.Unit;
@@ -24,7 +25,10 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalDuration;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
+import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
+import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
 import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -157,7 +161,7 @@ public final class TemporalPlainYearMonthBuiltins {
         final var month = toIntegerField(arg(args, 1), "month", ops);
         final var calendarArg = arg(args, 2);
         if (!(calendarArg instanceof JsUndefined)) {
-            requireIso8601(JsCoercion.toStr(calendarArg, ops));
+            requireCalendarString(calendarArg);
         }
         final var referenceISODayArg = arg(args, 3);
         final var referenceISODay = referenceISODayArg instanceof JsUndefined
@@ -167,11 +171,12 @@ public final class TemporalPlainYearMonthBuiltins {
                 IsoCalendar.regulateDate(year, month, referenceISODay, RegulateOverflow.REJECT));
     }
 
-    private static void requireIso8601(String calendar) {
-        if (!"iso8601".equals(calendar)) {
-            throw new RangeErrorException(
-                    "Only the \"iso8601\" calendar is supported by this engine, got: " + calendar);
+    // Constructor argument: a bare calendar identifier only; a non-string value is a TypeError.
+    private static String requireCalendarString(JsValue calendarArg) {
+        if (!(calendarArg instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
         }
+        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     private static JsTemporalPlainYearMonth toPlainYearMonth(JsValue item, InterpreterOps ops) {
@@ -191,10 +196,24 @@ public final class TemporalPlainYearMonthBuiltins {
         if (item instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsTemporalPlainYearMonth wrapped) {
             return new JsTemporalPlainYearMonth(wrapped.fields());
         }
+        // ToTemporalYearMonth reads a Temporal object argument's year/month fields the same way it
+        // reads a plain object's (PrepareTemporalFields calls Get, not an internal-slot bypass), but
+        // these Temporal types are not JsObject, so they need their own branches here to reach the
+        // same year+month result (referenceISODay forced to 1, per CalendarYearMonthFromFields).
+        if (item instanceof JsTemporalPlainDate pd) {
+            return new JsTemporalPlainYearMonth(new Iso8601Fields(pd.year(), pd.month(), 1));
+        }
+        if (item instanceof JsTemporalPlainDateTime dt) {
+            return new JsTemporalPlainYearMonth(new Iso8601Fields(dt.year(), dt.month(), 1));
+        }
+        if (item instanceof JsTemporalZonedDateTime zdt) {
+            final var date = zdt.isoFieldsAtLocal().date();
+            return new JsTemporalPlainYearMonth(new Iso8601Fields(date.year(), date.month(), 1));
+        }
         if (item instanceof JsString s) {
             final var parsed = TemporalParser.parseYearMonth(s.getValue());
             if (parsed.calendar() != null) {
-                requireIso8601(parsed.calendar());
+                TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
             }
             return new JsTemporalPlainYearMonth(parsed.date());
         }
@@ -205,9 +224,29 @@ public final class TemporalPlainYearMonthBuiltins {
     }
 
     private static Iso8601Fields yearMonthFromFields(JsObject obj, RegulateOverflow overflow, InterpreterOps ops) {
+        requireValidCalendarField(obj, ops);
         final var year = requiredIntegerField(obj, "year", ops);
         final var month = resolveMonth(obj, ops);
         return IsoCalendar.regulateDate(year, month, 1, overflow);
+    }
+
+    // Property-bag `calendar` field: accepts a bare identifier or a full ISO string carrying (or
+    // defaulting) a u-ca annotation. A `calendar` that is itself a Temporal object is taken via its
+    // fast path (its calendar is implicitly "iso8601" in this ISO-only engine, so its
+    // `calendar`/`calendarId` getters are never read, matching ToTemporalCalendar's own
+    // internal-slot fast path).
+    private static void requireValidCalendarField(JsObject obj, InterpreterOps ops) {
+        final var calendarValue = ops.getMember(obj, new JsString("calendar"));
+        if (calendarValue instanceof JsUndefined || calendarValue instanceof JsTemporalPlainDate
+                || calendarValue instanceof JsTemporalPlainDateTime || calendarValue instanceof JsTemporalPlainMonthDay
+                || calendarValue instanceof JsTemporalPlainYearMonth
+                || calendarValue instanceof JsTemporalZonedDateTime) {
+            return;
+        }
+        if (!(calendarValue instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
+        }
+        TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
     private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
@@ -389,26 +428,41 @@ public final class TemporalPlainYearMonthBuiltins {
     }
 
     private static DurationFields durationLikeFields(JsValue value, InterpreterOps ops) {
-        final var fields = new DurationFields(durationFieldOrZero(value, "years", ops),
-                durationFieldOrZero(value, "months", ops), durationFieldOrZero(value, "weeks", ops),
-                durationFieldOrZero(value, "days", ops), durationFieldOrZero(value, "hours", ops),
-                durationFieldOrZero(value, "minutes", ops), durationFieldOrZero(value, "seconds", ops),
-                durationFieldOrZero(value, "milliseconds", ops), durationFieldOrZero(value, "microseconds", ops),
-                durationFieldOrZero(value, "nanoseconds", ops));
+        final var years = readDurationField(value, "years", ops);
+        final var months = readDurationField(value, "months", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var days = readDurationField(value, "days", ops);
+        final var hours = readDurationField(value, "hours", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var microseconds = readDurationField(value, "microseconds", ops);
+        final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
+                && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
+            throw new TypeErrorException("Duration-like object must contain at least one recognized property");
+        }
+        final var fields = new DurationFields(orZeroDuration(years), orZeroDuration(months), orZeroDuration(weeks),
+                orZeroDuration(days), orZeroDuration(hours), orZeroDuration(minutes), orZeroDuration(seconds),
+                orZeroDuration(milliseconds), orZeroDuration(microseconds), orZeroDuration(nanoseconds));
         DurationMath.sign(fields);
         return fields;
     }
 
-    private static double durationFieldOrZero(JsValue obj, String name, InterpreterOps ops) {
+    private static Double readDurationField(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
-            return 0.0;
+            return null;
         }
         final var number = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)) {
             throw new RangeErrorException(name + " must be an integer");
         }
         return number;
+    }
+
+    private static double orZeroDuration(Double value) {
+        return value == null ? 0.0 : value;
     }
 
     private static DurationFields negate(DurationFields d) {

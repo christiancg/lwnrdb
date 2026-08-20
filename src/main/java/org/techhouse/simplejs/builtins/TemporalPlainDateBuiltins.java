@@ -14,6 +14,7 @@ import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
 import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
+import org.techhouse.simplejs.internal.temporal.TemporalCalendarIdentifier;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.internal.temporal.Unit;
@@ -27,6 +28,7 @@ import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
 import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -180,16 +182,18 @@ public final class TemporalPlainDateBuiltins {
         final var day = toIntegerField(arg(args, 2), "day", ops);
         final var calendarArg = arg(args, 3);
         if (!(calendarArg instanceof JsUndefined)) {
-            requireIso8601(JsCoercion.toStr(calendarArg, ops));
+            requireCalendarString(calendarArg, ops);
         }
         return new JsTemporalPlainDate(IsoCalendar.regulateDate(year, month, day, RegulateOverflow.REJECT));
     }
 
-    private static void requireIso8601(String calendar) {
-        if (!"iso8601".equals(calendar)) {
-            throw new RangeErrorException(
-                    "Only the \"iso8601\" calendar is supported by this engine, got: " + calendar);
+    // Constructor / withCalendar accept only a bare calendar identifier (no ISO date-time-string
+    // extraction fallback); a non-string value is a TypeError, not a RangeError.
+    private static String requireCalendarString(JsValue calendarArg, InterpreterOps ops) {
+        if (!(calendarArg instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
         }
+        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     // ToTemporalDate: accepts an existing PlainDate, an ISO date string, or a date-like object
@@ -203,8 +207,21 @@ public final class TemporalPlainDateBuiltins {
         if (item instanceof JsTemporalPlainDate pd) {
             return new JsTemporalPlainDate(pd.fields());
         }
+        // ToTemporalDate's fast paths for other Temporal types carrying an ISO date: their date
+        // fields are taken directly (PlainDateTime) or via the zone's local wall-clock reading
+        // (ZonedDateTime), without going through the generic fields-object / calendar-field path.
+        if (item instanceof JsTemporalPlainDateTime dt) {
+            return new JsTemporalPlainDate(dt.date());
+        }
+        if (item instanceof JsTemporalZonedDateTime zdt) {
+            return new JsTemporalPlainDate(zdt.isoFieldsAtLocal().date());
+        }
         if (item instanceof JsString s) {
-            return new JsTemporalPlainDate(TemporalParser.parseDate(s.getValue()).date());
+            final var parsed = TemporalParser.parseDate(s.getValue());
+            if (parsed.calendar() != null) {
+                TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
+            }
+            return new JsTemporalPlainDate(parsed.date());
         }
         if (item instanceof JsObject obj) {
             return new JsTemporalPlainDate(dateFromFields(obj, overflow, ops));
@@ -213,10 +230,30 @@ public final class TemporalPlainDateBuiltins {
     }
 
     private static Iso8601Fields dateFromFields(JsObject obj, RegulateOverflow overflow, InterpreterOps ops) {
+        requireValidCalendarField(obj, ops);
         final var year = requiredIntegerField(obj, "year", ops);
         final var month = resolveMonth(obj, ops);
         final var day = requiredIntegerField(obj, "day", ops);
         return IsoCalendar.regulateDate(year, month, day, overflow);
+    }
+
+    // Property-bag `calendar` field: accepts a bare identifier or a full ISO string carrying (or
+    // defaulting) a u-ca annotation. A `calendar` that is itself a Temporal object is taken via its
+    // fast path (its calendar is implicitly "iso8601" in this ISO-only engine, so its
+    // `calendar`/`calendarId` getters are never read, matching ToTemporalCalendar's own
+    // internal-slot fast path).
+    private static void requireValidCalendarField(JsObject obj, InterpreterOps ops) {
+        final var calendarValue = ops.getMember(obj, new JsString("calendar"));
+        if (calendarValue instanceof JsUndefined || calendarValue instanceof JsTemporalPlainDate
+                || calendarValue instanceof JsTemporalPlainDateTime || calendarValue instanceof JsTemporalPlainMonthDay
+                || calendarValue instanceof JsTemporalPlainYearMonth
+                || calendarValue instanceof JsTemporalZonedDateTime) {
+            return;
+        }
+        if (!(calendarValue instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
+        }
+        TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
     private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
@@ -337,12 +374,6 @@ public final class TemporalPlainDateBuiltins {
         };
     }
 
-    private static void validateRoundingIncrement(long increment, Unit unit) {
-        if (unit == Unit.DAY && increment != 1) {
-            throw new RangeErrorException("Invalid roundingIncrement " + increment + " for unit day");
-        }
-    }
-
     private static TemporalFormatter.CalendarName readCalendarNameOption(JsValue optionsArg, InterpreterOps ops) {
         final var value = optionOrUndefined(optionsArg, "calendarName", ops);
         return value instanceof JsUndefined
@@ -388,7 +419,7 @@ public final class TemporalPlainDateBuiltins {
     // withCalendar is effectively an identity operation in ISO-only mode: the only calendar this
     // engine ever carries is "iso8601", so the only observable effect is validating the argument.
     private static JsValue withCalendar(JsTemporalPlainDate receiver, JsValue calendarArg, InterpreterOps ops) {
-        requireIso8601(JsCoercion.toStr(calendarArg, ops));
+        requireCalendarString(calendarArg, ops);
         return new JsTemporalPlainDate(receiver.fields());
     }
 
@@ -399,28 +430,45 @@ public final class TemporalPlainDateBuiltins {
         if (!InterpreterUtils.isObjectLike(value)) {
             throw new TypeErrorException("Invalid Temporal.Duration-like value");
         }
-        final var fields = new DurationFields(durationFieldOrZero(value, "years", ops),
-                durationFieldOrZero(value, "months", ops), durationFieldOrZero(value, "weeks", ops),
-                durationFieldOrZero(value, "days", ops), durationFieldOrZero(value, "hours", ops),
-                durationFieldOrZero(value, "minutes", ops), durationFieldOrZero(value, "seconds", ops),
-                durationFieldOrZero(value, "milliseconds", ops), durationFieldOrZero(value, "microseconds", ops),
-                durationFieldOrZero(value, "nanoseconds", ops));
+        final var years = readDurationField(value, "years", ops);
+        final var months = readDurationField(value, "months", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var days = readDurationField(value, "days", ops);
+        final var hours = readDurationField(value, "hours", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var microseconds = readDurationField(value, "microseconds", ops);
+        final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
+                && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
+            throw new TypeErrorException("Duration-like object must contain at least one recognized property");
+        }
+        final var fields = new DurationFields(orZeroDuration(years), orZeroDuration(months), orZeroDuration(weeks),
+                orZeroDuration(days), orZeroDuration(hours), orZeroDuration(minutes), orZeroDuration(seconds),
+                orZeroDuration(milliseconds), orZeroDuration(microseconds), orZeroDuration(nanoseconds));
         DurationMath.sign(fields);
         return fields;
     }
 
     // ToIntegerIfIntegral: unlike the date fields above, a Duration-like field must already BE an
-    // integer (no truncation) - 1.5 is a RangeError, not silently floored.
-    private static double durationFieldOrZero(JsValue obj, String name, InterpreterOps ops) {
+    // integer (no truncation) - 1.5 is a RangeError, not silently floored. A missing property
+    // returns null (rather than defaulting to 0 here) so the caller can reject a duration-like value
+    // that has none of the ten recognized properties present.
+    private static Double readDurationField(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
-            return 0.0;
+            return null;
         }
         final var number = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)) {
             throw new RangeErrorException(name + " must be an integer");
         }
         return number;
+    }
+
+    private static double orZeroDuration(Double value) {
+        return value == null ? 0.0 : value;
     }
 
     private static DurationFields negate(DurationFields d) {
@@ -474,7 +522,6 @@ public final class TemporalPlainDateBuiltins {
         }
         var fields = IsoCalendar.differenceISODate(receiver.fields(), other.fields(), largestUnit);
         if (smallestUnit != Unit.DAY || increment != 1) {
-            validateRoundingIncrement(increment, smallestUnit);
             final var anchor = RelativeDurationMath.Anchor.plain(receiver.fields(), MIDNIGHT);
             fields = RelativeDurationMath.roundedDifference(anchor, other.fields(), MIDNIGHT, largestUnit, smallestUnit,
                     increment, mode);
@@ -540,12 +587,12 @@ public final class TemporalPlainDateBuiltins {
 
     private static String extractTimeZoneId(JsValue options, InterpreterOps ops) {
         if (options instanceof JsString s) {
-            return TemporalParser.parseTimeZoneIdentifier(s.getValue());
+            return TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
         }
         if (options instanceof JsObject obj) {
             final var timeZone = ops.getMember(obj, new JsString("timeZone"));
             if (timeZone instanceof JsString s) {
-                return TemporalParser.parseTimeZoneIdentifier(s.getValue());
+                return TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
             }
         }
         throw new TypeErrorException("Temporal.PlainDate.prototype.toZonedDateTime requires a timeZone");

@@ -15,6 +15,7 @@ import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
 import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
+import org.techhouse.simplejs.internal.temporal.TemporalCalendarIdentifier;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.internal.temporal.Unit;
@@ -248,9 +249,8 @@ public final class TemporalDurationBuiltins {
     // Temporal.PlainDateTime.from's own "any offset without a bracket is ignored" convention.
     private static RelativeDurationMath.Anchor parseRelativeToString(String text) {
         final var parsed = TemporalParser.parseDate(text);
-        if (parsed.calendar() != null && !"iso8601".equals(parsed.calendar())) {
-            throw new RangeErrorException(
-                    "Only the \"iso8601\" calendar is supported by this engine, got: " + parsed.calendar());
+        if (parsed.calendar() != null) {
+            TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
         }
         final var date = parsed.date();
         final var time = parsed.time() != null ? parsed.time() : MIDNIGHT;
@@ -309,11 +309,10 @@ public final class TemporalDurationBuiltins {
                 || calendarRaw instanceof JsTemporalPlainYearMonth || calendarRaw instanceof JsTemporalZonedDateTime) {
             return;
         }
-        final var calendarStr = JsCoercion.toStr(calendarRaw, ops);
-        if (!"iso8601".equals(calendarStr)) {
-            throw new RangeErrorException(
-                    "Only the \"iso8601\" calendar is supported by this engine, got: " + calendarStr);
+        if (!(calendarRaw instanceof JsString s)) {
+            throw new TypeErrorException("calendar must be a string");
         }
+        TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
     private static RelativeDurationMath.Anchor relativeToFromFields(JsValue obj, InterpreterOps ops) {
@@ -333,7 +332,10 @@ public final class TemporalDurationBuiltins {
         if (timeZoneRaw instanceof JsUndefined) {
             return RelativeDurationMath.Anchor.plain(date, time);
         }
-        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneRaw, ops));
+        if (!(timeZoneRaw instanceof JsString s)) {
+            throw new TypeErrorException("timeZone must be a string");
+        }
+        final var timeZoneId = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
         return RelativeDurationMath.Anchor.zoned(date, time, TemporalZonedDateTimeBuiltins.zoneOf(timeZoneId));
     }
 
@@ -468,11 +470,16 @@ public final class TemporalDurationBuiltins {
         final var currentValues = new double[]{current.years(), current.months(), current.weeks(), current.days(),
                 current.hours(), current.minutes(), current.seconds(), current.milliseconds(), current.microseconds(),
                 current.nanoseconds()};
+        var anyPresent = false;
         for (var i = 0; i < FIELD_ORDER.size(); i++) {
             final var member = ops.getMember(durationLike, new JsString(FIELD_ORDER.get(i)));
             if (member != null && !(member instanceof JsUndefined)) {
                 currentValues[i] = integerValue(member, ops);
+                anyPresent = true;
             }
+        }
+        if (!anyPresent) {
+            throw new TypeErrorException("Duration-like object must contain at least one recognized property");
         }
         final var fields = toFields(currentValues);
         DurationMath.sign(fields);

@@ -4,7 +4,7 @@ import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
-import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
@@ -39,15 +39,15 @@ public final class TemporalNowBuiltins {
         Intrinsics.installMethod(now, "timeZoneId",
                 new JsNativeFunction("timeZoneId", (_, _) -> new JsString(ZoneId.systemDefault().getId())));
         Intrinsics.installMethod(now, "plainDateISO", new JsNativeFunction("plainDateISO",
-                (_, args) -> new JsTemporalPlainDate(fieldsAt(resolveTimeZone(args, ops)).date())));
+                (_, args) -> new JsTemporalPlainDate(fieldsAt(resolveTimeZone(args)).date())));
         Intrinsics.installMethod(now, "plainTimeISO", new JsNativeFunction("plainTimeISO",
-                (_, args) -> new JsTemporalPlainTime(fieldsAt(resolveTimeZone(args, ops)).time())));
+                (_, args) -> new JsTemporalPlainTime(fieldsAt(resolveTimeZone(args)).time())));
         Intrinsics.installMethod(now, "plainDateTimeISO", new JsNativeFunction("plainDateTimeISO", (_, args) -> {
-            final var fields = fieldsAt(resolveTimeZone(args, ops));
+            final var fields = fieldsAt(resolveTimeZone(args));
             return new JsTemporalPlainDateTime(fields.date(), fields.time());
         }));
         Intrinsics.installMethod(now, "zonedDateTimeISO",
-                new JsNativeFunction("zonedDateTimeISO", (_, args) -> zonedDateTimeISO(resolveTimeZone(args, ops))));
+                new JsNativeFunction("zonedDateTimeISO", (_, args) -> zonedDateTimeISO(resolveTimeZone(args))));
     }
 
     // Date.now()'s own source of "now" - see the class-level note on why this is not
@@ -71,7 +71,7 @@ public final class TemporalNowBuiltins {
     // ZonedDateTime-like argument (including a subclass wrapper) reuses its own time zone; anything
     // else is coerced to a string and parsed as a time zone identifier, mirroring
     // TemporalInstantBuiltins/TemporalZonedDateTimeBuiltins' own zoneOf helpers.
-    private static TimeZoneRef resolveTimeZone(List<JsValue> args, InterpreterOps ops) {
+    private static TimeZoneRef resolveTimeZone(List<JsValue> args) {
         final var arg = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         if (arg instanceof JsUndefined) {
             final var zone = ZoneId.systemDefault();
@@ -81,7 +81,10 @@ public final class TemporalNowBuiltins {
         if (zoned != null) {
             return new TimeZoneRef(zoned.zone(), zoned.timeZoneId());
         }
-        final var id = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(arg, ops));
+        if (!(arg instanceof JsString s)) {
+            throw new TypeErrorException("timeZone must be a string");
+        }
+        final var id = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
         return new TimeZoneRef(zoneOf(id), id);
     }
 

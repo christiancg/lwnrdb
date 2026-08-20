@@ -98,4 +98,10 @@ public class TemporalNowBuiltinsTest {
     public void test_invalid_time_zone_argument_throws_range_error() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.Now.plainDateISO('Not/AZone')"));
     }
+
+    // A non-string, non-ZonedDateTime time zone argument is a TypeError
+    @Test
+    public void test_non_string_time_zone_argument_throws_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.Now.plainDateISO(42)"));
+    }
 }

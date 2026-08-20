@@ -11,6 +11,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.temporal.DurationFields;
+import org.techhouse.simplejs.internal.temporal.DurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
@@ -136,8 +137,8 @@ public final class TemporalInstantBuiltins {
             case "toJSON" -> new JsNativeFunction("toJSON", (_, _) -> new JsString(receiver.toString()));
             case "toLocaleString" ->
                 new JsNativeFunction("toLocaleString", (_, _) -> new JsString(receiver.toString()));
-            case "toZonedDateTimeISO" -> new JsNativeFunction("toZonedDateTimeISO",
-                    (_, args) -> toZonedDateTimeISO(receiver, arg(args, 0), ops));
+            case "toZonedDateTimeISO" ->
+                new JsNativeFunction("toZonedDateTimeISO", (_, args) -> toZonedDateTimeISO(receiver, arg(args, 0)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> {
                 throw new TypeErrorException(
                         "Temporal.Instant does not support valueOf; use compare() or equals() instead");
@@ -162,47 +163,78 @@ public final class TemporalInstantBuiltins {
         return JsTemporalInstant.fromEpochNanoseconds(receiver.epochNanoseconds().add(deltaNanos));
     }
 
-    // Duck-types the argument: any object exposing the Duration time fields works (a real
-    // Temporal.Duration or a plain object), and the calendar fields must be zero - Instant arithmetic
-    // is defined purely in exact nanoseconds, so a "day" (or larger) has no fixed meaning without a
-    // calendar/time zone attached.
+    // ToTemporalDuration: a real Temporal.Duration, an ISO 8601 duration string, or a plain
+    // duration-like object (requiring at least one of the ten recognized properties); the calendar
+    // fields must be zero once parsed - Instant arithmetic is defined purely in exact nanoseconds, so
+    // a "day" (or larger) has no fixed meaning without a calendar/time zone attached.
     private static BigInteger durationTimeNanos(JsValue durationLike, InterpreterOps ops) {
-        if (!InterpreterUtils.isObjectLike(durationLike) || ops == null) {
+        final var fields = toDurationFields(durationLike, ops);
+        requireZero(fields.years(), "years");
+        requireZero(fields.months(), "months");
+        requireZero(fields.weeks(), "weeks");
+        requireZero(fields.days(), "days");
+        return BigInteger.valueOf((long) fields.hours()).multiply(NANOS_PER_HOUR)
+                .add(BigInteger.valueOf((long) fields.minutes()).multiply(NANOS_PER_MINUTE))
+                .add(BigInteger.valueOf((long) fields.seconds()).multiply(NANOS_PER_SECOND))
+                .add(BigInteger.valueOf((long) fields.milliseconds()).multiply(NANOS_PER_MILLI))
+                .add(BigInteger.valueOf((long) fields.microseconds()).multiply(NANOS_PER_MICRO))
+                .add(BigInteger.valueOf((long) fields.nanoseconds()));
+    }
+
+    private static DurationFields toDurationFields(JsValue value, InterpreterOps ops) {
+        if (value instanceof JsTemporalDuration duration) {
+            return duration.getFields();
+        }
+        if (value instanceof JsString s) {
+            return TemporalParser.parseDuration(s.getValue());
+        }
+        if (!InterpreterUtils.isObjectLike(value) || ops == null) {
             throw new TypeErrorException("Temporal.Instant arithmetic requires a Duration-like object");
         }
-        requireZeroField(durationLike, "years", ops);
-        requireZeroField(durationLike, "months", ops);
-        requireZeroField(durationLike, "weeks", ops);
-        requireZeroField(durationLike, "days", ops);
-        final var hours = numField(durationLike, "hours", ops);
-        final var minutes = numField(durationLike, "minutes", ops);
-        final var seconds = numField(durationLike, "seconds", ops);
-        final var millis = numField(durationLike, "milliseconds", ops);
-        final var micros = numField(durationLike, "microseconds", ops);
-        final var nanos = numField(durationLike, "nanoseconds", ops);
-        return BigInteger.valueOf((long) hours).multiply(NANOS_PER_HOUR)
-                .add(BigInteger.valueOf((long) minutes).multiply(NANOS_PER_MINUTE))
-                .add(BigInteger.valueOf((long) seconds).multiply(NANOS_PER_SECOND))
-                .add(BigInteger.valueOf((long) millis).multiply(NANOS_PER_MILLI))
-                .add(BigInteger.valueOf((long) micros).multiply(NANOS_PER_MICRO)).add(BigInteger.valueOf((long) nanos));
+        final var years = readDurationField(value, "years", ops);
+        final var months = readDurationField(value, "months", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var days = readDurationField(value, "days", ops);
+        final var hours = readDurationField(value, "hours", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var microseconds = readDurationField(value, "microseconds", ops);
+        final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
+                && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
+            throw new TypeErrorException("Duration-like object must contain at least one recognized property");
+        }
+        final var fields = new DurationFields(orZeroDuration(years), orZeroDuration(months), orZeroDuration(weeks),
+                orZeroDuration(days), orZeroDuration(hours), orZeroDuration(minutes), orZeroDuration(seconds),
+                orZeroDuration(milliseconds), orZeroDuration(microseconds), orZeroDuration(nanoseconds));
+        DurationMath.sign(fields);
+        return fields;
     }
 
-    private static double numField(JsValue durationLike, String key, InterpreterOps ops) {
-        final var raw = ops.getMember(durationLike, new JsString(key));
-        if (raw == null || raw instanceof JsUndefined) {
-            return 0;
+    // ToIntegerIfIntegral: a Duration-like field must already be an integer (no truncation). A
+    // missing property returns null (rather than defaulting to 0 here) so the caller can reject a
+    // duration-like value that has none of the ten recognized properties present.
+    private static Double readDurationField(JsValue obj, String name, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString(name));
+        if (value instanceof JsUndefined) {
+            return null;
         }
-        final var value = JsCoercion.toNumber(raw, ops);
-        if (!Double.isFinite(value) || value != Math.floor(value)) {
-            throw new RangeErrorException("Temporal duration field '" + key + "' must be an integer");
+        final var number = JsCoercion.toNumber(value, ops);
+        if (Double.isNaN(number) || Double.isInfinite(number) || number != Math.floor(number)) {
+            throw new RangeErrorException(name + " must be an integer");
         }
-        return value;
+        return number;
     }
 
-    private static void requireZeroField(JsValue durationLike, String key, InterpreterOps ops) {
-        if (numField(durationLike, key, ops) != 0) {
+    private static double orZeroDuration(Double value) {
+        return value == null ? 0.0 : value;
+    }
+
+    private static void requireZero(double value, String name) {
+        if (value != 0) {
             throw new RangeErrorException(
-                    "Temporal.Instant arithmetic does not accept a non-zero '" + key + "' duration field");
+                    "Temporal.Instant arithmetic requires a zero '" + name + "' duration field, got " + value);
         }
     }
 
@@ -372,11 +404,14 @@ public final class TemporalInstantBuiltins {
 
     // Temporal.ZonedDateTime (phase T7) - a real instance, fixed "iso8601" calendar per this method's
     // own name.
-    private static JsValue toZonedDateTimeISO(JsTemporalInstant receiver, JsValue timeZoneArg, InterpreterOps ops) {
+    private static JsValue toZonedDateTimeISO(JsTemporalInstant receiver, JsValue timeZoneArg) {
         if (timeZoneArg == null || timeZoneArg instanceof JsUndefined) {
             throw new TypeErrorException("Temporal.Instant.prototype.toZonedDateTimeISO requires a timeZone argument");
         }
-        final var id = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneArg, ops));
+        if (!(timeZoneArg instanceof JsString s)) {
+            throw new TypeErrorException("timeZone must be a string");
+        }
+        final var id = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
         return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(), zoneOf(id), id);
     }
 
@@ -551,18 +586,21 @@ public final class TemporalInstantBuiltins {
         final var sign = offset.charAt(0) == '-' || offset.charAt(0) == '−' ? -1 : 1;
         final var rest = offset.substring(1).replace(":", "");
         final var hours = Integer.parseInt(rest.substring(0, 2));
-        final var minutes = Integer.parseInt(rest.substring(2, 4));
+        var minutes = 0;
         var seconds = 0;
         var nanos = 0L;
-        if (rest.length() > 4) {
-            seconds = Integer.parseInt(rest.substring(4, 6));
-            final var dot = rest.indexOf('.');
-            if (dot >= 0) {
-                var fraction = rest.substring(dot + 1);
-                fraction = fraction.length() > 9
-                        ? fraction.substring(0, 9)
-                        : fraction + "0".repeat(9 - fraction.length());
-                nanos = Long.parseLong(fraction);
+        if (rest.length() > 2) {
+            minutes = Integer.parseInt(rest.substring(2, 4));
+            if (rest.length() > 4) {
+                seconds = Integer.parseInt(rest.substring(4, 6));
+                final var dot = rest.indexOf('.');
+                if (dot >= 0) {
+                    var fraction = rest.substring(dot + 1);
+                    fraction = fraction.length() > 9
+                            ? fraction.substring(0, 9)
+                            : fraction + "0".repeat(9 - fraction.length());
+                    nanos = Long.parseLong(fraction);
+                }
             }
         }
         final var totalNanos = (hours * 3_600L + minutes * 60L + seconds) * 1_000_000_000L + nanos;

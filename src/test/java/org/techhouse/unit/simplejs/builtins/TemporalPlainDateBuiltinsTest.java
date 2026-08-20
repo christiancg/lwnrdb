@@ -43,6 +43,42 @@ public class TemporalPlainDateBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15, 'gregory')"));
     }
 
+    // A non-string calendar argument is a TypeError, not a RangeError - it never reaches the
+    // calendar-identifier validation at all
+    @Test
+    public void test_constructor_calendar_non_string_is_type_error() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15, 5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).withCalendar(5)"));
+    }
+
+    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
+    // defaulting) a u-ca annotation, or a Temporal object (fast path, no field reads)
+    @Test
+    public void test_from_fields_calendar_field_flexible() {
+        assertEquals("iso8601",
+                str("Temporal.PlainDate.from({year: 2020, month: 6, day: 15, calendar: 'iso8601'}).calendarId"));
+        assertEquals("iso8601",
+                str("Temporal.PlainDate.from({year: 2020, month: 6, day: 15, calendar: '2020-06-15[u-ca=iso8601]'})"
+                        + ".calendarId"));
+        assertEquals("iso8601", str("Temporal.PlainDate.from({year: 2020, month: 6, day: 15, "
+                + "calendar: new Temporal.PlainDate(2020, 1, 1)}).calendarId"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, month: 6, day: 15, calendar: 'hebrew'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, month: 6, day: 15, calendar: 5})"));
+    }
+
+    // ToTemporalDate's fast paths for PlainDateTime/ZonedDateTime arguments bypass the generic
+    // property-bag path entirely
+    @Test
+    public void test_from_plain_date_time_and_zoned_date_time_fast_paths() {
+        assertEquals("2020-06-15",
+                str("Temporal.PlainDate.from(new Temporal.PlainDateTime(2020, 6, 15, 10, 30)).toString()"));
+        assertEquals("2020-06-15", str("Temporal.PlainDate.from(Temporal.ZonedDateTime.from("
+                + "'2020-06-15T10:00:00-04:00[America/New_York]')).toString()"));
+    }
+
     // typeof/instanceof/toStringTag
     @Test
     public void test_type_identity() {
@@ -140,6 +176,21 @@ public class TemporalPlainDateBuiltinsTest {
         assertEquals(-14, num("new Temporal.PlainDate(2020, 1, 15).until(new Temporal.PlainDate(2020, 1, 1)).days"));
         assertEquals(14, num("new Temporal.PlainDate(2020, 1, 15).since(new Temporal.PlainDate(2020, 1, 1)).days"));
         assertEquals(0, num("new Temporal.PlainDate(2020, 1, 1).until(new Temporal.PlainDate(2020, 1, 1)).sign"));
+    }
+
+    // until()/since() round a computed Duration, so a day-unit increment greater than 1 is valid
+    // (unlike round(), which rounds a wall-clock reading and only ever accepts an increment of 1 for
+    // "day")
+    @Test
+    public void test_until_allows_day_increment_greater_than_one() {
+        assertEquals(10, num("new Temporal.PlainDate(2020, 1, 1).until(new Temporal.PlainDate(2020, 1, 15), "
+                + "{smallestUnit: 'day', roundingIncrement: 10, roundingMode: 'floor'}).days"));
+    }
+
+    // A duration-like object with none of the ten recognized properties present is a TypeError
+    @Test
+    public void test_add_rejects_duration_like_with_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).add({})"));
     }
 
     // equals compares calendar date, and accepts any ToTemporalDate-convertible value
