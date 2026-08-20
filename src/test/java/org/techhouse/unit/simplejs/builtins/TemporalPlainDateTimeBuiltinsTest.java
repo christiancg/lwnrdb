@@ -307,10 +307,14 @@ public class TemporalPlainDateTimeBuiltinsTest {
                 + ".until(new Temporal.PlainDateTime(2020, 1, 2), {largestUnit: 'day', smallestUnit: 'year'})"));
     }
 
+    // Calendar-unit rounding (largestUnit/smallestUnit above "day") is implemented via
+    // RelativeDurationMath, with the receiver itself as the implicit relativeTo anchor - no
+    // RangeError, a real years/months breakdown instead.
     @Test
-    public void test_difference_calendar_unit_rounding_not_implemented() {
-        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDateTime(2020, 1, 1)"
-                + ".until(new Temporal.PlainDateTime(2021, 3, 1), {largestUnit: 'year', smallestUnit: 'month'})"));
+    public void test_difference_calendar_unit_rounding() {
+        assertEquals("1,2", str("var d = new Temporal.PlainDateTime(2020, 1, 1)"
+                + ".until(new Temporal.PlainDateTime(2021, 3, 1), {largestUnit: 'year', smallestUnit: 'month'});"
+                + "d.years + ',' + d.months"));
     }
 
     // Exercises the "since" borrow-a-day branch where the date moves backward but the time-of-day

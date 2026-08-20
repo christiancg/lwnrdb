@@ -120,4 +120,45 @@ public class TemporalPlainDateTimeProgramTest {
         assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
         assertEquals("\"2024-03-10T09:15:30\"", new org.techhouse.ejson.EJson().toJson(result.getValue()));
     }
+
+    // until/since with largestUnit "years" balances a calendar-unit difference (no relativeTo needed -
+    // the receiver is the implicit anchor)
+    @Test
+    public void test_until_with_years_largest_unit() {
+        assertEquals("3,6,17",
+                str("var a = new Temporal.PlainDateTime(1997, 12, 1, 12);"
+                        + "var b = new Temporal.PlainDateTime(2001, 6, 18, 12);"
+                        + "var d = a.until(b, {largestUnit: 'years'}); d.years + ',' + d.months + ',' + d.days"));
+    }
+
+    // rounding at "years" carries a month-heavy remainder up (halfExpand)
+    @Test
+    public void test_until_rounds_up_to_years() {
+        assertEquals(2,
+                num("var a = new Temporal.PlainDateTime(2019, 1, 1);"
+                        + "var b = new Temporal.PlainDateTime(2020, 7, 2);"
+                        + "a.until(b, {smallestUnit: 'years', roundingMode: 'halfExpand'}).years"));
+    }
+
+    // rounding at "months" with largestUnit "years" can carry all the way into a full extra year
+    @Test
+    public void test_until_rounds_months_carries_into_years() {
+        assertEquals("2,0",
+                str("var a = new Temporal.PlainDateTime(2022, 1, 1);"
+                        + "var b = new Temporal.PlainDateTime(2023, 12, 25);"
+                        + "var d = a.until(b, {largestUnit: 'years', smallestUnit: 'months', roundingMode: 'expand'});"
+                        + "d.years + ',' + d.months"));
+    }
+
+    // rounding an exact whole-months multiple at "weeks" granularity does not introduce a spurious
+    // remainder (weeks stays 0, not a fractional-week artifact) - regression coverage for the
+    // differenceCalendar -> weeks refinement
+    @Test
+    public void test_until_exact_month_multiple_at_weeks_granularity() {
+        assertEquals("1,0,0",
+                str("var a = new Temporal.PlainDateTime(2012, 1, 1, 12);"
+                        + "var b = new Temporal.PlainDateTime(2012, 2, 1, 12);"
+                        + "var d = a.until(b, {smallestUnit: 'weeks', largestUnit: 'months'});"
+                        + "d.months + ',' + d.weeks + ',' + d.days"));
+    }
 }

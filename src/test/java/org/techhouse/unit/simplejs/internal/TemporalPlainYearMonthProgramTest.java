@@ -105,4 +105,14 @@ public class TemporalPlainYearMonthProgramTest {
         assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
         assertEquals("\"2024-03\"", new org.techhouse.ejson.EJson().toJson(result.getValue()));
     }
+
+    // until() rounds the 1-year-6-month calendar span down to a whole year at smallestUnit "years"
+    // (trunc keeps the odd integer part, matching the finer-grained tests in the "years"/"months"
+    // Duration.round test262 suite for the same relative-date arithmetic)
+    @Test
+    public void test_until_rounds_to_years() {
+        assertEquals("1",
+                str("var a = new Temporal.PlainYearMonth(2018, 6);" + "var b = new Temporal.PlainYearMonth(2019, 12);"
+                        + "'' + a.until(b, {smallestUnit: 'years', roundingMode: 'trunc'}).years"));
+    }
 }

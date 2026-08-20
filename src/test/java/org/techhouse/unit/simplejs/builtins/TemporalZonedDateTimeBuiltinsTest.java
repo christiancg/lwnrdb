@@ -226,10 +226,15 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 + ".until(new Temporal.ZonedDateTime(7200000000000n, 'UTC')) instanceof Temporal.Duration"));
     }
 
+    // Calendar-unit differencing (largestUnit above "day") is implemented via RelativeDurationMath on
+    // the receiver's local wall-clock date+time - no RangeError, a real months/hours breakdown
+    // instead (the two instants are two hours apart on the same calendar day, so months stays 0).
     @Test
-    public void test_until_since_rejects_calendar_units() {
-        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC')"
-                + ".until(new Temporal.ZonedDateTime(7200000000000n, 'UTC'), {largestUnit: 'month'})"));
+    public void test_until_since_calendar_units() {
+        assertEquals("0,2",
+                str("var d = new Temporal.ZonedDateTime(0n, 'UTC')"
+                        + ".until(new Temporal.ZonedDateTime(7200000000000n, 'UTC'), {largestUnit: 'month'});"
+                        + "d.months + ',' + d.hours"));
     }
 
     @Test

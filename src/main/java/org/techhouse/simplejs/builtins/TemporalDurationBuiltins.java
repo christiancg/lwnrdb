@@ -9,6 +9,11 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.temporal.DurationFields;
 import org.techhouse.simplejs.internal.temporal.DurationMath;
+import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
+import org.techhouse.simplejs.internal.temporal.IsoCalendar;
+import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
+import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
+import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
@@ -19,22 +24,32 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalPlainDate;
+import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
+import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
+import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
+import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 /**
- * {@code Temporal.Duration}: ten signed fields with no calendar dependency. Balancing/rounding
- * across years, months or weeks needs a {@code relativeTo} date to resolve (a "month" has no fixed
- * length) and is out of scope for this phase - {@link DurationMath} only implements the
- * calendar-independent part (day and below), so every operation that would need calendar-aware
- * balancing throws a {@link RangeErrorException} documenting the gap instead of guessing.
+ * {@code Temporal.Duration}: ten signed fields with no calendar dependency by itself. Balancing/
+ * rounding/totaling/comparing across years, months or weeks is genuinely calendar-dependent (a
+ * "month" has no fixed length) and needs a real anchor date to resolve - the {@code relativeTo}
+ * option, read via {@link #toRelativeToAnchor} and applied through {@link RelativeDurationMath}
+ * (shared with {@code PlainDateTime}/{@code ZonedDateTime}'s {@code since}/{@code until}, whose
+ * relativeTo is implicitly the receiver). When no such calendar unit is involved, {@link
+ * DurationMath}'s calendar-independent (day-and-below) math still handles everything directly, with
+ * no anchor required.
  */
 public final class TemporalDurationBuiltins {
-    private static final String CALENDAR_LIMITATION = "Duration operations involving years, months or weeks "
-            + "require calendar-aware balancing (a relativeTo date), which is not implemented";
+    private static final String RELATIVE_TO_REQUIRED = "relativeTo is required to round/total/compare a "
+            + "Temporal.Duration with years, months or weeks, or a unit larger than days";
 
     private static final List<String> FIELD_ORDER = List.of("years", "months", "weeks", "days", "hours", "minutes",
             "seconds", "milliseconds", "microseconds", "nanoseconds");
+
+    private static final IsoTimeFields MIDNIGHT = new IsoTimeFields(0, 0, 0, 0, 0, 0);
 
     public static final List<String> METHOD_NAMES = List.of("with", "negated", "abs", "add", "subtract", "round",
             "total", "toString", "toJSON", "toLocaleString", "valueOf");
@@ -166,23 +181,224 @@ public final class TemporalDurationBuiltins {
 
     // Two durations with literally identical fields are equal without needing a relativeTo, even if
     // both carry a year/month/week component - no calendar math is required to know a duration equals
-    // itself. Only a genuine difference in a calendar-dependent field forces the (unimplemented)
-    // relativeTo path, matching the narrow, non-speculative scope for calendar-dependent comparison.
+    // itself. Only a genuine difference in a calendar-dependent field requires relativeTo.
     private static JsValue compare(List<JsValue> args, InterpreterOps ops) {
         final var one = toDurationFields(arg(args, 0), ops);
         final var two = toDurationFields(arg(args, 1), ops);
+        // GetOptionsObject validates the options argument's type before the equal-durations shortcut
+        // below, so a bad options value (e.g. null) still throws even when the two durations compare
+        // equal without ever needing to look at relativeTo.
+        final var optionsArg = arg(args, 2);
+        final var relativeToValue = optionOrUndefined(optionsArg, "relativeTo", ops);
         if (one.equals(two)) {
             return new JsNumber(0);
         }
-        try {
-            DurationMath.requireCalendarIndependent(one, Unit.DAY);
-            DurationMath.requireCalendarIndependent(two, Unit.DAY);
-        } catch (UnsupportedOperationException e) {
-            throw new RangeErrorException(CALENDAR_LIMITATION);
+        if (!(relativeToValue instanceof JsUndefined)) {
+            final var anchor = toRelativeToAnchor(relativeToValue, ops);
+            return new JsNumber(RelativeDurationMath.compareApplied(anchor, one, two, RegulateOverflow.CONSTRAIN));
+        }
+        if (hasCalendarUnits(one) || hasCalendarUnits(two)) {
+            throw new RangeErrorException(RELATIVE_TO_REQUIRED);
         }
         final var totalOne = DurationMath.totalNanoseconds(one);
         final var totalTwo = DurationMath.totalNanoseconds(two);
         return new JsNumber(totalOne.compareTo(totalTwo));
+    }
+
+    private static boolean hasCalendarUnits(DurationFields f) {
+        return f.years() != 0 || f.months() != 0 || f.weeks() != 0;
+    }
+
+    private static JsValue optionOrUndefined(JsValue optionsArg, String key, InterpreterOps ops) {
+        if (optionsArg == null || optionsArg instanceof JsUndefined) {
+            return JsUndefined.getInstance();
+        }
+        if (!InterpreterUtils.isObjectLike(optionsArg)) {
+            throw new TypeErrorException("options must be an object");
+        }
+        return ops.getMember(optionsArg, new JsString(key));
+    }
+
+    // ---- relativeTo: resolves a real Temporal.PlainDate/PlainDateTime/ZonedDateTime, an ISO string,
+    // or a fields-like object into a RelativeDurationMath.Anchor. Mirrors ToRelativeTemporalObject.
+
+    private static RelativeDurationMath.Anchor toRelativeToAnchor(JsValue value, InterpreterOps ops) {
+        if (value instanceof JsTemporalZonedDateTime zdt) {
+            final var f = zdt.isoFieldsAtLocal();
+            return RelativeDurationMath.Anchor.zoned(f.date(), f.time(), zdt.zone());
+        }
+        if (value instanceof JsTemporalPlainDateTime pdt) {
+            return RelativeDurationMath.Anchor.plain(pdt.date(), pdt.time());
+        }
+        if (value instanceof JsTemporalPlainDate pd) {
+            return RelativeDurationMath.Anchor.plain(pd.fields(), MIDNIGHT);
+        }
+        if (value instanceof JsString s) {
+            return parseRelativeToString(s.getValue());
+        }
+        if (InterpreterUtils.isObjectLike(value)) {
+            return relativeToFromFields(value, ops);
+        }
+        throw new TypeErrorException("relativeTo must be a Temporal.PlainDate, Temporal.PlainDateTime, "
+                + "Temporal.ZonedDateTime, an ISO 8601 string, or a fields-like object");
+    }
+
+    // A relativeTo string is a plain date/date-time UNLESS it carries a bracketed IANA/offset time
+    // zone annotation (a numeric UTC offset alone, with no bracket, does not make it zoned) - matches
+    // Temporal.PlainDateTime.from's own "any offset without a bracket is ignored" convention.
+    private static RelativeDurationMath.Anchor parseRelativeToString(String text) {
+        final var parsed = TemporalParser.parseDate(text);
+        if (parsed.calendar() != null && !"iso8601".equals(parsed.calendar())) {
+            throw new RangeErrorException(
+                    "Only the \"iso8601\" calendar is supported by this engine, got: " + parsed.calendar());
+        }
+        final var date = parsed.date();
+        final var time = parsed.time() != null ? parsed.time() : MIDNIGHT;
+        if (parsed.timeZoneId() == null) {
+            // A bare UTC designator ("Z") with no bracketed annotation names an exact instant, not a
+            // wall-clock date/date-time - unlike a plain numeric offset (which a relativeTo string
+            // discards), "Z" alone is invalid as relativeTo.
+            if ("Z".equalsIgnoreCase(parsed.offset())) {
+                throw new RangeErrorException(
+                        "relativeTo string with a UTC designator requires a bracketed time zone annotation: " + text);
+            }
+            return RelativeDurationMath.Anchor.plain(date, time);
+        }
+        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(parsed.timeZoneId());
+        final var zone = TemporalZonedDateTimeBuiltins.zoneOf(timeZoneId);
+        if (parsed.offset() != null && !"Z".equalsIgnoreCase(parsed.offset())) {
+            requireMatchingOffset(date, time, zone, parsed.offset(), text);
+        }
+        return RelativeDurationMath.Anchor.zoned(date, time, zone);
+    }
+
+    // A relativeTo string carrying both an explicit numeric offset and a bracketed zone annotation
+    // must agree - unlike Temporal.ZonedDateTime.from (which trusts the given offset outright for
+    // exactness), relativeTo has no `offset` disambiguation option, so a mismatch is simply invalid.
+    private static void requireMatchingOffset(Iso8601Fields date, IsoTimeFields time, java.time.ZoneId zone,
+            String offsetText, String source) {
+        final java.time.ZoneOffset given;
+        try {
+            given = java.time.ZoneOffset.of(offsetText);
+        } catch (java.time.DateTimeException e) {
+            throw new RangeErrorException("Invalid UTC offset: " + offsetText);
+        }
+        final var nanoOfSecond = time.millisecond() * 1_000_000 + time.microsecond() * 1_000 + time.nanosecond();
+        final java.time.LocalDateTime local;
+        try {
+            local = java.time.LocalDateTime.of(date.year(), date.month(), date.day(), time.hour(), time.minute(),
+                    time.second(), nanoOfSecond);
+        } catch (java.time.DateTimeException e) {
+            throw new RangeErrorException("Invalid date/time in relativeTo: " + e.getMessage());
+        }
+        final var actual = zone.getRules().getOffset(local);
+        if (!given.equals(actual)) {
+            throw new RangeErrorException(
+                    "relativeTo string offset " + offsetText + " does not match time zone " + zone + ": " + source);
+        }
+    }
+
+    // A `calendar` property that is itself a Temporal object (PlainDate/PlainDateTime/PlainYearMonth/
+    // PlainMonthDay/ZonedDateTime) is taken via its fast path - its calendar is implicitly "iso8601"
+    // in this ISO-only engine, so its `calendar`/`calendarId` getters are never read (matching
+    // ToTemporalCalendar's own internal-slot fast path). Any other value must coerce to "iso8601".
+    private static void requireValidCalendarField(JsValue obj, InterpreterOps ops) {
+        final var calendarRaw = ops.getMember(obj, new JsString("calendar"));
+        if (calendarRaw instanceof JsUndefined || calendarRaw instanceof JsTemporalPlainDate
+                || calendarRaw instanceof JsTemporalPlainDateTime || calendarRaw instanceof JsTemporalPlainMonthDay
+                || calendarRaw instanceof JsTemporalPlainYearMonth || calendarRaw instanceof JsTemporalZonedDateTime) {
+            return;
+        }
+        final var calendarStr = JsCoercion.toStr(calendarRaw, ops);
+        if (!"iso8601".equals(calendarStr)) {
+            throw new RangeErrorException(
+                    "Only the \"iso8601\" calendar is supported by this engine, got: " + calendarStr);
+        }
+    }
+
+    private static RelativeDurationMath.Anchor relativeToFromFields(JsValue obj, InterpreterOps ops) {
+        requireValidCalendarField(obj, ops);
+        final var year = requiredRelativeToField(obj, "year", ops);
+        final var month = resolveRelativeToMonth(obj, ops);
+        final var day = requiredRelativeToField(obj, "day", ops);
+        final var hour = relativeToFieldOrDefault(obj, "hour", 0, ops);
+        final var minute = relativeToFieldOrDefault(obj, "minute", 0, ops);
+        final var second = relativeToFieldOrDefault(obj, "second", 0, ops);
+        final var millisecond = relativeToFieldOrDefault(obj, "millisecond", 0, ops);
+        final var microsecond = relativeToFieldOrDefault(obj, "microsecond", 0, ops);
+        final var nanosecond = relativeToFieldOrDefault(obj, "nanosecond", 0, ops);
+        final var date = IsoCalendar.regulateDate(year, month, day, RegulateOverflow.CONSTRAIN);
+        final var time = new IsoTimeFields(hour, minute, second, millisecond, microsecond, nanosecond);
+        final var timeZoneRaw = ops.getMember(obj, new JsString("timeZone"));
+        if (timeZoneRaw instanceof JsUndefined) {
+            return RelativeDurationMath.Anchor.plain(date, time);
+        }
+        final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(JsCoercion.toStr(timeZoneRaw, ops));
+        return RelativeDurationMath.Anchor.zoned(date, time, TemporalZonedDateTimeBuiltins.zoneOf(timeZoneId));
+    }
+
+    private static int requiredRelativeToField(JsValue obj, String name, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString(name));
+        if (value instanceof JsUndefined) {
+            throw new TypeErrorException(name + " is required in a relativeTo fields object");
+        }
+        return relativeToIntegerField(value, name, ops);
+    }
+
+    private static int relativeToFieldOrDefault(JsValue obj, String name, int defaultValue, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString(name));
+        return value instanceof JsUndefined ? defaultValue : relativeToIntegerField(value, name, ops);
+    }
+
+    private static int resolveRelativeToMonth(JsValue obj, InterpreterOps ops) {
+        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
+        final var monthValue = ops.getMember(obj, new JsString("month"));
+        if (!(monthCodeValue instanceof JsUndefined)) {
+            final var resolved = parseRelativeToMonthCode(JsCoercion.toStr(monthCodeValue, ops));
+            if (!(monthValue instanceof JsUndefined) && relativeToIntegerField(monthValue, "month", ops) != resolved) {
+                throw new RangeErrorException("month and monthCode are inconsistent");
+            }
+            return resolved;
+        }
+        if (monthValue instanceof JsUndefined) {
+            throw new TypeErrorException("month or monthCode is required in a relativeTo fields object");
+        }
+        return relativeToIntegerField(monthValue, "month", ops);
+    }
+
+    private static int parseRelativeToMonthCode(String code) {
+        if (code.length() == 3 && code.charAt(0) == 'M') {
+            try {
+                final var value = Integer.parseInt(code.substring(1));
+                if (value >= 1 && value <= 12) {
+                    return value;
+                }
+            } catch (NumberFormatException ignored) {
+                // Falls through to the RangeError below.
+            }
+        }
+        throw new RangeErrorException("Invalid monthCode: " + code);
+    }
+
+    // ToIntegerWithTruncation: a finite number is required, truncated toward zero.
+    // ToIntegerWithTruncation, per TemporalRoundingIncrement's own spec algorithm - unlike a Duration
+    // field or a relativeTo field-object value, roundingIncrement is truncated rather than required to
+    // already be an integer (2.5 is accepted and truncates to 2).
+    private static long roundingIncrementValue(JsValue value, InterpreterOps ops) {
+        final var number = JsCoercion.toNumber(value, ops);
+        if (Double.isNaN(number) || Double.isInfinite(number)) {
+            throw new RangeErrorException("roundingIncrement must be a finite integer, got " + number);
+        }
+        return (long) (number < 0 ? Math.ceil(number) : Math.floor(number));
+    }
+
+    private static int relativeToIntegerField(JsValue value, String name, InterpreterOps ops) {
+        final var number = JsCoercion.toNumber(value, ops);
+        if (Double.isNaN(number) || Double.isInfinite(number)) {
+            throw new RangeErrorException(name + " must be a finite integer, got " + number);
+        }
+        final var truncated = number < 0 ? Math.ceil(number) : Math.floor(number);
+        return (int) truncated;
     }
 
     private static DurationFields toDurationFields(JsValue value, InterpreterOps ops) {
@@ -264,9 +480,7 @@ public final class TemporalDurationBuiltins {
     }
 
     private static JsValue negated(JsTemporalDuration receiver) {
-        final var f = receiver.getFields();
-        return new JsTemporalDuration(new DurationFields(-f.years(), -f.months(), -f.weeks(), -f.days(), -f.hours(),
-                -f.minutes(), -f.seconds(), -f.milliseconds(), -f.microseconds(), -f.nanoseconds()));
+        return new JsTemporalDuration(DurationMath.negate(receiver.getFields()));
     }
 
     private static JsValue abs(JsTemporalDuration receiver) {
@@ -293,7 +507,10 @@ public final class TemporalDurationBuiltins {
             final var totalNanos = DurationMath.totalNanoseconds(a).add(subtract ? otherTotal.negate() : otherTotal);
             return new JsTemporalDuration(DurationMath.balanceFromTotalNanoseconds(totalNanos, Unit.DAY));
         } catch (UnsupportedOperationException e) {
-            throw new RangeErrorException(CALENDAR_LIMITATION);
+            // add()/subtract() with a calendar-unit operand is out of this feature's scope (unlike
+            // round/total/compare/since/until, add/subtract's relativeTo-anchored balancing was not
+            // part of the closed gap - see the feature plan's scope note).
+            throw new RangeErrorException(RELATIVE_TO_REQUIRED);
         }
     }
 
@@ -309,24 +526,124 @@ public final class TemporalDurationBuiltins {
         final var largestUnitValue = ops.getMember(options, new JsString("largestUnit"));
         final var incrementValue = ops.getMember(options, new JsString("roundingIncrement"));
         final var modeValue = ops.getMember(options, new JsString("roundingMode"));
+        final var relativeToValue = ops.getMember(options, new JsString("relativeTo"));
         if (isAbsent(smallestUnitValue) && isAbsent(largestUnitValue)) {
             throw new RangeErrorException("round requires at least one of smallestUnit or largestUnit");
         }
+        final var fields = receiver.getFields();
         final var smallestUnit = isAbsent(smallestUnitValue)
                 ? Unit.NANOSECOND
                 : Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
-        final var largestUnit = isAbsent(largestUnitValue)
-                ? Unit.DAY
-                : Unit.parseTemporalUnit(JsCoercion.toStr(largestUnitValue, ops));
-        final var increment = isAbsent(incrementValue) ? 1 : (long) integerValue(incrementValue, ops);
+        final var largestUnit = resolveLargestUnit(largestUnitValue, fields, smallestUnit, ops);
+        if (smallestUnit.ordinal() < largestUnit.ordinal()) {
+            throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
+        }
+        final var increment = isAbsent(incrementValue) ? 1 : roundingIncrementValue(incrementValue, ops);
+        if (increment < 1 || increment > 1_000_000_000) {
+            throw new RangeErrorException("roundingIncrement out of range: " + increment);
+        }
         final var mode = isAbsent(modeValue)
                 ? RoundingMode.HALF_EXPAND
                 : RoundingMode.parse(JsCoercion.toStr(modeValue, ops));
-        try {
-            return new JsTemporalDuration(
-                    DurationMath.roundDuration(receiver.getFields(), smallestUnit, increment, mode, largestUnit));
-        } catch (UnsupportedOperationException e) {
-            throw new RangeErrorException(CALENDAR_LIMITATION);
+        if (!isAbsent(relativeToValue)) {
+            final var anchor = toRelativeToAnchor(relativeToValue, ops);
+            validateIncrementForBalancing(smallestUnit, largestUnit, increment);
+            validateRoundingIncrementForUnit(increment, smallestUnit);
+            final var endPoint = RelativeDurationMath.applyDuration(anchor, fields, RegulateOverflow.CONSTRAIN);
+            // Only roundedDifference below resolves the endpoint through RelativeDurationMath's own
+            // exact-instant range check; the plain differenceCalendar fast path never does, so a
+            // calendar-part addition that lands outside Temporal's representable range (huge
+            // weeks/days) would otherwise go undetected. Discarding the result: this call's only
+            // purpose here is that range check.
+            RelativeDurationMath.toEpochNanos(anchor, endPoint.date(), endPoint.time());
+            final var result = smallestUnit == Unit.NANOSECOND && increment == 1
+                    ? DurationMath.differenceCalendar(anchor.date(), anchor.time(), endPoint.date(), endPoint.time(),
+                            largestUnit)
+                    : RelativeDurationMath.roundedDifference(anchor, endPoint.date(), endPoint.time(), largestUnit,
+                            smallestUnit, increment, mode);
+            return new JsTemporalDuration(result);
+        }
+        if (hasCalendarUnits(fields) || largestUnit.isLargerThan(Unit.DAY) || smallestUnit.isLargerThan(Unit.DAY)) {
+            throw new RangeErrorException(RELATIVE_TO_REQUIRED);
+        }
+        return new JsTemporalDuration(DurationMath.roundDuration(fields, smallestUnit, increment, mode, largestUnit));
+    }
+
+    // largestUnit's "auto" (or absent) default is LargerOfTwoTemporalUnits(DefaultTemporalLargestUnit
+    // (duration), smallestUnit) - the largest unit already present in the duration, widened to
+    // smallestUnit if that is coarser still (e.g. a {days:364} duration rounded to "years" needs
+    // largestUnit to widen to "years" too, not stay at the duration's own natural "days").
+    private static Unit resolveLargestUnit(JsValue largestUnitValue, DurationFields fields, Unit smallestUnit,
+            InterpreterOps ops) {
+        final var autoDefault = coarserOf(defaultLargestUnit(fields), smallestUnit);
+        if (isAbsent(largestUnitValue)) {
+            return autoDefault;
+        }
+        final var raw = JsCoercion.toStr(largestUnitValue, ops);
+        return "auto".equals(raw) ? autoDefault : Unit.parseTemporalUnit(raw);
+    }
+
+    private static Unit defaultLargestUnit(DurationFields f) {
+        if (f.years() != 0) {
+            return Unit.YEAR;
+        }
+        if (f.months() != 0) {
+            return Unit.MONTH;
+        }
+        if (f.weeks() != 0) {
+            return Unit.WEEK;
+        }
+        if (f.days() != 0) {
+            return Unit.DAY;
+        }
+        if (f.hours() != 0) {
+            return Unit.HOUR;
+        }
+        if (f.minutes() != 0) {
+            return Unit.MINUTE;
+        }
+        if (f.seconds() != 0) {
+            return Unit.SECOND;
+        }
+        if (f.milliseconds() != 0) {
+            return Unit.MILLISECOND;
+        }
+        if (f.microseconds() != 0) {
+            return Unit.MICROSECOND;
+        }
+        return Unit.NANOSECOND;
+    }
+
+    private static Unit coarserOf(Unit a, Unit b) {
+        return a.ordinal() <= b.ordinal() ? a : b;
+    }
+
+    // RoundDuration disallows a rounding increment greater than 1 for a date unit (year/month/week/
+    // day) when also balancing to a DIFFERENT (coarser) largestUnit - the ambiguity of "round to N
+    // months, then re-express in years" isn't well-defined the way "round to N months, stay in
+    // months" is. increment 1, or largestUnit == smallestUnit, are both always fine.
+    private static void validateIncrementForBalancing(Unit smallestUnit, Unit largestUnit, long increment) {
+        if (smallestUnit.ordinal() <= Unit.DAY.ordinal() && increment != 1 && largestUnit != smallestUnit) {
+            throw new RangeErrorException("roundingIncrement > 1 is not supported for smallestUnit \""
+                    + smallestUnit.singular() + "\" when balancing to a different largestUnit");
+        }
+    }
+
+    // Date units (year/month/week/day) accept any increment in range (validateIncrementForBalancing
+    // above covers their one real restriction); time units must divide evenly into their natural cycle
+    // length, matching every other Temporal type's rounding-increment validation.
+    private static void validateRoundingIncrementForUnit(long increment, Unit unit) {
+        if (unit.ordinal() <= Unit.DAY.ordinal()) {
+            return;
+        }
+        final var maximum = switch (unit) {
+            case HOUR -> 24;
+            case MINUTE, SECOND -> 60;
+            case MILLISECOND, MICROSECOND, NANOSECOND -> 1000;
+            default -> throw new RangeErrorException("Invalid unit for rounding: " + unit);
+        };
+        if (maximum % increment != 0 || increment == maximum) {
+            throw new RangeErrorException("Invalid roundingIncrement " + increment + " for unit " + unit.singular());
         }
     }
 
@@ -343,15 +660,22 @@ public final class TemporalDurationBuiltins {
             throw new RangeErrorException("total requires a unit option");
         }
         final var unit = Unit.parseTemporalUnit(JsCoercion.toStr(unitValue, ops));
+        final var relativeToValue = ops.getMember(options, new JsString("relativeTo"));
         final var fields = receiver.getFields();
-        try {
-            DurationMath.requireCalendarIndependent(fields, unit);
-        } catch (UnsupportedOperationException e) {
-            throw new RangeErrorException(CALENDAR_LIMITATION);
+        if (!isAbsent(relativeToValue)) {
+            final var anchor = toRelativeToAnchor(relativeToValue, ops);
+            final var endPoint = RelativeDurationMath.applyDuration(anchor, fields, RegulateOverflow.CONSTRAIN);
+            return new JsNumber(RelativeDurationMath.totalInUnit(anchor, endPoint.date(), endPoint.time(), unit));
+        }
+        if (hasCalendarUnits(fields) || unit.isLargerThan(Unit.DAY)) {
+            throw new RangeErrorException(RELATIVE_TO_REQUIRED);
         }
         final var totalNanos = new BigDecimal(DurationMath.totalNanoseconds(fields));
         final var perUnit = new BigDecimal(DurationMath.nanosPerUnit(unit));
-        return new JsNumber(totalNanos.divide(perUnit, 20, java.math.RoundingMode.HALF_UP).doubleValue());
+        // 50 significant digits (MathContext, not a fixed post-point scale) leaves an enormous margin
+        // over a double's ~17, so the BigDecimal -> double conversion below is exact regardless of this
+        // intermediate rounding mode's tie-breaking choice - see RelativeDurationMath.exactDivide.
+        return new JsNumber(totalNanos.divide(perUnit, new java.math.MathContext(50)).doubleValue());
     }
 
     private static JsValue toStringMethod(JsTemporalDuration receiver, JsValue optionsArg, InterpreterOps ops) {
@@ -371,16 +695,28 @@ public final class TemporalDurationBuiltins {
             final var mode = isAbsent(roundingModeValue)
                     ? RoundingMode.TRUNC
                     : RoundingMode.parse(JsCoercion.toStr(roundingModeValue, ops));
-            try {
-                toFormat = DurationMath.roundDuration(toFormat, unit, 1, mode, Unit.DAY);
-            } catch (UnsupportedOperationException e) {
-                throw new RangeErrorException(CALENDAR_LIMITATION);
-            }
+            toFormat = roundFractionalTail(toFormat, unit, mode);
             fractionalSecondDigits = digitsForUnit(unit);
         } else if (!isAbsent(digitsValue)) {
             fractionalSecondDigits = parseFractionalDigits(digitsValue, ops);
         }
         return new JsString(TemporalFormatter.formatDuration(toFormat, fractionalSecondDigits));
+    }
+
+    // toString's smallestUnit is always second-or-finer (parseFractionalUnit enforces this), so
+    // rounding it only ever needs to touch the day-and-below tail - years/months/weeks stay exactly
+    // as they are, never being consulted or reset by the rounding itself. Splitting the tail out
+    // before rounding (rather than rounding the whole DurationFields) is what lets a Duration with a
+    // nonzero year/month/week format with a smallestUnit/fractionalSecondDigits option at all: the
+    // calendar-independent DurationMath.roundDuration used here rejects any nonzero year/month/week
+    // outright, and reattaching them post-round keeps that check meaningful elsewhere.
+    private static DurationFields roundFractionalTail(DurationFields fields, Unit unit, RoundingMode mode) {
+        final var tail = new DurationFields(0, 0, 0, fields.days(), fields.hours(), fields.minutes(), fields.seconds(),
+                fields.milliseconds(), fields.microseconds(), fields.nanoseconds());
+        final var rounded = DurationMath.roundDuration(tail, unit, 1, mode, Unit.DAY);
+        return new DurationFields(fields.years(), fields.months(), fields.weeks(), rounded.days(), rounded.hours(),
+                rounded.minutes(), rounded.seconds(), rounded.milliseconds(), rounded.microseconds(),
+                rounded.nanoseconds());
     }
 
     private static Unit parseFractionalUnit(String value) {
@@ -412,8 +748,11 @@ public final class TemporalDurationBuiltins {
         return (int) number;
     }
 
+    // A null-prototype object (OrdinaryObjectCreate(null)) so a lookup of an absent option key (e.g.
+    // relativeTo, when only a unit string shorthand was passed) never falls through to Object.prototype.
     private static JsObject singleKeyOptions(String key, JsString value) {
         final var options = new JsObject();
+        options.setProto(null);
         options.set(key, value);
         return options;
     }
