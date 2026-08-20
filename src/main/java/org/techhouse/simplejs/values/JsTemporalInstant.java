@@ -95,7 +95,11 @@ public final class JsTemporalInstant extends JsValue {
         return epochMillisecondsLong();
     }
 
-    public int compareTo(JsTemporalInstant other) {
+    // Deliberately not named compareTo/Comparable: this type does not implement java.lang.Comparable
+    // (no natural total order is exposed to script code beyond this epoch comparison), so a
+    // compareTo(JsTemporalInstant)-shaped method without the interface and matching equals() trips
+    // SpotBugs' Comparable-pattern detectors.
+    public int compareEpoch(JsTemporalInstant other) {
         final var cmp = Long.compare(epochSeconds, other.epochSeconds);
         return cmp != 0 ? cmp : Integer.compare(nanoAdjustment, other.nanoAdjustment);
     }

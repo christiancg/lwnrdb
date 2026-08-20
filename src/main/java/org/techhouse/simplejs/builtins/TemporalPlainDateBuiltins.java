@@ -6,6 +6,7 @@ import java.util.function.Function;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.temporal.DurationFields;
 import org.techhouse.simplejs.internal.temporal.DurationMath;
 import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
@@ -339,22 +340,22 @@ public final class TemporalPlainDateBuiltins {
         if (value instanceof JsString s) {
             return TemporalParser.parseDuration(s.getValue());
         }
-        if (!(value instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(value)) {
             throw new TypeErrorException("Invalid Temporal.Duration-like value");
         }
-        final var fields = new DurationFields(durationFieldOrZero(obj, "years", ops),
-                durationFieldOrZero(obj, "months", ops), durationFieldOrZero(obj, "weeks", ops),
-                durationFieldOrZero(obj, "days", ops), durationFieldOrZero(obj, "hours", ops),
-                durationFieldOrZero(obj, "minutes", ops), durationFieldOrZero(obj, "seconds", ops),
-                durationFieldOrZero(obj, "milliseconds", ops), durationFieldOrZero(obj, "microseconds", ops),
-                durationFieldOrZero(obj, "nanoseconds", ops));
+        final var fields = new DurationFields(durationFieldOrZero(value, "years", ops),
+                durationFieldOrZero(value, "months", ops), durationFieldOrZero(value, "weeks", ops),
+                durationFieldOrZero(value, "days", ops), durationFieldOrZero(value, "hours", ops),
+                durationFieldOrZero(value, "minutes", ops), durationFieldOrZero(value, "seconds", ops),
+                durationFieldOrZero(value, "milliseconds", ops), durationFieldOrZero(value, "microseconds", ops),
+                durationFieldOrZero(value, "nanoseconds", ops));
         DurationMath.sign(fields);
         return fields;
     }
 
     // ToIntegerIfIntegral: unlike the date fields above, a Duration-like field must already BE an
     // integer (no truncation) - 1.5 is a RangeError, not silently floored.
-    private static double durationFieldOrZero(JsObject obj, String name, InterpreterOps ops) {
+    private static double durationFieldOrZero(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         if (value instanceof JsUndefined) {
             return 0.0;
@@ -488,19 +489,19 @@ public final class TemporalPlainDateBuiltins {
         if (timeLike instanceof JsString s) {
             return TemporalParser.parseTime(s.getValue()).time();
         }
-        if (!(timeLike instanceof JsObject obj)) {
+        if (!InterpreterUtils.isObjectLike(timeLike)) {
             throw new TypeErrorException("Invalid time-like value");
         }
-        final var hour = timeFieldOrZero(obj, "hour", ops);
-        final var minute = timeFieldOrZero(obj, "minute", ops);
-        final var second = timeFieldOrZero(obj, "second", ops);
-        final var millisecond = timeFieldOrZero(obj, "millisecond", ops);
-        final var microsecond = timeFieldOrZero(obj, "microsecond", ops);
-        final var nanosecond = timeFieldOrZero(obj, "nanosecond", ops);
+        final var hour = timeFieldOrZero(timeLike, "hour", ops);
+        final var minute = timeFieldOrZero(timeLike, "minute", ops);
+        final var second = timeFieldOrZero(timeLike, "second", ops);
+        final var millisecond = timeFieldOrZero(timeLike, "millisecond", ops);
+        final var microsecond = timeFieldOrZero(timeLike, "microsecond", ops);
+        final var nanosecond = timeFieldOrZero(timeLike, "nanosecond", ops);
         return new IsoTimeFields(hour, minute, second, millisecond, microsecond, nanosecond);
     }
 
-    private static int timeFieldOrZero(JsObject obj, String name, InterpreterOps ops) {
+    private static int timeFieldOrZero(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
         return value instanceof JsUndefined ? 0 : toIntegerField(value, name, ops);
     }

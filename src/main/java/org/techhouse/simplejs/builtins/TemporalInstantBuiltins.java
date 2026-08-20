@@ -10,6 +10,7 @@ import java.util.Locale;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
@@ -157,7 +158,7 @@ public final class TemporalInstantBuiltins {
     // is defined purely in exact nanoseconds, so a "day" (or larger) has no fixed meaning without a
     // calendar/time zone attached.
     private static BigInteger durationTimeNanos(JsValue durationLike, InterpreterOps ops) {
-        if (!(durationLike instanceof JsObject) || ops == null) {
+        if (!InterpreterUtils.isObjectLike(durationLike) || ops == null) {
             throw new TypeErrorException("Temporal.Instant arithmetic requires a Duration-like object");
         }
         requireZeroField(durationLike, "years", ops);
@@ -528,7 +529,7 @@ public final class TemporalInstantBuiltins {
     }
 
     private static int compare(JsTemporalInstant a, JsTemporalInstant b) {
-        return Integer.signum(a.compareTo(b));
+        return Integer.signum(a.compareEpoch(b));
     }
 
     // ToTemporalInstant: accepts a Temporal.Instant instance (including a subclass wrapper) or an ISO

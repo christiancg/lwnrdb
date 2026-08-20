@@ -32,6 +32,12 @@ public class TemporalPlainDateProgramTest {
                 str("var d = new Temporal.PlainDate(2024, 3, 10);" + "d.year + ',' + d.month + ',' + d.day"));
     }
 
+    // Individual numeric field accessors round-trip through the engine
+    @Test
+    public void test_numeric_field_accessor() {
+        assertEquals(10, num("new Temporal.PlainDate(2024, 3, 10).day"));
+    }
+
     // getISOFields and the field accessors agree with each other
     @Test
     public void test_field_accessors_agree_with_getISOFields() {

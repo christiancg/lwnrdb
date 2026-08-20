@@ -37,6 +37,12 @@ public class TemporalPlainTimeProgramTest {
         assertEquals("09:30:00", str("new Temporal.PlainTime(9, 30).toString()"));
     }
 
+    // Individual numeric field accessors round-trip through the engine
+    @Test
+    public void test_numeric_field_accessor() {
+        assertEquals(30, num("new Temporal.PlainTime(9, 30).minute"));
+    }
+
     // add/subtract compose and wrap around midnight, matching the direct builtin-level assertions
     @Test
     public void test_add_and_subtract_compose() {
@@ -127,5 +133,50 @@ public class TemporalPlainTimeProgramTest {
     @Test
     public void test_to_zoned_date_time_is_not_yet_supported() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).toZonedDateTime({})"));
+    }
+
+    // round() with an explicit unit/increment/roundingMode combination, end to end
+    @Test
+    public void test_round_with_options_end_to_end() {
+        final var result = new SimpleJs().run("""
+                return new Temporal.PlainTime(12, 34, 56)
+                    .round({ smallestUnit: 'second', roundingIncrement: 30, roundingMode: 'halfExpand' })
+                    .toString();
+                """, SimpleHostBindings.empty());
+        assertFalse(result.isError());
+        assertEquals("12:35:00", result.getValue().asJsonString().getValue());
+    }
+
+    // toString() with a fractionalSecondDigits option, end to end
+    @Test
+    public void test_to_string_fractional_second_digits_end_to_end() {
+        final var result = new SimpleJs().run(
+                "return new Temporal.PlainTime(1, 2, 3, 400).toString({ fractionalSecondDigits: 2 });",
+                SimpleHostBindings.empty());
+        assertFalse(result.isError());
+        assertEquals("01:02:03.40", result.getValue().asJsonString().getValue());
+    }
+
+    // An invalid roundingIncrement surfaces as a catchable RangeError
+    @Test
+    public void test_invalid_rounding_increment_surfaces_range_error() {
+        final var result = new SimpleJs().run(
+                "return new Temporal.PlainTime(1).round({ smallestUnit: 'hour', roundingIncrement: 5 });",
+                SimpleHostBindings.empty());
+        assertTrue(result.isError());
+        assertEquals("RangeError", result.getErrorName());
+    }
+
+    // until()/since() report a duration decomposed against a custom largestUnit, end to end
+    @Test
+    public void test_until_with_largest_unit_end_to_end() {
+        final var result = new SimpleJs().run("""
+                const a = new Temporal.PlainTime(10, 0, 0);
+                const b = new Temporal.PlainTime(11, 30, 0);
+                const d = a.until(b, { largestUnit: 'minute' });
+                return d.minutes;
+                """, SimpleHostBindings.empty());
+        assertFalse(result.isError());
+        assertEquals(90, result.getValue().asJsonNumber().asInteger());
     }
 }

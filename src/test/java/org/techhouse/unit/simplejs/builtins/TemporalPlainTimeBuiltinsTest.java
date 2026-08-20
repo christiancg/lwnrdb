@@ -207,4 +207,223 @@ public class TemporalPlainTimeBuiltinsTest {
     public void test_unknown_member_is_undefined() {
         assertEquals("undefined", str("typeof new Temporal.PlainTime().nope"));
     }
+
+    // round() sweeps every rounding mode, positive side (via non-negative-only roundNonNegative)
+    @Test
+    public void test_round_all_modes() {
+        final var setup = "new Temporal.PlainTime(0, 0, 0, 0, 0, %d)"
+                + ".round({smallestUnit: 'nanosecond', roundingIncrement: 10, roundingMode: '%s'}).nanosecond";
+        assertEquals(20, num(String.format(setup, 13, "ceil")));
+        assertEquals(10, num(String.format(setup, 13, "floor")));
+        assertEquals(10, num(String.format(setup, 13, "trunc")));
+        assertEquals(20, num(String.format(setup, 15, "halfExpand")));
+        assertEquals(20, num(String.format(setup, 15, "halfCeil")));
+        assertEquals(10, num(String.format(setup, 15, "halfFloor")));
+        assertEquals(10, num(String.format(setup, 15, "halfTrunc")));
+        assertEquals(20, num(String.format(setup, 15, "halfEven")));
+        assertEquals(20, num(String.format(setup, 25, "halfEven")));
+    }
+
+    // round() carries over the day boundary (mod 86400e9) when rounding up past midnight
+    @Test
+    public void test_round_wraps_past_midnight() {
+        assertEquals("00:00:00", str("new Temporal.PlainTime(23, 59, 59, 999, 999, 999)"
+                + ".round({smallestUnit: 'second', roundingMode: 'ceil'}).toString()"));
+    }
+
+    // round() accepts every fixed time unit through hour
+    @Test
+    public void test_round_every_unit() {
+        assertEquals(0, num("new Temporal.PlainTime(0, 0, 0, 0, 0, 1)"
+                + ".round({smallestUnit: 'hour', roundingIncrement: 12, roundingMode: 'floor'}).hour"));
+        assertEquals(0, num("new Temporal.PlainTime(0, 0, 0, 0, 0, 1)"
+                + ".round({smallestUnit: 'minute', roundingIncrement: 30, roundingMode: 'floor'}).minute"));
+        assertEquals(0, num("new Temporal.PlainTime(0, 0, 0, 0, 0, 1)"
+                + ".round({smallestUnit: 'second', roundingIncrement: 30, roundingMode: 'floor'}).second"));
+        assertEquals(0,
+                num("new Temporal.PlainTime(0, 0, 0, 0, 0, 1)"
+                        + ".round({smallestUnit: 'millisecond', roundingIncrement: 500, roundingMode: 'floor'})"
+                        + ".millisecond"));
+        assertEquals(0,
+                num("new Temporal.PlainTime(0, 0, 0, 0, 0, 1)"
+                        + ".round({smallestUnit: 'microsecond', roundingIncrement: 500, roundingMode: 'floor'})"
+                        + ".microsecond"));
+    }
+
+    // round() rejects a day-or-larger smallestUnit
+    @Test
+    public void test_round_rejects_day_unit() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).round({smallestUnit: 'day'})"));
+    }
+
+    // roundingIncrement must be a positive integer, evenly divide the unit maximum, and not equal it
+    @Test
+    public void test_round_invalid_increment() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).round({smallestUnit: 'hour', roundingIncrement: 5})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainTime(1).round({smallestUnit: 'hour', roundingIncrement: 24})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainTime(1).round({smallestUnit: 'second', roundingIncrement: 0})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainTime(1).round({smallestUnit: 'second', roundingIncrement: 1_000_000_001})"));
+    }
+
+    // toString() honours fractionalSecondDigits (numeric and "auto"), smallestUnit and roundingMode
+    @Test
+    public void test_to_string_fractional_second_digits() {
+        assertEquals("00:00:00.500000000",
+                str("new Temporal.PlainTime(0, 0, 0, 500).toString({fractionalSecondDigits: 9})"));
+        assertEquals("00:00:00", str("new Temporal.PlainTime(0, 0, 0, 500).toString({fractionalSecondDigits: 0})"));
+        assertEquals("00:00:00.5",
+                str("new Temporal.PlainTime(0, 0, 0, 500).toString({fractionalSecondDigits: 'auto'})"));
+    }
+
+    @Test
+    public void test_to_string_fractional_second_digits_invalid() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).toString({fractionalSecondDigits: -1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).toString({fractionalSecondDigits: 10})"));
+    }
+
+    @Test
+    public void test_to_string_smallest_unit_minute() {
+        assertEquals("12:34", str("new Temporal.PlainTime(12, 34, 56).toString({smallestUnit: 'minute'})"));
+    }
+
+    @Test
+    public void test_to_string_smallest_unit_other() {
+        assertEquals("12:34:57", str(
+                "new Temporal.PlainTime(12, 34, 56, 500).toString({smallestUnit: 'second', roundingMode: 'ceil'})"));
+        assertEquals("12:34:56.500",
+                str("new Temporal.PlainTime(12, 34, 56, 500).toString({smallestUnit: 'millisecond'})"));
+    }
+
+    @Test
+    public void test_to_string_rejects_day_smallest_unit() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).toString({smallestUnit: 'hour'})"));
+    }
+
+    @Test
+    public void test_to_string_requires_object_options() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).toString(5)"));
+    }
+
+    // until()/since() honour largestUnit/smallestUnit/roundingIncrement/roundingMode options
+    @Test
+    public void test_until_with_options() {
+        assertTrue(bool("var d = new Temporal.PlainTime(10, 0, 0).until(new Temporal.PlainTime(11, 30, 0), "
+                + "{largestUnit: 'minute'}); d.minutes === 90"));
+        assertEquals(30, num("new Temporal.PlainTime(10, 0, 0).until(new Temporal.PlainTime(10, 0, 20), "
+                + "{smallestUnit: 'second', roundingIncrement: 30, roundingMode: 'halfExpand'}).seconds"));
+    }
+
+    // since() negates the rounding mode relative to until() (ceil/floor swap, halfCeil/halfFloor swap)
+    @Test
+    public void test_since_negates_rounding_mode_ceil_floor() {
+        assertEquals(1, num("new Temporal.PlainTime(10, 0, 20).since(new Temporal.PlainTime(10, 0, 0), "
+                + "{smallestUnit: 'minute', roundingMode: 'ceil'}).minutes"));
+        assertEquals(0, num("new Temporal.PlainTime(10, 0, 20).since(new Temporal.PlainTime(10, 0, 0), "
+                + "{smallestUnit: 'minute', roundingMode: 'floor'}).minutes"), 0.0);
+    }
+
+    @Test
+    public void test_since_negates_rounding_mode_half_ceil_floor() {
+        assertEquals(1, num("new Temporal.PlainTime(10, 0, 30).since(new Temporal.PlainTime(10, 0, 0), "
+                + "{smallestUnit: 'minute', roundingMode: 'halfCeil'}).minutes"));
+        assertEquals(0, num("new Temporal.PlainTime(10, 0, 30).since(new Temporal.PlainTime(10, 0, 0), "
+                + "{smallestUnit: 'minute', roundingMode: 'halfFloor'}).minutes"), 0.0);
+    }
+
+    // until()/since() reject a largestUnit/smallestUnit larger than hour
+    @Test
+    public void test_until_rejects_day_units() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainTime(1).until(new Temporal.PlainTime(2), {largestUnit: 'day'})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainTime(1).until(new Temporal.PlainTime(2), {smallestUnit: 'day'})"));
+    }
+
+    @Test
+    public void test_until_rejects_smallest_larger_than_largest() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).until(new Temporal.PlainTime(2), "
+                        + "{smallestUnit: 'hour', largestUnit: 'second'})"));
+    }
+
+    @Test
+    public void test_until_options_must_be_object() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).until(new Temporal.PlainTime(2), 5)"));
+    }
+
+    @Test
+    public void test_until_largest_unit_auto_defaults_to_hour() {
+        assertEquals(2, num("new Temporal.PlainTime(10, 0, 0).until(new Temporal.PlainTime(12, 30, 0), "
+                + "{largestUnit: 'auto'}).hours"));
+    }
+
+    // readOverflowOption rejects an invalid overflow value and a non-object options argument
+    @Test
+    public void test_overflow_option_invalid() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainTime.from({hour: 1}, {overflow: 'bogus'})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from({hour: 1}, 5)"));
+    }
+
+    // from() rejects a time-like object with no recognized fields
+    @Test
+    public void test_from_rejects_object_with_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from({})"));
+    }
+
+    // Reflect.construct(Temporal.PlainTime, args, newTarget) links the new instance's prototype to
+    // newTarget.prototype instead of the intrinsic Temporal.PlainTime prototype
+    @Test
+    public void test_reflect_construct_links_new_target_prototype() {
+        assertTrue(bool("""
+                var Ctor = function() {};
+                var instance = Reflect.construct(Temporal.PlainTime, [1, 2, 3], Ctor);
+                Object.getPrototypeOf(instance) === Ctor.prototype
+                    && Object.getOwnPropertyDescriptor(Temporal.PlainTime.prototype, "hour").get.call(instance) === 1
+                """));
+    }
+
+    @Test
+    public void test_plain_new_keeps_plain_time_prototype() {
+        assertTrue(bool("Object.getPrototypeOf(new Temporal.PlainTime()) === Temporal.PlainTime.prototype"));
+    }
+
+    // toPlainDateTime requires a date-like object, and requires each of year/month/day
+    @Test
+    public void test_to_plain_date_time_requires_object() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).toPlainDateTime(5)"));
+    }
+
+    @Test
+    public void test_to_plain_date_time_requires_year_month_day() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).toPlainDateTime({month: 1, day: 1})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).toPlainDateTime({year: 2024, day: 1})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).toPlainDateTime({year: 2024, month: 1})"));
+    }
+
+    // numberField (used by add/subtract) rejects a non-integer/NaN/infinite duration field
+    @Test
+    public void test_add_rejects_invalid_duration_fields() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({hours: 1.5})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({hours: NaN})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).add({hours: Infinity})"));
+    }
+
+    @Test
+    public void test_add_requires_object_duration() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add(5)"));
+    }
 }

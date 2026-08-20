@@ -150,8 +150,9 @@ public final class IsoCalendar {
             }
             case WEEK -> {
                 final var totalDays = ChronoUnit.DAYS.between(smaller, larger);
-                yield new DurationFields(0, 0, sign * (double) (totalDays / 7), sign * (double) (totalDays % 7), 0, 0,
-                        0, 0, 0, 0);
+                final long weeks = totalDays / 7;
+                final long remainderDays = totalDays % 7;
+                yield new DurationFields(0, 0, sign * (double) weeks, sign * (double) remainderDays, 0, 0, 0, 0, 0, 0);
             }
             default ->
                 new DurationFields(0, 0, 0, sign * (double) ChronoUnit.DAYS.between(smaller, larger), 0, 0, 0, 0, 0, 0);

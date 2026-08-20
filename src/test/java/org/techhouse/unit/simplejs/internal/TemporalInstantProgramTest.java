@@ -115,4 +115,46 @@ public class TemporalInstantProgramTest {
         assertFalse(result.isError());
         assertEquals("TypeError", result.getValue().asJsonString().getValue());
     }
+
+    // round() with an explicit unit/increment/mode combination, exercised end-to-end through the
+    // engine's error/result contract rather than the direct builtin-level helper.
+    @Test
+    public void test_round_with_options_end_to_end() {
+        final var result = run("""
+                const rounded = Temporal.Instant.fromEpochMilliseconds(1500)
+                    .round({ smallestUnit: 'second', roundingMode: 'floor' });
+                return rounded.epochMilliseconds;
+                """);
+        assertFalse(result.isError());
+        assertEquals(1000, result.getValue().asJsonNumber().asInteger());
+    }
+
+    // toString() with a timeZone option renders a non-UTC offset
+    @Test
+    public void test_to_string_with_time_zone_option() {
+        final var result = run("return new Temporal.Instant(0n).toString({ timeZone: '+02:00' });");
+        assertFalse(result.isError());
+        assertEquals("1970-01-01T02:00:00+02:00", result.getValue().asJsonString().getValue());
+    }
+
+    // An invalid time zone identifier surfaces as a catchable RangeError
+    @Test
+    public void test_invalid_time_zone_surfaces_range_error() {
+        final var result = run("return new Temporal.Instant(0n).toString({ timeZone: 'Not/AZone' });");
+        assertTrue(result.isError());
+        assertEquals("RangeError", result.getErrorName());
+    }
+
+    // until()/since() report a duration decomposed against a custom largestUnit
+    @Test
+    public void test_until_with_largest_unit_end_to_end() {
+        final var result = run("""
+                const a = Temporal.Instant.fromEpochMilliseconds(0);
+                const b = Temporal.Instant.fromEpochMilliseconds(90000);
+                const d = a.until(b, { largestUnit: 'minute' });
+                return d.minutes === 1 && d.seconds === 30;
+                """);
+        assertFalse(result.isError());
+        assertTrue(result.getValue().asJsonBoolean().getValue());
+    }
 }
