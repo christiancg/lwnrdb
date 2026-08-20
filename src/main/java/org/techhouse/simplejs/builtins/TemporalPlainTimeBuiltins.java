@@ -424,8 +424,7 @@ public final class TemporalPlainTimeBuiltins {
     }
 
     private static DurationFields negate(DurationFields f) {
-        return new DurationFields(-f.years(), -f.months(), -f.weeks(), -f.days(), -f.hours(), -f.minutes(),
-                -f.seconds(), -f.milliseconds(), -f.microseconds(), -f.nanoseconds());
+        return DurationMath.negate(f);
     }
 
     private static long readIncrementOption(JsValue options, InterpreterOps ops) {

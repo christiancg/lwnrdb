@@ -19,6 +19,7 @@ import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
+import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
@@ -65,9 +66,6 @@ import org.techhouse.simplejs.values.JsValue;
  * can land on different results across a DST boundary, exactly as the spec requires.
  */
 public final class TemporalZonedDateTimeBuiltins {
-    private static final String CALENDAR_LIMITATION = "Duration operations involving years, months or weeks "
-            + "require calendar-aware balancing (a relativeTo date), which is not implemented";
-
     public static final List<String> NAMES = List.of("with", "withCalendar", "withTimeZone", "withPlainDate",
             "withPlainTime", "add", "subtract", "until", "since", "round", "equals", "toInstant", "toPlainDate",
             "toPlainTime", "toPlainDateTime", "toPlainYearMonth", "toPlainMonthDay", "toString", "toJSON",
@@ -795,8 +793,7 @@ public final class TemporalZonedDateTimeBuiltins {
     }
 
     private static DurationFields negate(DurationFields d) {
-        return new DurationFields(-d.years(), -d.months(), -d.weeks(), -d.days(), -d.hours(), -d.minutes(),
-                -d.seconds(), -d.milliseconds(), -d.microseconds(), -d.nanoseconds());
+        return DurationMath.negate(d);
     }
 
     private static JsValue add(JsTemporalZonedDateTime receiver, JsValue durationLike, JsValue optionsArg,
@@ -865,9 +862,6 @@ public final class TemporalZonedDateTimeBuiltins {
         final var smallestUnit = readSmallestUnitOption(optionsArg, ops);
         final var largestUnitDefault = smallestUnit.isLargerThan(Unit.HOUR) ? smallestUnit : Unit.HOUR;
         final var largestUnit = readLargestUnitOption(optionsArg, largestUnitDefault, ops);
-        if (largestUnit.isLargerThan(Unit.DAY)) {
-            throw new RangeErrorException(CALENDAR_LIMITATION);
-        }
         if (smallestUnit.ordinal() < largestUnit.ordinal()) {
             throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
         }
@@ -876,13 +870,29 @@ public final class TemporalZonedDateTimeBuiltins {
         if (isSince) {
             mode = negateRoundingMode(mode);
         }
-        var fields = largestUnit == Unit.DAY
-                ? dayAndTimeDifference(receiver, other)
-                : DurationMath.balanceFromTotalNanoseconds(
-                        other.epochNanoseconds().subtract(receiver.epochNanoseconds()), largestUnit);
-        if (smallestUnit != Unit.NANOSECOND || increment != 1) {
-            validateRoundingIncrement(increment, smallestUnit);
-            fields = DurationMath.roundDuration(fields, smallestUnit, increment, mode, largestUnit);
+        DurationFields fields;
+        if (largestUnit.isLargerThan(Unit.DAY)) {
+            // Calendar-unit differences between zoned date-times are computed on the receiver's local
+            // wall-clock date+time (DifferenceZonedDateTime); only the exact rounding decision below
+            // "day" needs the real instant/zone, via RelativeDurationMath's zoned Anchor.
+            final var anchorFields = receiver.isoFieldsAtLocal();
+            final var anchor = RelativeDurationMath.Anchor.zoned(anchorFields.date(), anchorFields.time(),
+                    receiver.zone());
+            final var otherLocal = other.isoFieldsAtLocal();
+            fields = smallestUnit != Unit.NANOSECOND || increment != 1
+                    ? RelativeDurationMath.roundedDifference(anchor, otherLocal.date(), otherLocal.time(), largestUnit,
+                            smallestUnit, increment, mode)
+                    : DurationMath.differenceCalendar(anchor.date(), anchor.time(), otherLocal.date(),
+                            otherLocal.time(), largestUnit);
+        } else {
+            fields = largestUnit == Unit.DAY
+                    ? dayAndTimeDifference(receiver, other)
+                    : DurationMath.balanceFromTotalNanoseconds(
+                            other.epochNanoseconds().subtract(receiver.epochNanoseconds()), largestUnit);
+            if (smallestUnit != Unit.NANOSECOND || increment != 1) {
+                validateRoundingIncrement(increment, smallestUnit);
+                fields = DurationMath.roundDuration(fields, smallestUnit, increment, mode, largestUnit);
+            }
         }
         if (isSince) {
             fields = negate(fields);

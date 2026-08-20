@@ -17,6 +17,7 @@ import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
+import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
 import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
@@ -45,9 +46,6 @@ import org.techhouse.simplejs.values.JsValue;
  * {@code disambiguation} option.
  */
 public final class TemporalPlainDateTimeBuiltins {
-    private static final String CALENDAR_LIMITATION = "Duration operations involving years, months or weeks "
-            + "require calendar-aware balancing (a relativeTo date), which is not implemented";
-
     public static final List<String> NAMES = List.of("with", "withCalendar", "withPlainTime", "add", "subtract",
             "until", "since", "round", "equals", "toPlainDate", "toPlainTime", "toPlainYearMonth", "toPlainMonthDay",
             "toZonedDateTime", "toString", "toJSON", "toLocaleString", "getISOFields", "valueOf");
@@ -61,7 +59,6 @@ public final class TemporalPlainDateTimeBuiltins {
     private static final BigInteger NANOS_PER_SECOND = BigInteger.valueOf(1_000_000_000L);
     private static final BigInteger NANOS_PER_MILLI = BigInteger.valueOf(1_000_000L);
     private static final BigInteger NANOS_PER_MICRO = BigInteger.valueOf(1_000L);
-    private static final long NANOS_PER_DAY_LONG = 86_400_000_000_000L;
     private static final long NANOS_PER_HOUR_LONG = 3_600_000_000_000L;
     private static final long NANOS_PER_MINUTE_LONG = 60_000_000_000L;
     private static final long NANOS_PER_SECOND_LONG = 1_000_000_000L;
@@ -573,8 +570,7 @@ public final class TemporalPlainDateTimeBuiltins {
     }
 
     private static DurationFields negate(DurationFields d) {
-        return new DurationFields(-d.years(), -d.months(), -d.weeks(), -d.days(), -d.hours(), -d.minutes(),
-                -d.seconds(), -d.milliseconds(), -d.microseconds(), -d.nanoseconds());
+        return DurationMath.negate(d);
     }
 
     private static JsValue add(JsTemporalPlainDateTime receiver, JsValue durationLike, JsValue optionsArg,
@@ -611,11 +607,6 @@ public final class TemporalPlainDateTimeBuiltins {
                 .add(BigInteger.valueOf(t.millisecond()).multiply(NANOS_PER_MILLI))
                 .add(BigInteger.valueOf(t.microsecond()).multiply(NANOS_PER_MICRO))
                 .add(BigInteger.valueOf(t.nanosecond()));
-    }
-
-    private static long toNanosOfDayLong(IsoTimeFields t) {
-        return t.hour() * NANOS_PER_HOUR_LONG + t.minute() * NANOS_PER_MINUTE_LONG + t.second() * NANOS_PER_SECOND_LONG
-                + t.millisecond() * NANOS_PER_MILLI_LONG + t.microsecond() * NANOS_PER_MICRO_LONG + t.nanosecond();
     }
 
     private static IsoTimeFields fromNanosOfDay(long nanos) {
@@ -673,70 +664,22 @@ public final class TemporalPlainDateTimeBuiltins {
         if (isSince) {
             mode = negateRoundingMode(mode);
         }
-        var fields = differenceDateTime(receiver.date(), receiver.time(), other.date(), other.time(), largestUnit);
+        var fields = DurationMath.differenceCalendar(receiver.date(), receiver.time(), other.date(), other.time(),
+                largestUnit);
         if (smallestUnit != Unit.NANOSECOND || increment != 1) {
-            if (!smallestUnit.isLargerThan(Unit.DAY)) {
+            if (largestUnit.isLargerThan(Unit.DAY)) {
+                final var anchor = RelativeDurationMath.Anchor.plain(receiver.date(), receiver.time());
+                fields = RelativeDurationMath.roundedDifference(anchor, other.date(), other.time(), largestUnit,
+                        smallestUnit, increment, mode);
+            } else {
                 validateRoundingIncrement(increment, smallestUnit);
-            }
-            try {
                 fields = DurationMath.roundDuration(fields, smallestUnit, increment, mode, largestUnit);
-            } catch (UnsupportedOperationException e) {
-                throw new RangeErrorException(CALENDAR_LIMITATION);
             }
         }
         if (isSince) {
             fields = negate(fields);
         }
         return new JsTemporalDuration(fields);
-    }
-
-    // DifferenceISODateTime: the calendar-independent time-of-day diff is computed first; if its sign
-    // disagrees with the date-only comparison, a day is borrowed so the (later, calendar-aware)
-    // date-part breakdown and the time-part remainder end up carrying the same sign. largestUnit "day"
-    // and smaller fold the whole result into a single nanosecond total instead (a "day" is always
-    // exactly 86,400 seconds within one PlainDateTime, unlike a real calendar month/week).
-    private static DurationFields differenceDateTime(Iso8601Fields date1, IsoTimeFields time1, Iso8601Fields date2,
-            IsoTimeFields time2, Unit largestUnit) {
-        final var dateSign = IsoCalendar.compareIsoDate(date2, date1);
-        var rawTimeDiffNanos = toNanosOfDayLong(time2) - toNanosOfDayLong(time1);
-        var adjustedDate2 = date2;
-        if (rawTimeDiffNanos != 0 && dateSign != 0) {
-            if (dateSign > 0 && rawTimeDiffNanos < 0) {
-                adjustedDate2 = IsoCalendar.balanceIsoDate(date2.year(), date2.month(), date2.day() - 1L);
-                rawTimeDiffNanos += NANOS_PER_DAY_LONG;
-            } else if (dateSign < 0 && rawTimeDiffNanos > 0) {
-                adjustedDate2 = IsoCalendar.balanceIsoDate(date2.year(), date2.month(), date2.day() + 1L);
-                rawTimeDiffNanos -= NANOS_PER_DAY_LONG;
-            }
-        }
-        final var dateLargestUnit = largestUnit.isLargerThan(Unit.DAY) ? largestUnit : Unit.DAY;
-        final var dateDiff = IsoCalendar.differenceISODate(date1, adjustedDate2, dateLargestUnit);
-        if (largestUnit.isLargerThan(Unit.DAY)) {
-            final var timeFields = timeNanosToFields(rawTimeDiffNanos);
-            return new DurationFields(dateDiff.years(), dateDiff.months(), dateDiff.weeks(), dateDiff.days(),
-                    timeFields.hours(), timeFields.minutes(), timeFields.seconds(), timeFields.milliseconds(),
-                    timeFields.microseconds(), timeFields.nanoseconds());
-        }
-        final var totalNanos = BigInteger.valueOf((long) dateDiff.days()).multiply(NANOS_PER_DAY)
-                .add(BigInteger.valueOf(rawTimeDiffNanos));
-        return DurationMath.balanceFromTotalNanoseconds(totalNanos, largestUnit);
-    }
-
-    private static DurationFields timeNanosToFields(long nanos) {
-        final var sign = Long.signum(nanos);
-        var abs = Math.abs(nanos);
-        final var hours = abs / NANOS_PER_HOUR_LONG;
-        abs %= NANOS_PER_HOUR_LONG;
-        final var minutes = abs / NANOS_PER_MINUTE_LONG;
-        abs %= NANOS_PER_MINUTE_LONG;
-        final var seconds = abs / NANOS_PER_SECOND_LONG;
-        abs %= NANOS_PER_SECOND_LONG;
-        final var millis = abs / NANOS_PER_MILLI_LONG;
-        abs %= NANOS_PER_MILLI_LONG;
-        final var micros = abs / NANOS_PER_MICRO_LONG;
-        final var nanosRemainder = abs % NANOS_PER_MICRO_LONG;
-        return new DurationFields(0, 0, 0, 0, sign * (double) hours, sign * (double) minutes, sign * (double) seconds,
-                sign * (double) millis, sign * (double) micros, sign * (double) nanosRemainder);
     }
 
     private static JsValue equalsMethod(JsTemporalPlainDateTime receiver, JsValue otherArg, InterpreterOps ops) {

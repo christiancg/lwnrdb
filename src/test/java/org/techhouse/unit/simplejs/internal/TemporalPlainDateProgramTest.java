@@ -115,4 +115,13 @@ public class TemporalPlainDateProgramTest {
         assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
         assertEquals("\"2024-03-10\"", new org.techhouse.ejson.EJson().toJson(result.getValue()));
     }
+
+    // until() rounds to a calendar smallestUnit finer than its largestUnit default, using the receiver
+    // as the implicit anchor - halfExpand rounds a half-year-ish remainder up
+    @Test
+    public void test_until_rounds_to_years() {
+        assertEquals(2,
+                num("var a = new Temporal.PlainDate(2019, 1, 1);" + "var b = new Temporal.PlainDate(2020, 7, 2);"
+                        + "a.until(b, {smallestUnit: 'years', roundingMode: 'halfExpand'}).years"));
+    }
 }

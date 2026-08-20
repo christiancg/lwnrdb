@@ -10,6 +10,7 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
+import org.techhouse.simplejs.internal.temporal.Unit;
 
 public class IsoCalendarTest {
     @Test
@@ -147,5 +148,73 @@ public class IsoCalendarTest {
         final var date = new Iso8601Fields(2024, 1, 1);
         assertEquals(1, IsoCalendar.weekOfYear(date));
         assertEquals(2024, IsoCalendar.yearOfWeek(date));
+    }
+
+    @Test
+    public void test_regulate_date_rejects_day_below_range() {
+        assertThrows(RangeErrorException.class, () -> IsoCalendar.regulateDate(2023, 4, 0, RegulateOverflow.REJECT));
+    }
+
+    @Test
+    public void test_difference_iso_date_year_largest_unit_both_directions() {
+        final var earlier = new Iso8601Fields(2018, 6, 1);
+        final var later = new Iso8601Fields(2021, 3, 5);
+        final var forward = IsoCalendar.differenceISODate(earlier, later, Unit.YEAR);
+        assertEquals(2, forward.years());
+        assertEquals(9, forward.months());
+        assertEquals(4, forward.days());
+        final var backward = IsoCalendar.differenceISODate(later, earlier, Unit.YEAR);
+        assertEquals(-2, backward.years());
+        assertEquals(-9, backward.months());
+        assertEquals(-4, backward.days());
+    }
+
+    @Test
+    public void test_difference_iso_date_month_largest_unit_folds_years_into_months() {
+        final var result = IsoCalendar.differenceISODate(new Iso8601Fields(2020, 1, 1), new Iso8601Fields(2021, 3, 1),
+                Unit.MONTH);
+        assertEquals(0, result.years());
+        assertEquals(14, result.months());
+        assertEquals(0, result.days());
+    }
+
+    @Test
+    public void test_difference_iso_date_week_largest_unit_both_directions() {
+        final var forward = IsoCalendar.differenceISODate(new Iso8601Fields(2020, 1, 1), new Iso8601Fields(2020, 1, 22),
+                Unit.WEEK);
+        assertEquals(3, forward.weeks());
+        assertEquals(0, forward.days());
+        final var backward = IsoCalendar.differenceISODate(new Iso8601Fields(2020, 1, 22),
+                new Iso8601Fields(2020, 1, 1), Unit.WEEK);
+        assertEquals(-3, backward.weeks());
+        assertEquals(0, backward.days());
+    }
+
+    @Test
+    public void test_difference_iso_date_day_largest_unit_both_directions() {
+        final var forward = IsoCalendar.differenceISODate(new Iso8601Fields(2020, 1, 1), new Iso8601Fields(2020, 1, 11),
+                Unit.DAY);
+        assertEquals(10, forward.days());
+        final var backward = IsoCalendar.differenceISODate(new Iso8601Fields(2020, 1, 11),
+                new Iso8601Fields(2020, 1, 1), Unit.DAY);
+        assertEquals(-10, backward.days());
+    }
+
+    @Test
+    public void test_difference_iso_date_same_date_is_zero() {
+        final var date = new Iso8601Fields(2020, 1, 1);
+        assertEquals(0, IsoCalendar.differenceISODate(date, date, Unit.YEAR).years());
+    }
+
+    // A month-end anchor day (31) whose naive calendar-month estimate overshoots once it is clamped
+    // against a shorter target month (February) forces monthDayDifference's shrink-then-verify
+    // correction loop, not just its happy-path single estimate.
+    @Test
+    public void test_difference_iso_date_month_end_anchor_needs_correction() {
+        final var forward = IsoCalendar.differenceISODate(new Iso8601Fields(2000, 1, 31), new Iso8601Fields(2010, 2, 1),
+                Unit.YEAR);
+        assertEquals(10, forward.years());
+        assertEquals(0, forward.months());
+        assertEquals(1, forward.days());
     }
 }

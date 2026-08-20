@@ -12,6 +12,8 @@ import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.RegulateOverflow;
+import org.techhouse.simplejs.internal.temporal.RelativeDurationMath;
+import org.techhouse.simplejs.internal.temporal.RoundingMode;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.internal.temporal.Unit;
@@ -280,22 +282,65 @@ public final class TemporalPlainDateBuiltins {
                 : RegulateOverflow.parse(JsCoercion.toStr(value, ops));
     }
 
-    private static Unit readLargestUnitOption(JsValue optionsArg, InterpreterOps ops) {
+    private static Unit readLargestUnitOption(JsValue optionsArg, Unit fallback, InterpreterOps ops) {
         final var value = optionOrUndefined(optionsArg, "largestUnit", ops);
         if (value instanceof JsUndefined) {
-            return Unit.DAY;
+            return fallback;
         }
         final var raw = JsCoercion.toStr(value, ops);
         if ("auto".equals(raw)) {
-            return Unit.DAY;
+            return fallback;
         }
+        final var unit = requireDateUnit(raw, "largestUnit");
+        return unit;
+    }
+
+    private static Unit readSmallestUnitOption(JsValue optionsArg, InterpreterOps ops) {
+        final var value = optionOrUndefined(optionsArg, "smallestUnit", ops);
+        return value instanceof JsUndefined ? Unit.DAY : requireDateUnit(JsCoercion.toStr(value, ops), "smallestUnit");
+    }
+
+    private static Unit requireDateUnit(String raw, String optionName) {
         final var unit = Unit.parseTemporalUnit(raw);
         if (unit.ordinal() > Unit.DAY.ordinal()) {
             throw new RangeErrorException(
-                    "largestUnit must be one of \"year\", \"month\", \"week\" or \"day\" for Temporal.PlainDate, got: "
-                            + raw);
+                    optionName + " must be one of \"year\", \"month\", \"week\" or \"day\" for Temporal.PlainDate, "
+                            + "got: " + raw);
         }
         return unit;
+    }
+
+    private static long readIncrementOption(JsValue optionsArg, InterpreterOps ops) {
+        final var value = optionOrUndefined(optionsArg, "roundingIncrement", ops);
+        if (value instanceof JsUndefined) {
+            return 1;
+        }
+        final var number = toIntegerField(value, "roundingIncrement", ops);
+        if (number < 1 || number > 1_000_000_000) {
+            throw new RangeErrorException("roundingIncrement out of range: " + number);
+        }
+        return number;
+    }
+
+    private static RoundingMode readRoundingModeOption(JsValue optionsArg, InterpreterOps ops, RoundingMode fallback) {
+        final var value = optionOrUndefined(optionsArg, "roundingMode", ops);
+        return value instanceof JsUndefined ? fallback : RoundingMode.parse(JsCoercion.toStr(value, ops));
+    }
+
+    private static RoundingMode negateRoundingMode(RoundingMode mode) {
+        return switch (mode) {
+            case CEIL -> RoundingMode.FLOOR;
+            case FLOOR -> RoundingMode.CEIL;
+            case HALF_CEIL -> RoundingMode.HALF_FLOOR;
+            case HALF_FLOOR -> RoundingMode.HALF_CEIL;
+            default -> mode;
+        };
+    }
+
+    private static void validateRoundingIncrement(long increment, Unit unit) {
+        if (unit == Unit.DAY && increment != 1) {
+            throw new RangeErrorException("Invalid roundingIncrement " + increment + " for unit day");
+        }
     }
 
     private static TemporalFormatter.CalendarName readCalendarNameOption(JsValue optionsArg, InterpreterOps ops) {
@@ -379,8 +424,7 @@ public final class TemporalPlainDateBuiltins {
     }
 
     private static DurationFields negate(DurationFields d) {
-        return new DurationFields(-d.years(), -d.months(), -d.weeks(), -d.days(), -d.hours(), -d.minutes(),
-                -d.seconds(), -d.milliseconds(), -d.microseconds(), -d.nanoseconds());
+        return DurationMath.negate(d);
     }
 
     // Only the date-granular fields (years/months/weeks/days) affect a PlainDate; a duration's time
@@ -404,16 +448,41 @@ public final class TemporalPlainDateBuiltins {
 
     private static JsValue until(JsTemporalPlainDate receiver, JsValue otherArg, JsValue optionsArg,
             InterpreterOps ops) {
-        final var other = toPlainDate(otherArg, ops);
-        final var largestUnit = readLargestUnitOption(optionsArg, ops);
-        return new JsTemporalDuration(IsoCalendar.differenceISODate(receiver.fields(), other.fields(), largestUnit));
+        return difference(receiver, otherArg, optionsArg, false, ops);
     }
 
     private static JsValue since(JsTemporalPlainDate receiver, JsValue otherArg, JsValue optionsArg,
             InterpreterOps ops) {
+        return difference(receiver, otherArg, optionsArg, true, ops);
+    }
+
+    private static final IsoTimeFields MIDNIGHT = new IsoTimeFields(0, 0, 0, 0, 0, 0);
+
+    private static JsValue difference(JsTemporalPlainDate receiver, JsValue otherArg, JsValue optionsArg,
+            boolean isSince, InterpreterOps ops) {
         final var other = toPlainDate(otherArg, ops);
-        final var largestUnit = readLargestUnitOption(optionsArg, ops);
-        return new JsTemporalDuration(IsoCalendar.differenceISODate(other.fields(), receiver.fields(), largestUnit));
+        final var smallestUnit = readSmallestUnitOption(optionsArg, ops);
+        final var largestUnitDefault = smallestUnit.isLargerThan(Unit.DAY) ? smallestUnit : Unit.DAY;
+        final var largestUnit = readLargestUnitOption(optionsArg, largestUnitDefault, ops);
+        if (smallestUnit.ordinal() < largestUnit.ordinal()) {
+            throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
+        }
+        final var increment = readIncrementOption(optionsArg, ops);
+        var mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
+        if (isSince) {
+            mode = negateRoundingMode(mode);
+        }
+        var fields = IsoCalendar.differenceISODate(receiver.fields(), other.fields(), largestUnit);
+        if (smallestUnit != Unit.DAY || increment != 1) {
+            validateRoundingIncrement(increment, smallestUnit);
+            final var anchor = RelativeDurationMath.Anchor.plain(receiver.fields(), MIDNIGHT);
+            fields = RelativeDurationMath.roundedDifference(anchor, other.fields(), MIDNIGHT, largestUnit, smallestUnit,
+                    increment, mode);
+        }
+        if (isSince) {
+            fields = negate(fields);
+        }
+        return new JsTemporalDuration(fields);
     }
 
     private static JsValue equalsMethod(JsTemporalPlainDate receiver, JsValue otherArg, InterpreterOps ops) {

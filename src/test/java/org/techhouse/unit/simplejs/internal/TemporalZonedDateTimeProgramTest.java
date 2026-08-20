@@ -121,4 +121,34 @@ public class TemporalZonedDateTimeProgramTest {
         assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
         assertEquals("\"1970-01-01T00:00:00+00:00[UTC]\"", new org.techhouse.ejson.EJson().toJson(result.getValue()));
     }
+
+    // until with largestUnit "years" balances a calendar-unit difference on the local wall-clock date
+    // (implicit relativeTo - the receiver itself)
+    @Test
+    public void test_until_with_years_largest_unit() {
+        assertEquals("3,6,17",
+                str("var a = Temporal.ZonedDateTime.from('1997-12-01T12:00[UTC]');"
+                        + "var b = Temporal.ZonedDateTime.from('2001-06-18T12:00[UTC]');"
+                        + "var d = a.until(b, {largestUnit: 'years'}); d.years + ',' + d.months + ',' + d.days"));
+    }
+
+    // rounding at "months" with largestUnit "years" carries into a full extra year
+    @Test
+    public void test_until_rounds_months_carries_into_years() {
+        assertEquals(2,
+                num("var a = Temporal.ZonedDateTime.from('2022-01-01T00:00[UTC]');"
+                        + "var b = Temporal.ZonedDateTime.from('2023-12-25T00:00[UTC]');"
+                        + "a.until(b, {largestUnit: 'years', smallestUnit: 'months', roundingMode: 'expand'}).years"));
+    }
+
+    // since is the negation of until across a calendar-unit largestUnit
+    @Test
+    public void test_since_is_negation_of_until() {
+        assertTrue(bool("var a = Temporal.ZonedDateTime.from('2020-01-01T00:00[UTC]');"
+                + "var b = Temporal.ZonedDateTime.from('2021-03-05T00:00[UTC]');"
+                + "var forward = a.until(b, {largestUnit: 'years'});"
+                + "var backward = b.since(a, {largestUnit: 'years'});"
+                + "forward.years === backward.years && forward.months === backward.months"
+                + " && forward.days === backward.days"));
+    }
 }

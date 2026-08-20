@@ -123,9 +123,15 @@ public final class IsoCalendar {
     /**
      * DifferenceISODate: the calendar difference from {@code date1} to {@code date2} (i.e. the
      * duration that {@link #addDate} would apply to {@code date1} to reach {@code date2}), broken
-     * down greedily into units no larger than {@code largestUnit}. Delegates to {@link Period}
-     * (year/month) since that is the same greedy proleptic-Gregorian breakdown the "iso8601"
-     * calendar's date arithmetic already reduces to.
+     * down greedily into units no larger than {@code largestUnit}. The week/day cases delegate to
+     * {@link ChronoUnit#DAYS} (an exact, direction-symmetric day count - negating it is always
+     * correct). The year/month cases are NOT simply {@link Period#between} on the smaller/larger pair
+     * negated when {@code date1 > date2}: month length varies, so a period computed forward from the
+     * earlier date and then negated does not generally land back on the later date when re-applied
+     * from it (e.g. the month-end/leap-day boundary cases {@link #monthDayDifference} exists to get
+     * right) - {@link #monthDayDifference} instead searches directly from {@code date1} in the actual
+     * sign direction, verified against {@link LocalDate#plusMonths} (the same CONSTRAIN semantics
+     * {@link #addDate} uses), so the result always round-trips via {@link #addDate}.
      */
     public static DurationFields differenceISODate(Iso8601Fields date1, Iso8601Fields date2, Unit largestUnit) {
         final var start = toLocalDate(date1);
@@ -133,29 +139,65 @@ public final class IsoCalendar {
         if (start.equals(end)) {
             return DurationFields.ZERO;
         }
-        final var sign = start.isBefore(end) ? 1 : -1;
-        final var smaller = sign > 0 ? start : end;
-        final var larger = sign > 0 ? end : start;
         return switch (largestUnit) {
             case YEAR -> {
-                final var period = Period.between(smaller, larger);
-                yield new DurationFields(sign * (double) period.getYears(), sign * (double) period.getMonths(), 0,
-                        sign * (double) period.getDays(), 0, 0, 0, 0, 0, 0);
+                final var diff = monthDayDifference(start, end);
+                final var years = diff.totalMonths() / 12;
+                final var months = diff.totalMonths() % 12;
+                yield new DurationFields(years, months, 0, diff.days(), 0, 0, 0, 0, 0, 0);
             }
             case MONTH -> {
-                final var period = Period.between(smaller, larger);
-                final var months = period.getYears() * 12L + period.getMonths();
-                yield new DurationFields(0, sign * (double) months, 0, sign * (double) period.getDays(), 0, 0, 0, 0, 0,
-                        0);
+                final var diff = monthDayDifference(start, end);
+                yield new DurationFields(0, diff.totalMonths(), 0, diff.days(), 0, 0, 0, 0, 0, 0);
             }
             case WEEK -> {
+                final var sign = start.isBefore(end) ? 1 : -1;
+                final var smaller = sign > 0 ? start : end;
+                final var larger = sign > 0 ? end : start;
                 final var totalDays = ChronoUnit.DAYS.between(smaller, larger);
                 final long weeks = totalDays / 7;
                 final long remainderDays = totalDays % 7;
-                yield new DurationFields(0, 0, sign * (double) weeks, sign * (double) remainderDays, 0, 0, 0, 0, 0, 0);
+                yield new DurationFields(0, 0, signed(sign, weeks), signed(sign, remainderDays), 0, 0, 0, 0, 0, 0);
             }
-            default ->
-                new DurationFields(0, 0, 0, sign * (double) ChronoUnit.DAYS.between(smaller, larger), 0, 0, 0, 0, 0, 0);
+            default -> {
+                final var sign = start.isBefore(end) ? 1 : -1;
+                final var smaller = sign > 0 ? start : end;
+                final var larger = sign > 0 ? end : start;
+                yield new DurationFields(0, 0, 0, signed(sign, ChronoUnit.DAYS.between(smaller, larger)), 0, 0, 0, 0, 0,
+                        0);
+            }
         };
+    }
+
+    private record MonthDayDiff(long totalMonths, long days) {
+    }
+
+    // Searches for the whole-month count (signed, anchored at `start`) such that start.plusMonths(...)
+    // lands as close to `end` as possible without passing it (in the actual start->end direction),
+    // then measures the exact day remainder from that landing point - the direct, round-trip-safe
+    // replacement for a smaller/larger Period.between negated post hoc.
+    private static MonthDayDiff monthDayDifference(LocalDate start, LocalDate end) {
+        final var sign = start.isBefore(end) ? 1 : -1;
+        var totalMonths = (end.getYear() - start.getYear()) * 12L + (end.getMonthValue() - start.getMonthValue());
+        while (overshoots(start.plusMonths(totalMonths), end, sign)) {
+            totalMonths -= sign;
+        }
+        while (!overshoots(start.plusMonths(totalMonths + sign), end, sign)) {
+            totalMonths += sign;
+        }
+        final var landing = start.plusMonths(totalMonths);
+        return new MonthDayDiff(totalMonths, ChronoUnit.DAYS.between(landing, end));
+    }
+
+    // True once `candidate` has gone past `target` in the `sign` direction of travel.
+    private static boolean overshoots(LocalDate candidate, LocalDate target, int sign) {
+        return sign > 0 ? candidate.isAfter(target) : candidate.isBefore(target);
+    }
+
+    // A zero component must stay +0 after applying `sign`, not become -0 (a Duration field is never
+    // observably signed-zero per spec) - plain `sign * value` produces -0 in IEEE 754 whenever value
+    // is 0 and sign is negative.
+    private static double signed(int sign, long value) {
+        return value == 0 ? 0.0 : sign * (double) value;
     }
 }
