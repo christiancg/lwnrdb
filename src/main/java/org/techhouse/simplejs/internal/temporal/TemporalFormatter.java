@@ -55,6 +55,10 @@ public final class TemporalFormatter {
         return formatYear(date.year()) + "-" + pad2(date.month()) + "-" + pad2(date.day());
     }
 
+    public static String formatDate(Iso8601Fields date, CalendarName calendarName) {
+        return formatDate(date) + formatCalendarAnnotation(calendarName);
+    }
+
     public static String formatTime(IsoTimeFields time, Integer fractionalSecondDigits) {
         final var sb = new StringBuilder();
         sb.append(pad2(time.hour())).append(':').append(pad2(time.minute())).append(':').append(pad2(time.second()));

@@ -31,6 +31,7 @@ import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -103,6 +104,7 @@ public final class JsCoercion {
             case JsDate d -> d.toDateString();
             case JsTemporalDuration d -> d.toString();
             case JsTemporalPlainTime t -> t.toString();
+            case JsTemporalPlainDate pd -> pd.toString();
             // A proxy has no [[SourceText]] of its own, so a callable target's retained text must not
             // leak through it: Function.prototype.toString on a proxy is the NativeFunction form.
             case JsProxy proxy when proxy.isCallable() -> FunctionProtoBuiltins.nativeFunctionForm(proxy.getTarget());

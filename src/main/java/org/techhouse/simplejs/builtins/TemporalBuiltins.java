@@ -17,6 +17,7 @@ public final class TemporalBuiltins {
         temporal.setProto(intrinsics.objectProto());
         installCtor(temporal, "Duration", TemporalDurationBuiltins.create(ops), intrinsics.temporalDurationProto());
         installCtor(temporal, "PlainTime", TemporalPlainTimeBuiltins.create(ops), intrinsics.temporalPlainTimeProto());
+        installCtor(temporal, "PlainDate", TemporalPlainDateBuiltins.create(ops), intrinsics.temporalPlainDateProto());
         global.declareBuiltin("Temporal", temporal);
         return temporal;
     }
