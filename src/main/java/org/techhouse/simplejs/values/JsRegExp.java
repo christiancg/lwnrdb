@@ -2,7 +2,7 @@ package org.techhouse.simplejs.values;
 
 import java.util.List;
 import java.util.Map;
-import java.util.regex.Pattern;
+import org.techhouse.simplejs.internal.regex.RegexProgram;
 
 public final class JsRegExp extends JsValue {
     private static final String LAST_INDEX = "lastIndex";
@@ -11,20 +11,12 @@ public final class JsRegExp extends JsValue {
 
     private final String source;
     private final String flags;
-    private final Pattern pattern;
-    // Original group name -> the java group names it was compiled to; more than one when ES2025
-    // duplicate named groups appear in different alternatives.
-    private final Map<String, List<String>> groupAliases;
+    private final RegexProgram program;
 
-    public JsRegExp(String source, String flags, Pattern pattern) {
-        this(source, flags, pattern, Map.of());
-    }
-
-    public JsRegExp(String source, String flags, Pattern pattern, Map<String, List<String>> groupAliases) {
+    public JsRegExp(String source, String flags, RegexProgram program) {
         this.source = source;
         this.flags = flags;
-        this.pattern = pattern;
-        this.groupAliases = groupAliases == null ? Map.of() : groupAliases;
+        this.program = program;
         // lastIndex is an ordinary own data property, not an internal slot behind an accessor: a
         // script may redefine it non-writable, and RegExpBuiltinExec's Set must then throw.
         final var table = ownProperties();
@@ -32,8 +24,10 @@ public final class JsRegExp extends JsValue {
         table.setFlags(LAST_INDEX, new JsObject.PropertyFlags(true, false, false));
     }
 
-    public Map<String, List<String>> getGroupAliases() {
-        return groupAliases;
+    // Original group name -> the capturing group numbers it was compiled to; more than one when
+    // ES2025 duplicate named groups appear in different alternatives.
+    public Map<String, List<Integer>> getGroupAliases() {
+        return program.groupAliases();
     }
 
     public String getSource() {
@@ -44,8 +38,8 @@ public final class JsRegExp extends JsValue {
         return flags;
     }
 
-    public Pattern getPattern() {
-        return pattern;
+    public RegexProgram getProgram() {
+        return program;
     }
 
     public JsValue getLastIndex() {

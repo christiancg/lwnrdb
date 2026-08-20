@@ -434,7 +434,7 @@ public final class Interpreter {
             } else if (statement instanceof FunctionDeclaration declaration) {
                 final var name = declaration.getName().getName();
                 final var function = makeFunction(name, declaration.getParams(), declaration.getBody(), false, false,
-                        declaration.isAsync(), declaration.isGenerator(), env);
+                        declaration.isAsync(), declaration.isGenerator(), env, declaration.getSourceText());
                 env.declareFunction(name, function);
             }
         }
@@ -883,12 +883,12 @@ public final class Interpreter {
     private JsValue evalFunctionExpression(FunctionExpression expression, Environment env) {
         if (expression.getName() == null) {
             return makeFunction(null, expression.getParams(), expression.getBody(), false, false, expression.isAsync(),
-                    expression.isGenerator(), env);
+                    expression.isGenerator(), env, expression.getSourceText());
         }
         final var name = expression.getName().getName();
         final var funcEnv = env.child();
         final var function = makeFunction(name, expression.getParams(), expression.getBody(), false, false,
-                expression.isAsync(), expression.isGenerator(), funcEnv);
+                expression.isAsync(), expression.isGenerator(), funcEnv, expression.getSourceText());
         funcEnv.declareLexical(name, "const");
         funcEnv.initialize(name, function);
         return function;
@@ -896,12 +896,13 @@ public final class Interpreter {
 
     private JsValue evalArrowFunction(ArrowFunctionExpression expression, Environment env) {
         return makeFunction(null, expression.getParams(), expression.getBody(), true, expression.isExpressionBody(),
-                expression.isAsync(), false, env);
+                expression.isAsync(), false, env, expression.getSourceText());
     }
 
     public JsFunction makeFunction(String name, List<JsNode> params, JsNode body, boolean arrow, boolean expressionBody,
-            boolean async, boolean generator, Environment closure) {
+            boolean async, boolean generator, Environment closure, String sourceText) {
         final var function = new JsFunction(name, params, body, arrow, expressionBody, async, generator, closure);
+        function.setSourceText(sourceText);
         if (generator) {
             function.getPrototype().setProto(async ? intrinsics.asyncIteratorProto() : intrinsics.iteratorProto());
         }

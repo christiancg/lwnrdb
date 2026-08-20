@@ -112,7 +112,7 @@ public final class Parser {
     }
 
     public static Program parse(List<JsBaseElement> tokens) {
-        return new State(tokens, null, null, false).parseProgram();
+        return new State(null, tokens, null, null, false).parseProgram();
     }
 
     public static Program parse(Lexer.LexResult lexed) {
@@ -123,7 +123,8 @@ public final class Parser {
     // contract deliberately relaxes: a top-level `return`, `new.target` or `super` outside function
     // code, `import`/`export`, `import.meta`, and a top-level `using` declaration.
     public static Program parse(Lexer.LexResult lexed, boolean strictScriptGoal) {
-        return new State(lexed.tokens(), lexed.positions(), lexed.newlineBefore(), strictScriptGoal).parseProgram();
+        return new State(lexed.source(), lexed.tokens(), lexed.positions(), lexed.newlineBefore(), strictScriptGoal)
+                .parseProgram();
     }
 
     // The recursive-descent walk is inherently stateful (a moving cursor over the token stream),
@@ -152,6 +153,7 @@ public final class Parser {
         private DeclarationScope scope = new DeclarationScope(null, true);
         private PrivateScope privateScope;
         private final Map<String, Boolean> labels = new HashMap<>();
+        private final String source;
         private int iterationDepth;
         private int switchDepth;
         private boolean inStaticBlock;
@@ -175,10 +177,28 @@ public final class Parser {
         // Contains looks through an arrow for `new.target` and `super` but not through a function.
         private boolean inNonArrowFunction;
 
-        private State(List<JsBaseElement> tokens, List<SourcePosition> positions, List<Boolean> newlineBefore,
-                boolean strictScriptGoal) {
+        private State(String source, List<JsBaseElement> tokens, List<SourcePosition> positions,
+                List<Boolean> newlineBefore, boolean strictScriptGoal) {
             super(tokens, positions, newlineBefore);
+            this.source = source;
             this.strictScriptGoal = strictScriptGoal;
+        }
+
+        // Function.prototype.toString hands back the construct's own text, so the function-like and
+        // class productions record where they started and slice the source once they are complete.
+        private int spanStart() {
+            return source == null || positions == null ? -1 : positions.get(pos).getOffset();
+        }
+
+        // The span ends at the last token consumed - the closing '}' or the concise body's final
+        // token - so trailing trivia stays out of it, while any comment *inside* the construct is
+        // kept verbatim because the slice is taken from the source rather than rebuilt from tokens.
+        private String spanFrom(int start) {
+            if (start < 0) {
+                return null;
+            }
+            final var last = positions.get(Math.max(0, pos - 1));
+            return source.substring(start, last.getOffset() + last.getLength());
         }
 
         private <T> T inScope(Supplier<T> production) {
@@ -382,7 +402,7 @@ public final class Parser {
                         return parseContinue();
                     }
                     case "function" -> {
-                        return parseFunctionDeclaration(false);
+                        return parseFunctionDeclaration(false, spanStart());
                     }
                     case "async" -> {
                         // `async [no LineTerminator here] function`: a line break between the two
@@ -390,8 +410,9 @@ public final class Parser {
                         // reference, followed by a separate ordinary function declaration.
                         if (!newlineBeforePeek() && peek().getType() == JsType.KEYWORD
                                 && "function".equals(((JsKeyword) peek()).getValue())) {
+                            final var start = spanStart();
                             advance();
-                            return parseFunctionDeclaration(true);
+                            return parseFunctionDeclaration(true, start);
                         }
                     }
                     case "class" -> {
@@ -949,14 +970,17 @@ public final class Parser {
             return new SyntaxErrorException("Undefined label '" + label.getName() + "'");
         }
 
-        private FunctionDeclaration parseFunctionDeclaration(boolean async) {
+        // start is the offset of `function`, or of the `async` the caller has already consumed.
+        private FunctionDeclaration parseFunctionDeclaration(boolean async, int start) {
             expectKeyword("function");
             final var generator = matchOperator("*");
             final var name = parseBindingIdentifier();
             // A function declaration is var-scoped at a function boundary and lexical inside a block.
             declareBoundNames(name, !scope.isFunctionBoundary());
             final var parts = parseFunctionParts(generator, async);
-            return new FunctionDeclaration(name, parts.params(), parts.body(), async, generator);
+            final var declaration = new FunctionDeclaration(name, parts.params(), parts.body(), async, generator);
+            declaration.setSourceText(spanFrom(start));
+            return declaration;
         }
 
         private ImportDeclaration parseImportDeclaration() {
@@ -1091,12 +1115,13 @@ public final class Parser {
                 return parseVariableDeclaration();
             }
             if (isKeyword("function")) {
-                return parseFunctionDeclaration(false);
+                return parseFunctionDeclaration(false, spanStart());
             }
             if (isKeyword("async") && peek().getType() == JsType.KEYWORD
                     && "function".equals(((JsKeyword) peek()).getValue())) {
+                final var start = spanStart();
                 advance();
-                return parseFunctionDeclaration(true);
+                return parseFunctionDeclaration(true, start);
             }
             if (isKeyword("class")) {
                 return parseClassDeclaration();
@@ -1291,9 +1316,10 @@ public final class Parser {
                 if (newlineBeforePeek()) {
                     throw error();
                 }
+                final var start = spanStart();
                 advance();
                 advance();
-                return parseArrowBody(List.of(new Identifier(name)), false);
+                return parseArrowBody(List.of(new Identifier(name)), false, start);
             }
             advance();
             return new Identifier(name);
@@ -1959,10 +1985,11 @@ public final class Parser {
                 if (newlineBeforePeek()) {
                     throw error();
                 }
+                final var start = spanStart();
                 advance();
                 advance();
                 validateBindingName(t.getValue());
-                return parseArrowBody(List.of(new Identifier(t.getValue())), false);
+                return parseArrowBody(List.of(new Identifier(t.getValue())), false, start);
             }
             advance();
             return new Identifier(t.getValue());
@@ -1975,7 +2002,7 @@ public final class Parser {
                     advance();
                     yield new ThisExpression();
                 }
-                case "function" -> parseFunctionExpression(false);
+                case "function" -> parseFunctionExpression(false, spanStart());
                 case "async" -> asyncStartsFunctionOrArrow() ? parseAsyncPrimary() : parseContextualIdentifier("async");
                 case "of" -> parseContextualIdentifier("of");
                 case "await" -> {
@@ -2056,9 +2083,10 @@ public final class Parser {
         }
 
         private Expression parseAsyncPrimary() {
+            final var start = spanStart();
             expectKeyword("async");
             if (isKeyword("function")) {
-                return parseFunctionExpression(true);
+                return parseFunctionExpression(true, start);
             }
             // An async arrow's parameters are AsyncArrowBindingIdentifier/CoverCallExpression under
             // [+Await], so `await` is reserved there even though the head is not yet the body.
@@ -2068,7 +2096,7 @@ public final class Parser {
                 }
                 final var param = withAwaitReserved(true, this::parseBindingIdentifier);
                 expectOperator("=>");
-                return parseArrowBody(List.of(param), true);
+                return parseArrowBody(List.of(param), true, start);
             }
             if (isSeparator('(') && matchingParenFollowedByArrow()) {
                 final var params = withAwaitReserved(true, this::parseParams);
@@ -2076,7 +2104,7 @@ public final class Parser {
                     throw error();
                 }
                 expectOperator("=>");
-                return parseArrowBody(params, true);
+                return parseArrowBody(params, true, start);
             }
             throw error();
         }
@@ -2095,30 +2123,38 @@ public final class Parser {
 
         // A FunctionExpression's own name is a BindingIdentifier[~Yield, ~Await] (and [+Await] only for
         // an async one), so `(function await(){})` is legal even inside a class static block.
-        private FunctionExpression parseFunctionExpression(boolean async) {
+        private FunctionExpression parseFunctionExpression(boolean async, int start) {
             expectKeyword("function");
             final var generator = matchOperator("*");
             final var name = withAwaitReserved(async, () -> identifierLikeAt(0) ? parseBindingIdentifier() : null);
             final var parts = parseFunctionParts(generator, async);
-            return new FunctionExpression(name, parts.params(), parts.body(), async, generator);
+            final var expression = new FunctionExpression(name, parts.params(), parts.body(), async, generator);
+            expression.setSourceText(spanFrom(start));
+            return expression;
         }
 
         private ClassDeclaration parseClassDeclaration() {
+            final var start = spanStart();
             expectKeyword("class");
             final var id = parseBindingIdentifier();
             declareBoundNames(id, true);
             final var superClass = parseClassHeritage();
-            return new ClassDeclaration(id, superClass, parseClassBody(superClass != null));
+            final var declaration = new ClassDeclaration(id, superClass, parseClassBody(superClass != null));
+            declaration.setSourceText(spanFrom(start));
+            return declaration;
         }
 
         private ClassExpression parseClassExpression() {
+            final var start = spanStart();
             expectKeyword("class");
             Identifier id = null;
             if (identifierLikeAt(0) && isNotKeywordAt(0)) {
                 id = parseBindingIdentifier();
             }
             final var superClass = parseClassHeritage();
-            return new ClassExpression(id, superClass, parseClassBody(superClass != null));
+            final var expression = new ClassExpression(id, superClass, parseClassBody(superClass != null));
+            expression.setSourceText(spanFrom(start));
+            return expression;
         }
 
         // ClassHeritage is a LeftHandSideExpression, so an unparenthesised arrow function is a
@@ -2203,6 +2239,9 @@ public final class Parser {
             if (isStatic && isSeparator('{')) {
                 return parseStaticBlock();
             }
+            // MethodDefinition is the production whose text the method reports, so `static` - part of
+            // the enclosing ClassElement - stays outside the span.
+            final var start = spanStart();
             final var async = matchAsyncMethodModifier();
             final var generator = matchOperator("*");
             var kind = "method";
@@ -2221,6 +2260,7 @@ public final class Parser {
                         "constructor".equals(resolvedKind) && classHasHeritage, true);
                 checkAccessorParams(resolvedKind, parts.params());
                 final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
+                value.setSourceText(spanFrom(start));
                 declarePrivateName(privateNames, memberKey, resolvedKind, isStatic);
                 return new MethodDefinition(memberKey.key(), value, resolvedKind, isStatic, memberKey.computed());
             }
@@ -2540,12 +2580,13 @@ public final class Parser {
 
         private Expression parseParenOrArrow() {
             if (matchingParenFollowedByArrow()) {
+                final var start = spanStart();
                 final var params = parseParams();
                 if (newlineBeforeCurrent()) {
                     throw error();
                 }
                 expectOperator("=>");
-                return parseArrowBody(params, false);
+                return parseArrowBody(params, false, start);
             }
             expectSeparator('(');
             final var expr = withInAllowed(this::parseExpression);
@@ -2585,7 +2626,9 @@ public final class Parser {
             return false;
         }
 
-        private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async) {
+        // start is the offset of the arrow's own first token: its `async`, its single binding
+        // identifier, or the '(' opening its parameter list.
+        private ArrowFunctionExpression parseArrowBody(List<JsNode> params, boolean async, int start) {
             // ArrowFunction : ArrowParameters => ConciseBody - it is a Syntax Error if ArrowParameters
             // Contains YieldExpression/AwaitExpression: the cover grammar parses the parenthesized
             // head with the enclosing [Yield]/[Await] parameter still in effect (arrows never reset
@@ -2600,12 +2643,16 @@ public final class Parser {
             awaitReserved = async;
             try {
                 return inFunctionKind(async, () -> inBreakableBoundary(() -> {
+                    final ArrowFunctionExpression arrow;
                     if (isSeparator('{')) {
                         final var body = inFunctionScope(params, this::parseBlockBody);
                         checkUseStrictWithSimpleParams(params, body);
-                        return new ArrowFunctionExpression(params, body, false, async);
+                        arrow = new ArrowFunctionExpression(params, body, false, async);
+                    } else {
+                        arrow = new ArrowFunctionExpression(params, parseAssignment(), true, async);
                     }
-                    return new ArrowFunctionExpression(params, parseAssignment(), true, async);
+                    arrow.setSourceText(spanFrom(start));
+                    return arrow;
                 }));
             } finally {
                 inFunctionBody = wasInFunctionBody;
@@ -2689,6 +2736,9 @@ public final class Parser {
         }
 
         private Property parseProperty() {
+            // A method's own source text starts at its first modifier (`async`, `*`, `get`/`set`) or
+            // at its key, so the span opens before any of them is consumed.
+            final var start = spanStart();
             var async = false;
             if (isKeyword("async") && starOrKeyFollows() && !newlineBeforePeek()) {
                 advance();
@@ -2715,6 +2765,7 @@ public final class Parser {
                 final var parts = parseFunctionParts(generator, async, false, true);
                 checkAccessorParams(kind, parts.params());
                 final var value = new FunctionExpression(null, parts.params(), parts.body(), async, generator);
+                value.setSourceText(spanFrom(start));
                 return new Property(key, value, computed, false, "init".equals(kind) ? "method" : kind);
             }
             if (async || generator || !"init".equals(kind)) {
@@ -2804,7 +2855,7 @@ public final class Parser {
         // A template's substitutions are lexed into their own token lists, so the nested parser has to
         // inherit the grammar context the template itself sits in.
         private State forTemplateExpression(List<JsBaseElement> tokens) {
-            final var nested = new State(tokens, null, null, strictScriptGoal);
+            final var nested = new State(null, tokens, null, null, strictScriptGoal);
             nested.inGenerator = inGenerator;
             nested.inAsync = inAsync;
             nested.superCallAllowed = superCallAllowed;

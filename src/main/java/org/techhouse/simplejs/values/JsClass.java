@@ -40,6 +40,9 @@ public final class JsClass extends JsValue {
     // so a later NamedEvaluation (`setInferredName`, for an anonymous class expression) does not
     // clobber it - matching the spec's HasOwnProperty(v, "name") guard on SetFunctionName.
     private boolean explicitNameProperty;
+    // [[SourceText]]: a class constructor reports the whole ClassDeclaration/ClassExpression text,
+    // implicit constructor included.
+    private String sourceText;
 
     public JsClass(String name, JsClass superClass, Environment methodScope) {
         this.name = name;
@@ -134,6 +137,14 @@ public final class JsClass extends JsValue {
 
     public String getName() {
         return name;
+    }
+
+    public String getSourceText() {
+        return sourceText;
+    }
+
+    public void setSourceText(String sourceText) {
+        this.sourceText = sourceText;
     }
 
     public void setInferredName(String inferred) {

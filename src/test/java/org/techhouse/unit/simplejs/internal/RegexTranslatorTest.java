@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
+import org.techhouse.simplejs.internal.regex.RegexMatcher;
 
 // The literal escapes below are deliberate: these cases turn on invisible or homoglyph code
 // points (U+FE0F variation selector, U+20E3 combining keycap, U+017F long s, U+212A Kelvin sign,
@@ -16,11 +17,12 @@ import org.techhouse.simplejs.internal.RegexTranslator;
 @SuppressWarnings("UnnecessaryUnicodeEscape")
 public class RegexTranslatorTest {
     private static boolean matches(String source, String flags, String input) {
-        return RegexTranslator.compile(source, flags).getPattern().matcher(input).find();
+        return RegexMatcher.exec(RegexTranslator.compile(source, flags).getProgram(), input, 0, false) != null;
     }
 
     private static boolean fullMatch(String source, String flags, String input) {
-        return RegexTranslator.compile(source, flags).getPattern().matcher(input).matches();
+        final var match = RegexMatcher.exec(RegexTranslator.compile(source, flags).getProgram(), input, 0, false);
+        return match != null && match.start() == 0 && match.end() == input.length();
     }
 
     private static void rejects(String source, String flags) {
@@ -39,10 +41,10 @@ public class RegexTranslatorTest {
     // the longest alternative wins exactly as a character class would.
     @Test
     public void translatesMultiCodePointStringAlternativesToAnAlternation() {
-        final var pattern = RegexTranslator.compile("[\\q{a|abc|ab}]", "v").getPattern().pattern();
-        final var first = pattern.indexOf("\\x{61}\\x{62}\\x{63}");
-        final var second = pattern.indexOf("\\x{61}\\x{62}|");
-        assertTrue(first >= 0 && second > first, pattern);
+        assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "abc"));
+        assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "ab"));
+        assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "a"));
+        assertFalse(fullMatch("[\\q{a|abc|ab}]", "v", "ax"));
     }
 
     @Test
@@ -359,8 +361,8 @@ public class RegexTranslatorTest {
     }
 
     private static String firstMatch(String input) {
-        final var matcher = RegexTranslator.compile("a*?b", "").getPattern().matcher(input);
-        return matcher.find() ? matcher.group() : null;
+        final var match = RegexMatcher.exec(RegexTranslator.compile("a*?b", "").getProgram(), input, 0, false);
+        return match == null ? null : match.group(0);
     }
 
     @Test

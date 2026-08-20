@@ -121,7 +121,8 @@ public final class ModuleEvaluator {
                     ? "default"
                     : functionDeclaration.getName().getName();
             return interp.makeFunction(name, functionDeclaration.getParams(), functionDeclaration.getBody(), false,
-                    false, functionDeclaration.isAsync(), functionDeclaration.isGenerator(), env);
+                    false, functionDeclaration.isAsync(), functionDeclaration.isGenerator(), env,
+                    functionDeclaration.getSourceText());
         }
         if (value instanceof ClassDeclaration classDeclaration) {
             classes.evalClassDeclaration(classDeclaration, env);

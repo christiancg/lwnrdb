@@ -23,6 +23,7 @@ import org.techhouse.simplejs.nodes.ClassExpression;
 import org.techhouse.simplejs.nodes.Expression;
 import org.techhouse.simplejs.nodes.FieldDefinition;
 import org.techhouse.simplejs.nodes.Identifier;
+import org.techhouse.simplejs.nodes.JsNode;
 import org.techhouse.simplejs.nodes.MemberExpression;
 import org.techhouse.simplejs.nodes.MethodDefinition;
 import org.techhouse.simplejs.nodes.PrivateIdentifier;
@@ -76,7 +77,8 @@ public final class ClassEvaluator {
     }
 
     public Completion evalClassDeclaration(ClassDeclaration declaration, Environment env) {
-        final var cls = buildClass(declaration.getId(), declaration.getSuperClass(), declaration.getBody(), env, null);
+        final var cls = buildClass(declaration, declaration.getId(), declaration.getSuperClass(), declaration.getBody(),
+                env, null);
         final var name = declaration.getId().getName();
         env.declareLexical(name, "let");
         env.initialize(name, cls);
@@ -84,7 +86,7 @@ public final class ClassEvaluator {
     }
 
     public JsValue evalClassExpression(ClassExpression expression, Environment env) {
-        return buildClass(expression.getId(), expression.getSuperClass(), expression.getBody(), env, null);
+        return buildClass(expression, expression.getId(), expression.getSuperClass(), expression.getBody(), env, null);
     }
 
     // NamedEvaluation for a class expression: the caller already knows (from its own syntactic
@@ -92,10 +94,11 @@ public final class ClassEvaluator {
     // this anonymous class expression's name should be inferred, and passes it in so buildClass can
     // set it before running static field initializers/blocks - see Interpreter.evalNamed.
     public JsValue evalClassExpression(ClassExpression expression, Environment env, String inferredName) {
-        return buildClass(expression.getId(), expression.getSuperClass(), expression.getBody(), env, inferredName);
+        return buildClass(expression, expression.getId(), expression.getSuperClass(), expression.getBody(), env,
+                inferredName);
     }
 
-    private JsClass buildClass(Identifier id, Expression superClassExpr, ClassBody body, Environment env,
+    private JsClass buildClass(JsNode origin, Identifier id, Expression superClassExpr, ClassBody body, Environment env,
             String inferredName) {
         // ClassDefinitionEvaluation creates the class's own scope - with the class name bound but
         // uninitialized (TDZ) - and switches into it *before* evaluating ClassHeritage, so `class x
@@ -124,6 +127,7 @@ public final class ClassEvaluator {
         }
         final var methodScope = classScope.child();
         final var cls = new JsClass(name, superClass, methodScope);
+        cls.setSourceText(origin.getSourceText());
         if (nullHeritage) {
             cls.markNullHeritage();
             // The prototype object has no parent, but the constructor function itself still chains
@@ -219,7 +223,7 @@ public final class ClassEvaluator {
     private void installMethod(JsClass cls, MethodDefinition method, Environment classScope) {
         final var value = method.getValue();
         final var fn = interp.makeFunction(null, value.getParams(), value.getBody(), false, false, value.isAsync(),
-                value.isGenerator(), cls.getMethodScope());
+                value.isGenerator(), cls.getMethodScope(), value.getSourceText());
         final var kind = method.getKind();
         if ("constructor".equals(kind)) {
             if (cls.isDerived()) {

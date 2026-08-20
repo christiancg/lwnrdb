@@ -3,11 +3,12 @@ package org.techhouse.simplejs.builtins;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
+import org.techhouse.simplejs.internal.regex.RegexMatch;
+import org.techhouse.simplejs.internal.regex.RegexMatcher;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsFunction;
@@ -286,9 +287,8 @@ public final class RegexBuiltins {
             return JsNull.getInstance();
         }
         final var start = (int) lastIndex;
-        final var matcher = state.getPattern().matcher(input);
-        final var found = sticky ? matcher.find(start) && matcher.start() == start : matcher.find(start);
-        if (!found) {
+        final var matcher = RegexMatcher.exec(state.getProgram(), input, start, sticky);
+        if (matcher == null) {
             resetLastIndex(target, stateful, ops);
             return JsNull.getInstance();
         }
@@ -339,7 +339,7 @@ public final class RegexBuiltins {
         return Math.min(Math.floor(number), MAX_SAFE_LENGTH);
     }
 
-    public static void addIndices(JsArray result, Matcher matcher, JsRegExp regexp) {
+    public static void addIndices(JsArray result, RegexMatch matcher, JsRegExp regexp) {
         final var indices = new JsArray();
         for (var i = 0; i <= matcher.groupCount(); i++) {
             indices.push(pair(matcher.start(i), matcher.end(i)));
@@ -366,7 +366,7 @@ public final class RegexBuiltins {
         return new JsArray(List.of(new JsNumber(start), new JsNumber(end)));
     }
 
-    public static JsArray buildMatchResult(Matcher matcher, String input, JsRegExp regexp) {
+    public static JsArray buildMatchResult(RegexMatch matcher, String input, JsRegExp regexp) {
         final var result = new JsArray();
         final var count = matcher.groupCount();
         for (var i = 0; i <= count; i++) {
@@ -392,11 +392,12 @@ public final class RegexBuiltins {
         return List.copyOf(regexp.getGroupAliases().keySet());
     }
 
-    // A duplicated name compiles to several java groups; at most one of them can have participated.
-    public static String participatingGroup(JsRegExp regexp, String name, Matcher matcher) {
+    // A duplicated name compiles to several capturing groups; at most one of them can have
+    // participated.
+    public static Integer participatingGroup(JsRegExp regexp, String name, RegexMatch matcher) {
         final var aliases = regexp.getGroupAliases().get(name);
         if (aliases == null) {
-            return name;
+            return null;
         }
         for (final var alias : aliases) {
             if (matcher.start(alias) >= 0) {

@@ -61,24 +61,31 @@ IGNORED_FLAGS = {"generated", "CanBlockIsFalse", "CanBlockIsTrue", "non-determin
 
 # The confirmed divergences the first run has to reproduce. A row that comes back all-green means the
 # filter, the prelude or the verdict logic is wrong — not that the engine improved.
-DIVERGENCES = [
-    ("Function.prototype.toString retains no source", ["built-ins/Function/prototype/toString/"]),
-]
+DIVERGENCES = []
 # A row is deleted in the same commit that closes its divergence, naming the test id that now passes.
 # When the last row goes, self_check inverts and asserts the baseline is empty instead: at that point
-# "all green" is the expected state, not the alarm.
+# "all green" is the expected state, not the alarm - which is where the engine now stands.
 # Rows are removed from the list above as their divergence is closed. A row only asserts that *some*
 # test under its prefix still fails, so a stale one keeps passing on an unrelated failure and quietly
-# becomes a false claim about the engine - the nine dropped so far (String(symbol) throwing,
+# becomes a false claim about the engine - the eleven dropped so far (String(symbol) throwing,
 # Reflect.ownKeys omitting symbols, shallow primitive wrappers, typed arrays lacking the
 # integer-indexed internals, regex named-group limitations, Object.assign bypassing a setter,
 # instanceof surviving F.prototype reassignment - closed by primitive-prototype-with-primitive.js
 # passing, tagged template strings now cached per call site - closed by
 # cache-same-site.js/cache-different-functions-same-site.js/cache-same-site-top-level.js passing,
-# and descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor) - the row's own proving test,
+# descriptor coercion gaps (ToPropertyKey, ToPropertyDescriptor) - the row's own proving test,
 # built-ins/Object/defineProperty/15.2.3.6-4-243-2.js, turned out to be a plain strict-mode
 # write-through-a-getter-only-array-index bug unrelated to descriptor coercion at all, fixed in
-# MemberEvaluator.setArrayMember) were each verified fixed by probe first.
+# MemberEvaluator.setArrayMember, Function.prototype.toString retaining no source - closed by
+# built-ins/Function/prototype/toString/method-computed-property-name.js passing once the parser
+# records a source span for every function-like production, and finally the java.util.regex
+# capture-reset/lookbehind-backreference/code-unit-stepping family - closed by replacing
+# java.util.regex entirely with a purpose-built backtracking matcher (internal/regex/), which
+# implements ECMA-262 Pattern Semantics directly: RegexParser compiles a Pattern straight to an
+# RxNode AST (internal/regex/RxNode.java) and RegexMatcher executes it via continuation-passing
+# backtracking with real per-iteration capture snapshot/restore, bidirectional (forward/backward)
+# matching for unbounded lookbehind, and code-unit- vs code-point-aware stepping keyed off the u/v
+# flag) were each verified fixed by probe first.
 
 
 class HarnessError(RuntimeError):

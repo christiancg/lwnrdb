@@ -92,10 +92,17 @@ public class FunctionProtoBuiltinsTest {
 
     @Test
     public void toStringReturnsSourceTextForUserFunctions() {
-        assertEquals("function f() { [native code] }", strOf("(function f() { return 1; }).toString()"));
-        assertEquals("function f() { [native code] }", strOf("'' + function f() {}"));
-        assertEquals("function () { [native code] }", strOf("String(function () {})"));
-        assertEquals("function C() { [native code] }", strOf("String(class C {})"));
+        assertEquals("function f() { return 1; }", strOf("(function f() { return 1; }).toString()"));
+        assertEquals("function f() {}", strOf("'' + function f() {}"));
+        assertEquals("function () {}", strOf("String(function () {})"));
+        assertEquals("class C {}", strOf("String(class C {})"));
+    }
+
+    // A builtin has no source of its own, so it keeps the NativeFunction form.
+    @Test
+    public void toStringReturnsTheNativeFormForBuiltins() {
+        assertEquals("function values() { [native code] }", strOf("Object.values.toString()"));
+        assertEquals("function () { [native code] }", strOf("String((function f() {}).bind(null))"));
     }
 
     @Test

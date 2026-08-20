@@ -7,11 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
+import org.techhouse.simplejs.internal.regex.RegexMatcher;
 
-// The regex v (unicodeSets) flag translates set notation into java.util.regex-compatible classes.
+// The regex v (unicodeSets) flag translates set notation into the RxNode AST RegexMatcher executes.
 public class RegexTranslatorVFlagTest {
     private static boolean find(String source, String probe) {
-        return RegexTranslator.compile(source, "v").getPattern().matcher(probe).find();
+        return findFlags(source, "v", probe);
+    }
+
+    private static boolean findFlags(String source, String flags, String probe) {
+        return RegexMatcher.exec(RegexTranslator.compile(source, flags).getProgram(), probe, 0, false) != null;
     }
 
     // subtraction A--B keeps members of A that are not in B
@@ -83,9 +88,9 @@ public class RegexTranslatorVFlagTest {
     // \p{ASCII} is translated to the java.util.regex property of the same name
     @Test
     public void test_ascii_binary_property() {
-        assertTrue(RegexTranslator.compile("\\p{ASCII}", "u").getPattern().matcher("A").find());
-        assertFalse(RegexTranslator.compile("\\p{ASCII}", "u").getPattern().matcher("\u00e9").find());
-        assertTrue(RegexTranslator.compile("\\P{ASCII}", "u").getPattern().matcher("\u00e9").find());
+        assertTrue(findFlags("\\p{ASCII}", "u", "A"));
+        assertFalse(findFlags("\\p{ASCII}", "u", "é"));
+        assertTrue(findFlags("\\P{ASCII}", "u", "é"));
     }
 
     // \p{ASCII} composes with v-mode set subtraction
@@ -98,7 +103,7 @@ public class RegexTranslatorVFlagTest {
     // \p{Any} matches every code point
     @Test
     public void test_any_binary_property() {
-        assertTrue(RegexTranslator.compile("\\p{Any}", "u").getPattern().matcher("\u00e9").find());
+        assertTrue(findFlags("\\p{Any}", "u", "é"));
     }
 
     // an unsupported property name is still a SyntaxError
@@ -111,16 +116,16 @@ public class RegexTranslatorVFlagTest {
     // the existing category and script forms stay green
     @Test
     public void test_existing_properties_unchanged() {
-        assertTrue(RegexTranslator.compile("\\p{Lu}", "u").getPattern().matcher("A").find());
-        assertTrue(RegexTranslator.compile("\\p{Script=Greek}", "u").getPattern().matcher("\u03b1").find());
+        assertTrue(findFlags("\\p{Lu}", "u", "A"));
+        assertTrue(findFlags("\\p{Script=Greek}", "u", "α"));
     }
 
     // ASCII_Hex_Digit is the ASCII-only subset [0-9A-Fa-f], in both u-mode and v-mode
     @Test
     public void test_ascii_hex_digit_binary_property() {
-        assertTrue(RegexTranslator.compile("\\p{ASCII_Hex_Digit}", "u").getPattern().matcher("f").find());
-        assertFalse(RegexTranslator.compile("\\p{ASCII_Hex_Digit}", "u").getPattern().matcher("g").find());
-        assertTrue(RegexTranslator.compile("\\P{ASCII_Hex_Digit}", "u").getPattern().matcher("g").find());
+        assertTrue(findFlags("\\p{ASCII_Hex_Digit}", "u", "f"));
+        assertFalse(findFlags("\\p{ASCII_Hex_Digit}", "u", "g"));
+        assertTrue(findFlags("\\P{ASCII_Hex_Digit}", "u", "g"));
         assertTrue(find("[\\p{ASCII_Hex_Digit}]", "A"));
         assertFalse(find("[\\p{ASCII_Hex_Digit}]", "G"));
     }

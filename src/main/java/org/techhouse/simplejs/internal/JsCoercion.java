@@ -99,6 +99,9 @@ public final class JsCoercion {
             case JsMap ignored -> "[object Map]";
             case JsSet ignored -> "[object Set]";
             case JsDate d -> d.toDateString();
+            // A proxy has no [[SourceText]] of its own, so a callable target's retained text must not
+            // leak through it: Function.prototype.toString on a proxy is the NativeFunction form.
+            case JsProxy proxy when proxy.isCallable() -> FunctionProtoBuiltins.nativeFunctionForm(proxy.getTarget());
             case JsProxy proxy -> toStrDataOnly(proxy.getTarget());
             case JsArguments ignored -> "[object Arguments]";
             case JsGlobalObject ignored -> "[object global]";

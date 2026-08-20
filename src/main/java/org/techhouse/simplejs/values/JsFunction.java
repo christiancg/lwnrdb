@@ -19,6 +19,9 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private final PropertyTable table = new PropertyTable();
     private Set<String> deletedMetadataKeys;
     private JsValue prototype;
+    // [[SourceText]]: the text of the function-like production this closure came from, or null when
+    // the parser had no source to slice - see JsNode.sourceText.
+    private String sourceText;
     // Concise methods and accessors are not constructors, so they have no `prototype` property.
     private boolean method;
     private boolean derivedConstructor;
@@ -43,6 +46,14 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         if (name == null) {
             name = inferred;
         }
+    }
+
+    public String getSourceText() {
+        return sourceText;
+    }
+
+    public void setSourceText(String sourceText) {
+        this.sourceText = sourceText;
     }
 
     public List<JsNode> getParams() {

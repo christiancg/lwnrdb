@@ -67,7 +67,7 @@ public class JsRegExpTest {
     // The alias table is empty for an ordinary pattern and lists every java name for a duplicated one
     @Test
     public void test_group_aliases() {
-        assertTrue(new JsRegExp("a", "", java.util.regex.Pattern.compile("a")).getGroupAliases().isEmpty());
+        assertTrue(new JsRegExp("a", "", RegexTranslator.compile("a", "").getProgram()).getGroupAliases().isEmpty());
         final var duplicated = RegexTranslator.compile("(?<y>a)|(?<y>b)", "");
         assertEquals(2, duplicated.getGroupAliases().get("y").size());
         final var single = RegexTranslator.compile("(?<y>a)", "");

@@ -35,11 +35,27 @@ public final class FunctionProtoBuiltins {
         };
     }
 
-    // No source text is retained for closures (the AST carries no offsets), so every callable
-    // reports the NativeFunction shape the spec allows when HostHasSourceTextAvailable is false.
-    // It has to parse as the NativeFunction production, so a synthesised name that is not an
-    // IdentifierName (an anonymous function, `bound f`, a computed key) is dropped.
+    // A function-like value parsed from real source reports its own text verbatim; everything else
+    // (a builtin, a bound function, a function parsed from a bare token list) falls back to the
+    // NativeFunction shape the spec allows when HostHasSourceTextAvailable is false.
     public static String sourceText(JsValue target) {
+        final var retained = retainedSource(target);
+        return retained == null ? nativeFunctionForm(target) : retained;
+    }
+
+    private static String retainedSource(JsValue target) {
+        if (target instanceof JsFunction fn) {
+            return fn.getSourceText();
+        }
+        if (target instanceof JsClass klass) {
+            return klass.getSourceText();
+        }
+        return null;
+    }
+
+    // The synthesised form has to parse as the NativeFunction production, so a name that is not an
+    // IdentifierName (an anonymous function, `bound f`, a computed key) is dropped.
+    public static String nativeFunctionForm(JsValue target) {
         final var name = nameOf(target);
         final var accessor = name.startsWith("get ") || name.startsWith("set ");
         final var bare = accessor ? name.substring(4) : name;
