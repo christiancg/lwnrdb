@@ -92,8 +92,17 @@ public final class TemporalFormatter {
     }
 
     public static String formatDuration(DurationFields duration) {
+        return formatDuration(duration, null);
+    }
+
+    // fractionalSecondDigits forces an exact digit count on the seconds fraction (0..9, or null for
+    // the default "trim trailing zeros, omit if empty" behavior) - the same option every other
+    // Temporal type's toString accepts, restricted here to the fractional-second units since Duration
+    // has no smallestUnit coarser than seconds (day/hour/minute are never truncated away).
+    public static String formatDuration(DurationFields duration, Integer fractionalSecondDigits) {
         final var sign = DurationMath.sign(duration);
-        if (sign == 0) {
+        final var forcesFraction = fractionalSecondDigits != null && fractionalSecondDigits > 0;
+        if (sign == 0 && !forcesFraction) {
             return "PT0S";
         }
         final var sb = new StringBuilder();
@@ -108,14 +117,17 @@ public final class TemporalFormatter {
 
         final var timeNanos = combineSecondsFraction(Math.abs(duration.seconds()), Math.abs(duration.milliseconds()),
                 Math.abs(duration.microseconds()), Math.abs(duration.nanoseconds()));
-        final var hasTime = duration.hours() != 0 || duration.minutes() != 0 || timeNanos[0] != 0 || timeNanos[1] != 0;
+        final var hasTime = duration.hours() != 0 || duration.minutes() != 0 || timeNanos[0] != 0 || timeNanos[1] != 0
+                || forcesFraction;
         if (hasTime) {
             sb.append('T');
             appendDateComponent(sb, duration.hours(), 'H');
             appendDateComponent(sb, duration.minutes(), 'M');
-            if (timeNanos[0] != 0 || timeNanos[1] != 0) {
+            if (timeNanos[0] != 0 || timeNanos[1] != 0 || fractionalSecondDigits != null) {
                 sb.append(timeNanos[0]);
-                final var fraction = trimTrailingZeros(zeroPad9(timeNanos[1]));
+                final var fraction = fractionalSecondDigits == null
+                        ? trimTrailingZeros(zeroPad9(timeNanos[1]))
+                        : formatFraction(0, 0, (int) timeNanos[1], fractionalSecondDigits);
                 if (!fraction.isEmpty()) {
                     sb.append('.').append(fraction);
                 }

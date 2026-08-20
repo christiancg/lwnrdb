@@ -162,4 +162,31 @@ public class DurationMathTest {
         assertThrows(UnsupportedOperationException.class,
                 () -> DurationMath.roundDuration(fields, Unit.WEEK, 1, RoundingMode.TRUNC, Unit.DAY));
     }
+
+    // balanceFromTotalNanoseconds: the AddDurations shape, starting from an already-signed total
+    // rather than a fields record (see Temporal.Duration.prototype.add/subtract)
+    @Test
+    public void test_balance_from_total_nanoseconds_zero() {
+        final var result = DurationMath.balanceFromTotalNanoseconds(java.math.BigInteger.ZERO, Unit.DAY);
+        assertEquals(DurationFields.ZERO, result);
+    }
+
+    @Test
+    public void test_balance_from_total_nanoseconds_positive_and_negative() {
+        final var positive = DurationMath.balanceFromTotalNanoseconds(java.math.BigInteger.valueOf(90_000_000_000_000L),
+                Unit.DAY);
+        assertEquals(1, positive.days());
+        assertEquals(1, positive.hours());
+
+        final var negative = DurationMath
+                .balanceFromTotalNanoseconds(java.math.BigInteger.valueOf(-90_000_000_000_000L), Unit.DAY);
+        assertEquals(-1, negative.days());
+        assertEquals(-1, negative.hours());
+    }
+
+    @Test
+    public void test_balance_from_total_nanoseconds_rejects_calendar_largest_unit() {
+        assertThrows(UnsupportedOperationException.class,
+                () -> DurationMath.balanceFromTotalNanoseconds(java.math.BigInteger.ONE, Unit.MONTH));
+    }
 }

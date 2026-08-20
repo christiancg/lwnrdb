@@ -5,7 +5,7 @@ import java.util.List;
 
 public abstract class JsValue {
     public enum JsValueType {
-        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW
+        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW, TEMPORAL_DURATION
     }
 
     public JsValueType getType() {
@@ -143,6 +143,7 @@ public abstract class JsValue {
             case JsMap ignored -> JsValueType.MAP;
             case JsSet ignored -> JsValueType.SET;
             case JsDate ignored -> JsValueType.DATE;
+            case JsTemporalDuration ignored -> JsValueType.TEMPORAL_DURATION;
             case JsProxy ignored -> JsValueType.PROXY;
             case JsArguments ignored -> JsValueType.ARGUMENTS;
             case JsGlobalObject ignored -> JsValueType.GLOBAL;
