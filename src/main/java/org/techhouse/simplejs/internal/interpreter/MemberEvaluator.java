@@ -47,6 +47,7 @@ import org.techhouse.simplejs.values.JsRegExp;
 import org.techhouse.simplejs.values.JsSet;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsSymbol;
+import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -297,6 +298,7 @@ public final class MemberEvaluator {
             case JsMap map -> mapMember(map, key);
             case JsSet set -> jsSetMember(set, key);
             case JsDate date -> dateMember(date, key);
+            case JsTemporalPlainDate date -> intrinsicMember(date, key);
             case JsTypedArray typed -> typedArrayMember(typed, key);
             case JsArrayBuffer buffer -> bufferMember(buffer, key);
             case JsDataView view -> dataViewMember(view, key);

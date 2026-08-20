@@ -5,7 +5,7 @@ import java.util.List;
 
 public abstract class JsValue {
     public enum JsValueType {
-        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW
+        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW, TEMPORAL_PLAIN_DATE
     }
 
     public JsValueType getType() {
@@ -149,6 +149,7 @@ public abstract class JsValue {
             case JsArrayBuffer ignored -> JsValueType.ARRAY_BUFFER;
             case JsTypedArray ignored -> JsValueType.TYPED_ARRAY;
             case JsDataView ignored -> JsValueType.DATA_VIEW;
+            case JsTemporalPlainDate ignored -> JsValueType.TEMPORAL_PLAIN_DATE;
             default -> throw new IllegalStateException("Unexpected value: " + object);
         };
     }

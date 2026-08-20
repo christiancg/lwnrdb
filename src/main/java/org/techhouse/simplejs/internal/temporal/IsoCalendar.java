@@ -2,6 +2,8 @@ package org.techhouse.simplejs.internal.temporal;
 
 import java.time.DateTimeException;
 import java.time.LocalDate;
+import java.time.Period;
+import java.time.temporal.ChronoUnit;
 import java.time.temporal.WeekFields;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
@@ -93,5 +95,66 @@ public final class IsoCalendar {
         } catch (DateTimeException e) {
             throw new RangeErrorException("invalid ISO date: " + date);
         }
+    }
+
+    /**
+     * AddISODate: adds a calendar-aware years/months delta first (regulating the day against the
+     * resulting year/month via {@code overflow}), then balances in the day-granular weeks/days
+     * delta. The two-phase order matters - balancing everything through {@link #balanceIsoDate} in
+     * one shot would resolve e.g. "Jan 31 + 1 month" by walking 31 raw days from Feb 1st instead of
+     * constraining/rejecting against February's real length.
+     */
+    public static Iso8601Fields addDate(Iso8601Fields date, double years, double months, double weeks, double days,
+            RegulateOverflow overflow) {
+        final long totalMonths = (date.month() - 1L) + (long) months;
+        final long yearCarry = Math.floorDiv(totalMonths, 12);
+        final int balancedMonth = (int) Math.floorMod(totalMonths, 12) + 1;
+        final long balancedYear = date.year() + (long) years + yearCarry;
+        final int intYear;
+        try {
+            intYear = Math.toIntExact(balancedYear);
+        } catch (ArithmeticException e) {
+            throw new RangeErrorException("date value is outside the representable range");
+        }
+        final var regulated = regulateDate(intYear, balancedMonth, date.day(), overflow);
+        return balanceIsoDate(regulated.year(), regulated.month(), regulated.day() + (long) weeks * 7 + (long) days);
+    }
+
+    /**
+     * DifferenceISODate: the calendar difference from {@code date1} to {@code date2} (i.e. the
+     * duration that {@link #addDate} would apply to {@code date1} to reach {@code date2}), broken
+     * down greedily into units no larger than {@code largestUnit}. Delegates to {@link Period}
+     * (year/month) since that is the same greedy proleptic-Gregorian breakdown the "iso8601"
+     * calendar's date arithmetic already reduces to.
+     */
+    public static DurationFields differenceISODate(Iso8601Fields date1, Iso8601Fields date2, Unit largestUnit) {
+        final var start = toLocalDate(date1);
+        final var end = toLocalDate(date2);
+        if (start.equals(end)) {
+            return DurationFields.ZERO;
+        }
+        final var sign = start.isBefore(end) ? 1 : -1;
+        final var smaller = sign > 0 ? start : end;
+        final var larger = sign > 0 ? end : start;
+        return switch (largestUnit) {
+            case YEAR -> {
+                final var period = Period.between(smaller, larger);
+                yield new DurationFields(sign * (double) period.getYears(), sign * (double) period.getMonths(), 0,
+                        sign * (double) period.getDays(), 0, 0, 0, 0, 0, 0);
+            }
+            case MONTH -> {
+                final var period = Period.between(smaller, larger);
+                final var months = period.getYears() * 12L + period.getMonths();
+                yield new DurationFields(0, sign * (double) months, 0, sign * (double) period.getDays(), 0, 0, 0, 0, 0,
+                        0);
+            }
+            case WEEK -> {
+                final var totalDays = ChronoUnit.DAYS.between(smaller, larger);
+                yield new DurationFields(0, 0, sign * (double) (totalDays / 7), sign * (double) (totalDays % 7), 0, 0,
+                        0, 0, 0, 0);
+            }
+            default ->
+                new DurationFields(0, 0, 0, sign * (double) ChronoUnit.DAYS.between(smaller, larger), 0, 0, 0, 0, 0, 0);
+        };
     }
 }
