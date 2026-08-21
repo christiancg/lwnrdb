@@ -2,6 +2,7 @@ package org.techhouse.simplejs.builtins;
 
 import java.math.BigInteger;
 import java.time.DateTimeException;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -29,6 +30,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
@@ -51,15 +53,17 @@ public final class TemporalPlainDateTimeBuiltins {
             "until", "since", "round", "equals", "toPlainDate", "toPlainTime", "toPlainYearMonth", "toPlainMonthDay",
             "toZonedDateTime", "toString", "toJSON", "toLocaleString", "getISOFields", "valueOf");
 
-    private static final String[] TIME_FIELD_NAMES = {"hour", "minute", "second", "millisecond", "microsecond",
-            "nanosecond"};
-
     private static final BigInteger NANOS_PER_DAY = BigInteger.valueOf(86_400_000_000_000L);
     private static final BigInteger NANOS_PER_HOUR = BigInteger.valueOf(3_600_000_000_000L);
     private static final BigInteger NANOS_PER_MINUTE = BigInteger.valueOf(60_000_000_000L);
     private static final BigInteger NANOS_PER_SECOND = BigInteger.valueOf(1_000_000_000L);
     private static final BigInteger NANOS_PER_MILLI = BigInteger.valueOf(1_000_000L);
     private static final BigInteger NANOS_PER_MICRO = BigInteger.valueOf(1_000L);
+    // The Instant epoch-nanoseconds limit (+/-8.64e21, i.e. +/-100_000_000 days from the epoch).
+    // PlainDateTime's own representable range is exactly one day wider on each side (it has no
+    // associated offset, so the boundary day itself is only partially valid - see requireWithinLimits).
+    private static final BigInteger INSTANT_EPOCH_NANOS_LIMIT = BigInteger.valueOf(864)
+            .multiply(BigInteger.TEN.pow(19));
     private static final long NANOS_PER_HOUR_LONG = 3_600_000_000_000L;
     private static final long NANOS_PER_MINUTE_LONG = 60_000_000_000L;
     private static final long NANOS_PER_SECOND_LONG = 1_000_000_000L;
@@ -73,7 +77,7 @@ public final class TemporalPlainDateTimeBuiltins {
     public static JsNativeFunction create(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("PlainDateTime", (_, args) -> {
             requireNewTarget();
-            return construct(args, ops);
+            return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(3);
         final var from = new JsNativeFunction("from", (_, args) -> toDateTime(arg(args, 0), arg(args, 1), ops));
@@ -97,7 +101,26 @@ public final class TemporalPlainDateTimeBuiltins {
         }
     }
 
-    private static JsValue construct(List<JsValue> args, InterpreterOps ops) {
+    // OrdinaryCreateFromConstructor: Reflect.construct(Temporal.PlainDateTime, args, Ctor) links the
+    // new instance's [[Prototype]] to Ctor.prototype rather than always to the intrinsic prototype
+    // (mirrors TemporalPlainTimeBuiltins.withNewTargetPrototype) - and, crucially, the Get(newTarget,
+    // "prototype") itself must run so a poisoned prototype getter's exception propagates.
+    private static JsValue withNewTargetPrototype(JsTemporalPlainDateTime constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return constructed;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
+            return constructed;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(constructed);
+        wrapper.setProto(requested);
+        return wrapper;
+    }
+
+    private static JsTemporalPlainDateTime construct(List<JsValue> args, InterpreterOps ops) {
         final var year = toIntegerField(arg(args, 0), "year", ops);
         final var month = toIntegerField(arg(args, 1), "month", ops);
         final var day = toIntegerField(arg(args, 2), "day", ops);
@@ -114,7 +137,7 @@ public final class TemporalPlainDateTimeBuiltins {
         final var date = IsoCalendar.regulateDate(year, month, day, RegulateOverflow.REJECT);
         final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond,
                 RegulateOverflow.REJECT);
-        return new JsTemporalPlainDateTime(date, time);
+        return dateTime(date, time);
     }
 
     private static int intOrZero(List<JsValue> args, int index, InterpreterOps ops) {
@@ -153,6 +176,27 @@ public final class TemporalPlainDateTimeBuiltins {
         if (value < 0 || value > max) {
             throw new RangeErrorException(name + " must be in the range 0.." + max + ", got " + value);
         }
+    }
+
+    // ISODateTimeWithinLimits: exclusive at both ends, one day wider than Instant's own +/-8.64e21ns
+    // range - e.g. -271821-04-19T00:00:00 is invalid but one nanosecond later is valid, while
+    // -271821-04-20T00:00:00 (a whole day later) is valid at any time of day.
+    private static void requireWithinLimits(Iso8601Fields date, IsoTimeFields time) {
+        final var epochDay = LocalDate.of(date.year(), date.month(), date.day()).toEpochDay();
+        final var epochNanos = BigInteger.valueOf(epochDay).multiply(NANOS_PER_DAY).add(toNanosOfDay(time));
+        final var minLimit = INSTANT_EPOCH_NANOS_LIMIT.negate().subtract(NANOS_PER_DAY);
+        final var maxLimit = INSTANT_EPOCH_NANOS_LIMIT.add(NANOS_PER_DAY);
+        if (epochNanos.compareTo(minLimit) <= 0 || epochNanos.compareTo(maxLimit) >= 0) {
+            throw new RangeErrorException(
+                    "Temporal.PlainDateTime outside of representable range: " + date + " " + time);
+        }
+    }
+
+    // The single construction choke point every other factory in this file routes through, so the
+    // representable-range check (above) is never skippable.
+    private static JsTemporalPlainDateTime dateTime(Iso8601Fields date, IsoTimeFields time) {
+        requireWithinLimits(date, time);
+        return new JsTemporalPlainDateTime(date, time);
     }
 
     // Constructor / withCalendar accept only a bare calendar identifier; a non-string value is a
@@ -278,88 +322,158 @@ public final class TemporalPlainDateTimeBuiltins {
         return toDateTime(item, JsUndefined.getInstance(), ops);
     }
 
+    // Item-type dispatch happens BEFORE any options are touched: a Temporal instance/PlainDate/
+    // ZonedDateTime/string is recognized (or a string is parsed, which can throw) first, and only then
+    // is the (still fully validated, even though its result is discarded) overflow option read - this
+    // matches from/order-of-operations.js requiring "get options.overflow" even when cloning an
+    // instance or parsing a string, and from/observable-get-overflow-argument-string-invalid.js
+    // requiring options to be left untouched when the string itself fails to parse.
     private static JsTemporalPlainDateTime toDateTime(JsValue item, JsValue optionsArg, InterpreterOps ops) {
-        final var overflow = readOverflowOption(optionsArg, ops);
         if (item instanceof JsTemporalPlainDateTime dt) {
-            return new JsTemporalPlainDateTime(dt.date(), dt.time());
+            readOverflowOption(optionsArg, ops);
+            return dateTime(dt.date(), dt.time());
         }
         // ToTemporalDateTime's fast paths for other Temporal types carrying an ISO date: a PlainDate's
         // date fields are taken directly with the time defaulted to midnight, and a ZonedDateTime's
         // date+time fields are taken via the zone's local wall-clock reading - both bypass the generic
         // property-bag path entirely (no Get calls on the argument).
         if (item instanceof JsTemporalPlainDate pd) {
-            return new JsTemporalPlainDateTime(pd.fields(), new IsoTimeFields(0, 0, 0, 0, 0, 0));
+            readOverflowOption(optionsArg, ops);
+            return dateTime(pd.fields(), new IsoTimeFields(0, 0, 0, 0, 0, 0));
         }
         if (item instanceof JsTemporalZonedDateTime zdt) {
+            readOverflowOption(optionsArg, ops);
             final var isoFields = zdt.isoFieldsAtLocal();
-            return new JsTemporalPlainDateTime(isoFields.date(), isoFields.time());
+            return dateTime(isoFields.date(), isoFields.time());
         }
         if (item instanceof JsString s) {
-            final var parsed = TemporalParser.parseDateTime(s.getValue());
+            // A bare date (no time part) is accepted, defaulting the time to midnight - PlainDateTime
+            // accepts a superset of PlainDate's own string grammar plus an optional time part.
+            final var parsed = TemporalParser.parseDate(s.getValue());
             if (parsed.calendar() != null) {
                 TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
             }
-            return new JsTemporalPlainDateTime(parsed.date(), parsed.time());
+            readOverflowOption(optionsArg, ops);
+            final var time = parsed.time() != null ? parsed.time() : new IsoTimeFields(0, 0, 0, 0, 0, 0);
+            return dateTime(parsed.date(), time);
         }
         if (InterpreterUtils.isObjectLike(item)) {
-            return dateTimeFromFields(item, overflow, ops);
+            return dateTimeFromFields(item, optionsArg, ops);
         }
         throw new TypeErrorException("Cannot convert value to a Temporal.PlainDateTime");
     }
 
-    private static JsTemporalPlainDateTime dateTimeFromFields(JsValue obj, RegulateOverflow overflow,
-            InterpreterOps ops) {
+    // PrepareCalendarFields reads every recognized field in alphabetical order (calendar first, then
+    // day/hour/microsecond/millisecond/minute/month/monthCode/nanosecond/second/year) regardless of
+    // presence, then GetTemporalOverflowOption runs last - see from/order-of-operations.js. day/month
+    // use ToPositiveIntegerWithTruncation (reject <= 0 unconditionally, independent of overflow - see
+    // from/negative-month-or-day.js); monthCode's *syntax* is validated the moment it is read (RangeError
+    // immediately, before any later field is even read - see from/monthcode-invalid.js's "L99M" case)
+    // while its *numeric suitability* (range/leap-suffix) and any month/monthCode conflict are resolved
+    // only after every field (including year) has been read - see
+    // from/calendarresolvefields-error-ordering.js and from/monthcode-invalid.js's "M99L" case.
+    private static JsTemporalPlainDateTime dateTimeFromFields(JsValue obj, JsValue optionsArg, InterpreterOps ops) {
         requireValidCalendarField(obj, ops);
-        final var year = requiredIntegerField(obj, "year", ops);
-        final var month = resolveMonth(obj, ops);
-        final var day = requiredIntegerField(obj, "day", ops);
+        final var dayValue = ops.getMember(obj, new JsString("day"));
+        if (dayValue instanceof JsUndefined) {
+            throw new TypeErrorException("day is required");
+        }
+        final var day = toPositiveIntegerField(dayValue, "day", ops);
         final var hour = fieldOrDefault(obj, "hour", 0, ops);
-        final var minute = fieldOrDefault(obj, "minute", 0, ops);
-        final var second = fieldOrDefault(obj, "second", 0, ops);
-        final var millisecond = fieldOrDefault(obj, "millisecond", 0, ops);
         final var microsecond = fieldOrDefault(obj, "microsecond", 0, ops);
-        final var nanosecond = fieldOrDefault(obj, "nanosecond", 0, ops);
-        final var date = IsoCalendar.regulateDate(year, month, day, overflow);
-        final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow);
-        return new JsTemporalPlainDateTime(date, time);
-    }
-
-    private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
-        if (value instanceof JsUndefined) {
-            throw new TypeErrorException(name + " is required");
-        }
-        return toIntegerField(value, name, ops);
-    }
-
-    private static int resolveMonth(JsValue obj, InterpreterOps ops) {
-        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
+        final var millisecond = fieldOrDefault(obj, "millisecond", 0, ops);
+        final var minute = fieldOrDefault(obj, "minute", 0, ops);
         final var monthValue = ops.getMember(obj, new JsString("month"));
-        if (!(monthCodeValue instanceof JsUndefined)) {
-            final var resolved = parseMonthCode(JsCoercion.toStr(monthCodeValue, ops));
-            if (!(monthValue instanceof JsUndefined) && toIntegerField(monthValue, "month", ops) != resolved) {
-                throw new RangeErrorException("month and monthCode are inconsistent");
-            }
-            return resolved;
-        }
-        if (monthValue instanceof JsUndefined) {
+        final Integer month = monthValue instanceof JsUndefined
+                ? null
+                : toPositiveIntegerField(monthValue, "month", ops);
+        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
+        final var monthCode = monthCodeValue instanceof JsUndefined
+                ? null
+                : requireMonthCodeSyntax(monthCodeValue, ops);
+        if (month == null && monthCode == null) {
             throw new TypeErrorException("month or monthCode is required");
         }
-        return toIntegerField(monthValue, "month", ops);
+        final var nanosecond = fieldOrDefault(obj, "nanosecond", 0, ops);
+        final var second = fieldOrDefault(obj, "second", 0, ops);
+        final var yearValue = ops.getMember(obj, new JsString("year"));
+        if (yearValue instanceof JsUndefined) {
+            throw new TypeErrorException("year is required");
+        }
+        final var year = toIntegerField(yearValue, "year", ops);
+        final var resolvedMonth = resolveMonthValue(month, monthCode);
+        final var overflow = readOverflowOption(optionsArg, ops);
+        final var date = IsoCalendar.regulateDate(year, resolvedMonth, day, overflow);
+        final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow);
+        return dateTime(date, time);
     }
 
-    private static int parseMonthCode(String code) {
-        if (code.length() == 3 && code.charAt(0) == 'M') {
-            try {
-                final var value = Integer.parseInt(code.substring(1));
-                if (value >= 1 && value <= 12) {
-                    return value;
-                }
-            } catch (NumberFormatException ignored) {
-                // Falls through to the RangeError below.
-            }
+    // ToPositiveIntegerWithTruncation: unlike ToIntegerWithTruncation, a non-positive result is always
+    // a RangeError, regardless of the overflow option (which only constrains an in-range-but-excessive
+    // value, e.g. day 30 in February - it never accepts a negative one).
+    private static int toPositiveIntegerField(JsValue value, String name, InterpreterOps ops) {
+        final var result = toIntegerField(value, name, ops);
+        if (result < 1) {
+            throw new RangeErrorException(name + " must be a positive integer, got " + result);
         }
-        throw new RangeErrorException("Invalid monthCode: " + code);
+        return result;
+    }
+
+    // ToMonthCode: value must be (or ToPrimitive-convert to, with the "string" hint) an actual String -
+    // a non-string primitive (number, bigint, boolean, symbol, null) or an object whose ToPrimitive
+    // result isn't a string is rejected with TypeError before any syntax check ever runs.
+    private static String requireMonthCodeSyntax(JsValue value, InterpreterOps ops) {
+        final var primitive = JsCoercion.toPrimitive(value, "string", ops);
+        if (!(primitive instanceof JsString s)) {
+            throw new TypeErrorException("monthCode must be a string");
+        }
+        final var code = s.getValue();
+        if (!isSyntacticallyValidMonthCode(code)) {
+            throw new RangeErrorException("Invalid monthCode: " + code);
+        }
+        return code;
+    }
+
+    // MMonthCode ::: "M" DecimalDigit DecimalDigit "L"? - the syntactic shape only; whether the number
+    // is 1..12 (and ISO never allows the leap-month "L" suffix) is a separate, later check.
+    private static boolean isSyntacticallyValidMonthCode(String code) {
+        final var length = code.length();
+        if (length != 3 && length != 4) {
+            return false;
+        }
+        return code.charAt(0) == 'M' && Character.isDigit(code.charAt(1)) && Character.isDigit(code.charAt(2))
+                && (length == 3 || code.charAt(3) == 'L');
+    }
+
+    // The numeric/semantic half of monthCode resolution: value 1..12, no leap-month suffix (ISO 8601
+    // has no leap months), and must agree with an explicit numeric `month` field if both are present.
+    private static int monthCodeNumericValue(String code) {
+        if (code.length() == 4) {
+            throw new RangeErrorException("Invalid monthCode for the iso8601 calendar: " + code);
+        }
+        final var value = Integer.parseInt(code.substring(1));
+        if (value < 1 || value > 12) {
+            throw new RangeErrorException("Invalid monthCode for the iso8601 calendar: " + code);
+        }
+        return value;
+    }
+
+    private static int resolveMonthValue(Integer month, String monthCode) {
+        if (monthCode == null) {
+            return month;
+        }
+        final var resolved = monthCodeNumericValue(monthCode);
+        if (month != null && month != resolved) {
+            throw new RangeErrorException("month and monthCode are inconsistent");
+        }
+        return resolved;
+    }
+
+    private static int resolveMonthValue(Integer month, String monthCode, int defaultMonth) {
+        if (month == null && monthCode == null) {
+            return defaultMonth;
+        }
+        return resolveMonthValue(month, monthCode);
     }
 
     private static int fieldOrDefault(JsValue obj, String name, int defaultValue, InterpreterOps ops) {
@@ -390,15 +504,6 @@ public final class TemporalPlainDateTimeBuiltins {
         return value instanceof JsUndefined
                 ? RegulateOverflow.CONSTRAIN
                 : RegulateOverflow.parse(JsCoercion.toStr(value, ops));
-    }
-
-    private static Unit readLargestUnitOption(JsValue optionsArg, Unit fallback, InterpreterOps ops) {
-        final var value = optionOrUndefined(optionsArg, "largestUnit", ops);
-        if (value instanceof JsUndefined) {
-            return fallback;
-        }
-        final var raw = JsCoercion.toStr(value, ops);
-        return "auto".equals(raw) ? fallback : Unit.parseTemporalUnit(raw);
     }
 
     private static Unit readSmallestUnitOption(JsValue optionsArg, InterpreterOps ops) {
@@ -473,7 +578,7 @@ public final class TemporalPlainDateTimeBuiltins {
     }
 
     // A null-prototype object (OrdinaryObjectCreate(null)) so a lookup of an absent option key never
-    // falls through to Object.prototype.
+    // falls through to Object.prototype - see round/string-shorthand-no-object-prototype-pollution.js.
     private static JsObject smallestUnitOptions(JsString value) {
         final var options = new JsObject();
         options.setProto(null);
@@ -481,39 +586,111 @@ public final class TemporalPlainDateTimeBuiltins {
         return options;
     }
 
+    // RejectObjectWithCalendarOrTimeZone runs first (calendar/timeZone properties are disallowed on a
+    // with() argument), then every field is read in alphabetical order regardless of presence (day
+    // and month use ToPositiveIntegerWithTruncation exactly like from(), so with({day: -1}, badOptions)
+    // still RangeErrors before the options argument's own type is ever checked - see
+    // with/options-wrong-type.js), then GetTemporalOverflowOption runs last - see
+    // with/order-of-operations.js.
     private static JsValue with(JsTemporalPlainDateTime receiver, JsValue fieldsLike, JsValue optionsArg,
             InterpreterOps ops) {
-        if (!InterpreterUtils.isObjectLike(fieldsLike) || fieldsLike instanceof JsTemporalPlainDateTime) {
+        if (isAnyTemporalValue(fieldsLike) || !InterpreterUtils.isObjectLike(fieldsLike)) {
             throw new TypeErrorException("Temporal.PlainDateTime.prototype.with argument must be a plain object");
         }
-        final var overflow = readOverflowOption(optionsArg, ops);
-        final var year = fieldOrDefault(fieldsLike, "year", receiver.year(), ops);
-        final var month = resolveMonthWith(fieldsLike, receiver.month(), ops);
-        final var day = fieldOrDefault(fieldsLike, "day", receiver.day(), ops);
+        rejectCalendarOrTimeZoneField(fieldsLike, ops);
         final var t = receiver.time();
-        final var hour = fieldOrDefault(fieldsLike, "hour", t.hour(), ops);
-        final var minute = fieldOrDefault(fieldsLike, "minute", t.minute(), ops);
-        final var second = fieldOrDefault(fieldsLike, "second", t.second(), ops);
-        final var millisecond = fieldOrDefault(fieldsLike, "millisecond", t.millisecond(), ops);
-        final var microsecond = fieldOrDefault(fieldsLike, "microsecond", t.microsecond(), ops);
-        final var nanosecond = fieldOrDefault(fieldsLike, "nanosecond", t.nanosecond(), ops);
-        final var date = IsoCalendar.regulateDate(year, month, day, overflow);
-        final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow);
-        return new JsTemporalPlainDateTime(date, time);
-    }
-
-    private static int resolveMonthWith(JsValue obj, int defaultMonth, InterpreterOps ops) {
-        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
-        if (!(monthCodeValue instanceof JsUndefined)) {
-            return parseMonthCode(JsCoercion.toStr(monthCodeValue, ops));
+        var any = false;
+        final var dayValue = ops.getMember(fieldsLike, new JsString("day"));
+        any |= !(dayValue instanceof JsUndefined);
+        final var day = dayValue instanceof JsUndefined ? receiver.day() : toPositiveIntegerField(dayValue, "day", ops);
+        final var hourValue = ops.getMember(fieldsLike, new JsString("hour"));
+        any |= !(hourValue instanceof JsUndefined);
+        final var hour = hourValue instanceof JsUndefined ? t.hour() : toIntegerField(hourValue, "hour", ops);
+        final var microsecondValue = ops.getMember(fieldsLike, new JsString("microsecond"));
+        any |= !(microsecondValue instanceof JsUndefined);
+        final var microsecond = microsecondValue instanceof JsUndefined
+                ? t.microsecond()
+                : toIntegerField(microsecondValue, "microsecond", ops);
+        final var millisecondValue = ops.getMember(fieldsLike, new JsString("millisecond"));
+        any |= !(millisecondValue instanceof JsUndefined);
+        final var millisecond = millisecondValue instanceof JsUndefined
+                ? t.millisecond()
+                : toIntegerField(millisecondValue, "millisecond", ops);
+        final var minuteValue = ops.getMember(fieldsLike, new JsString("minute"));
+        any |= !(minuteValue instanceof JsUndefined);
+        final var minute = minuteValue instanceof JsUndefined ? t.minute() : toIntegerField(minuteValue, "minute", ops);
+        final var monthValue = ops.getMember(fieldsLike, new JsString("month"));
+        any |= !(monthValue instanceof JsUndefined);
+        final Integer month = monthValue instanceof JsUndefined
+                ? null
+                : toPositiveIntegerField(monthValue, "month", ops);
+        final var monthCodeValue = ops.getMember(fieldsLike, new JsString("monthCode"));
+        any |= !(monthCodeValue instanceof JsUndefined);
+        final var monthCode = monthCodeValue instanceof JsUndefined
+                ? null
+                : requireMonthCodeSyntax(monthCodeValue, ops);
+        final var nanosecondValue = ops.getMember(fieldsLike, new JsString("nanosecond"));
+        any |= !(nanosecondValue instanceof JsUndefined);
+        final var nanosecond = nanosecondValue instanceof JsUndefined
+                ? t.nanosecond()
+                : toIntegerField(nanosecondValue, "nanosecond", ops);
+        final var secondValue = ops.getMember(fieldsLike, new JsString("second"));
+        any |= !(secondValue instanceof JsUndefined);
+        final var second = secondValue instanceof JsUndefined ? t.second() : toIntegerField(secondValue, "second", ops);
+        final var yearValue = ops.getMember(fieldsLike, new JsString("year"));
+        any |= !(yearValue instanceof JsUndefined);
+        final var year = yearValue instanceof JsUndefined ? receiver.year() : toIntegerField(yearValue, "year", ops);
+        if (!any) {
+            throw new TypeErrorException("with() argument must contain at least one recognized property");
         }
-        return fieldOrDefault(obj, "month", defaultMonth, ops);
+        final var resolvedMonth = resolveMonthValue(month, monthCode, receiver.month());
+        final var overflow = readOverflowOption(optionsArg, ops);
+        final var date = IsoCalendar.regulateDate(year, resolvedMonth, day, overflow);
+        final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow);
+        return dateTime(date, time);
     }
 
-    // withCalendar is an identity operation in ISO-only mode - the only effect is validating the arg.
+    private static void rejectCalendarOrTimeZoneField(JsValue fieldsLike, InterpreterOps ops) {
+        if (!(ops.getMember(fieldsLike, new JsString("calendar")) instanceof JsUndefined)) {
+            throw new TypeErrorException(
+                    "Temporal.PlainDateTime.prototype.with argument must not have a calendar " + "property");
+        }
+        if (!(ops.getMember(fieldsLike, new JsString("timeZone")) instanceof JsUndefined)) {
+            throw new TypeErrorException(
+                    "Temporal.PlainDateTime.prototype.with argument must not have a timeZone " + "property");
+        }
+    }
+
+    // The five Temporal types carrying a calendar - accepted as a withCalendar()/property-bag
+    // `calendar` argument (their own calendar is read via a fast path, without ever touching a
+    // "calendar"/"timeZone" property on them).
+    private static boolean isTemporalWithCalendar(JsValue value) {
+        return value instanceof JsTemporalPlainDate || value instanceof JsTemporalPlainDateTime
+                || value instanceof JsTemporalPlainMonthDay || value instanceof JsTemporalPlainYearMonth
+                || value instanceof JsTemporalZonedDateTime;
+    }
+
+    // Every built-in Temporal type is rejected outright as a with() argument (not just the
+    // calendar-bearing ones - a plain Temporal.PlainTime is equally not a valid partial-fields
+    // object) - the check runs before any property is read at all, so a poisoned calendar/timeZone
+    // getter on the instance is never invoked - see with/calendar-temporal-object-throws.js.
+    private static boolean isAnyTemporalValue(JsValue value) {
+        return isTemporalWithCalendar(value) || value instanceof JsTemporalPlainTime;
+    }
+
+    // withCalendar is an identity operation in ISO-only mode - the only effect is validating the arg,
+    // which (unlike the constructor's bare-identifier-only calendar argument) accepts the broader
+    // CalendarString grammar (a full ISO date/date-time/time string, extracting or defaulting its u-ca
+    // annotation) or any of the five Temporal types carrying an ISO date, read via a fast path that
+    // never touches the argument's own calendar/timeZone properties.
     private static JsValue withCalendar(JsTemporalPlainDateTime receiver, JsValue calendarArg, InterpreterOps ops) {
-        requireCalendarString(calendarArg);
-        return new JsTemporalPlainDateTime(receiver.date(), receiver.time());
+        if (!isTemporalWithCalendar(calendarArg)) {
+            if (!(calendarArg instanceof JsString s)) {
+                throw new TypeErrorException("calendar must be a string");
+            }
+            TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
+        }
+        return dateTime(receiver.date(), receiver.time());
     }
 
     // Property-bag `calendar` field: accepts a bare identifier or a full ISO string carrying (or
@@ -533,7 +710,7 @@ public final class TemporalPlainDateTimeBuiltins {
     }
 
     private static JsValue withPlainTime(JsTemporalPlainDateTime receiver, JsValue timeLike, InterpreterOps ops) {
-        return new JsTemporalPlainDateTime(receiver.date(), toPlainTimeOrMidnight(timeLike, ops));
+        return dateTime(receiver.date(), toPlainTimeOrMidnight(timeLike, ops));
     }
 
     // ToTemporalTime, narrowed to withPlainTime's needs: an absent argument defaults to midnight
@@ -561,21 +738,33 @@ public final class TemporalPlainDateTimeBuiltins {
         throw new TypeErrorException("Temporal.PlainDateTime.prototype.withPlainTime requires a time-like value");
     }
 
+    // Fields are read in alphabetical order (hour, microsecond, millisecond, minute, nanosecond,
+    // second) - see withPlainTime/order-of-operations.js.
     private static IsoTimeFields timeFromObjectRequireAny(JsValue obj, InterpreterOps ops) {
-        final var values = new int[6];
-        var any = false;
-        for (var i = 0; i < TIME_FIELD_NAMES.length; i++) {
-            final var value = ops.getMember(obj, new JsString(TIME_FIELD_NAMES[i]));
-            if (!(value instanceof JsUndefined)) {
-                any = true;
-                values[i] = toIntegerField(value, TIME_FIELD_NAMES[i], ops);
-            }
-        }
-        if (!any) {
+        final var hourValue = ops.getMember(obj, new JsString("hour"));
+        final var hour = hourValue instanceof JsUndefined ? 0 : toIntegerField(hourValue, "hour", ops);
+        final var microsecondValue = ops.getMember(obj, new JsString("microsecond"));
+        final var microsecond = microsecondValue instanceof JsUndefined
+                ? 0
+                : toIntegerField(microsecondValue, "microsecond", ops);
+        final var millisecondValue = ops.getMember(obj, new JsString("millisecond"));
+        final var millisecond = millisecondValue instanceof JsUndefined
+                ? 0
+                : toIntegerField(millisecondValue, "millisecond", ops);
+        final var minuteValue = ops.getMember(obj, new JsString("minute"));
+        final var minute = minuteValue instanceof JsUndefined ? 0 : toIntegerField(minuteValue, "minute", ops);
+        final var nanosecondValue = ops.getMember(obj, new JsString("nanosecond"));
+        final var nanosecond = nanosecondValue instanceof JsUndefined
+                ? 0
+                : toIntegerField(nanosecondValue, "nanosecond", ops);
+        final var secondValue = ops.getMember(obj, new JsString("second"));
+        final var second = secondValue instanceof JsUndefined ? 0 : toIntegerField(secondValue, "second", ops);
+        if (hourValue instanceof JsUndefined && microsecondValue instanceof JsUndefined
+                && millisecondValue instanceof JsUndefined && minuteValue instanceof JsUndefined
+                && nanosecondValue instanceof JsUndefined && secondValue instanceof JsUndefined) {
             throw new TypeErrorException("Invalid time-like object: no recognized properties");
         }
-        return regulateTime(values[0], values[1], values[2], values[3], values[4], values[5],
-                RegulateOverflow.CONSTRAIN);
+        return regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, RegulateOverflow.CONSTRAIN);
     }
 
     // ToTemporalDuration: a real Temporal.Duration (via InterpreterUtils.isObjectLike + getMember
@@ -591,16 +780,18 @@ public final class TemporalPlainDateTimeBuiltins {
             return fields;
         }
         if (InterpreterUtils.isObjectLike(value)) {
-            final var years = readDurationField(value, "years", ops);
-            final var months = readDurationField(value, "months", ops);
-            final var weeks = readDurationField(value, "weeks", ops);
+            // Fields are read in alphabetical order (days, hours, microseconds, milliseconds, minutes,
+            // months, nanoseconds, seconds, weeks, years) - see add/order-of-operations.js.
             final var days = readDurationField(value, "days", ops);
             final var hours = readDurationField(value, "hours", ops);
-            final var minutes = readDurationField(value, "minutes", ops);
-            final var seconds = readDurationField(value, "seconds", ops);
-            final var milliseconds = readDurationField(value, "milliseconds", ops);
             final var microseconds = readDurationField(value, "microseconds", ops);
+            final var milliseconds = readDurationField(value, "milliseconds", ops);
+            final var minutes = readDurationField(value, "minutes", ops);
+            final var months = readDurationField(value, "months", ops);
             final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+            final var seconds = readDurationField(value, "seconds", ops);
+            final var weeks = readDurationField(value, "weeks", ops);
+            final var years = readDurationField(value, "years", ops);
             if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
                     && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
                 throw new TypeErrorException("Duration-like object must contain at least one recognized property");
@@ -662,7 +853,7 @@ public final class TemporalPlainDateTimeBuiltins {
         final var newNanosOfDay = total.subtract(dayCarry.multiply(NANOS_PER_DAY));
         final var newDate = IsoCalendar.addDate(receiver.date(), duration.years(), duration.months(), duration.weeks(),
                 duration.days() + dayCarry.doubleValue(), overflow);
-        return new JsTemporalPlainDateTime(newDate, fromNanosOfDay(newNanosOfDay.longValueExact()));
+        return dateTime(newDate, fromNanosOfDay(newNanosOfDay.longValueExact()));
     }
 
     private static BigInteger toNanosOfDay(IsoTimeFields t) {
@@ -715,17 +906,27 @@ public final class TemporalPlainDateTimeBuiltins {
     private static JsValue difference(JsTemporalPlainDateTime receiver, JsValue otherArg, JsValue optionsArg,
             boolean isSince, InterpreterOps ops) {
         final var other = toDateTime(otherArg, ops);
+        // GetDifferenceSettings reads every option in alphabetical order (largestUnit, roundingIncrement,
+        // roundingMode, smallestUnit) before any of the algorithmic validation below runs - see
+        // since/order-of-operations.js. largestUnit's raw string is captured first and resolved against
+        // smallestUnit only once smallestUnit itself has been read.
+        final var largestUnitValue = optionOrUndefined(optionsArg, "largestUnit", ops);
+        final var largestUnitRaw = largestUnitValue instanceof JsUndefined
+                ? null
+                : JsCoercion.toStr(largestUnitValue, ops);
+        final var increment = readIncrementOption(optionsArg, ops);
+        var mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
         final var smallestUnit = readSmallestUnitOption(optionsArg, ops);
         // largestUnit defaults to (and "auto" resolves to) whichever of smallestUnit/day is coarser,
         // so a smallestUnit larger than the usual "day" default (e.g. "years") doesn't spuriously
         // conflict with it.
         final var largestUnitDefault = smallestUnit.isLargerThan(Unit.DAY) ? smallestUnit : Unit.DAY;
-        final var largestUnit = readLargestUnitOption(optionsArg, largestUnitDefault, ops);
+        final var largestUnit = largestUnitRaw == null || "auto".equals(largestUnitRaw)
+                ? largestUnitDefault
+                : Unit.parseTemporalUnit(largestUnitRaw);
         if (smallestUnit.ordinal() < largestUnit.ordinal()) {
             throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
         }
-        final var increment = readIncrementOption(optionsArg, ops);
-        var mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
         if (isSince) {
             mode = negateRoundingMode(mode);
         }
@@ -759,18 +960,24 @@ public final class TemporalPlainDateTimeBuiltins {
         if (!InterpreterUtils.isObjectLike(options)) {
             throw new TypeErrorException("options must be an object or a string");
         }
+        // All three options are read and cast in alphabetical order (roundingIncrement, roundingMode,
+        // smallestUnit) before any algorithmic validation (required-ness, unit range, increment-vs-unit
+        // compatibility) runs - see round/options-read-before-algorithmic-validation.js.
+        final var increment = readIncrementOption(options, ops);
+        final var mode = readRoundingModeOption(options, ops, RoundingMode.HALF_EXPAND);
         final var smallestUnitValue = optionOrUndefined(options, "smallestUnit", ops);
-        if (smallestUnitValue instanceof JsUndefined) {
+        final var smallestUnitRaw = smallestUnitValue instanceof JsUndefined
+                ? null
+                : JsCoercion.toStr(smallestUnitValue, ops);
+        if (smallestUnitRaw == null) {
             throw new RangeErrorException("smallestUnit is required");
         }
-        final var smallestUnit = Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
+        final var smallestUnit = Unit.parseTemporalUnit(smallestUnitRaw);
         if (smallestUnit.isLargerThan(Unit.DAY)) {
             throw new RangeErrorException(
                     "Invalid smallestUnit for Temporal.PlainDateTime.prototype.round: " + smallestUnit.singular());
         }
-        final var increment = readIncrementOption(options, ops);
         validateRoundingIncrement(increment, smallestUnit);
-        final var mode = readRoundingModeOption(options, ops, RoundingMode.HALF_EXPAND);
         return roundToUnit(receiver, smallestUnit, increment, mode);
     }
 
@@ -786,7 +993,7 @@ public final class TemporalPlainDateTimeBuiltins {
         final var newDate = dayCarry.signum() == 0
                 ? receiver.date()
                 : IsoCalendar.addDate(receiver.date(), 0, 0, 0, dayCarry.doubleValue(), RegulateOverflow.CONSTRAIN);
-        return new JsTemporalPlainDateTime(newDate, fromNanosOfDay(remainder.longValueExact()));
+        return dateTime(newDate, fromNanosOfDay(remainder.longValueExact()));
     }
 
     private static JsTemporalPlainDateTime roundToUnit(JsTemporalPlainDateTime receiver, Unit unit, long increment,
@@ -864,8 +1071,11 @@ public final class TemporalPlainDateTimeBuiltins {
     private static JsValue toZonedDateTime(JsTemporalPlainDateTime receiver, JsValue timeZoneArg, JsValue optionsArg,
             InterpreterOps ops) {
         final var id = extractTimeZoneId(timeZoneArg, ops);
-        final var zone = TemporalZonedDateTimeBuiltins.zoneOf(id);
+        // The disambiguation option is read (and cast) before the time zone identifier is resolved to
+        // a real zone/offset, so its observable Get/toString still happens even when the zone itself is
+        // unrepresentable - see toZonedDateTime/options-read-before-algorithmic-validation.js.
         final var disambiguation = readDisambiguationOption(optionsArg, ops);
+        final var zone = TemporalZonedDateTimeBuiltins.zoneOf(id);
         final var date = receiver.date();
         final var time = receiver.time();
         final var nanoOfSecond = time.millisecond() * 1_000_000 + time.microsecond() * 1_000 + time.nanosecond();
@@ -877,6 +1087,12 @@ public final class TemporalPlainDateTimeBuiltins {
         } catch (DateTimeException e) {
             throw new RangeErrorException("Invalid Temporal.PlainDateTime for toZonedDateTime: " + e.getMessage());
         }
+        // The resolved instant must itself fall within Temporal.Instant's representable range - a
+        // PlainDateTime near the edge of ITS (one-day-wider) range can resolve, through a time zone
+        // offset, to an instant that overflows Instant's own +/-8.64e21ns limit.
+        final var epochNanos = BigInteger.valueOf(zdt.toEpochSecond()).multiply(NANOS_PER_SECOND)
+                .add(BigInteger.valueOf(zdt.getNano()));
+        JsTemporalInstant.fromEpochNanoseconds(epochNanos);
         return JsTemporalZonedDateTime.fromJavaZonedDateTime(zdt, id);
     }
 
@@ -928,16 +1144,21 @@ public final class TemporalPlainDateTimeBuiltins {
     }
 
     private static String extractTimeZoneId(JsValue options, InterpreterOps ops) {
+        String raw = null;
         if (options instanceof JsString s) {
-            return TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
-        }
-        if (options instanceof JsObject obj) {
+            raw = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
+        } else if (options instanceof JsObject obj) {
             final var timeZone = ops.getMember(obj, new JsString("timeZone"));
             if (timeZone instanceof JsString s) {
-                return TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
+                raw = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
             }
         }
-        throw new TypeErrorException("Temporal.PlainDateTime.prototype.toZonedDateTime requires a timeZone");
+        if (raw == null) {
+            throw new TypeErrorException("Temporal.PlainDateTime.prototype.toZonedDateTime requires a timeZone");
+        }
+        // "UTC" is matched ASCII-case-insensitively (java.time's ZoneId.of is exact-case); the
+        // canonical spelling is used both for zone resolution and for the stored timeZoneId text.
+        return TemporalCalendarIdentifier.asciiEqualsIgnoreCase(raw, "utc") ? "UTC" : raw;
     }
 
     private static JsValue toStringMethod(JsTemporalPlainDateTime receiver, JsValue optionsArg, InterpreterOps ops) {
@@ -947,33 +1168,42 @@ public final class TemporalPlainDateTimeBuiltins {
         if (!InterpreterUtils.isObjectLike(optionsArg)) {
             throw new TypeErrorException("options must be an object");
         }
+        // Every option is read and cast in alphabetical order (calendarName, fractionalSecondDigits,
+        // roundingMode, smallestUnit) before the cross-cutting algorithmic validation (smallestUnit must
+        // be a time unit) runs - see toString/options-read-before-algorithmic-validation.js.
         final var calendarName = readCalendarNameOption(optionsArg, ops);
+        final var fsdValue = optionOrUndefined(optionsArg, "fractionalSecondDigits", ops);
+        Integer digits = null;
+        if (!(fsdValue instanceof JsUndefined)) {
+            if (fsdValue instanceof JsNumber) {
+                final var floored = (int) Math.floor(JsCoercion.toNumber(fsdValue, ops));
+                if (floored < 0 || floored > 9) {
+                    throw new RangeErrorException("fractionalSecondDigits must be 0..9 or \"auto\", got " + floored);
+                }
+                digits = floored;
+            } else if (!"auto".equals(JsCoercion.toStr(fsdValue, ops))) {
+                throw new RangeErrorException("fractionalSecondDigits must be 0..9 or \"auto\"");
+            }
+        }
         final var mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
         final var smallestUnitValue = optionOrUndefined(optionsArg, "smallestUnit", ops);
+        Unit smallestUnit = null;
         if (!(smallestUnitValue instanceof JsUndefined)) {
-            final var unitStr = JsCoercion.toStr(smallestUnitValue, ops);
-            if ("minute".equals(unitStr)) {
+            smallestUnit = Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
+        }
+        if (smallestUnit != null) {
+            if (smallestUnit == Unit.MINUTE) {
                 final var rounded = roundToUnit(receiver, Unit.MINUTE, 1, mode);
                 return new JsString(TemporalFormatter.formatDate(rounded.date()) + "T" + pad2(rounded.time().hour())
                         + ":" + pad2(rounded.time().minute())
                         + TemporalFormatter.formatCalendarAnnotation(calendarName));
             }
-            final var unit = Unit.parseTemporalUnit(unitStr);
-            requireSecondOrSmallerUnit(unit);
-            final var rounded = roundToUnit(receiver, unit, 1, mode);
-            return new JsString(TemporalFormatter.formatDateTime(rounded.date(), rounded.time(), digitsForUnit(unit),
-                    calendarName));
+            requireSecondOrSmallerUnit(smallestUnit);
+            final var rounded = roundToUnit(receiver, smallestUnit, 1, mode);
+            return new JsString(TemporalFormatter.formatDateTime(rounded.date(), rounded.time(),
+                    digitsForUnit(smallestUnit), calendarName));
         }
-        final var fsdValue = optionOrUndefined(optionsArg, "fractionalSecondDigits", ops);
-        if (!(fsdValue instanceof JsUndefined)) {
-            if (fsdValue instanceof JsString s && "auto".equals(s.getValue())) {
-                return new JsString(
-                        TemporalFormatter.formatDateTime(receiver.date(), receiver.time(), null, calendarName));
-            }
-            final var digits = toIntegerField(fsdValue, "fractionalSecondDigits", ops);
-            if (digits < 0 || digits > 9) {
-                throw new RangeErrorException("fractionalSecondDigits must be 0..9 or \"auto\"");
-            }
+        if (digits != null) {
             final var rounded = roundToFractionalDigits(receiver, digits, mode);
             return new JsString(TemporalFormatter.formatDateTime(rounded.date(), rounded.time(), digits, calendarName));
         }

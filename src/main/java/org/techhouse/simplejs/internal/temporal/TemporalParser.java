@@ -267,17 +267,20 @@ public final class TemporalParser {
         return input;
     }
 
-    // A bare TimeZoneIdentifier's numeric offset is minute precision only (no seconds/fraction) -
-    // distinct from the general UTC-offset grammar used inside a full date-time string, where
-    // sub-minute precision is accepted but purely informational.
+    // A bare TimeZoneIdentifier's numeric offset is hour precision at minimum and minute precision at
+    // most (no seconds/fraction) - distinct from the general UTC-offset grammar used inside a full
+    // date-time string, where sub-minute precision is accepted but purely informational. The minute
+    // part itself is optional (e.g. "+00", not just "+00:00"/"+0000").
     private static String parseTimeZoneOffset(Cursor cursor) {
         final var start = cursor.pos;
         cursor.advance();
         readDigits(cursor, 2);
         if (!cursor.atEnd() && cursor.peek() == ':') {
             cursor.advance();
+            readDigits(cursor, 2);
+        } else if (!cursor.atEnd() && isDigit(cursor.peek())) {
+            readDigits(cursor, 2);
         }
-        readDigits(cursor, 2);
         return cursor.source.substring(start, cursor.pos);
     }
 
