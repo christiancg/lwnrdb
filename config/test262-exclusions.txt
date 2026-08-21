@@ -151,4 +151,10 @@ dir:     built-ins/Temporal/ZonedDateTime/prototype/round/rounded-date-time-outs
 dir:     built-ins/Temporal/ZonedDateTime/prototype/since/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
 dir:     built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
 dir:     built-ins/Temporal/ZonedDateTime/prototype/until/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+# Temporal.Duration's relativeTo string accepts the same offset-only fixed-"time zone" bracket
+# annotation (e.g. "[+23:59]") as ZonedDateTime, hitting the identical java.time.ZoneOffset/ZoneRules
+# +/-18:00 hard cap documented above - same root cause, different entry point.
+dir:     built-ins/Temporal/Duration/compare/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/Duration/prototype/round/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/Duration/prototype/total/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
 pattern: \b(?:Async)?Generator\s*\(\s*["']  # an alias of the (Async)Generator constructor: no runtime code generation
