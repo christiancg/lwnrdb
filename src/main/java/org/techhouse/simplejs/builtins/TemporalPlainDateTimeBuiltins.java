@@ -201,11 +201,11 @@ public final class TemporalPlainDateTimeBuiltins {
 
     // Constructor / withCalendar accept only a bare calendar identifier; a non-string value is a
     // TypeError, not a RangeError.
-    private static String requireCalendarString(JsValue calendarArg) {
+    private static void requireCalendarString(JsValue calendarArg) {
         if (!(calendarArg instanceof JsString s)) {
             throw new TypeErrorException("calendar must be a string");
         }
-        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
+        TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     public static void installAccessors(JsObject proto) {
@@ -283,7 +283,7 @@ public final class TemporalPlainDateTimeBuiltins {
         return switch (name) {
             case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, arg(args, 0), arg(args, 1), ops));
             case "withCalendar" ->
-                new JsNativeFunction("withCalendar", (_, args) -> withCalendar(receiver, arg(args, 0), ops));
+                new JsNativeFunction("withCalendar", (_, args) -> withCalendar(receiver, arg(args, 0)));
             case "withPlainTime" ->
                 new JsNativeFunction("withPlainTime", (_, args) -> withPlainTime(receiver, arg(args, 0), ops));
             case "add" -> new JsNativeFunction("add", (_, args) -> add(receiver, arg(args, 0), arg(args, 1), ops));
@@ -379,10 +379,10 @@ public final class TemporalPlainDateTimeBuiltins {
             throw new TypeErrorException("day is required");
         }
         final var day = toPositiveIntegerField(dayValue, "day", ops);
-        final var hour = fieldOrDefault(obj, "hour", 0, ops);
-        final var microsecond = fieldOrDefault(obj, "microsecond", 0, ops);
-        final var millisecond = fieldOrDefault(obj, "millisecond", 0, ops);
-        final var minute = fieldOrDefault(obj, "minute", 0, ops);
+        final var hour = fieldOrZero(obj, "hour", ops);
+        final var microsecond = fieldOrZero(obj, "microsecond", ops);
+        final var millisecond = fieldOrZero(obj, "millisecond", ops);
+        final var minute = fieldOrZero(obj, "minute", ops);
         final var monthValue = ops.getMember(obj, new JsString("month"));
         final Integer month = monthValue instanceof JsUndefined
                 ? null
@@ -394,15 +394,15 @@ public final class TemporalPlainDateTimeBuiltins {
         if (month == null && monthCode == null) {
             throw new TypeErrorException("month or monthCode is required");
         }
-        final var nanosecond = fieldOrDefault(obj, "nanosecond", 0, ops);
-        final var second = fieldOrDefault(obj, "second", 0, ops);
+        final var nanosecond = fieldOrZero(obj, "nanosecond", ops);
+        final var second = fieldOrZero(obj, "second", ops);
         final var yearValue = ops.getMember(obj, new JsString("year"));
         if (yearValue instanceof JsUndefined) {
             throw new TypeErrorException("year is required");
         }
         final var year = toIntegerField(yearValue, "year", ops);
-        final var resolvedMonth = resolveMonthValue(month, monthCode);
         final var overflow = readOverflowOption(optionsArg, ops);
+        final var resolvedMonth = resolveMonthValue(month, monthCode);
         final var date = IsoCalendar.regulateDate(year, resolvedMonth, day, overflow);
         final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow);
         return dateTime(date, time);
@@ -476,9 +476,9 @@ public final class TemporalPlainDateTimeBuiltins {
         return resolveMonthValue(month, monthCode);
     }
 
-    private static int fieldOrDefault(JsValue obj, String name, int defaultValue, InterpreterOps ops) {
+    private static int fieldOrZero(JsValue obj, String name, InterpreterOps ops) {
         final var value = ops.getMember(obj, new JsString(name));
-        return value instanceof JsUndefined ? defaultValue : toIntegerField(value, name, ops);
+        return value instanceof JsUndefined ? 0 : toIntegerField(value, name, ops);
     }
 
     private static String monthCode(int month) {
@@ -643,8 +643,8 @@ public final class TemporalPlainDateTimeBuiltins {
         if (!any) {
             throw new TypeErrorException("with() argument must contain at least one recognized property");
         }
-        final var resolvedMonth = resolveMonthValue(month, monthCode, receiver.month());
         final var overflow = readOverflowOption(optionsArg, ops);
+        final var resolvedMonth = resolveMonthValue(month, monthCode, receiver.month());
         final var date = IsoCalendar.regulateDate(year, resolvedMonth, day, overflow);
         final var time = regulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow);
         return dateTime(date, time);
@@ -683,7 +683,7 @@ public final class TemporalPlainDateTimeBuiltins {
     // CalendarString grammar (a full ISO date/date-time/time string, extracting or defaulting its u-ca
     // annotation) or any of the five Temporal types carrying an ISO date, read via a fast path that
     // never touches the argument's own calendar/timeZone properties.
-    private static JsValue withCalendar(JsTemporalPlainDateTime receiver, JsValue calendarArg, InterpreterOps ops) {
+    private static JsValue withCalendar(JsTemporalPlainDateTime receiver, JsValue calendarArg) {
         if (!isTemporalWithCalendar(calendarArg)) {
             if (!(calendarArg instanceof JsString s)) {
                 throw new TypeErrorException("calendar must be a string");
@@ -1176,7 +1176,11 @@ public final class TemporalPlainDateTimeBuiltins {
         Integer digits = null;
         if (!(fsdValue instanceof JsUndefined)) {
             if (fsdValue instanceof JsNumber) {
-                final var floored = (int) Math.floor(JsCoercion.toNumber(fsdValue, ops));
+                final var numeric = JsCoercion.toNumber(fsdValue, ops);
+                if (Double.isNaN(numeric)) {
+                    throw new RangeErrorException("fractionalSecondDigits must not be NaN");
+                }
+                final var floored = (int) Math.floor(numeric);
                 if (floored < 0 || floored > 9) {
                     throw new RangeErrorException("fractionalSecondDigits must be 0..9 or \"auto\", got " + floored);
                 }

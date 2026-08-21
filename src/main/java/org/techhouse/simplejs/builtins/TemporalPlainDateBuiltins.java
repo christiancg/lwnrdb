@@ -91,7 +91,7 @@ public final class TemporalPlainDateBuiltins {
         return switch (name) {
             case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, arg(args, 0), arg(args, 1), ops));
             case "withCalendar" ->
-                new JsNativeFunction("withCalendar", (_, args) -> withCalendar(receiver, arg(args, 0), ops));
+                new JsNativeFunction("withCalendar", (_, args) -> withCalendar(receiver, arg(args, 0)));
             case "add" -> new JsNativeFunction("add", (_, args) -> add(receiver, arg(args, 0), arg(args, 1), ops));
             case "subtract" ->
                 new JsNativeFunction("subtract", (_, args) -> subtract(receiver, arg(args, 0), arg(args, 1), ops));
@@ -195,18 +195,18 @@ public final class TemporalPlainDateBuiltins {
         final var day = toIntegerField(arg(args, 2), "day", ops);
         final var calendarArg = arg(args, 3);
         if (!(calendarArg instanceof JsUndefined)) {
-            requireCalendarString(calendarArg, ops);
+            requireCalendarString(calendarArg);
         }
         return new JsTemporalPlainDate(IsoCalendar.regulateDate(year, month, day, RegulateOverflow.REJECT));
     }
 
     // Constructor: accepts only a bare calendar identifier (no ISO date-time-string extraction
     // fallback); a non-string value is a TypeError, not a RangeError.
-    private static String requireCalendarString(JsValue calendarArg, InterpreterOps ops) {
+    private static void requireCalendarString(JsValue calendarArg) {
         if (!(calendarArg instanceof JsString s)) {
             throw new TypeErrorException("calendar must be a string");
         }
-        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
+        TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     // ToTemporalDate: accepts an existing PlainDate, an ISO date string, or a date-like object
@@ -265,10 +265,10 @@ public final class TemporalPlainDateBuiltins {
     // between month and monthCode is resolved separately by the caller, once `options` has been read.
     private static UnresolvedDateFields resolveDateFields(JsValue obj, InterpreterOps ops) {
         requireValidCalendarField(obj, ops);
-        final var day = requiredPositiveIntegerField(obj, "day", ops);
-        final var month = optionalPositiveIntegerField(obj, "month", ops);
+        final var day = requiredDayField(obj, ops);
+        final var month = optionalMonthField(obj, ops);
         final var monthCode = optionalMonthCodeField(obj, ops);
-        final var year = requiredIntegerField(obj, "year", ops);
+        final var year = requiredYearField(obj, ops);
         return new UnresolvedDateFields(year, month, monthCode, day);
     }
 
@@ -291,25 +291,25 @@ public final class TemporalPlainDateBuiltins {
         TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
-    private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
+    private static int requiredYearField(JsValue obj, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString("year"));
         if (value instanceof JsUndefined) {
-            throw new TypeErrorException(name + " is required");
+            throw new TypeErrorException("year is required");
         }
-        return toIntegerField(value, name, ops);
+        return toIntegerField(value, "year", ops);
     }
 
-    private static int requiredPositiveIntegerField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
+    private static int requiredDayField(JsValue obj, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString("day"));
         if (value instanceof JsUndefined) {
-            throw new TypeErrorException(name + " is required");
+            throw new TypeErrorException("day is required");
         }
-        return toPositiveIntegerField(value, name, ops);
+        return toPositiveIntegerField(value, "day", ops);
     }
 
-    private static Integer optionalPositiveIntegerField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
-        return value instanceof JsUndefined ? null : toPositiveIntegerField(value, name, ops);
+    private static Integer optionalMonthField(JsValue obj, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString("month"));
+        return value instanceof JsUndefined ? null : toPositiveIntegerField(value, "month", ops);
     }
 
     // monthCode's Cast is ToPrimitive(value, "string") followed by a STRICT typeof-string check (not
@@ -529,7 +529,7 @@ public final class TemporalPlainDateBuiltins {
     // instanceof only - its calendar is implicitly "iso8601", so no property is ever read from it) or
     // any full ISO date/date-time/time/year-month/month-day string (a bare identifier is one degenerate
     // case of that grammar).
-    private static JsValue withCalendar(JsTemporalPlainDate receiver, JsValue calendarArg, InterpreterOps ops) {
+    private static JsValue withCalendar(JsTemporalPlainDate receiver, JsValue calendarArg) {
         if (!(calendarArg instanceof JsTemporalPlainDate || calendarArg instanceof JsTemporalPlainDateTime
                 || calendarArg instanceof JsTemporalPlainMonthDay || calendarArg instanceof JsTemporalPlainYearMonth
                 || calendarArg instanceof JsTemporalZonedDateTime)) {

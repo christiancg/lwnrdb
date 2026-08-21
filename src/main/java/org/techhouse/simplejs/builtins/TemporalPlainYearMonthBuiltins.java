@@ -208,11 +208,11 @@ public final class TemporalPlainYearMonthBuiltins {
     }
 
     // Constructor argument: a bare calendar identifier only; a non-string value is a TypeError.
-    private static String requireCalendarString(JsValue calendarArg) {
+    private static void requireCalendarString(JsValue calendarArg) {
         if (!(calendarArg instanceof JsString s)) {
             throw new TypeErrorException("calendar must be a string");
         }
-        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
+        TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     // ISOYearMonthWithinLimits: April -271821 through September 275760, independent of the day.
@@ -317,7 +317,7 @@ public final class TemporalPlainYearMonthBuiltins {
         final var monthValue = ops.getMember(obj, new JsString("month"));
         final var month = monthValue instanceof JsUndefined
                 ? null
-                : (Integer) requirePositiveIntegerField(monthValue, "month", ops);
+                : (Integer) requirePositiveMonthField(monthValue, ops);
         final var monthCode = monthCodeSyntaxChecked(ops.getMember(obj, new JsString("monthCode")), ops);
         final var yearValue = ops.getMember(obj, new JsString("year"));
         if (yearValue instanceof JsUndefined) {
@@ -350,22 +350,22 @@ public final class TemporalPlainYearMonthBuiltins {
         TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
-    private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
+    private static int requiredDayField(JsValue obj, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString("day"));
         if (value instanceof JsUndefined) {
-            throw new TypeErrorException(name + " is required");
+            throw new TypeErrorException("day is required");
         }
-        return toIntegerField(value, name, ops);
+        return toIntegerField(value, "day", ops);
     }
 
-    // ToPositiveIntegerWithTruncation: "month" (and PlainMonthDay's "day") must truncate to a strictly
-    // positive integer regardless of the `overflow` option - a non-positive value is always a
-    // RangeError, even under overflow "constrain" (which only clamps the *upper* bound against the
-    // calendar). See from/negative-month.js and from/overflow-constrain.js.
-    private static int requirePositiveIntegerField(JsValue value, String name, InterpreterOps ops) {
-        final var truncated = toIntegerField(value, name, ops);
+    // ToPositiveIntegerWithTruncation: "month" must truncate to a strictly positive integer regardless
+    // of the `overflow` option - a non-positive value is always a RangeError, even under overflow
+    // "constrain" (which only clamps the *upper* bound against the calendar). See
+    // from/negative-month.js and from/overflow-constrain.js.
+    private static int requirePositiveMonthField(JsValue value, InterpreterOps ops) {
+        final var truncated = toIntegerField(value, "month", ops);
         if (truncated < 1) {
-            throw new RangeErrorException(name + " must be a positive integer, got " + truncated);
+            throw new RangeErrorException("month must be a positive integer, got " + truncated);
         }
         return truncated;
     }
@@ -450,9 +450,9 @@ public final class TemporalPlainYearMonthBuiltins {
         return value instanceof JsUndefined ? null : JsCoercion.toStr(value, ops);
     }
 
-    private static Unit resolveLargestUnit(String raw, Unit fallback) {
+    private static Unit resolveLargestUnit(String raw) {
         if (raw == null || "auto".equals(raw)) {
-            return fallback;
+            return Unit.YEAR;
         }
         return requireYearOrMonthUnit(raw, "largestUnit");
     }
@@ -488,8 +488,8 @@ public final class TemporalPlainYearMonthBuiltins {
         return value instanceof JsUndefined ? null : JsCoercion.toStr(value, ops);
     }
 
-    private static RoundingMode resolveRoundingMode(String raw, RoundingMode fallback) {
-        return raw == null ? fallback : RoundingMode.parse(raw);
+    private static RoundingMode resolveRoundingMode(String raw) {
+        return raw == null ? RoundingMode.TRUNC : RoundingMode.parse(raw);
     }
 
     private static RoundingMode negateRoundingMode(RoundingMode mode) {
@@ -550,7 +550,7 @@ public final class TemporalPlainYearMonthBuiltins {
         final var monthValue = ops.getMember(fieldsLike, new JsString("month"));
         final var month = monthValue instanceof JsUndefined
                 ? null
-                : (Integer) requirePositiveIntegerField(monthValue, "month", ops);
+                : (Integer) requirePositiveMonthField(monthValue, ops);
         final var monthCode = monthCodeSyntaxChecked(ops.getMember(fieldsLike, new JsString("monthCode")), ops);
         final var yearValue = ops.getMember(fieldsLike, new JsString("year"));
         final var year = yearValue instanceof JsUndefined ? null : (Integer) toIntegerField(yearValue, "year", ops);
@@ -697,13 +697,12 @@ public final class TemporalPlainYearMonthBuiltins {
             boolean isSince, InterpreterOps ops) {
         final var other = toPlainYearMonth(otherArg, ops);
         final var largestUnitRaw = readUnitOptionRaw(optionsArg, "largestUnit", ops);
-        final var incrementRaw = readIncrementOptionRaw(optionsArg, ops);
+        final var increment = readIncrementOptionRaw(optionsArg, ops);
         final var roundingModeRaw = readRoundingModeOptionRaw(optionsArg, ops);
         final var smallestUnitRaw = readUnitOptionRaw(optionsArg, "smallestUnit", ops);
-        final var largestUnit = resolveLargestUnit(largestUnitRaw, Unit.YEAR);
-        requireValidIncrement(incrementRaw);
-        final var increment = incrementRaw;
-        var mode = resolveRoundingMode(roundingModeRaw, RoundingMode.TRUNC);
+        final var largestUnit = resolveLargestUnit(largestUnitRaw);
+        requireValidIncrement(increment);
+        var mode = resolveRoundingMode(roundingModeRaw);
         final var smallestUnit = resolveSmallestUnit(smallestUnitRaw);
         if (smallestUnit.ordinal() < largestUnit.ordinal()) {
             throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
@@ -743,7 +742,7 @@ public final class TemporalPlainYearMonthBuiltins {
             throw new TypeErrorException(
                     "Temporal.PlainYearMonth.prototype.toPlainDate requires an object with a day property");
         }
-        final var day = requiredIntegerField(item, "day", ops);
+        final var day = requiredDayField(item, ops);
         final var result = IsoCalendar.regulateDate(receiver.year(), receiver.month(), day, RegulateOverflow.CONSTRAIN);
         requireDateInRange(result);
         return new JsTemporalPlainDate(result);

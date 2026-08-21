@@ -470,4 +470,100 @@ public class TemporalPlainDateTimeBuiltinsTest {
         assertTrue(bool("new Temporal.PlainDateTime(2020, 6, 15).era === undefined"));
         assertTrue(bool("new Temporal.PlainDateTime(2020, 6, 15).eraYear === undefined"));
     }
+
+    @Test
+    public void test_to_zoned_date_time_dst_fold_disambiguation() {
+        // 2020-11-01 01:30 America/New_York is an ambiguous local time (fall-back fold).
+        assertEquals(1, num("new Temporal.PlainDateTime(2020, 11, 1, 1, 30)"
+                + ".toZonedDateTime('America/New_York', {disambiguation: 'later'}).hour"));
+        assertEquals(1, num("new Temporal.PlainDateTime(2020, 11, 1, 1, 30)"
+                + ".toZonedDateTime('America/New_York', {disambiguation: 'earlier'}).hour"));
+        assertEquals(1, num("new Temporal.PlainDateTime(2020, 11, 1, 1, 30)"
+                + ".toZonedDateTime('America/New_York', {disambiguation: 'compatible'}).hour"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDateTime(2020, 11, 1, 1, 30)"
+                + ".toZonedDateTime('America/New_York', {disambiguation: 'reject'})"));
+    }
+
+    // The representable range is one day wider than Temporal.Instant's own +/-8.64e21ns limit, except
+    // at the very edge nanosecond - see requireWithinLimits.
+    @Test
+    public void test_representable_range_edge() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDateTime(-271821, 4, 19)"));
+        assertEquals(1, num("new Temporal.PlainDateTime(-271821, 4, 19, 0, 0, 0, 0, 0, 1).nanosecond"));
+    }
+
+    // Reflect.construct with a subclass links [[Prototype]] to the subclass's prototype rather than
+    // the intrinsic one.
+    @Test
+    public void test_reflect_construct_subclass_prototype() {
+        assertTrue(bool("class Sub extends Temporal.PlainDateTime {}"
+                + "const d = Reflect.construct(Temporal.PlainDateTime, [2020, 6, 15], Sub);"
+                + "Object.getPrototypeOf(d) === Sub.prototype"));
+        assertEquals(15, num("class Sub extends Temporal.PlainDateTime {}"
+                + "const d = Reflect.construct(Temporal.PlainDateTime, [2020, 6, 15], Sub);" + "d.day"));
+    }
+
+    @Test
+    public void test_to_date_time_from_string_with_calendar_annotation() {
+        assertEquals("iso8601", str("Temporal.PlainDateTime.from('2020-06-15[u-ca=iso8601]').calendarId"));
+    }
+
+    @Test
+    public void test_from_fields_day_required() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, month: 6})"));
+    }
+
+    @Test
+    public void test_from_fields_non_positive_day_or_month() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, month: 6, day: 0})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, month: 0, day: 1})"));
+    }
+
+    @Test
+    public void test_from_fields_month_code_validation() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, monthCode: 5, day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, monthCode: 'X08', day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, monthCode: 'M13', day: 1})"));
+    }
+
+    @Test
+    public void test_with_explicit_overflow_option() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDateTime(2020, 4, 15).with({day: 31}, {overflow: 'reject'})"));
+        assertEquals(30, num("new Temporal.PlainDateTime(2020, 4, 15).with({day: 31}, {overflow: 'constrain'}).day"));
+    }
+
+    @Test
+    public void test_round_day_unit_with_increment_one() {
+        assertEquals(16, num(
+                "new Temporal.PlainDateTime(2020, 6, 15, 13).round({smallestUnit: 'day', roundingIncrement: 1}).day"));
+    }
+
+    @Test
+    public void test_with_requires_recognized_property() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDateTime(2020, 6, 15).with({})"));
+    }
+
+    @Test
+    public void test_with_rejects_calendar_and_time_zone_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainDateTime(2020, 6, 15).with({year: 2021, calendar: 'iso8601'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDateTime(2020, 6, 15).with({year: 2021, timeZone: 'UTC'})"));
+    }
+
+    @Test
+    public void test_to_string_fractional_second_digits_invalid() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainDateTime(2020, 6, 15, 1, 2, 3).toString({fractionalSecondDigits: NaN})"));
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.PlainDateTime(2020, 6, 15, 1, 2, 3).toString({fractionalSecondDigits: 'bogus'})"));
+    }
 }

@@ -573,6 +573,24 @@ public class TemporalZonedDateTimeBuiltinsTest {
                         + "roundingMode: 'expand'}).toString()"));
     }
 
+    // 1250 is exactly halfway between 1000 and 1500 (increment 500); halfEven picks the even
+    // multiple (1000/500 = 2, even).
+    @Test
+    public void test_rounding_mode_half_even_at_an_exact_tie() {
+        assertEquals("1000", str("new Temporal.ZonedDateTime(1250n, 'UTC').round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 500, roundingMode: 'halfEven'}).epochNanoseconds.toString()"));
+    }
+
+    // A negative-direction halfCeil/halfFloor tie: the tie-break can go toward the unchanged
+    // (non-away-from-zero) quotient depending on sign and direction.
+    @Test
+    public void test_rounding_mode_half_ceil_half_floor_negative_ties() {
+        assertEquals("-1000", str("new Temporal.ZonedDateTime(-1250n, 'UTC').round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 500, roundingMode: 'halfCeil'}).epochNanoseconds.toString()"));
+        assertEquals("1000", str("new Temporal.ZonedDateTime(1250n, 'UTC').round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 500, roundingMode: 'halfFloor'}).epochNanoseconds.toString()"));
+    }
+
     // era/eraYear are always undefined for the ISO-8601-only calendar this engine implements
     @Test
     public void test_era_and_era_year_are_undefined() {
@@ -680,5 +698,106 @@ public class TemporalZonedDateTimeBuiltinsTest {
     public void test_string_coercion() {
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("String(new Temporal.ZonedDateTime(0n, 'UTC'))"));
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("`${new Temporal.ZonedDateTime(0n, 'UTC')}`"));
+    }
+
+    @Test
+    public void test_z_offset_is_utc() {
+        assertTrue(bool("Temporal.ZonedDateTime.from('1970-01-01T00:00:00Z[UTC]').epochNanoseconds === 0n"));
+    }
+
+    @Test
+    public void test_offset_with_fractional_part_is_trimmed() {
+        assertEquals(0, num("Temporal.ZonedDateTime.from('1970-01-01T00:00:00+00:00:00.5[+00:00]').offsetNanoseconds"));
+    }
+
+    @Test
+    public void test_reflect_construct_subclass_prototype() {
+        assertTrue(bool("class Sub extends Temporal.ZonedDateTime {}"
+                + "const z = Reflect.construct(Temporal.ZonedDateTime, [0n, 'UTC'], Sub);"
+                + "Object.getPrototypeOf(z) === Sub.prototype"));
+    }
+
+    @Test
+    public void test_from_string_invalid_time_zone_throws_range_error() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from('2020-06-15T00:00:00[Not/AZone]')"));
+    }
+
+    @Test
+    public void test_until_rejects_smallest_unit_larger_than_largest_unit() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').until(new Temporal.ZonedDateTime("
+                        + "86400000000000n, 'UTC'), {smallestUnit: 'hour', largestUnit: 'minute'})"));
+    }
+
+    @Test
+    public void test_round_rejects_non_object_non_string_options() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').round(5)"));
+    }
+
+    @Test
+    public void test_round_requires_smallest_unit() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').round({})"));
+    }
+
+    @Test
+    public void test_round_to_calendar_day_with_various_modes() {
+        // 12:00 UTC is exactly half of a 24h UTC day.
+        assertEquals("1970-01-02T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'ceil'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'floor'}).toString()"));
+        assertEquals("1970-01-02T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'halfCeil'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'halfFloor'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'halfEven'}).toString()"));
+        // A quarter into the day rounds down under every half-based mode (not a tie).
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(21600000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'halfTrunc'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(21600000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'trunc'}).toString()"));
+        assertEquals("1970-01-02T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(21600000000000n, 'UTC').round("
+                + "{smallestUnit: 'day', roundingMode: 'expand'}).toString()"));
+    }
+
+    @Test
+    public void test_round_signed_nanoseconds_negative_epoch() {
+        // -30 minutes (half of an hour) before epoch, exercising the sign<0 branches.
+        final var halfHourNs = "-1800000000000n";
+        assertEquals("1969-12-31T23:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'floor'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'ceil'}).toString()"));
+        assertEquals("1969-12-31T23:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'halfFloor'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'halfCeil'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'halfEven'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'trunc'}).toString()"));
+        assertEquals("1969-12-31T23:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'expand'}).toString()"));
+    }
+
+    @Test
+    public void test_to_string_smallest_unit_second() {
+        assertEquals("1970-01-01T00:00:30", str("new Temporal.ZonedDateTime(30500000000n, 'UTC').toString("
+                + "{smallestUnit: 'second', timeZoneName: 'never', offset: 'never'})"));
+    }
+
+    @Test
+    public void test_to_string_rejects_smallest_unit_larger_than_second() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').toString({smallestUnit: 'hour'})"));
+    }
+
+    @Test
+    public void test_to_string_numeric_fractional_second_digits() {
+        assertEquals("1970-01-01T00:00:00.500+00:00[UTC]",
+                str("new Temporal.ZonedDateTime(500000000n, 'UTC').toString({fractionalSecondDigits: 3})"));
     }
 }

@@ -206,4 +206,51 @@ public class TemporalPlainMonthDayBuiltinsTest {
                         + "var e = d.with({monthCode: 'M06', day: 15}, {overflow: 'reject'});"
                         + "e.monthCode.substring(1) + ',' + e.day"));
     }
+
+    @Test
+    public void test_with_rejects_calendar_and_time_zone_properties() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainMonthDay(11, 30).with({day: 1, calendar: 'iso8601'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainMonthDay(11, 30).with({day: 1, timeZone: 'UTC'})"));
+    }
+
+    @Test
+    public void test_with_rejects_no_recognized_fields() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainMonthDay(11, 30).with({})"));
+    }
+
+    // ToTemporalMonthDay's fast paths for PlainDate/PlainDateTime/ZonedDateTime arguments read the
+    // month+day directly, forcing referenceISOYear to 1972
+    @Test
+    public void test_from_plain_date_plain_date_time_and_zoned_date_time_fast_paths() {
+        assertEquals(1972,
+                num("Temporal.PlainMonthDay.from(new Temporal.PlainDate(2020, 11, 30)).getISOFields().isoYear"));
+        assertEquals(1972, num(
+                "Temporal.PlainMonthDay.from(new Temporal.PlainDateTime(2020, 11, 30, 10)).getISOFields().isoYear"));
+        assertEquals(1972,
+                num("Temporal.PlainMonthDay.from("
+                        + "Temporal.ZonedDateTime.from('2020-11-30T10:00:00-05:00[America/New_York]'))"
+                        + ".getISOFields().isoYear"));
+    }
+
+    @Test
+    public void test_from_rejects_non_string_month_code() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainMonthDay.from({monthCode: 5, day: 1})"));
+    }
+
+    @Test
+    public void test_from_rejects_non_positive_day() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainMonthDay.from({monthCode: 'M11', day: -1})"));
+    }
+
+    // Reflect.construct threads a distinct newTarget's own prototype onto the constructed instance
+    @Test
+    public void test_reflect_construct_uses_new_target_prototype() {
+        assertTrue(bool("function Sub() {} Sub.prototype = Object.create(Temporal.PlainMonthDay.prototype); "
+                + "var d = Reflect.construct(Temporal.PlainMonthDay, [11, 30], Sub); "
+                + "Object.getPrototypeOf(d) === Sub.prototype"));
+    }
 }

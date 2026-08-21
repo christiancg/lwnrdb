@@ -33,6 +33,7 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
@@ -154,11 +155,11 @@ public final class TemporalZonedDateTimeBuiltins {
 
     // Constructor / withCalendar accept only a bare calendar identifier; a non-string value is a
     // TypeError, not a RangeError.
-    private static String requireCalendarString(JsValue calendarArg) {
+    private static void requireCalendarString(JsValue calendarArg) {
         if (!(calendarArg instanceof JsString s)) {
             throw new TypeErrorException("calendar must be a string");
         }
-        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
+        TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     static ZoneId zoneOf(String identifier) {
@@ -227,8 +228,24 @@ public final class TemporalZonedDateTimeBuiltins {
         };
     }
 
+    // ISODateWithinLimits already guarantees the date part is representable; the calendar-anchored
+    // wall-clock range is narrower by exactly one instant at the very bottom - midnight on the
+    // minimum ISO date is the sole date/time-of-day combination that falls outside the true
+    // +-8.64e21ns instant envelope once treated as a naive (zero-offset) nanosecond count. Mirrors
+    // TemporalPlainDateBuiltins.MIN_PLAIN_DATE/toPlainDateTime - see
+    // PlainDate/prototype/toZonedDateTime/throws-if-combined-date-time-outside-valid-iso-range.js.
+    private static final Iso8601Fields MIN_ISO_DATE = new Iso8601Fields(-271821, 4, 19);
+
+    private static boolean isMidnight(IsoTimeFields time) {
+        return time.hour() == 0 && time.minute() == 0 && time.second() == 0 && time.millisecond() == 0
+                && time.microsecond() == 0 && time.nanosecond() == 0;
+    }
+
     static JsTemporalZonedDateTime resolveToZoned(Iso8601Fields date, IsoTimeFields time, ZoneId zone,
             String timeZoneId, Disambiguation disambiguation) {
+        if (date.equals(MIN_ISO_DATE) && isMidnight(time)) {
+            throw new RangeErrorException("date-time value is outside the representable range");
+        }
         final var nanoOfSecond = time.millisecond() * 1_000_000 + time.microsecond() * 1_000 + time.nanosecond();
         final LocalDateTime local;
         try {
@@ -237,7 +254,13 @@ public final class TemporalZonedDateTimeBuiltins {
         } catch (DateTimeException e) {
             throw new RangeErrorException("Invalid Temporal.ZonedDateTime fields: " + e.getMessage());
         }
-        return JsTemporalZonedDateTime.fromJavaZonedDateTime(resolveLocal(local, zone, disambiguation), timeZoneId);
+        final var resolved = resolveLocal(local, zone, disambiguation);
+        // The wall-clock/naive check above doesn't catch every case - GetStartOfDay's resulting
+        // instant can still fall outside the Instant range once the zone's offset is applied (e.g. a
+        // date within the naive range combined with an offset that pushes the exact instant past the
+        // boundary) - see ZonedDateTime/from/argument-string-start-of-day-not-valid-epoch-nanoseconds.js.
+        JsTemporalInstant.fromEpochNanoseconds(epochNanosOf(resolved));
+        return JsTemporalZonedDateTime.fromJavaZonedDateTime(resolved, timeZoneId);
     }
 
     private static BigInteger epochNanosOf(ZonedDateTime zdt) {
@@ -344,9 +367,9 @@ public final class TemporalZonedDateTimeBuiltins {
         return switch (name) {
             case "with" -> new JsNativeFunction("with", (_, args) -> with(receiver, arg(args, 0), arg(args, 1), ops));
             case "withCalendar" ->
-                new JsNativeFunction("withCalendar", (_, args) -> withCalendar(receiver, arg(args, 0), ops));
+                new JsNativeFunction("withCalendar", (_, args) -> withCalendar(receiver, arg(args, 0)));
             case "withTimeZone" ->
-                new JsNativeFunction("withTimeZone", (_, args) -> withTimeZone(receiver, arg(args, 0), ops));
+                new JsNativeFunction("withTimeZone", (_, args) -> withTimeZone(receiver, arg(args, 0)));
             case "withPlainDate" ->
                 new JsNativeFunction("withPlainDate", (_, args) -> withPlainDate(receiver, arg(args, 0), ops));
             case "withPlainTime" ->
@@ -433,6 +456,11 @@ public final class TemporalZonedDateTimeBuiltins {
         final var instant = parsed.offset() != null
                 ? local.toInstant(toZoneOffset(parsed.offset()))
                 : resolveLocal(local, zone, disambiguation).toInstant();
+        // GetStartOfDay's (or the explicit-offset's) resulting instant can fall outside the Instant
+        // range even though the wall-clock date/time was itself in range - see
+        // ZonedDateTime/from/argument-string-start-of-day-not-valid-epoch-nanoseconds.js.
+        JsTemporalInstant.fromEpochNanoseconds(BigInteger.valueOf(instant.getEpochSecond()).multiply(NANOS_PER_SECOND)
+                .add(BigInteger.valueOf(instant.getNano())));
         return new JsTemporalZonedDateTime(instant.getEpochSecond(), instant.getNano(), zone, timeZoneId);
     }
 
@@ -701,7 +729,7 @@ public final class TemporalZonedDateTimeBuiltins {
     }
 
     // withCalendar only validates the argument in ISO-only mode - it is otherwise an identity op.
-    private static JsValue withCalendar(JsTemporalZonedDateTime receiver, JsValue calendarArg, InterpreterOps ops) {
+    private static JsValue withCalendar(JsTemporalZonedDateTime receiver, JsValue calendarArg) {
         requireCalendarString(calendarArg);
         return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(), receiver.zone(),
                 receiver.timeZoneId());
@@ -723,7 +751,7 @@ public final class TemporalZonedDateTimeBuiltins {
         TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
-    private static JsValue withTimeZone(JsTemporalZonedDateTime receiver, JsValue timeZoneArg, InterpreterOps ops) {
+    private static JsValue withTimeZone(JsTemporalZonedDateTime receiver, JsValue timeZoneArg) {
         if (!(timeZoneArg instanceof JsString s)) {
             throw new TypeErrorException("timeZone must be a string");
         }

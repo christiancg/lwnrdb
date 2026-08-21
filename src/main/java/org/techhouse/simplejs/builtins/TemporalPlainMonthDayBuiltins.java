@@ -176,11 +176,11 @@ public final class TemporalPlainMonthDayBuiltins {
     }
 
     // Constructor argument: a bare calendar identifier only; a non-string value is a TypeError.
-    private static String requireCalendarString(JsValue calendarArg) {
+    private static void requireCalendarString(JsValue calendarArg) {
         if (!(calendarArg instanceof JsString s)) {
             throw new TypeErrorException("calendar must be a string");
         }
-        return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
+        TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
     private static JsTemporalPlainMonthDay toPlainMonthDay(JsValue item, InterpreterOps ops) {
@@ -291,12 +291,12 @@ public final class TemporalPlainMonthDayBuiltins {
         TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
-    private static int requiredIntegerField(JsValue obj, String name, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
+    private static int requiredYearField(JsValue obj, InterpreterOps ops) {
+        final var value = ops.getMember(obj, new JsString("year"));
         if (value instanceof JsUndefined) {
-            throw new TypeErrorException(name + " is required");
+            throw new TypeErrorException("year is required");
         }
-        return toIntegerField(value, name, ops);
+        return toIntegerField(value, "year", ops);
     }
 
     // ToPositiveIntegerWithTruncation: "month" and "day" must truncate to a strictly positive integer
@@ -460,7 +460,7 @@ public final class TemporalPlainMonthDayBuiltins {
             throw new TypeErrorException(
                     "Temporal.PlainMonthDay.prototype.toPlainDate requires an object with a year property");
         }
-        final var year = requiredIntegerField(item, "year", ops);
+        final var year = requiredYearField(item, ops);
         final var result = IsoCalendar.regulateDate(year, receiver.month(), receiver.day(), RegulateOverflow.CONSTRAIN);
         requireDateInRange(result);
         return new JsTemporalPlainDate(result);

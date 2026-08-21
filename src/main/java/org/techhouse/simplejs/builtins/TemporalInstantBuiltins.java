@@ -179,9 +179,12 @@ public final class TemporalInstantBuiltins {
 
     // A duration field can be a double far beyond long's range (e.g. 1.728e22 nanoseconds in a
     // minimum-to-maximum-instant test) - narrowing to (long) first would silently saturate/lose
-    // precision, so the double is converted to BigInteger directly.
+    // precision, so the double is converted to BigInteger directly. The BigDecimal(double)
+    // constructor (not BigDecimal.valueOf, which round-trips through Double.toString and can drop
+    // trailing digits of a large exact-integer double) preserves the double's exact binary value.
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     private static BigInteger exact(double value) {
-        return java.math.BigDecimal.valueOf(value).toBigInteger();
+        return new java.math.BigDecimal(value).toBigInteger();
     }
 
     private static DurationFields toDurationFields(JsValue value, InterpreterOps ops) {
@@ -256,10 +259,10 @@ public final class TemporalInstantBuiltins {
         // Every option is read (and coerced, observably calling valueOf/toString) in this fixed
         // order - largestUnit, roundingIncrement, roundingMode, smallestUnit - before any
         // algorithmic validation.
-        final var largestUnitRaw = unitOptionOrAuto(options, "largestUnit", null, ops);
+        final var largestUnitRaw = unitOptionOrAuto(options, ops);
         final var increment = incrementOption(options, ops);
         final var mode = roundingModeOption(options, RoundingMode.TRUNC, ops);
-        final var smallestUnit = unitOption(options, "smallestUnit", Unit.NANOSECOND, ops);
+        final var smallestUnit = unitOption(options, Unit.NANOSECOND, ops);
         // largestUnit defaults to (and "auto" resolves to) whichever of smallestUnit/second is
         // coarser, so a smallestUnit larger than the usual "second" default (e.g. "hours") doesn't
         // spuriously conflict with it.
@@ -379,7 +382,7 @@ public final class TemporalInstantBuiltins {
         // round(), toString() never reads a roundingIncrement option (implicitly always 1).
         var fractionDigits = fractionalSecondDigitsOption(options, ops);
         final var mode = roundingModeOption(options, RoundingMode.TRUNC, ops);
-        final var smallestUnit = unitOption(options, "smallestUnit", null, ops);
+        final var smallestUnit = unitOption(options, null, ops);
         final var zone = timeZoneOption(options, ops);
         if (smallestUnit != null && smallestUnit.isLargerThan(Unit.MINUTE)) {
             throw new RangeErrorException(
@@ -528,27 +531,27 @@ public final class TemporalInstantBuiltins {
         return RoundingMode.parse(JsCoercion.toStr(raw, ops));
     }
 
-    private static Unit unitOption(JsValue options, String key, Unit fallback, InterpreterOps ops) {
+    private static Unit unitOption(JsValue options, Unit fallback, InterpreterOps ops) {
         if (options == null || options instanceof JsUndefined) {
             return fallback;
         }
-        final var raw = ops.getMember(options, new JsString(key));
+        final var raw = ops.getMember(options, new JsString("smallestUnit"));
         if (raw == null || raw instanceof JsUndefined) {
             return fallback;
         }
         return Unit.parseTemporalUnit(JsCoercion.toStr(raw, ops));
     }
 
-    private static Unit unitOptionOrAuto(JsValue options, String key, Unit fallback, InterpreterOps ops) {
+    private static Unit unitOptionOrAuto(JsValue options, InterpreterOps ops) {
         if (options == null || options instanceof JsUndefined) {
-            return fallback;
+            return null;
         }
-        final var raw = ops.getMember(options, new JsString(key));
+        final var raw = ops.getMember(options, new JsString("largestUnit"));
         if (raw == null || raw instanceof JsUndefined) {
-            return fallback;
+            return null;
         }
         final var str = JsCoercion.toStr(raw, ops);
-        return "auto".equals(str) ? fallback : Unit.parseTemporalUnit(str);
+        return "auto".equals(str) ? null : Unit.parseTemporalUnit(str);
     }
 
     private static BigInteger nanosPerUnit(Unit unit) {
