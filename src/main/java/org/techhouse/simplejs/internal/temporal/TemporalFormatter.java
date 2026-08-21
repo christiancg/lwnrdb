@@ -88,6 +88,12 @@ public final class TemporalFormatter {
         return withYear + formatCalendarAnnotation(calendarName);
     }
 
+    // A "minute" smallestUnit/rounding target omits the seconds field entirely (rather than
+    // formatting ":00"), per the Instant/PlainTime toString grammar.
+    public static String formatTimeMinutePrecision(IsoTimeFields time) {
+        return pad2(time.hour()) + ":" + pad2(time.minute());
+    }
+
     public static String formatTime(IsoTimeFields time, Integer fractionalSecondDigits) {
         final var sb = new StringBuilder();
         sb.append(pad2(time.hour())).append(':').append(pad2(time.minute())).append(':').append(pad2(time.second()));
@@ -134,7 +140,9 @@ public final class TemporalFormatter {
     // has no smallestUnit coarser than seconds (day/hour/minute are never truncated away).
     public static String formatDuration(DurationFields duration, Integer fractionalSecondDigits) {
         final var sign = DurationMath.sign(duration);
-        final var forcesFraction = fractionalSecondDigits != null && fractionalSecondDigits > 0;
+        // An explicit (non-"auto") precision forces the seconds unit to be shown even at 0 digits
+        // (e.g. fractionalSecondDigits: 0 still renders "T0S"), not just a nonzero digit count.
+        final var forcesFraction = fractionalSecondDigits != null;
         if (sign == 0 && !forcesFraction) {
             return "PT0S";
         }

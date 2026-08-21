@@ -1,9 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
-import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.List;
-import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -85,7 +83,7 @@ public final class TemporalNowBuiltins {
             throw new TypeErrorException("timeZone must be a string");
         }
         final var id = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
-        return new TimeZoneRef(zoneOf(id), id);
+        return new TimeZoneRef(TemporalZonedDateTimeBuiltins.zoneOf(id), id);
     }
 
     private static JsTemporalZonedDateTime asZonedDateTime(JsValue value) {
@@ -96,13 +94,5 @@ public final class TemporalNowBuiltins {
             return zoned;
         }
         return null;
-    }
-
-    private static ZoneId zoneOf(String id) {
-        try {
-            return ZoneId.of(id);
-        } catch (DateTimeException e) {
-            throw new RangeErrorException("Invalid time zone identifier: " + id);
-        }
     }
 }

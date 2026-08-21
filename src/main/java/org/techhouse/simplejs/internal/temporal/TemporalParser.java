@@ -1,5 +1,6 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import java.util.regex.Pattern;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
 /**
@@ -27,6 +28,17 @@ public final class TemporalParser {
         return result;
     }
 
+    // Temporal.Duration's relativeTo string is unique among the Plain-type coercions: a bare 'Z' is
+    // only invalid when there is no bracketed time zone annotation to give it meaning (a Z-with-
+    // bracket names a real exact time in that zone), so it can't reuse parseDate/parseDateTime's
+    // unconditional rejection - the caller decides based on whether a bracket is present.
+    public static ParsedDateTime parseRelativeToString(String input) {
+        final var cursor = new Cursor(input);
+        final var result = parseDateTimeCore(cursor);
+        requireEnd(cursor);
+        return result;
+    }
+
     // A bare 'Z' UTC designator forces Instant/ZonedDateTime interpretation and is specifically
     // excluded from every Plain-type string coercion (PlainDate/PlainDateTime/PlainYearMonth/
     // PlainMonthDay/PlainTime); a numeric offset like "+00:00" is fine and simply ignored.
@@ -44,7 +56,11 @@ public final class TemporalParser {
     public static ParsedDateTime parseTime(String input) {
         try {
             final var cursor = new Cursor(input);
-            if (!cursor.atEnd() && (cursor.peek() == 'T' || cursor.peek() == 't')) {
+            final var hasTDesignator = !cursor.atEnd() && (cursor.peek() == 'T' || cursor.peek() == 't');
+            if (!hasTDesignator) {
+                rejectAmbiguousBareTimeString(input);
+            }
+            if (hasTDesignator) {
                 cursor.advance();
             }
             final var time = parseTimeSpec(cursor);
@@ -102,9 +118,10 @@ public final class TemporalParser {
         final var cursor = new Cursor(input);
         final var result = parseDateTimeCore(cursor);
         requireEnd(cursor);
-        if (result.time() == null || result.timeZoneId() == null) {
-            throw new RangeErrorException(
-                    "Temporal zoned date-time string requires a time and a time zone annotation: " + input);
+        // Unlike TemporalDateTimeString (PlainDateTime), a ZonedDateTimeString's time part is
+        // optional (defaulting to midnight) as long as the mandatory time zone annotation is present.
+        if (result.timeZoneId() == null) {
+            throw new RangeErrorException("Temporal zoned date-time string requires a time zone annotation: " + input);
         }
         return result;
     }
@@ -162,10 +179,21 @@ public final class TemporalParser {
                 expanded = true;
                 cursor.advance();
             }
-            final var year = sign * readDigits(cursor, expanded ? 6 : 4);
-            cursor.expect('-');
-            final var month = readDigits(cursor, 2);
+            final var yearDigits = readDigits(cursor, expanded ? 6 : 4);
+            if (expanded && sign < 0 && yearDigits == 0) {
+                throw new RangeErrorException("Invalid Temporal date: expanded year -000000 is not allowed");
+            }
+            final var year = sign * yearDigits;
+            // The year-month separator, like every other Temporal string separator, chooses extended
+            // vs basic independently (e.g. "197611" is accepted alongside "1976-11").
             if (!cursor.atEnd() && cursor.peek() == '-') {
+                cursor.advance();
+            }
+            final var month = readDigits(cursor, 2);
+            // A day component (extended "-DD" or basic "DD") immediately following means this is
+            // actually a full date/date-time, not a reduced year-month - back off and let the caller's
+            // full-date fallback parse it (with its own real day, rather than defaulting to day 1).
+            if (!cursor.atEnd() && (cursor.peek() == '-' || isDigit(cursor.peek()))) {
                 cursor.pos = savedPos;
                 return null;
             }
@@ -189,7 +217,11 @@ public final class TemporalParser {
                 }
             }
             final var month = readDigits(cursor, 2);
-            cursor.expect('-');
+            // The month-day separator, like the leading "--", is optional independently (e.g. "1001"
+            // and "--1001" are accepted alongside "10-01" and "--10-01").
+            if (!cursor.atEnd() && cursor.peek() == '-') {
+                cursor.advance();
+            }
             final var day = readDigits(cursor, 2);
             if (!cursor.atEnd() && cursor.peek() == '-') {
                 cursor.pos = savedPos;
@@ -214,13 +246,24 @@ public final class TemporalParser {
             return offset;
         }
         final var start = cursor.pos;
-        while (!cursor.atEnd() && isTimeZoneNameChar(cursor.peek())) {
-            cursor.advance();
+        // A TimeZoneIANAName always begins with a letter (tzdata has no digit-leading zones); this
+        // keeps a bare date-time-shaped string (e.g. "2021-08-19T1730Z") from being misread as a
+        // literal (bogus) IANA name instead of falling back to the date-time/annotation grammar.
+        if (!cursor.atEnd() && Character.isLetter(cursor.peek())) {
+            while (!cursor.atEnd() && isTimeZoneNameChar(cursor.peek())) {
+                cursor.advance();
+            }
         }
         if (cursor.pos == start) {
             throw new RangeErrorException("Invalid time zone identifier: " + input);
         }
         requireEnd(cursor);
+        // "UTC" is the one time zone identifier the spec requires callers to recognize
+        // case-insensitively and report back in its canonical case; other IANA names are returned
+        // verbatim (this engine defers to java.time for their canonical form, if any).
+        if (TemporalCalendarIdentifier.asciiEqualsIgnoreCase(input, "utc")) {
+            return "UTC";
+        }
         return input;
     }
 
@@ -276,7 +319,10 @@ public final class TemporalParser {
             signFactor = cursor.peek() == '+' ? 1 : -1;
             cursor.advance();
         }
-        cursor.expect('P');
+        if (cursor.atEnd() || !isDesignator(cursor.peek(), 'P')) {
+            throw new RangeErrorException("Invalid Temporal duration string: " + input);
+        }
+        cursor.advance();
 
         final var years = tryReadComponent(cursor, 'Y');
         final var months = tryReadComponent(cursor, 'M');
@@ -290,7 +336,7 @@ public final class TemporalParser {
         var milliseconds = 0.0;
         var microseconds = 0.0;
         var nanoseconds = 0.0;
-        if (!cursor.atEnd() && cursor.peek() == 'T') {
+        if (!cursor.atEnd() && isDesignator(cursor.peek(), 'T')) {
             cursor.advance();
             // Per the DurationTime grammar, only the last time component present may carry a
             // fractional part (DurationHoursPart's fraction alternative excludes a following minutes
@@ -351,13 +397,57 @@ public final class TemporalParser {
         if (!anyComponent) {
             throw new RangeErrorException("Empty Temporal duration string: " + input);
         }
-        return new DurationFields(signFactor * orZero(years), signFactor * orZero(months), signFactor * orZero(weeks),
-                signFactor * orZero(days), signFactor * hours, signFactor * minutes, signFactor * seconds,
-                signFactor * milliseconds, signFactor * microseconds, signFactor * nanoseconds);
+        // An absent component is 0, and a negative overall sign must not turn that into a spurious
+        // -0 (IEEE754 negative * positive zero = negative zero) - every field is normalised back to
+        // +0 rather than only the ones this parser happens to track as a nullable Double.
+        return new DurationFields(normalizeZero(signFactor * orZero(years)), normalizeZero(signFactor * orZero(months)),
+                normalizeZero(signFactor * orZero(weeks)), normalizeZero(signFactor * orZero(days)),
+                normalizeZero(signFactor * hours), normalizeZero(signFactor * minutes),
+                normalizeZero(signFactor * seconds), normalizeZero(signFactor * milliseconds),
+                normalizeZero(signFactor * microseconds), normalizeZero(signFactor * nanoseconds));
+    }
+
+    private static double normalizeZero(double value) {
+        return value == 0.0 ? 0.0 : value;
     }
 
     private static double orZero(Double value) {
         return value == null ? 0.0 : value;
+    }
+
+    // A no-T-prefix TimeSpec is a syntax error when it could equally be read as a reduced-precision
+    // Date (DateSpecYearMonth "YYYY[-]MM" or DateSpecMonthDay "MM[-]DD") - a bracket annotation never
+    // resolves the ambiguity, so it is stripped before the shape check. Per spec this is a pure
+    // grammar-shape test, not a "try both and see which succeeds" runtime check.
+    private static final Pattern AMBIGUOUS_YEAR_MONTH = Pattern.compile("(\\d{4})-?(\\d{2})");
+    private static final Pattern AMBIGUOUS_MONTH_DAY = Pattern.compile("(\\d{2})-?(\\d{2})");
+
+    private static void rejectAmbiguousBareTimeString(String input) {
+        final var bracketIndex = input.indexOf('[');
+        final var core = bracketIndex < 0 ? input : input.substring(0, bracketIndex);
+        if (isAmbiguousDateShape(core)) {
+            throw new RangeErrorException("'" + input + "' is ambiguous and requires T prefix");
+        }
+    }
+
+    private static boolean isAmbiguousDateShape(String core) {
+        final var yearMonth = AMBIGUOUS_YEAR_MONTH.matcher(core);
+        if (yearMonth.matches()) {
+            final var month = Integer.parseInt(yearMonth.group(2));
+            return month >= 1 && month <= 12;
+        }
+        final var monthDay = AMBIGUOUS_MONTH_DAY.matcher(core);
+        if (monthDay.matches()) {
+            final var month = Integer.parseInt(monthDay.group(1));
+            final var day = Integer.parseInt(monthDay.group(2));
+            try {
+                IsoCalendar.regulateDate(1972, month, day, RegulateOverflow.REJECT);
+                return true;
+            } catch (RangeErrorException e) {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static ParsedDateTime parseDateTimeCore(Cursor cursor) {
@@ -468,7 +558,7 @@ public final class TemporalParser {
                     cursor.advance();
                 }
                 second = readDigits(cursor, 2);
-                if (!cursor.atEnd() && cursor.peek() == '.') {
+                if (!cursor.atEnd() && (cursor.peek() == '.' || cursor.peek() == ',')) {
                     cursor.advance();
                     readFractionDigits(cursor);
                 }
@@ -520,6 +610,11 @@ public final class TemporalParser {
                     throw new RangeErrorException(
                             "A bare time zone annotation must be the first annotation: " + cursor.source);
                 }
+                // A bracket time zone annotation's content must itself be a syntactically valid
+                // TimeZoneIdentifier (RFC 9557) - a numeric-offset annotation is minute-precision only,
+                // same as a bare TimeZoneIdentifier - checked here so every string production rejects a
+                // malformed annotation, not just the callers that go on to resolve it into a zone.
+                parseTimeZoneIdentifier(content);
                 timeZoneId = content;
             } else {
                 final var key = content.substring(0, equalsIndex);
@@ -576,7 +671,7 @@ public final class TemporalParser {
         while (!cursor.atEnd() && isDigit(cursor.peek())) {
             cursor.advance();
         }
-        if (!cursor.atEnd() && cursor.peek() == designator) {
+        if (!cursor.atEnd() && isDesignator(cursor.peek(), designator)) {
             final var digits = cursor.source.substring(digitsStart, cursor.pos);
             cursor.advance();
             return Double.parseDouble(digits);
@@ -611,13 +706,20 @@ public final class TemporalParser {
             fraction = readFractionDigits(cursor);
             hasFraction = true;
         }
-        if (!cursor.atEnd() && cursor.peek() == designator) {
+        if (!cursor.atEnd() && isDesignator(cursor.peek(), designator)) {
             final var whole = Double.parseDouble(cursor.source.substring(digitsStart, digitsEnd));
             cursor.advance();
             return new TimeComponent(whole, hasFraction, Long.parseLong(fraction));
         }
         cursor.pos = savedPos;
         return null;
+    }
+
+    // The duration designators (P/Y/M/W/D/T/H/S) are matched ASCII-case-insensitively (a lowercase
+    // duration string like "p1y1m1dt1h1m1s" is valid per test262), unlike every other Temporal string
+    // literal (date/time separators, 'Z', annotation brackets), which stay case-sensitive.
+    private static boolean isDesignator(char c, char designator) {
+        return Character.toUpperCase(c) == designator;
     }
 
     // TemporalDecimalFraction is bounded to 1-9 digits; a 10th digit is a Range/syntax error, not a

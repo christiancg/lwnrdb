@@ -255,33 +255,35 @@ public class TemporalInstantBuiltinsTest {
         assertEquals("10", str(String.format(setup, 12, "halfEven")));
     }
 
-    // round() sweeps ceil/floor/trunc on the negative side (asymmetric-toward-infinity behaviour)
+    // round() computes every mode via RoundNumberToIncrementAsIfPositive: the raw (possibly negative)
+    // epochNanoseconds value is bracketed by its true floor/ceiling multiples of the increment, and
+    // "trunc"/"expand" resolve to those brackets directly (same as "floor"/"ceil") rather than
+    // shrinking/growing the value's magnitude the way they would for a signed Duration.
     @Test
     public void test_round_all_modes_negative() {
         final var setup = "new Temporal.Instant(%dn).round({smallestUnit: 'nanosecond', roundingIncrement: 10, "
                 + "roundingMode: '%s'}).epochNanoseconds.toString()";
         assertEquals("-10", str(String.format(setup, -13, "ceil")));
         assertEquals("-20", str(String.format(setup, -13, "floor")));
-        assertEquals("-10", str(String.format(setup, -13, "trunc")));
-        assertEquals("-20", str(String.format(setup, -15, "halfExpand")));
+        assertEquals("-20", str(String.format(setup, -13, "trunc")));
+        assertEquals("-10", str(String.format(setup, -15, "halfExpand")));
     }
 
-    // "expand" rounds away from zero unconditionally, for both a positive and a negative instant
+    // "expand" rounds toward the ceiling bracket unconditionally, for both a positive and a negative
+    // instant (not "away from zero", which is Duration's own, sign-aware convention)
     @Test
     public void test_round_expand() {
-        assertEquals("86400000000000",
-                str("new Temporal.Instant(1n).round({smallestUnit: 'day', roundingMode: 'expand'})"
+        assertEquals("3600000000000",
+                str("new Temporal.Instant(1n).round({smallestUnit: 'hour', roundingMode: 'expand'})"
                         + ".epochNanoseconds.toString()"));
-        assertEquals("-86400000000000",
-                str("new Temporal.Instant(-1n).round({smallestUnit: 'day', roundingMode: 'expand'})"
-                        + ".epochNanoseconds.toString()"));
+        assertEquals("0", str("new Temporal.Instant(-1n).round({smallestUnit: 'hour', roundingMode: 'expand'})"
+                + ".epochNanoseconds.toString()"));
     }
 
-    // round() accepts every fixed-length time unit through hour, plus the calendar-independent "day"
+    // round() accepts every fixed-length time unit through hour (day and coarser are rejected - a
+    // "day" has no fixed length without a calendar/time zone attached)
     @Test
     public void test_round_every_unit() {
-        assertEquals("86400000000000", str("new Temporal.Instant(1n).round({smallestUnit: 'day', roundingMode: 'ceil'})"
-                + ".epochNanoseconds.toString()"));
         assertEquals("0", str("new Temporal.Instant(1n).round({smallestUnit: 'hour', roundingIncrement: 12, "
                 + "roundingMode: 'floor'}).epochNanoseconds.toString()"));
         assertEquals("0", str("new Temporal.Instant(1n).round({smallestUnit: 'minute', roundingIncrement: 30, "
@@ -296,25 +298,27 @@ public class TemporalInstantBuiltinsTest {
                 str("new Temporal.Instant(1n).round({smallestUnit: 'nanosecond'}).epochNanoseconds.toString()"));
     }
 
-    // round() rejects a smallestUnit larger than day, and requires an options object at all
+    // round() rejects a smallestUnit larger than hour (a bare string is a shorthand for
+    // {smallestUnit: string}, so only a genuinely non-object/non-string argument is a TypeError)
     @Test
     public void test_round_rejects_invalid_options() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).round('second')"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).round(5)"));
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("new Temporal.Instant(0n).round({smallestUnit: 'month'})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.Instant(0n).round({smallestUnit: 'day'})"));
     }
 
-    // roundingIncrement must be a positive integer that evenly divides the unit's maximum
+    // roundingIncrement must truncate to a positive integer that evenly divides the unit's
+    // fit-into-a-day maximum (e.g. up to 24 for "hour", not just the immediately-larger unit)
     @Test
     public void test_round_invalid_increment() {
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("new Temporal.Instant(0n).round({smallestUnit: 'hour', roundingIncrement: 5})"));
-        assertThrows(RangeErrorException.class,
-                () -> Interpreter.run("new Temporal.Instant(0n).round({smallestUnit: 'day', roundingIncrement: 2})"));
         assertThrows(RangeErrorException.class, () -> Interpreter
                 .run("new Temporal.Instant(0n).round({smallestUnit: 'second', roundingIncrement: 0})"));
         assertThrows(RangeErrorException.class, () -> Interpreter
-                .run("new Temporal.Instant(0n).round({smallestUnit: 'second', roundingIncrement: 1.5})"));
+                .run("new Temporal.Instant(0n).round({smallestUnit: 'second', roundingIncrement: 0.5})"));
         assertThrows(RangeErrorException.class, () -> Interpreter
                 .run("new Temporal.Instant(0n).round({smallestUnit: 'second', roundingIncrement: NaN})"));
     }
@@ -331,6 +335,8 @@ public class TemporalInstantBuiltinsTest {
                 str("new Temporal.Instant(500000000n).toString({fractionalSecondDigits: 'auto'})"));
     }
 
+    // fractionalSecondDigits floors a non-integer Number rather than rejecting it outright (only the
+    // floored value's range is validated)
     @Test
     public void test_to_string_fractional_second_digits_invalid() {
         assertThrows(RangeErrorException.class,
@@ -338,9 +344,11 @@ public class TemporalInstantBuiltinsTest {
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("new Temporal.Instant(0n).toString({fractionalSecondDigits: 10})"));
         assertThrows(RangeErrorException.class,
-                () -> Interpreter.run("new Temporal.Instant(0n).toString({fractionalSecondDigits: 2.5})"));
+                () -> Interpreter.run("new Temporal.Instant(0n).toString({fractionalSecondDigits: -0.6})"));
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("new Temporal.Instant(0n).toString({fractionalSecondDigits: NaN})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.Instant(0n).toString({fractionalSecondDigits: null})"));
     }
 
     @Test
@@ -371,17 +379,21 @@ public class TemporalInstantBuiltinsTest {
                 """));
     }
 
+    // toString accepts "minute" (unlike round(), which is hour-and-smaller) - only day-or-coarser is
+    // rejected
     @Test
     public void test_to_string_smallest_unit_rejects_larger_than_second() {
+        assertEquals("1970-01-01T00:00Z", str("new Temporal.Instant(0n).toString({smallestUnit: 'minute'})"));
         assertThrows(RangeErrorException.class,
-                () -> Interpreter.run("new Temporal.Instant(0n).toString({smallestUnit: 'minute'})"));
+                () -> Interpreter.run("new Temporal.Instant(0n).toString({smallestUnit: 'hour'})"));
     }
 
     @Test
     public void test_to_string_time_zone_option() {
         assertEquals("1970-01-01T05:00:00+05:00", str("new Temporal.Instant(0n).toString({timeZone: '+05:00'})"));
         assertEquals("1969-12-31T19:00:00-05:00", str("new Temporal.Instant(0n).toString({timeZone: '-05:00'})"));
-        assertEquals("1970-01-01T01:02:03+01:02:03", str("new Temporal.Instant(0n).toString({timeZone: '+01:02:03'})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.Instant(0n).toString({timeZone: '+01:02:03'})"));
         assertEquals("1970-01-01T00:00:00+00:00", str("new Temporal.Instant(0n).toString({timeZone: 'UTC'})"));
     }
 

@@ -154,7 +154,12 @@ public final class TemporalPlainMonthDayBuiltins {
             if (parsed.calendar() != null) {
                 TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
             }
-            return new JsTemporalPlainMonthDay(parsed.date());
+            // Per CalendarMonthDayFromFields, the iso8601 calendar always normalises referenceISOYear
+            // to 1972 - even when the source string was a full date/date-time carrying a real year
+            // (e.g. "2000-05-02T00+00"), not just the reduced "MM-DD"/"--MM-DD" form.
+            final var date = parsed.date();
+            return new JsTemporalPlainMonthDay(
+                    new Iso8601Fields(JsTemporalPlainMonthDay.DEFAULT_REFERENCE_ISO_YEAR, date.month(), date.day()));
         }
         if (item instanceof JsObject obj) {
             return new JsTemporalPlainMonthDay(monthDayFromFields(obj, overflow, ops));

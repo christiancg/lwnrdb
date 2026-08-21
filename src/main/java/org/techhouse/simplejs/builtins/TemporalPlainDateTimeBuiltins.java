@@ -472,8 +472,11 @@ public final class TemporalPlainDateTimeBuiltins {
         };
     }
 
+    // A null-prototype object (OrdinaryObjectCreate(null)) so a lookup of an absent option key never
+    // falls through to Object.prototype.
     private static JsObject smallestUnitOptions(JsString value) {
         final var options = new JsObject();
+        options.setProto(null);
         options.set("smallestUnit", value);
         return options;
     }
@@ -861,7 +864,7 @@ public final class TemporalPlainDateTimeBuiltins {
     private static JsValue toZonedDateTime(JsTemporalPlainDateTime receiver, JsValue timeZoneArg, JsValue optionsArg,
             InterpreterOps ops) {
         final var id = extractTimeZoneId(timeZoneArg, ops);
-        final var zone = zoneOf(id);
+        final var zone = TemporalZonedDateTimeBuiltins.zoneOf(id);
         final var disambiguation = readDisambiguationOption(optionsArg, ops);
         final var date = receiver.date();
         final var time = receiver.time();
@@ -935,14 +938,6 @@ public final class TemporalPlainDateTimeBuiltins {
             }
         }
         throw new TypeErrorException("Temporal.PlainDateTime.prototype.toZonedDateTime requires a timeZone");
-    }
-
-    private static ZoneId zoneOf(String id) {
-        try {
-            return ZoneId.of(id);
-        } catch (DateTimeException e) {
-            throw new RangeErrorException("Invalid time zone identifier: " + id);
-        }
     }
 
     private static JsValue toStringMethod(JsTemporalPlainDateTime receiver, JsValue optionsArg, InterpreterOps ops) {

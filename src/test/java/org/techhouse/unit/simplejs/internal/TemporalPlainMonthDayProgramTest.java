@@ -65,7 +65,7 @@ public class TemporalPlainMonthDayProgramTest {
                 + "Temporal.PlainMonthDay.from(md.toString()).equals(md)"));
         assertTrue(bool("var md = Temporal.PlainMonthDay.from('2020-03-10');"
                 + "Temporal.PlainMonthDay.from(md.toString({calendarName: 'always'}))"
-                + ".getISOFields().isoYear === 2020"));
+                + ".getISOFields().isoYear === 1972"));
     }
 
     @Test

@@ -49,8 +49,13 @@ public class TemporalDurationProgramTest {
     // add/subtract of calendar-independent durations balances carries across units
     @Test
     public void test_add_carries_across_units() {
-        assertEquals("P1DT1H",
+        // The result balances no further than the coarser of the two operands' own largest unit -
+        // neither operand here has a "days" component, so the sum stays in hours (never becomes
+        // "P1DT1H"), matching Temporal.Duration.compare's own definition of "largest unit".
+        assertEquals("PT25H",
                 str("new Temporal.Duration(0, 0, 0, 0, 23).add(new Temporal.Duration(0, 0, 0, 0, 2)).toString()"));
+        assertEquals("P2DT1H",
+                str("new Temporal.Duration(0, 0, 0, 1, 23).add(new Temporal.Duration(0, 0, 0, 0, 2)).toString()"));
     }
 
     // round with an increment groups to the nearest multiple

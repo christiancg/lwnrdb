@@ -21,8 +21,12 @@ import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalDuration;
+import org.techhouse.simplejs.values.JsTemporalInstant;
+import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
+import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
 import org.techhouse.simplejs.values.JsTemporalPlainTime;
+import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
 import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
@@ -57,6 +61,13 @@ public final class TemporalPlainTimeBuiltins {
     private static final BigInteger TWO = BigInteger.valueOf(2);
     private static final String[] FIELD_NAMES = {"hour", "minute", "second", "millisecond", "microsecond",
             "nanosecond"};
+    // PrepareTemporalFields/ToTemporalTimeRecord reads recognized properties in alphabetical order
+    // (hour, microsecond, millisecond, minute, nanosecond, second) - these are indices into
+    // FIELD_NAMES/the canonical hour..nanosecond value array, in that read order.
+    private static final int[] ALPHA_FIELD_ORDER = {0, 4, 3, 1, 5, 2};
+    private static final double DURATION_DATE_LIMIT = 4_294_967_296.0;
+    private static final BigInteger DURATION_TIME_LIMIT = BigInteger.valueOf(9_007_199_254_740_992L)
+            .multiply(BigInteger.valueOf(1_000_000_000L));
 
     private TemporalPlainTimeBuiltins() {
     }
@@ -228,29 +239,125 @@ public final class TemporalPlainTimeBuiltins {
         if (InterpreterUtils.isObjectLike(item)) {
             return fromTimeLikeObject(item, overflow, ops);
         }
-        return new JsTemporalPlainTime(TemporalParser.parseTime(JsCoercion.toStr(item, ops)).time());
+        if (!(item instanceof JsString str)) {
+            throw new TypeErrorException("Cannot convert to Temporal.PlainTime: expected a string or a property bag");
+        }
+        requireUnambiguousBareTimeString(str.getValue());
+        return new JsTemporalPlainTime(TemporalParser.parseTime(str.getValue()).time());
+    }
+
+    // TimeSpecWithOptionalOffsetNotAmbiguous: without a leading 'T' designator, a bare time string
+    // must not also be syntactically valid as a reduced YearMonth (YYYY-MM/YYYYMM) or MonthDay
+    // (MM-DD/MMDD) string - the ISO 8601 profile requires a 'T' prefix to disambiguate in that case
+    // (a leading space is never accepted as a substitute, and simply fails to parse as a time on its
+    // own, so no explicit check for it is needed here).
+    private static void requireUnambiguousBareTimeString(String input) {
+        if (input.isEmpty() || input.charAt(0) == 'T' || input.charAt(0) == 't') {
+            return;
+        }
+        var core = input;
+        final var bracket = core.indexOf('[');
+        if (bracket >= 0) {
+            core = core.substring(0, bracket);
+        }
+        if (isAmbiguousWithDateForm(core)) {
+            throw new RangeErrorException("'" + input
+                    + "' is ambiguous and requires a 'T' prefix to be parsed as a Temporal.PlainTime " + "string");
+        }
+    }
+
+    private static boolean isAmbiguousWithDateForm(String core) {
+        if (core.matches("\\d{4}-\\d{2}")) {
+            return isValidMonth(core.substring(5, 7));
+        }
+        if (core.matches("\\d{6}")) {
+            return isValidMonth(core.substring(4, 6));
+        }
+        if (core.matches("\\d{2}-\\d{2}")) {
+            return isValidReducedMonthDay(core.substring(0, 2), core.substring(3, 5));
+        }
+        if (core.matches("\\d{4}")) {
+            return isValidReducedMonthDay(core.substring(0, 2), core.substring(2, 4));
+        }
+        return false;
+    }
+
+    private static boolean isValidMonth(String digits) {
+        final var month = Integer.parseInt(digits);
+        return month >= 1 && month <= 12;
+    }
+
+    private static boolean isValidReducedMonthDay(String monthDigits, String dayDigits) {
+        try {
+            IsoCalendar.regulateDate(1972, Integer.parseInt(monthDigits), Integer.parseInt(dayDigits),
+                    RegulateOverflow.REJECT);
+            return true;
+        } catch (RangeErrorException e) {
+            return false;
+        }
     }
 
     private static JsTemporalPlainTime fromTimeLikeObject(JsValue item, RegulateOverflow overflow, InterpreterOps ops) {
+        final var values = readAlphabeticalTimeFields(item, ops);
+        return new JsTemporalPlainTime(
+                regulateTime(values[0], values[1], values[2], values[3], values[4], values[5], overflow));
+    }
+
+    private static int[] readAlphabeticalTimeFields(JsValue item, InterpreterOps ops) {
         final var values = new int[6];
         var any = false;
-        for (var i = 0; i < FIELD_NAMES.length; i++) {
-            final var value = member(item, FIELD_NAMES[i], ops);
+        for (final var idx : ALPHA_FIELD_ORDER) {
+            final var value = member(item, FIELD_NAMES[idx], ops);
             if (!(value instanceof JsUndefined)) {
                 any = true;
-                values[i] = (int) toIntegerWithTruncation(value, ops);
+                values[idx] = (int) toIntegerWithTruncation(value, ops);
             }
         }
         if (!any) {
             throw new TypeErrorException("Invalid Temporal.PlainTime-like object: no recognized properties");
         }
-        return new JsTemporalPlainTime(
-                regulateTime(values[0], values[1], values[2], values[3], values[4], values[5], overflow));
+        return values;
     }
 
+    private static boolean isTemporalInstance(JsValue value) {
+        return value instanceof JsTemporalPlainTime || value instanceof JsTemporalPlainDate
+                || value instanceof JsTemporalPlainDateTime || value instanceof JsTemporalPlainMonthDay
+                || value instanceof JsTemporalPlainYearMonth || value instanceof JsTemporalZonedDateTime
+                || value instanceof JsTemporalInstant || value instanceof JsTemporalDuration;
+    }
+
+    // ToTemporalTime, `from()`'s own shape: unlike compare/equals/since/until (which always use
+    // CONSTRAIN and have no separate options argument), `from()` must read the entire item argument
+    // (fields, in alphabetical order, or the ISO string) to completion - including any TypeError/
+    // RangeError that surfaces while doing so - before it reads/validates the overflow option at all.
     private static JsValue from(List<JsValue> args, InterpreterOps ops) {
-        final var overflow = readOverflowOption(arg(args, 1), ops);
-        return toTemporalTime(arg(args, 0), overflow, ops);
+        final var item = arg(args, 0);
+        final var optionsArg = arg(args, 1);
+        if (item instanceof JsTemporalPlainTime time) {
+            readOverflowOption(optionsArg, ops);
+            return new JsTemporalPlainTime(time.getFields());
+        }
+        if (item instanceof JsTemporalPlainDateTime dt) {
+            readOverflowOption(optionsArg, ops);
+            return new JsTemporalPlainTime(dt.time());
+        }
+        if (item instanceof JsTemporalZonedDateTime zdt) {
+            readOverflowOption(optionsArg, ops);
+            return new JsTemporalPlainTime(zdt.isoFieldsAtLocal().time());
+        }
+        if (InterpreterUtils.isObjectLike(item)) {
+            final var values = readAlphabeticalTimeFields(item, ops);
+            final var overflow = readOverflowOption(optionsArg, ops);
+            return new JsTemporalPlainTime(
+                    regulateTime(values[0], values[1], values[2], values[3], values[4], values[5], overflow));
+        }
+        if (!(item instanceof JsString str)) {
+            throw new TypeErrorException("Cannot convert to Temporal.PlainTime: expected a string or a property bag");
+        }
+        requireUnambiguousBareTimeString(str.getValue());
+        final var time = TemporalParser.parseTime(str.getValue()).time();
+        readOverflowOption(optionsArg, ops);
+        return new JsTemporalPlainTime(time);
     }
 
     private static JsValue compareStatic(List<JsValue> args, InterpreterOps ops) {
@@ -272,28 +379,37 @@ public final class TemporalPlainTimeBuiltins {
                 : RegulateOverflow.parse(JsCoercion.toStr(value, ops));
     }
 
-    // IsPartialTemporalObject: a real Temporal.* instance is rejected here per spec - only a bare
-    // time-like object may be passed to `with`.
+    // IsPartialTemporalObject: any real Temporal.* instance is rejected here per spec - only a bare
+    // time-like object may be passed to `with`. RejectObjectWithCalendarOrTimeZone reads (and
+    // rejects the presence of) `calendar`/`timeZone` before any recognized time field is read, and
+    // GetTemporalOverflowOption is read only after every field has been read (so an invalid field
+    // value surfaces as a RangeError before an invalid options argument's TypeError).
     private static JsValue with(JsTemporalPlainTime receiver, JsValue timeLike, JsValue optionsArg,
             InterpreterOps ops) {
-        if (!InterpreterUtils.isObjectLike(timeLike) || timeLike instanceof JsTemporalPlainTime) {
+        if (!InterpreterUtils.isObjectLike(timeLike) || isTemporalInstance(timeLike)) {
             throw new TypeErrorException("with() argument must be a plain time-like object");
         }
-        final var overflow = readOverflowOption(optionsArg, ops);
+        if (!(member(timeLike, "calendar", ops) instanceof JsUndefined)) {
+            throw new TypeErrorException("with() argument must not have a calendar property");
+        }
+        if (!(member(timeLike, "timeZone", ops) instanceof JsUndefined)) {
+            throw new TypeErrorException("with() argument must not have a timeZone property");
+        }
         final var current = receiver.getFields();
         final var values = new int[]{current.hour(), current.minute(), current.second(), current.millisecond(),
                 current.microsecond(), current.nanosecond()};
         var any = false;
-        for (var i = 0; i < FIELD_NAMES.length; i++) {
-            final var value = member(timeLike, FIELD_NAMES[i], ops);
+        for (final var idx : ALPHA_FIELD_ORDER) {
+            final var value = member(timeLike, FIELD_NAMES[idx], ops);
             if (!(value instanceof JsUndefined)) {
                 any = true;
-                values[i] = (int) toIntegerWithTruncation(value, ops);
+                values[idx] = (int) toIntegerWithTruncation(value, ops);
             }
         }
         if (!any) {
             throw new TypeErrorException("Invalid Temporal.PlainTime-like object: no recognized properties");
         }
+        final var overflow = readOverflowOption(optionsArg, ops);
         return new JsTemporalPlainTime(
                 regulateTime(values[0], values[1], values[2], values[3], values[4], values[5], overflow));
     }
@@ -358,21 +474,24 @@ public final class TemporalPlainTimeBuiltins {
             return duration.getFields();
         }
         if (value instanceof JsString s) {
-            return TemporalParser.parseDuration(s.getValue());
+            final var parsed = TemporalParser.parseDuration(s.getValue());
+            requireValidDuration(parsed);
+            return parsed;
         }
         if (!InterpreterUtils.isObjectLike(value)) {
             throw new TypeErrorException("Invalid Temporal.Duration-like value");
         }
-        final var years = readDurationField(value, "years", ops);
-        final var months = readDurationField(value, "months", ops);
-        final var weeks = readDurationField(value, "weeks", ops);
+        // ToTemporalDurationRecord reads the ten recognized properties in alphabetical order.
         final var days = readDurationField(value, "days", ops);
         final var hours = readDurationField(value, "hours", ops);
-        final var minutes = readDurationField(value, "minutes", ops);
-        final var seconds = readDurationField(value, "seconds", ops);
-        final var milliseconds = readDurationField(value, "milliseconds", ops);
         final var microseconds = readDurationField(value, "microseconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var months = readDurationField(value, "months", ops);
         final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var years = readDurationField(value, "years", ops);
         if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
                 && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
             throw new TypeErrorException("Duration-like object must contain at least one recognized property");
@@ -381,7 +500,36 @@ public final class TemporalPlainTimeBuiltins {
                 orZeroDuration(days), orZeroDuration(hours), orZeroDuration(minutes), orZeroDuration(seconds),
                 orZeroDuration(milliseconds), orZeroDuration(microseconds), orZeroDuration(nanoseconds));
         DurationMath.sign(fields);
+        requireValidDuration(fields);
         return fields;
+    }
+
+    // IsValidDuration: the date units are bounded to +-(2**32 - 1) individually, and the combined
+    // time units (days included, since a PlainTime's add/subtract wraps a duration's days into its
+    // nanosecond total same as hours..nanoseconds) must not reach +-2**53 seconds - this is checked
+    // exactly via BigInteger nanoseconds rather than double arithmetic, since some of the boundary
+    // values here are themselves at the edge of double's exact-integer range.
+    private static void requireValidDuration(DurationFields f) {
+        for (final var component : new double[]{f.years(), f.months(), f.weeks(), f.days(), f.hours(), f.minutes(),
+                f.seconds(), f.milliseconds(), f.microseconds(), f.nanoseconds()}) {
+            if (Double.isNaN(component) || Double.isInfinite(component)) {
+                throw new RangeErrorException("Duration component must be a finite number");
+            }
+        }
+        if (Math.abs(f.years()) >= DURATION_DATE_LIMIT || Math.abs(f.months()) >= DURATION_DATE_LIMIT
+                || Math.abs(f.weeks()) >= DURATION_DATE_LIMIT) {
+            throw new RangeErrorException("Duration years/months/weeks component is out of range");
+        }
+        final var totalNanos = BigInteger.valueOf((long) f.days()).multiply(NANOS_PER_DAY)
+                .add(BigInteger.valueOf((long) f.hours()).multiply(NANOS_PER_HOUR))
+                .add(BigInteger.valueOf((long) f.minutes()).multiply(NANOS_PER_MINUTE))
+                .add(BigInteger.valueOf((long) f.seconds()).multiply(NANOS_PER_SECOND))
+                .add(BigInteger.valueOf((long) f.milliseconds()).multiply(NANOS_PER_MILLI))
+                .add(BigInteger.valueOf((long) f.microseconds()).multiply(NANOS_PER_MICRO))
+                .add(BigInteger.valueOf((long) f.nanoseconds()));
+        if (totalNanos.abs().compareTo(DURATION_TIME_LIMIT) >= 0) {
+            throw new RangeErrorException("Duration time component is out of range");
+        }
     }
 
     // ToIntegerIfIntegral: a Duration-like field must already be an integer (no truncation). A
@@ -427,20 +575,44 @@ public final class TemporalPlainTimeBuiltins {
             if (!InterpreterUtils.isObjectLike(optionsArg)) {
                 throw new TypeErrorException("options must be an object");
             }
+            // All recognized options are read (and cast/coerced) in alphabetical order before any of
+            // them is algorithmically validated.
+            String largestUnitStr = null;
             final var largestUnitValue = member(optionsArg, "largestUnit", ops);
             if (!(largestUnitValue instanceof JsUndefined)) {
-                final var str = JsCoercion.toStr(largestUnitValue, ops);
-                largestUnit = "auto".equals(str) ? Unit.HOUR : Unit.parseTemporalUnit(str);
-                requireTimeUnit(largestUnit);
+                largestUnitStr = JsCoercion.toStr(largestUnitValue, ops);
             }
+            Long incrementRaw = null;
+            final var incrementValue = member(optionsArg, "roundingIncrement", ops);
+            if (!(incrementValue instanceof JsUndefined)) {
+                incrementRaw = (long) toIntegerWithTruncation(incrementValue, ops);
+            }
+            String modeStr = null;
+            final var modeValue = member(optionsArg, "roundingMode", ops);
+            if (!(modeValue instanceof JsUndefined)) {
+                modeStr = JsCoercion.toStr(modeValue, ops);
+            }
+            String smallestUnitStr = null;
             final var smallestUnitValue = member(optionsArg, "smallestUnit", ops);
             if (!(smallestUnitValue instanceof JsUndefined)) {
-                smallestUnit = Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
+                smallestUnitStr = JsCoercion.toStr(smallestUnitValue, ops);
+            }
+            if (largestUnitStr != null) {
+                largestUnit = "auto".equals(largestUnitStr) ? Unit.HOUR : Unit.parseTemporalUnit(largestUnitStr);
+                requireTimeUnit(largestUnit);
+            }
+            if (smallestUnitStr != null) {
+                smallestUnit = Unit.parseTemporalUnit(smallestUnitStr);
                 requireTimeUnit(smallestUnit);
             }
-            increment = readIncrementOption(optionsArg, ops);
+            if (incrementRaw != null) {
+                if (incrementRaw < 1 || incrementRaw > 1_000_000_000) {
+                    throw new RangeErrorException("roundingIncrement out of range: " + incrementRaw);
+                }
+                increment = incrementRaw;
+            }
             validateRoundingIncrement(increment, smallestUnit);
-            mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
+            mode = modeStr == null ? RoundingMode.TRUNC : RoundingMode.parse(modeStr);
             if (isSince) {
                 mode = negateRoundingMode(mode);
             }
@@ -470,18 +642,6 @@ public final class TemporalPlainTimeBuiltins {
         return DurationMath.negate(f);
     }
 
-    private static long readIncrementOption(JsValue options, InterpreterOps ops) {
-        final var value = member(options, "roundingIncrement", ops);
-        if (value instanceof JsUndefined) {
-            return 1;
-        }
-        final var number = toIntegerWithTruncation(value, ops);
-        if (number < 1 || number > 1_000_000_000) {
-            throw new RangeErrorException("roundingIncrement out of range: " + number);
-        }
-        return (long) number;
-    }
-
     private static void validateRoundingIncrement(long increment, Unit unit) {
         final var maximum = switch (unit) {
             case HOUR -> 24;
@@ -494,15 +654,11 @@ public final class TemporalPlainTimeBuiltins {
         }
     }
 
-    private static RoundingMode readRoundingModeOption(JsValue options, InterpreterOps ops, RoundingMode fallback) {
-        final var value = member(options, "roundingMode", ops);
-        return value instanceof JsUndefined ? fallback : RoundingMode.parse(JsCoercion.toStr(value, ops));
-    }
-
     private static JsValue optionsObject(JsValue value) {
         if (value instanceof JsString) {
             final var obj = new JsObject();
             obj.set("smallestUnit", value);
+            obj.setProto(null);
             return obj;
         }
         return value;
@@ -516,15 +672,34 @@ public final class TemporalPlainTimeBuiltins {
         if (!InterpreterUtils.isObjectLike(options)) {
             throw new TypeErrorException("options must be an object or a string");
         }
+        // All recognized options are read (and cast/coerced) in alphabetical order before any of
+        // them is algorithmically validated - including the smallestUnit-is-required check.
+        Long incrementRaw = null;
+        final var incrementValue = member(options, "roundingIncrement", ops);
+        if (!(incrementValue instanceof JsUndefined)) {
+            incrementRaw = (long) toIntegerWithTruncation(incrementValue, ops);
+        }
+        String modeStr = null;
+        final var modeValue = member(options, "roundingMode", ops);
+        if (!(modeValue instanceof JsUndefined)) {
+            modeStr = JsCoercion.toStr(modeValue, ops);
+        }
+        String smallestUnitStr = null;
         final var smallestUnitValue = member(options, "smallestUnit", ops);
-        if (smallestUnitValue instanceof JsUndefined) {
+        if (!(smallestUnitValue instanceof JsUndefined)) {
+            smallestUnitStr = JsCoercion.toStr(smallestUnitValue, ops);
+        }
+        if (smallestUnitStr == null) {
             throw new RangeErrorException("smallestUnit is required");
         }
-        final var smallestUnit = Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
+        final var smallestUnit = Unit.parseTemporalUnit(smallestUnitStr);
         requireTimeUnit(smallestUnit);
-        final var increment = readIncrementOption(options, ops);
+        final var increment = incrementRaw == null ? 1L : incrementRaw;
+        if (incrementRaw != null && (increment < 1 || increment > 1_000_000_000)) {
+            throw new RangeErrorException("roundingIncrement out of range: " + increment);
+        }
         validateRoundingIncrement(increment, smallestUnit);
-        final var mode = readRoundingModeOption(options, ops, RoundingMode.HALF_EXPAND);
+        final var mode = modeStr == null ? RoundingMode.HALF_EXPAND : RoundingMode.parse(modeStr);
         return new JsTemporalPlainTime(roundToUnit(receiver.getFields(), smallestUnit, increment, mode));
     }
 
@@ -578,30 +753,58 @@ public final class TemporalPlainTimeBuiltins {
         if (!InterpreterUtils.isObjectLike(optionsArg)) {
             throw new TypeErrorException("options must be an object");
         }
-        final var mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
+        // GetStringOrNumberOption's Number-vs-String branch is chosen from the value's own type as
+        // returned by Get (never re-derived after further coercion) - a real Number takes the
+        // ToNumber path, everything else (including a wrapper object whose valueOf/toString return a
+        // number) goes through ToString. All three options are read (and cast/coerced) in
+        // alphabetical order before any of them is algorithmically validated.
+        Double fsdNumeric = null;
+        String fsdString = null;
+        final var fsdRaw = member(optionsArg, "fractionalSecondDigits", ops);
+        if (!(fsdRaw instanceof JsUndefined)) {
+            if (fsdRaw instanceof JsNumber) {
+                fsdNumeric = JsCoercion.toNumber(fsdRaw, ops);
+            } else {
+                fsdString = JsCoercion.toStr(fsdRaw, ops);
+            }
+        }
+        String modeStr = null;
+        final var modeValue = member(optionsArg, "roundingMode", ops);
+        if (!(modeValue instanceof JsUndefined)) {
+            modeStr = JsCoercion.toStr(modeValue, ops);
+        }
+        String smallestUnitStr = null;
         final var smallestUnitValue = member(optionsArg, "smallestUnit", ops);
         if (!(smallestUnitValue instanceof JsUndefined)) {
-            final var unitStr = JsCoercion.toStr(smallestUnitValue, ops);
-            if ("minute".equals(unitStr)) {
+            smallestUnitStr = JsCoercion.toStr(smallestUnitValue, ops);
+        }
+        final var mode = modeStr == null ? RoundingMode.TRUNC : RoundingMode.parse(modeStr);
+        if (smallestUnitStr != null) {
+            final var unit = Unit.parseTemporalUnit(smallestUnitStr);
+            requireTimeUnit(unit);
+            if (unit == Unit.MINUTE) {
                 final var rounded = roundToUnit(receiver.getFields(), Unit.MINUTE, 1, mode);
                 return new JsString(pad2(rounded.hour()) + ":" + pad2(rounded.minute()));
             }
-            final var unit = Unit.parseTemporalUnit(unitStr);
-            requireTimeUnit(unit);
             final var rounded = roundToUnit(receiver.getFields(), unit, 1, mode);
             return new JsString(TemporalFormatter.formatTime(rounded, digitsForUnit(unit)));
         }
-        final var fsdValue = member(optionsArg, "fractionalSecondDigits", ops);
-        if (!(fsdValue instanceof JsUndefined)) {
-            if (fsdValue instanceof JsString s && "auto".equals(s.getValue())) {
-                return new JsString(receiver.toString());
+        if (fsdNumeric != null) {
+            final var flooredDouble = Math.floor(fsdNumeric);
+            if (Double.isNaN(flooredDouble) || flooredDouble < 0 || flooredDouble > 9) {
+                throw new RangeErrorException("fractionalSecondDigits " + fsdNumeric + " floors to " + flooredDouble
+                        + " and is out of " + "range");
             }
-            final var digits = (int) toIntegerWithTruncation(fsdValue, ops);
-            if (digits < 0 || digits > 9) {
-                throw new RangeErrorException("fractionalSecondDigits must be 0..9 or \"auto\"");
-            }
+            final var digits = (int) flooredDouble;
             final var rounded = roundToFractionalDigits(receiver.getFields(), digits, mode);
             return new JsString(TemporalFormatter.formatTime(rounded, digits));
+        }
+        if (fsdString != null) {
+            if (!"auto".equals(fsdString)) {
+                throw new RangeErrorException(
+                        "fractionalSecondDigits must be 0..9 or \"auto\", got \"" + fsdString + "\"");
+            }
+            return new JsString(receiver.toString());
         }
         return new JsString(receiver.toString());
     }

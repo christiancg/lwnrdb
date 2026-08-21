@@ -125,7 +125,7 @@ public class TemporalPlainMonthDayBuiltinsTest {
                 str("var d = Temporal.PlainMonthDay.from('11-30');" + "d.monthCode.substring(1) + ',' + d.day"));
         assertEquals("11,30",
                 str("var d = Temporal.PlainMonthDay.from('--11-30');" + "d.monthCode.substring(1) + ',' + d.day"));
-        assertEquals(2020, num("Temporal.PlainMonthDay.from('2020-11-30').getISOFields().isoYear"));
+        assertEquals(1972, num("Temporal.PlainMonthDay.from('2020-11-30').getISOFields().isoYear"));
         assertEquals("11,30", str(
                 "var d = Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30}); d.monthCode.substring(1) + ',' + d.day"));
         assertTrue(bool("var a = new Temporal.PlainMonthDay(11, 30); Temporal.PlainMonthDay.from(a).equals(a)"));

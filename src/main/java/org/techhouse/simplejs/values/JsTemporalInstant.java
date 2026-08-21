@@ -65,8 +65,10 @@ public final class JsTemporalInstant extends JsValue {
     }
 
     public static JsTemporalInstant fromEpochMilliseconds(double epochMilliseconds) {
-        if (!Double.isFinite(epochMilliseconds)) {
-            throw new RangeErrorException("Instant epoch milliseconds must be a finite number");
+        // NumberToBigInt requires an integral Number - a fractional millisecond count is a RangeError,
+        // not silently truncated.
+        if (!Double.isFinite(epochMilliseconds) || epochMilliseconds != Math.floor(epochMilliseconds)) {
+            throw new RangeErrorException("Instant epoch milliseconds must be a finite integer");
         }
         final var millis = BigInteger.valueOf((long) epochMilliseconds);
         return fromEpochNanoseconds(millis.multiply(MILLIS_DIVISOR));
