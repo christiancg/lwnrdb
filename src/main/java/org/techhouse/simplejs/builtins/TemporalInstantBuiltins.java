@@ -1,7 +1,6 @@
 package org.techhouse.simplejs.builtins;
 
 import java.math.BigInteger;
-import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -61,7 +60,7 @@ public final class TemporalInstantBuiltins {
             if (JsNativeFunction.currentNewTarget() == null) {
                 throw new TypeErrorException("Constructor Temporal.Instant requires 'new'");
             }
-            return withNewTargetPrototype(construct(args), ops);
+            return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(1);
         final var from = new JsNativeFunction("from", (_, args) -> from(arg(args, 0), ops));
@@ -75,8 +74,8 @@ public final class TemporalInstantBuiltins {
                 (_, args) -> JsTemporalInstant.fromEpochMilliseconds(JsCoercion.toNumber(arg(args, 0), ops)));
         fromEpochMilliseconds.setLength(1);
         ctor.setProperty("fromEpochMilliseconds", fromEpochMilliseconds);
-        final var fromEpochNanoseconds = new JsNativeFunction("fromEpochNanoseconds",
-                (_, args) -> JsTemporalInstant.fromEpochNanoseconds(requireBigInt(arg(args, 0))));
+        final var fromEpochNanoseconds = new JsNativeFunction("fromEpochNanoseconds", (_, args) -> JsTemporalInstant
+                .fromEpochNanoseconds(NumberBuiltins.toBigIntValue(arg(args, 0), ops).getValue()));
         fromEpochNanoseconds.setLength(1);
         ctor.setProperty("fromEpochNanoseconds", fromEpochNanoseconds);
         return ctor;
@@ -99,11 +98,10 @@ public final class TemporalInstantBuiltins {
         return wrapper;
     }
 
-    private static JsTemporalInstant construct(List<JsValue> args) {
-        if (args.isEmpty() || !(args.getFirst() instanceof JsBigInt bigInt)) {
-            throw new TypeErrorException("Constructor Temporal.Instant requires an epochNanoseconds BigInt argument");
-        }
-        return JsTemporalInstant.fromEpochNanoseconds(bigInt.getValue());
+    private static JsTemporalInstant construct(List<JsValue> args, InterpreterOps ops) {
+        final var value = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        final var epochNanoseconds = NumberBuiltins.toBigIntValue(value, ops).getValue();
+        return JsTemporalInstant.fromEpochNanoseconds(epochNanoseconds);
     }
 
     public static void installAccessors(JsObject proto) {
@@ -173,12 +171,17 @@ public final class TemporalInstantBuiltins {
         requireZero(fields.months(), "months");
         requireZero(fields.weeks(), "weeks");
         requireZero(fields.days(), "days");
-        return BigInteger.valueOf((long) fields.hours()).multiply(NANOS_PER_HOUR)
-                .add(BigInteger.valueOf((long) fields.minutes()).multiply(NANOS_PER_MINUTE))
-                .add(BigInteger.valueOf((long) fields.seconds()).multiply(NANOS_PER_SECOND))
-                .add(BigInteger.valueOf((long) fields.milliseconds()).multiply(NANOS_PER_MILLI))
-                .add(BigInteger.valueOf((long) fields.microseconds()).multiply(NANOS_PER_MICRO))
-                .add(BigInteger.valueOf((long) fields.nanoseconds()));
+        return exact(fields.hours()).multiply(NANOS_PER_HOUR).add(exact(fields.minutes()).multiply(NANOS_PER_MINUTE))
+                .add(exact(fields.seconds()).multiply(NANOS_PER_SECOND))
+                .add(exact(fields.milliseconds()).multiply(NANOS_PER_MILLI))
+                .add(exact(fields.microseconds()).multiply(NANOS_PER_MICRO)).add(exact(fields.nanoseconds()));
+    }
+
+    // A duration field can be a double far beyond long's range (e.g. 1.728e22 nanoseconds in a
+    // minimum-to-maximum-instant test) - narrowing to (long) first would silently saturate/lose
+    // precision, so the double is converted to BigInteger directly.
+    private static BigInteger exact(double value) {
+        return java.math.BigDecimal.valueOf(value).toBigInteger();
     }
 
     private static DurationFields toDurationFields(JsValue value, InterpreterOps ops) {
@@ -191,16 +194,18 @@ public final class TemporalInstantBuiltins {
         if (!InterpreterUtils.isObjectLike(value) || ops == null) {
             throw new TypeErrorException("Temporal.Instant arithmetic requires a Duration-like object");
         }
-        final var years = readDurationField(value, "years", ops);
-        final var months = readDurationField(value, "months", ops);
-        final var weeks = readDurationField(value, "weeks", ops);
+        // PrepareTemporalFields reads the recognized properties alphabetically, not in the
+        // constructor's years-first positional order.
         final var days = readDurationField(value, "days", ops);
         final var hours = readDurationField(value, "hours", ops);
-        final var minutes = readDurationField(value, "minutes", ops);
-        final var seconds = readDurationField(value, "seconds", ops);
-        final var milliseconds = readDurationField(value, "milliseconds", ops);
         final var microseconds = readDurationField(value, "microseconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var months = readDurationField(value, "months", ops);
         final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var years = readDurationField(value, "years", ops);
         if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
                 && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
             throw new TypeErrorException("Duration-like object must contain at least one recognized property");
@@ -244,22 +249,29 @@ public final class TemporalInstantBuiltins {
     private static JsValue untilOrSince(JsTemporalInstant receiver, JsValue otherArg, JsValue optionsArg,
             InterpreterOps ops, int sign) {
         final var other = toInstant(otherArg, ops);
-        final var options = optionsArg instanceof JsObject opts ? opts : null;
+        if (!(optionsArg instanceof JsUndefined) && !InterpreterUtils.isObjectLike(optionsArg)) {
+            throw new TypeErrorException("options must be an object");
+        }
+        final var options = optionsArg instanceof JsUndefined ? null : optionsArg;
+        // Every option is read (and coerced, observably calling valueOf/toString) in this fixed
+        // order - largestUnit, roundingIncrement, roundingMode, smallestUnit - before any
+        // algorithmic validation.
+        final var largestUnitRaw = unitOptionOrAuto(options, "largestUnit", null, ops);
+        final var increment = incrementOption(options, ops);
+        final var mode = roundingModeOption(options, RoundingMode.TRUNC, ops);
         final var smallestUnit = unitOption(options, "smallestUnit", Unit.NANOSECOND, ops);
         // largestUnit defaults to (and "auto" resolves to) whichever of smallestUnit/second is
         // coarser, so a smallestUnit larger than the usual "second" default (e.g. "hours") doesn't
         // spuriously conflict with it.
         final var largestUnitDefault = smallestUnit.isLargerThan(Unit.SECOND) ? smallestUnit : Unit.SECOND;
-        final var largestUnit = unitOptionOrAuto(options, "largestUnit", largestUnitDefault, ops);
+        final var largestUnit = largestUnitRaw == null ? largestUnitDefault : largestUnitRaw;
         if (smallestUnit.isLargerThan(Unit.HOUR) || largestUnit.isLargerThan(Unit.HOUR)) {
             throw new RangeErrorException("Temporal.Instant.prototype.until/since only accept hour-and-smaller units");
         }
         if (smallestUnit.ordinal() < largestUnit.ordinal()) {
             throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
         }
-        final var increment = incrementOption(options, ops);
         validateIncrementForUnit(smallestUnit, increment);
-        final var mode = roundingModeOption(options, RoundingMode.TRUNC, ops);
         var deltaNanos = other.epochNanoseconds().subtract(receiver.epochNanoseconds())
                 .multiply(BigInteger.valueOf(sign));
         if (smallestUnit != Unit.NANOSECOND || increment != 1) {
@@ -309,50 +321,92 @@ public final class TemporalInstantBuiltins {
 
     // round() accepts day-and-smaller units (unlike until/since above): a "day" is a fixed,
     // calendar-independent 86,400 seconds when used as an explicit rounding unit here.
+    // GetTemporalUnit's "string shorthand" convenience: a bare string argument is equivalent to
+    // { smallestUnit: <string> }, matching the other Temporal round() methods.
+    private static JsValue roundOptionsObject(JsValue value) {
+        if (value instanceof JsString) {
+            final var obj = new JsObject();
+            obj.setProto(null);
+            obj.set("smallestUnit", value);
+            return obj;
+        }
+        return value;
+    }
+
     private static JsValue round(JsTemporalInstant receiver, JsValue optionsArg, InterpreterOps ops) {
-        if (!(optionsArg instanceof JsObject options)) {
+        final var options = roundOptionsObject(optionsArg);
+        if (!InterpreterUtils.isObjectLike(options)) {
             throw new TypeErrorException("Temporal.Instant.prototype.round requires an options object");
         }
+        // Every option is read (and coerced, observably calling valueOf/toString) before any
+        // algorithmic validation - including the smallestUnit/roundingIncrement compatibility check.
+        final var increment = incrementOption(options, ops);
+        final var mode = roundingModeOption(options, RoundingMode.HALF_EXPAND, ops);
         final var smallestUnitValue = ops.getMember(options, new JsString("smallestUnit"));
         if (smallestUnitValue == null || smallestUnitValue instanceof JsUndefined) {
             throw new RangeErrorException("round() requires a smallestUnit option");
         }
         final var smallestUnit = Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
-        if (smallestUnit.isLargerThan(Unit.DAY)) {
+        if (smallestUnit.isLargerThan(Unit.HOUR)) {
             throw new RangeErrorException(
                     "Invalid smallestUnit for Temporal.Instant.prototype.round: " + smallestUnit.singular());
         }
-        final var increment = incrementOption(options, ops);
-        validateIncrementForUnit(smallestUnit, increment);
-        final var mode = roundingModeOption(options, RoundingMode.HALF_EXPAND, ops);
+        validateRoundIncrementForDay(smallestUnit, increment);
         final var incrementNanos = nanosPerUnit(smallestUnit).multiply(BigInteger.valueOf(increment));
         return JsTemporalInstant
-                .fromEpochNanoseconds(roundNanoseconds(receiver.epochNanoseconds(), incrementNanos, mode));
+                .fromEpochNanoseconds(roundNanosecondsAsIfPositive(receiver.epochNanoseconds(), incrementNanos, mode));
+    }
+
+    // Unlike Duration rounding (bounded by the immediately-larger unit, e.g. minute <= 60), an
+    // Instant has no calendar context: its roundingIncrement is only required to divide evenly into
+    // a solar day (86400 SI seconds) in the target unit - so e.g. smallestUnit "minute" allows up to
+    // 1440, not just 60.
+    private static void validateRoundIncrementForDay(Unit unit, long increment) {
+        final var maximum = NANOS_PER_DAY.divide(nanosPerUnit(unit)).longValueExact();
+        if (increment < 1 || increment > maximum || maximum % increment != 0) {
+            throw new RangeErrorException("Invalid roundingIncrement " + increment + " for unit " + unit.singular());
+        }
     }
 
     private static JsValue toStringMethod(JsTemporalInstant receiver, JsValue optionsArg, InterpreterOps ops) {
-        final var options = optionsArg instanceof JsObject opts ? opts : null;
-        var instant = receiver;
-        final var smallestUnit = unitOption(options, "smallestUnit", null, ops);
-        var fractionDigits = fractionalSecondDigitsOption(options, ops);
-        if (smallestUnit != null) {
-            if (smallestUnit.isLargerThan(Unit.SECOND)) {
-                throw new RangeErrorException(
-                        "Invalid smallestUnit for Temporal.Instant.prototype.toString: " + smallestUnit.singular());
-            }
-            final var increment = incrementOption(options, ops);
-            validateIncrementForUnit(smallestUnit, increment);
-            final var mode = roundingModeOption(options, RoundingMode.TRUNC, ops);
-            instant = JsTemporalInstant.fromEpochNanoseconds(roundNanoseconds(receiver.epochNanoseconds(),
-                    nanosPerUnit(smallestUnit).multiply(BigInteger.valueOf(increment)), mode));
-            fractionDigits = digitsFor(smallestUnit);
+        if (!(optionsArg instanceof JsUndefined) && !InterpreterUtils.isObjectLike(optionsArg)) {
+            throw new TypeErrorException("options must be an object");
         }
+        final var options = optionsArg instanceof JsUndefined ? null : optionsArg;
+        // Every option is read (and coerced, observably calling valueOf/toString) in this fixed
+        // order - fractionalSecondDigits, roundingMode, smallestUnit, timeZone - before any
+        // algorithmic validation, including the smallestUnit-is-a-date-unit check below. Unlike
+        // round(), toString() never reads a roundingIncrement option (implicitly always 1).
+        var fractionDigits = fractionalSecondDigitsOption(options, ops);
+        final var mode = roundingModeOption(options, RoundingMode.TRUNC, ops);
+        final var smallestUnit = unitOption(options, "smallestUnit", null, ops);
         final var zone = timeZoneOption(options, ops);
+        if (smallestUnit != null && smallestUnit.isLargerThan(Unit.MINUTE)) {
+            throw new RangeErrorException(
+                    "Invalid smallestUnit for Temporal.Instant.prototype.toString: " + smallestUnit.singular());
+        }
+        var instant = receiver;
+        var minutePrecision = false;
+        if (smallestUnit != null) {
+            instant = JsTemporalInstant.fromEpochNanoseconds(
+                    roundNanosecondsAsIfPositive(receiver.epochNanoseconds(), nanosPerUnit(smallestUnit), mode));
+            if (smallestUnit == Unit.MINUTE) {
+                minutePrecision = true;
+            } else {
+                fractionDigits = digitsFor(smallestUnit);
+            }
+        } else if (fractionDigits != null) {
+            final var incrementNanos = BigInteger.TEN.pow(9 - fractionDigits);
+            instant = JsTemporalInstant.fromEpochNanoseconds(
+                    roundNanosecondsAsIfPositive(receiver.epochNanoseconds(), incrementNanos, mode));
+        }
         final var offset = zone == null ? ZoneOffset.UTC : zone.getRules().getOffset(instant.toJavaInstant());
         final var fields = instant.isoFieldsAt(offset);
         final var offsetText = zone == null ? "Z" : TemporalFormatter.formatOffset(offset);
-        return new JsString(TemporalFormatter.formatDate(fields.date()) + "T"
-                + TemporalFormatter.formatTime(fields.time(), fractionDigits) + offsetText);
+        final var timeText = minutePrecision
+                ? TemporalFormatter.formatTimeMinutePrecision(fields.time())
+                : TemporalFormatter.formatTime(fields.time(), fractionDigits);
+        return new JsString(TemporalFormatter.formatDate(fields.date()) + "T" + timeText + offsetText);
     }
 
     private static int digitsFor(Unit unit) {
@@ -365,41 +419,50 @@ public final class TemporalInstantBuiltins {
         };
     }
 
-    private static Integer fractionalSecondDigitsOption(JsObject options, InterpreterOps ops) {
-        if (options == null) {
+    // GetTemporalFractionalSecondDigitsOption: a value that isn't already type Number is converted
+    // via ToString and must equal "auto" exactly (a numeric *string* like "3" is rejected, and never
+    // reaches ToNumber) - it does not fall back to a general ToNumber coercion the way most numeric
+    // options do.
+    private static Integer fractionalSecondDigitsOption(JsValue options, InterpreterOps ops) {
+        if (options == null || options instanceof JsUndefined) {
             return null;
         }
         final var raw = ops.getMember(options, new JsString("fractionalSecondDigits"));
         if (raw == null || raw instanceof JsUndefined) {
             return null;
         }
-        if (raw instanceof JsString s && "auto".equals(s.getValue())) {
+        if (!(raw instanceof JsNumber number)) {
+            final var str = JsCoercion.toStr(raw, ops);
+            if (!"auto".equals(str)) {
+                throw new RangeErrorException(JsCoercion.toStr(raw) + " is not a number and converts to the string '"
+                        + str + "' which is not valid for fractionalSecondDigits");
+            }
             return null;
         }
-        final var value = JsCoercion.toNumber(raw, ops);
-        if (!Double.isFinite(value) || value < 0 || value > 9 || value != Math.floor(value)) {
+        final var value = number.getValue();
+        if (!Double.isFinite(value)) {
             throw new RangeErrorException("fractionalSecondDigits must be 'auto' or an integer 0..9");
         }
-        return (int) value;
+        final var floored = Math.floor(value);
+        if (floored < 0 || floored > 9) {
+            throw new RangeErrorException(
+                    "fractionalSecondDigits " + value + " floors to " + (long) floored + " and is out of range");
+        }
+        return (int) floored;
     }
 
-    private static ZoneId timeZoneOption(JsObject options, InterpreterOps ops) {
-        if (options == null) {
+    private static ZoneId timeZoneOption(JsValue options, InterpreterOps ops) {
+        if (options == null || options instanceof JsUndefined) {
             return null;
         }
         final var raw = ops.getMember(options, new JsString("timeZone"));
         if (raw == null || raw instanceof JsUndefined) {
             return null;
         }
-        return zoneOf(JsCoercion.toStr(raw, ops));
-    }
-
-    private static ZoneId zoneOf(String id) {
-        try {
-            return ZoneId.of(id);
-        } catch (DateTimeException e) {
-            throw new RangeErrorException("Invalid time zone identifier: " + id);
+        if (!(raw instanceof JsString s)) {
+            throw new TypeErrorException("timeZone must be a string");
         }
+        return TemporalZonedDateTimeBuiltins.zoneOf(TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue()));
     }
 
     // Temporal.ZonedDateTime (phase T7) - a real instance, fixed "iso8601" calendar per this method's
@@ -412,11 +475,12 @@ public final class TemporalInstantBuiltins {
             throw new TypeErrorException("timeZone must be a string");
         }
         final var id = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
-        return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(), zoneOf(id), id);
+        return new JsTemporalZonedDateTime(receiver.epochSecondsPart(), receiver.nanoAdjustment(),
+                TemporalZonedDateTimeBuiltins.zoneOf(id), id);
     }
 
-    private static long incrementOption(JsObject options, InterpreterOps ops) {
-        if (options == null) {
+    private static long incrementOption(JsValue options, InterpreterOps ops) {
+        if (options == null || options instanceof JsUndefined) {
             return 1;
         }
         final var raw = ops.getMember(options, new JsString("roundingIncrement"));
@@ -424,15 +488,22 @@ public final class TemporalInstantBuiltins {
             return 1;
         }
         final var value = JsCoercion.toNumber(raw, ops);
-        if (!Double.isFinite(value) || value < 1 || value != Math.floor(value)) {
+        if (!Double.isFinite(value)) {
             throw new RangeErrorException("roundingIncrement must be a positive integer");
         }
-        return (long) value;
+        final var truncated = (long) value;
+        if (truncated < 1 || truncated > 1_000_000_000L) {
+            throw new RangeErrorException("roundingIncrement must be a positive integer");
+        }
+        return truncated;
     }
 
+    // Duration rounding (since/until) validates the increment exclusively - it must be strictly less
+    // than the next-highest unit's conversion factor, not merely divide evenly into it - unlike
+    // Instant.round()'s inclusive day-fraction check (validateRoundIncrementForDay).
     private static void validateIncrementForUnit(Unit unit, long increment) {
         final var max = maxIncrementFor(unit);
-        if (increment < 1 || increment > max || max % increment != 0) {
+        if (increment < 1 || increment >= max || max % increment != 0) {
             throw new RangeErrorException("Invalid roundingIncrement " + increment + " for unit " + unit.singular());
         }
     }
@@ -446,8 +517,8 @@ public final class TemporalInstantBuiltins {
         };
     }
 
-    private static RoundingMode roundingModeOption(JsObject options, RoundingMode fallback, InterpreterOps ops) {
-        if (options == null) {
+    private static RoundingMode roundingModeOption(JsValue options, RoundingMode fallback, InterpreterOps ops) {
+        if (options == null || options instanceof JsUndefined) {
             return fallback;
         }
         final var raw = ops.getMember(options, new JsString("roundingMode"));
@@ -457,8 +528,8 @@ public final class TemporalInstantBuiltins {
         return RoundingMode.parse(JsCoercion.toStr(raw, ops));
     }
 
-    private static Unit unitOption(JsObject options, String key, Unit fallback, InterpreterOps ops) {
-        if (options == null) {
+    private static Unit unitOption(JsValue options, String key, Unit fallback, InterpreterOps ops) {
+        if (options == null || options instanceof JsUndefined) {
             return fallback;
         }
         final var raw = ops.getMember(options, new JsString(key));
@@ -468,8 +539,8 @@ public final class TemporalInstantBuiltins {
         return Unit.parseTemporalUnit(JsCoercion.toStr(raw, ops));
     }
 
-    private static Unit unitOptionOrAuto(JsObject options, String key, Unit fallback, InterpreterOps ops) {
-        if (options == null) {
+    private static Unit unitOptionOrAuto(JsValue options, String key, Unit fallback, InterpreterOps ops) {
+        if (options == null || options instanceof JsUndefined) {
             return fallback;
         }
         final var raw = ops.getMember(options, new JsString(key));
@@ -521,6 +592,37 @@ public final class TemporalInstantBuiltins {
         return roundedQuotient.multiply(increment);
     }
 
+    // RoundNumberToIncrementAsIfPositive: Instant.prototype.round/toString round the raw (possibly
+    // negative) epoch-nanosecond value directly, unlike a signed Duration's magnitude-relative
+    // rounding (roundNanoseconds above, used by since/until). Under this convention every mode
+    // resolves purely in terms of the true floor/ceiling bracket (never in terms of shrinking/growing
+    // the value's magnitude the way "trunc"/"expand" do for a signed Duration) - so the tie-breaking
+    // comparison must use the true (floor-based, always non-negative) remainder; Java's
+    // divideAndRemainder truncates toward zero, whose remainder is the *negated distance to the
+    // ceiling* for a negative value, not the distance to the floor, if left uncorrected.
+    private static BigInteger roundNanosecondsAsIfPositive(BigInteger value, BigInteger increment, RoundingMode mode) {
+        final var divRem = value.divideAndRemainder(increment);
+        var floorQuotient = divRem[0];
+        var floorRemainder = divRem[1];
+        if (floorRemainder.signum() < 0) {
+            floorQuotient = floorQuotient.subtract(BigInteger.ONE);
+            floorRemainder = floorRemainder.add(increment);
+        }
+        if (floorRemainder.signum() == 0) {
+            return value;
+        }
+        final var ceilQuotient = floorQuotient.add(BigInteger.ONE);
+        final var cmp = floorRemainder.shiftLeft(1).compareTo(increment);
+        final var roundedQuotient = switch (mode) {
+            case TRUNC, FLOOR -> floorQuotient;
+            case EXPAND, CEIL -> ceilQuotient;
+            case HALF_EXPAND, HALF_CEIL -> cmp >= 0 ? ceilQuotient : floorQuotient;
+            case HALF_TRUNC, HALF_FLOOR -> cmp > 0 ? ceilQuotient : floorQuotient;
+            case HALF_EVEN -> cmp > 0 || (cmp == 0 && floorQuotient.testBit(0)) ? ceilQuotient : floorQuotient;
+        };
+        return roundedQuotient.multiply(increment);
+    }
+
     private static BigInteger halfDirectional(BigInteger quotient, int cmp, int sign, boolean tieTowardPositive) {
         if (cmp > 0) {
             return awayFromZero(quotient, sign);
@@ -546,8 +648,11 @@ public final class TemporalInstantBuiltins {
         return sign >= 0 ? quotient.add(BigInteger.ONE) : quotient.subtract(BigInteger.ONE);
     }
 
+    // Unlike the internal toInstant coercion (used by compare/equals/since/until, where identity
+    // never matters), Temporal.Instant.from() must return a fresh copy even when given an existing
+    // Instant - never the same reference.
     private static JsValue from(JsValue value, InterpreterOps ops) {
-        return toInstant(value, ops);
+        return JsTemporalInstant.fromEpochNanoseconds(toInstant(value, ops).epochNanoseconds());
     }
 
     private static int compare(JsTemporalInstant a, JsTemporalInstant b) {
@@ -562,6 +667,21 @@ public final class TemporalInstantBuiltins {
         }
         if (value instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsTemporalInstant wrapped) {
             return wrapped;
+        }
+        // ToTemporalInstant fast path: a ZonedDateTime's instant is read directly (no toString call)
+        // rather than round-tripping through its string representation.
+        if (value instanceof JsTemporalZonedDateTime zoned) {
+            return JsTemporalInstant.fromEpochNanoseconds(zoned.epochNanoseconds());
+        }
+        if (value instanceof JsObject wrapper
+                && wrapper.getPrimitive() instanceof JsTemporalZonedDateTime zonedWrapped) {
+            return JsTemporalInstant.fromEpochNanoseconds(zonedWrapped.epochNanoseconds());
+        }
+        // A non-string primitive (undefined/null/boolean/number/bigint/symbol) is not a valid
+        // Instant argument at all and never reaches ToString - only an object (which may still fail
+        // to produce a parseable string, a RangeError) or a string itself is attempted.
+        if (!(value instanceof JsString) && !InterpreterUtils.isObjectLike(value)) {
+            throw new TypeErrorException("Cannot convert value to a Temporal.Instant");
         }
         return fromIsoString(JsCoercion.toStr(value, ops));
     }
@@ -605,13 +725,6 @@ public final class TemporalInstantBuiltins {
         }
         final var totalNanos = (hours * 3_600L + minutes * 60L + seconds) * 1_000_000_000L + nanos;
         return sign * totalNanos;
-    }
-
-    private static BigInteger requireBigInt(JsValue value) {
-        if (value instanceof JsBigInt bigInt) {
-            return bigInt.getValue();
-        }
-        throw new TypeErrorException("Temporal.Instant.fromEpochNanoseconds requires a BigInt argument");
     }
 
     private static JsValue arg(List<JsValue> args, int index) {

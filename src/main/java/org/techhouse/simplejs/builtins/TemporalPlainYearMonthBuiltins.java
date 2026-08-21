@@ -215,7 +215,11 @@ public final class TemporalPlainYearMonthBuiltins {
             if (parsed.calendar() != null) {
                 TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
             }
-            return new JsTemporalPlainYearMonth(parsed.date());
+            // Per CalendarYearMonthFromFields, the iso8601 calendar always normalises referenceISODay
+            // to 1 - even when the source string was a full date/date-time carrying a real day-of-month
+            // (e.g. "2019-12-15T00+00"), not just the reduced "YYYY-MM" form.
+            final var date = parsed.date();
+            return new JsTemporalPlainYearMonth(new Iso8601Fields(date.year(), date.month(), 1));
         }
         if (item instanceof JsObject obj) {
             return new JsTemporalPlainYearMonth(yearMonthFromFields(obj, overflow, ops));

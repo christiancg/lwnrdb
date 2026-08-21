@@ -135,10 +135,8 @@ public final class TemporalZonedDateTimeBuiltins {
     }
 
     private static JsTemporalZonedDateTime construct(List<JsValue> args, InterpreterOps ops) {
-        if (args.isEmpty() || !(args.getFirst() instanceof JsBigInt bigInt)) {
-            throw new TypeErrorException(
-                    "Constructor Temporal.ZonedDateTime requires an epochNanoseconds BigInt argument");
-        }
+        final var epochArg = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
+        final var epochNanoseconds = NumberBuiltins.toBigIntValue(epochArg, ops).getValue();
         final var timeZoneArg = arg(args, 1);
         if (timeZoneArg instanceof JsUndefined) {
             throw new TypeErrorException("Constructor Temporal.ZonedDateTime requires a timeZone argument");
@@ -151,7 +149,7 @@ public final class TemporalZonedDateTimeBuiltins {
         if (!(calendarArg instanceof JsUndefined)) {
             requireCalendarString(calendarArg);
         }
-        return JsTemporalZonedDateTime.fromEpochNanoseconds(bigInt.getValue(), zoneOf(timeZoneId), timeZoneId);
+        return JsTemporalZonedDateTime.fromEpochNanoseconds(epochNanoseconds, zoneOf(timeZoneId), timeZoneId);
     }
 
     // Constructor / withCalendar accept only a bare calendar identifier; a non-string value is a
@@ -186,8 +184,10 @@ public final class TemporalZonedDateTimeBuiltins {
             }
             var normalized = offsetText;
             final var dot = normalized.indexOf('.');
-            if (dot >= 0) {
-                normalized = normalized.substring(0, dot);
+            final var comma = normalized.indexOf(',');
+            final var fractionStart = dot < 0 ? comma : (comma < 0 ? dot : Math.min(dot, comma));
+            if (fractionStart >= 0) {
+                normalized = normalized.substring(0, fractionStart);
             }
             return ZoneOffset.of(normalized);
         } catch (DateTimeException e) {
@@ -421,7 +421,7 @@ public final class TemporalZonedDateTimeBuiltins {
         final var timeZoneId = TemporalParser.parseTimeZoneIdentifier(parsed.timeZoneId());
         final var zone = zoneOf(timeZoneId);
         final var date = parsed.date();
-        final var time = parsed.time();
+        final var time = parsed.time() != null ? parsed.time() : new IsoTimeFields(0, 0, 0, 0, 0, 0);
         final var nanoOfSecond = time.millisecond() * 1_000_000 + time.microsecond() * 1_000 + time.nanosecond();
         final LocalDateTime local;
         try {
@@ -668,8 +668,11 @@ public final class TemporalZonedDateTimeBuiltins {
         };
     }
 
+    // A null-prototype object (OrdinaryObjectCreate(null)) so a lookup of an absent option key never
+    // falls through to Object.prototype.
     private static JsObject smallestUnitOptions(JsString value) {
         final var options = new JsObject();
+        options.setProto(null);
         options.set("smallestUnit", value);
         return options;
     }

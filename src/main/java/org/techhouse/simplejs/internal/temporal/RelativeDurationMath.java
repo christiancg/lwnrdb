@@ -70,14 +70,35 @@ public final class RelativeDurationMath {
     // Temporal construction path.
     private static final BigInteger MAX_INSTANT_NANOS = new BigInteger("8640000000000000000000");
 
+    // A plain (non-zoned) anchor's ISO Date-Time Limits are date-only - any time-of-day on either
+    // boundary CALENDAR DAY is representable (e.g. "+275760-09-13T23:00" is valid), unlike a zoned
+    // anchor, which must resolve to a real instant within +-8.64e21ns of the epoch (so "T00:00Z" is
+    // the latest valid moment on that same boundary day). Using the exact-instant nanos check for a
+    // plain anchor too would wrongly reject any time past midnight on the max boundary day.
+    private static final Iso8601Fields MIN_PLAIN_DATE = new Iso8601Fields(-271821, 4, 19);
+    private static final Iso8601Fields MAX_PLAIN_DATE = new Iso8601Fields(275760, 9, 13);
+
     public static BigInteger toEpochNanos(Anchor anchor, Iso8601Fields date, IsoTimeFields time) {
-        final var nanos = anchor.isZoned()
-                ? resolveZonedEpochNanos(date, time, anchor.zone())
-                : plainEpochNanos(date, time);
+        if (!anchor.isZoned()) {
+            if (IsoCalendar.compareIsoDate(date, MIN_PLAIN_DATE) < 0
+                    || IsoCalendar.compareIsoDate(date, MAX_PLAIN_DATE) > 0) {
+                throw new RangeErrorException("date value is outside the representable range: " + date);
+            }
+            return plainEpochNanos(date, time);
+        }
+        final var nanos = resolveZonedEpochNanos(date, time, anchor.zone());
         if (nanos.abs().compareTo(MAX_INSTANT_NANOS) > 0) {
             throw new RangeErrorException("date value is outside the representable range: " + date);
         }
         return nanos;
+    }
+
+    // Temporal.Duration.compare's relativeTo-anchored path only ever compares two intermediate exact
+    // times - it never constructs (or exposes) a real Temporal.Instant/ZonedDateTime from them - so,
+    // unlike round()/total() (which materialise a real applied result the caller can observe), it must
+    // not throw merely because one side's raw arithmetic steps outside the +-8.64e21ns public range.
+    public static BigInteger toEpochNanosUnbounded(Anchor anchor, Iso8601Fields date, IsoTimeFields time) {
+        return anchor.isZoned() ? resolveZonedEpochNanos(date, time, anchor.zone()) : plainEpochNanos(date, time);
     }
 
     private static BigInteger plainEpochNanos(Iso8601Fields date, IsoTimeFields time) {
@@ -323,8 +344,8 @@ public final class RelativeDurationMath {
     public static int compareApplied(Anchor anchor, DurationFields one, DurationFields two, RegulateOverflow overflow) {
         final var pointOne = applyDuration(anchor, one, overflow);
         final var pointTwo = applyDuration(anchor, two, overflow);
-        final var nanosOne = toEpochNanos(anchor, pointOne.date(), pointOne.time());
-        final var nanosTwo = toEpochNanos(anchor, pointTwo.date(), pointTwo.time());
+        final var nanosOne = toEpochNanosUnbounded(anchor, pointOne.date(), pointOne.time());
+        final var nanosTwo = toEpochNanosUnbounded(anchor, pointTwo.date(), pointTwo.time());
         return nanosOne.compareTo(nanosTwo);
     }
 

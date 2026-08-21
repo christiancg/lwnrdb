@@ -458,6 +458,10 @@ public class TemporalPlainDateTimeBuiltinsTest {
                 + ".toZonedDateTime('America/New_York', {disambiguation: 'earlier'}).hour"));
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDateTime(2020, 3, 8, 2, 30)"
                 + ".toZonedDateTime('America/New_York', {disambiguation: 'reject'})"));
+        assertEquals(3, num("new Temporal.PlainDateTime(2020, 3, 8, 2, 30)"
+                + ".toZonedDateTime('America/New_York', {disambiguation: 'compatible'}).hour"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDateTime(2020, 3, 8, 2, 30)"
+                + ".toZonedDateTime('America/New_York', {disambiguation: 'bogus'})"));
     }
 
     // era/eraYear are always undefined for the ISO-8601-only calendar this engine implements
