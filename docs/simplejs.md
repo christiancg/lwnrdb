@@ -1123,10 +1123,13 @@ be kept in step — an exclusion with no entry here is a number being flattered.
 - **`Temporal`** — implemented (see *Temporal API* below) for the ISO 8601 calendar only. Not
   supported: non-ISO calendars (`gregory`/`hebrew`/`japanese`/etc. — delegated to the `Intl`
   exclusion above, since every non-ISO-calendar test262 case lives under the already-excluded
-  `intl402/Temporal/` tree), `relativeTo`-based calendar-unit (year/month/week) duration balancing —
-  `Temporal.Duration`/`ZonedDateTime`/`PlainDateTime` operations that mix calendar and exact-time
-  units throw a `RangeError` asking for a `relativeTo` date instead of performing the balance — and
-  leap seconds (parsing a `:60` seconds component is rejected, per spec).
+  `intl402/Temporal/` tree), leap seconds (parsing a `:60` seconds component is rejected, per spec)
+  and fixed offsets beyond ±18:00 (the `java.time.ZoneOffset` cap — see *Temporal API* below).
+  `relativeTo`-anchored calendar-unit (year/month/week) arithmetic **is** implemented, in
+  `internal/temporal/RelativeDurationMath`: it backs `Temporal.Duration`'s `round`/`total`/`compare`/
+  `add`/`subtract` and the `until`/`since` of `PlainDate`/`PlainDateTime`/`PlainYearMonth`/
+  `ZonedDateTime`. A `RangeError` is raised only when a calendar unit is requested with **no**
+  `relativeTo` anchor, which is what the spec requires rather than a gap.
 - **`SharedArrayBuffer` + `Atomics`** (including `Atomics.pause`) — shared-memory multithreading is
   meaningless in a single-threaded per-connection VM.
 - **Immutable `ArrayBuffer`** (`transferToImmutable`/`sliceToImmutable`) — the proposal is not in the
@@ -1440,11 +1443,23 @@ rationale rather than fighting it.
   prototype.toZonedDateTimeISO` and `Temporal.PlainDateTime.prototype.toZonedDateTime` return a real
   `Temporal.ZonedDateTime` instance once T7 merged (both were built before `ZonedDateTime` existed
   and started out returning a plain descriptive object); `Temporal.PlainDateTime.prototype.
-  toPlainYearMonth`/`toPlainMonthDay` return real instances once T4 merged. One narrow gap was never
-  retrofitted the same way: `Temporal.PlainDate.prototype.toZonedDateTime` (built in T3, before
-  `Instant`/`ZonedDateTime` existed) still returns a plain `{year, month, day, timeZoneId,
-  calendarId}` object rather than a real `Temporal.ZonedDateTime` — a known, narrow divergence from
-  the otherwise-complete surface.
+  toPlainYearMonth`/`toPlainMonthDay` return real instances once T4 merged; and
+  `Temporal.PlainDate.prototype.toZonedDateTime` (built in T3, before `Instant`/`ZonedDateTime`
+  existed, so it originally returned a plain descriptive object too) resolves through
+  `TemporalZonedDateTimeBuiltins.resolveToZoned` and returns a real instance as well. No cross-type
+  conversion is left returning a stand-in object.
+- **One narrow divergence, forced by `java.time`**: `Temporal.ZonedDateTime`'s constructor, string
+  grammar and property-bag `offset` field all accept a UTC offset up to ±23:59:59.999999999 as a
+  fixed-offset "time zone" (an offset-only identifier with no IANA name), but `java.time.ZoneOffset`
+  hard-caps at ±18:00 and `java.time.zone.ZoneRules` is `final` with no public factory accepting a
+  raw offset outside that range — so no `ZoneId` can be obtained for such an offset at all.
+  Supporting it would mean reimplementing every zone computation this area performs through
+  `java.time` (`resolveLocal`, `epochNanosOf`, `hoursInDay`, `round`, `add`/`subtract`, `toString`, …)
+  against a hand-rolled fixed-offset abstraction, for an offset magnitude no real IANA zone uses.
+  The ten test262 cases that exercise it (seven under `ZonedDateTime`, three under `Duration`'s
+  `relativeTo` string, which reaches the same cap through the `[+23:59]` bracket annotation) are
+  excluded by exact path in `config/test262-exclusions.txt` rather than baselined, so
+  `built-ins/Temporal` measures 4,593 of the corpus's 4,603 cases.
 - **Wiring touch points**, one arm each per type, mirroring the existing `JsDate` entries:
   `MemberEvaluator.getMember` (a thin `intrinsicMember` passthrough per type, since state access
   goes through the shared-prototype accessor mechanism above), `Intrinsics` (a proto field +
