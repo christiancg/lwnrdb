@@ -221,6 +221,11 @@ public final class TemporalParser {
             throw new RangeErrorException("Invalid time zone identifier: " + input);
         }
         requireEnd(cursor);
+        // "UTC" is matched ASCII-case-insensitively but always canonicalizes to uppercase - unlike an
+        // arbitrary IANA name, which this engine treats as case-sensitive.
+        if (TemporalCalendarIdentifier.asciiEqualsIgnoreCase(input, "utc")) {
+            return "UTC";
+        }
         return input;
     }
 
@@ -468,7 +473,7 @@ public final class TemporalParser {
                     cursor.advance();
                 }
                 second = readDigits(cursor, 2);
-                if (!cursor.atEnd() && cursor.peek() == '.') {
+                if (!cursor.atEnd() && (cursor.peek() == '.' || cursor.peek() == ',')) {
                     cursor.advance();
                     readFractionDigits(cursor);
                 }

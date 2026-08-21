@@ -87,12 +87,13 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').withTimeZone(5)"));
     }
 
-    // "UTC" is matched ASCII-case-insensitively, java.time's ZoneId.of is not
+    // "UTC" is matched ASCII-case-insensitively (java.time's ZoneId.of is not) and always
+    // canonicalizes to uppercase "UTC" - unlike an arbitrary IANA name, which stays case-sensitive.
     @Test
     public void test_time_zone_utc_is_case_insensitive() {
-        assertEquals("utc", str("new Temporal.ZonedDateTime(0n, 'utc').timeZoneId"));
+        assertEquals("UTC", str("new Temporal.ZonedDateTime(0n, 'utc').timeZoneId"));
         assertEquals(0, num("new Temporal.ZonedDateTime(0n, 'utc').offsetNanoseconds"));
-        assertEquals("Utc", str("new Temporal.ZonedDateTime(0n, 'Utc').timeZoneId"));
+        assertEquals("UTC", str("new Temporal.ZonedDateTime(0n, 'Utc').timeZoneId"));
     }
 
     // A calendar annotation on an ISO string parsed by from() is validated the same way a bare
