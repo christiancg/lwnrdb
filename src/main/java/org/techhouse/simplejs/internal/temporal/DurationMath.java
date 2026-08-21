@@ -1,5 +1,6 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import java.math.BigDecimal;
 import java.math.BigInteger;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
@@ -21,7 +22,54 @@ public final class DurationMath {
     private static final BigInteger NANOS_PER_MICRO = BigInteger.valueOf(1_000L);
     private static final BigInteger TWO = BigInteger.valueOf(2);
 
+    // IsValidDuration: years/months/weeks each cap at 2**32 (exclusive), and the exact days..
+    // nanoseconds total caps at 2**53 * 10**9 - 1 ns (i.e. a total just under 2**53 seconds) -
+    // together the only range constraint a Duration's fields are subject to.
+    private static final double YEARS_MONTHS_WEEKS_LIMIT = 4_294_967_296.0;
+    private static final BigInteger MAX_TIME_DURATION_NANOS = BigInteger.TWO.pow(53)
+            .multiply(BigInteger.valueOf(1_000_000_000L)).subtract(BigInteger.ONE);
+
     private DurationMath() {
+    }
+
+    // CreateDurationRecord's own validation (IsValidDuration): every construction chokepoint for a
+    // Duration - the raw constructor, from(), with(), add()/subtract(), round() - funnels through
+    // JsTemporalDuration's own constructor, which calls this.
+    public static void validate(DurationFields fields) {
+        requireFinite(fields);
+        sign(fields);
+        requireValidRange(fields);
+    }
+
+    private static void requireFinite(DurationFields fields) {
+        for (final var value : allFields(fields)) {
+            if (!Double.isFinite(value)) {
+                throw new RangeErrorException("Duration field must be finite, got " + value);
+            }
+        }
+    }
+
+    public static void requireValidRange(DurationFields fields) {
+        if (Math.abs(fields.years()) >= YEARS_MONTHS_WEEKS_LIMIT) {
+            throw new RangeErrorException("years is out of range: " + fields.years());
+        }
+        if (Math.abs(fields.months()) >= YEARS_MONTHS_WEEKS_LIMIT) {
+            throw new RangeErrorException("months is out of range: " + fields.months());
+        }
+        if (Math.abs(fields.weeks()) >= YEARS_MONTHS_WEEKS_LIMIT) {
+            throw new RangeErrorException("weeks is out of range: " + fields.weeks());
+        }
+        if (totalNanoseconds(fields).abs().compareTo(MAX_TIME_DURATION_NANOS) > 0) {
+            throw new RangeErrorException("duration is out of range");
+        }
+    }
+
+    // The BigDecimal(double) constructor (not BigDecimal.valueOf, which round-trips through
+    // Double.toString and can drop digits of a large exact-integer double) preserves the double's
+    // exact binary value - required here since a field can be far beyond long's range.
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
+    private static BigInteger exactNanos(double value, BigInteger nanosPerUnit) {
+        return new BigDecimal(value).toBigInteger().multiply(nanosPerUnit);
     }
 
     public static int sign(DurationFields fields) {
@@ -104,14 +152,18 @@ public final class DurationMath {
                 fields.minutes(), fields.seconds(), fields.milliseconds(), fields.microseconds(), fields.nanoseconds()};
     }
 
+    // A single-field duration (e.g. only "microseconds" or "nanoseconds" set) can legitimately hold a
+    // value well past Long.MAX_VALUE while still satisfying IsValidDuration's total-nanoseconds bound
+    // (up to ~9.007e21 for microseconds, ~9.007e24 for nanoseconds) - so, like requireValidRange's own
+    // check, this must use the exact BigDecimal conversion rather than a (long) cast, which would
+    // silently clamp such a field to Long.MAX_VALUE and corrupt every arithmetic use of this total
+    // (compare(), add()/subtract(), total()), not merely a validation check.
     public static BigInteger totalNanoseconds(DurationFields fields) {
-        return BigInteger.valueOf((long) fields.days()).multiply(NANOS_PER_DAY)
-                .add(BigInteger.valueOf((long) fields.hours()).multiply(NANOS_PER_HOUR))
-                .add(BigInteger.valueOf((long) fields.minutes()).multiply(NANOS_PER_MINUTE))
-                .add(BigInteger.valueOf((long) fields.seconds()).multiply(NANOS_PER_SECOND))
-                .add(BigInteger.valueOf((long) fields.milliseconds()).multiply(NANOS_PER_MILLI))
-                .add(BigInteger.valueOf((long) fields.microseconds()).multiply(NANOS_PER_MICRO))
-                .add(BigInteger.valueOf((long) fields.nanoseconds()));
+        return exactNanos(fields.days(), NANOS_PER_DAY).add(exactNanos(fields.hours(), NANOS_PER_HOUR))
+                .add(exactNanos(fields.minutes(), NANOS_PER_MINUTE)).add(exactNanos(fields.seconds(), NANOS_PER_SECOND))
+                .add(exactNanos(fields.milliseconds(), NANOS_PER_MILLI))
+                .add(exactNanos(fields.microseconds(), NANOS_PER_MICRO))
+                .add(exactNanos(fields.nanoseconds(), BigInteger.ONE));
     }
 
     public static BigInteger nanosPerUnit(Unit unit) {
@@ -132,12 +184,11 @@ public final class DurationMath {
     // arithmetic (IsoCalendar.addDate) need the time part added separately, matching AddDateTime/
     // AddZonedDateTime's own two-phase split.
     public static BigInteger timeUnitsNanoseconds(DurationFields fields) {
-        return BigInteger.valueOf((long) fields.hours()).multiply(NANOS_PER_HOUR)
-                .add(BigInteger.valueOf((long) fields.minutes()).multiply(NANOS_PER_MINUTE))
-                .add(BigInteger.valueOf((long) fields.seconds()).multiply(NANOS_PER_SECOND))
-                .add(BigInteger.valueOf((long) fields.milliseconds()).multiply(NANOS_PER_MILLI))
-                .add(BigInteger.valueOf((long) fields.microseconds()).multiply(NANOS_PER_MICRO))
-                .add(BigInteger.valueOf((long) fields.nanoseconds()));
+        return exactNanos(fields.hours(), NANOS_PER_HOUR).add(exactNanos(fields.minutes(), NANOS_PER_MINUTE))
+                .add(exactNanos(fields.seconds(), NANOS_PER_SECOND))
+                .add(exactNanos(fields.milliseconds(), NANOS_PER_MILLI))
+                .add(exactNanos(fields.microseconds(), NANOS_PER_MICRO))
+                .add(exactNanos(fields.nanoseconds(), BigInteger.ONE));
     }
 
     private static long nanosOfDayLong(IsoTimeFields t) {
@@ -204,45 +255,52 @@ public final class DurationMath {
         return balanceFromTotalNanoseconds(totalNanos, largestUnit);
     }
 
+    // The bucket matching largestUnit itself absorbs every coarser unit (e.g. largestUnit "seconds"
+    // folds days/hours/minutes into the seconds field) and so is the only one that can hold a value
+    // too large for a `long` (e.g. largestUnit "nanoseconds" on a near-2**53-second duration) - every
+    // finer bucket below it is a bounded remainder. doubleValue() (not longValueExact()) handles this
+    // uniformly: it never throws for an out-of-long-range magnitude, instead rounding to the nearest
+    // representable double exactly like JS's own Number(bigint) would, and is exact for the small
+    // remainders every other bucket holds.
     private static DurationFields decompose(BigInteger absNanos, Unit largestUnit) {
         var remaining = absNanos;
-        long days = 0;
-        long hours = 0;
-        long minutes = 0;
-        long seconds = 0;
-        long millis = 0;
-        long micros = 0;
+        double days = 0;
+        double hours = 0;
+        double minutes = 0;
+        double seconds = 0;
+        double millis = 0;
+        double micros = 0;
         if (Unit.DAY.ordinal() >= largestUnit.ordinal()) {
             final var dm = remaining.divideAndRemainder(NANOS_PER_DAY);
-            days = dm[0].longValueExact();
+            days = dm[0].doubleValue();
             remaining = dm[1];
         }
         if (Unit.HOUR.ordinal() >= largestUnit.ordinal()) {
             final var dm = remaining.divideAndRemainder(NANOS_PER_HOUR);
-            hours = dm[0].longValueExact();
+            hours = dm[0].doubleValue();
             remaining = dm[1];
         }
         if (Unit.MINUTE.ordinal() >= largestUnit.ordinal()) {
             final var dm = remaining.divideAndRemainder(NANOS_PER_MINUTE);
-            minutes = dm[0].longValueExact();
+            minutes = dm[0].doubleValue();
             remaining = dm[1];
         }
         if (Unit.SECOND.ordinal() >= largestUnit.ordinal()) {
             final var dm = remaining.divideAndRemainder(NANOS_PER_SECOND);
-            seconds = dm[0].longValueExact();
+            seconds = dm[0].doubleValue();
             remaining = dm[1];
         }
         if (Unit.MILLISECOND.ordinal() >= largestUnit.ordinal()) {
             final var dm = remaining.divideAndRemainder(NANOS_PER_MILLI);
-            millis = dm[0].longValueExact();
+            millis = dm[0].doubleValue();
             remaining = dm[1];
         }
         if (Unit.MICROSECOND.ordinal() >= largestUnit.ordinal()) {
             final var dm = remaining.divideAndRemainder(NANOS_PER_MICRO);
-            micros = dm[0].longValueExact();
+            micros = dm[0].doubleValue();
             remaining = dm[1];
         }
-        final var nanos = remaining.longValueExact();
+        final var nanos = remaining.doubleValue();
         return new DurationFields(0, 0, 0, days, hours, minutes, seconds, millis, micros, nanos);
     }
 

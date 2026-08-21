@@ -6,7 +6,8 @@ import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 
 /**
  * A JavaScript {@code Temporal.Duration} value: ten signed fields (years..nanoseconds), all of the
- * same sign or zero (enforced by {@link DurationMath#sign} at every construction site). Carries no
+ * same sign or zero, each within IsValidDuration's range (enforced by {@link DurationMath#validate}
+ * in this class's own constructor - the single chokepoint every Duration passes through). Carries no
  * calendar dependency, unlike every other Temporal type.
  */
 public final class JsTemporalDuration extends JsValue {
@@ -15,6 +16,7 @@ public final class JsTemporalDuration extends JsValue {
     private final DurationFields fields;
 
     public JsTemporalDuration(DurationFields fields) {
+        DurationMath.validate(fields);
         this.fields = fields;
     }
 

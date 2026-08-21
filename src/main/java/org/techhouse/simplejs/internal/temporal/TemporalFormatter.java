@@ -1,5 +1,6 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import java.math.BigInteger;
 import java.time.ZoneOffset;
 import java.util.Locale;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -191,12 +192,27 @@ public final class TemporalFormatter {
         sb.append(designator);
     }
 
+    // BigInteger throughout, not double multiplication: milliseconds/microseconds/nanoseconds can
+    // individually be as large as ~2**53 * their unit's fraction of a second (a Duration bounds only
+    // the combined total, not each field), so `milliseconds * 1_000_000L` in double arithmetic can
+    // already exceed 2**53's exact-integer precision - and Math.round() of a double past
+    // Long.MAX_VALUE silently clamps to Long.MAX_VALUE rather than throwing, corrupting the result
+    // instead of failing loudly. All four inputs are non-negative (callers pass Math.abs values).
     private static long[] combineSecondsFraction(double seconds, double milliseconds, double microseconds,
             double nanoseconds) {
-        final var totalNanos = Math.round(milliseconds * 1_000_000L + microseconds * 1_000L + nanoseconds);
-        final var wholeSeconds = (long) seconds + Math.floorDiv(totalNanos, 1_000_000_000L);
-        final var fractionNanos = Math.floorMod(totalNanos, 1_000_000_000L);
-        return new long[]{wholeSeconds, fractionNanos};
+        final var totalNanos = wholeNanos(milliseconds).multiply(BigInteger.valueOf(1_000_000L))
+                .add(wholeNanos(microseconds).multiply(BigInteger.valueOf(1_000L))).add(wholeNanos(nanoseconds));
+        final var dm = totalNanos.divideAndRemainder(BigInteger.valueOf(1_000_000_000L));
+        final var wholeSeconds = wholeNanos(seconds).add(dm[0]);
+        return new long[]{wholeSeconds.longValueExact(), dm[1].longValueExact()};
+    }
+
+    // BigDecimal(double), not BigDecimal.valueOf/a String literal: this must preserve the double's
+    // exact binary value (a round-trip through Double.toString could drop digits of a large
+    // exact-integer double), matching the same intentional choice in TemporalInstantBuiltins.exact.
+    @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
+    private static BigInteger wholeNanos(double value) {
+        return new java.math.BigDecimal(value).toBigInteger();
     }
 
     private static String formatFraction(int millisecond, int microsecond, int nanosecond,

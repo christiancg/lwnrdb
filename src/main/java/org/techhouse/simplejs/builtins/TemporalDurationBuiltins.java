@@ -117,8 +117,26 @@ public final class TemporalDurationBuiltins {
             values[i] = integerField(args, i, ops);
         }
         final var fields = toFields(values);
-        DurationMath.sign(fields);
-        return new JsTemporalDuration(fields);
+        return withNewTargetPrototype(new JsTemporalDuration(fields), ops);
+    }
+
+    // OrdinaryCreateFromConstructor, mirroring TemporalInstantBuiltins' own helper: a `Reflect.
+    // construct(Temporal.Duration, args, newTarget)` call with a custom newTarget reads newTarget's
+    // "prototype" (propagating a throw from a poisoned getter) and, if it names a genuinely different
+    // object, links the constructed instance to it via a wrapper rather than the intrinsic prototype.
+    private static JsValue withNewTargetPrototype(JsTemporalDuration constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return constructed;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
+            return constructed;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(constructed);
+        wrapper.setProto(requested);
+        return wrapper;
     }
 
     private static DurationFields toFields(double[] v) {
@@ -155,7 +173,7 @@ public final class TemporalDurationBuiltins {
         }
         if (item instanceof JsString str) {
             final var fields = TemporalParser.parseDuration(str.getValue());
-            DurationMath.sign(fields);
+            DurationMath.validate(fields);
             return new JsTemporalDuration(fields);
         }
         if (InterpreterUtils.isObjectLike(item)) {
@@ -166,6 +184,10 @@ public final class TemporalDurationBuiltins {
                         + "or a duration-like object");
     }
 
+    // Returns raw (validated) fields rather than a JsTemporalDuration: also used by compare()/add()/
+    // subtract() to read a duration-like "other" operand that is never itself wrapped into a Duration
+    // instance, so this - not JsTemporalDuration's constructor - is that path's own validation
+    // chokepoint.
     private static DurationFields durationLikeFields(JsValue item, InterpreterOps ops) {
         final var values = new double[FIELD_ORDER.size()];
         var any = false;
@@ -183,7 +205,7 @@ public final class TemporalDurationBuiltins {
                             + "milliseconds/microseconds/nanoseconds must be present");
         }
         final var fields = toFields(values);
-        DurationMath.sign(fields);
+        DurationMath.validate(fields);
         return fields;
     }
 
@@ -281,24 +303,19 @@ public final class TemporalDurationBuiltins {
         return RelativeDurationMath.Anchor.zoned(date, time, zone);
     }
 
-    // A relativeTo string carrying both an explicit numeric offset and a bracketed zone annotation
+    // A relativeTo string (or property bag) carrying both an explicit numeric offset and a time zone
     // must agree - unlike Temporal.ZonedDateTime.from (which trusts the given offset outright for
     // exactness), relativeTo has no `offset` disambiguation option, so a mismatch is simply invalid.
     private static void requireMatchingOffset(Iso8601Fields date, IsoTimeFields time, java.time.ZoneId zone,
             String offsetText, String source) {
-        final java.time.ZoneOffset given;
-        try {
-            var normalized = offsetText;
-            final var dot = normalized.indexOf('.');
-            final var comma = normalized.indexOf(',');
-            final var fractionStart = dot < 0 ? comma : (comma < 0 ? dot : Math.min(dot, comma));
-            if (fractionStart >= 0) {
-                normalized = normalized.substring(0, fractionStart);
-            }
-            given = java.time.ZoneOffset.of(normalized);
-        } catch (java.time.DateTimeException e) {
-            throw new RangeErrorException("Invalid UTC offset: " + offsetText);
+        var normalized = offsetText;
+        final var dot = normalized.indexOf('.');
+        final var comma = normalized.indexOf(',');
+        final var fractionStart = dot < 0 ? comma : (comma < 0 ? dot : Math.min(dot, comma));
+        if (fractionStart >= 0) {
+            normalized = normalized.substring(0, fractionStart);
         }
+        final var givenSeconds = parseOffsetSeconds(normalized);
         final var nanoOfSecond = time.millisecond() * 1_000_000 + time.microsecond() * 1_000 + time.nanosecond();
         final java.time.LocalDateTime local;
         try {
@@ -308,10 +325,55 @@ public final class TemporalDurationBuiltins {
             throw new RangeErrorException("Invalid date/time in relativeTo: " + e.getMessage());
         }
         final var actual = zone.getRules().getOffset(local);
-        if (!given.equals(actual)) {
+        if (givenSeconds != actual.getTotalSeconds()) {
             throw new RangeErrorException(
                     "relativeTo string offset " + offsetText + " does not match time zone " + zone + ": " + source);
         }
+    }
+
+    // A manual "+HH:MM[:SS]" / "+HHMM[SS]" parser rather than java.time.ZoneOffset.of: ZoneOffset
+    // caps at +-18:00, but Temporal's own UTC offset range extends to +-23:59:59.999999999 (the
+    // fractional part is already stripped by the caller) - java.time simply cannot represent an
+    // offset near that edge at all, so it cannot be reused here even just for parsing/validation.
+    private static long parseOffsetSeconds(String text) {
+        if (text.length() < 3 || (text.charAt(0) != '+' && text.charAt(0) != '-')) {
+            throw new RangeErrorException("Invalid UTC offset: " + text);
+        }
+        final var sign = text.charAt(0) == '-' ? -1 : 1;
+        final var body = text.substring(1);
+        final int hours;
+        final int minutes;
+        final int seconds;
+        if (body.contains(":")) {
+            final var parts = body.split(":", -1);
+            if (parts.length < 2 || parts.length > 3 || !allTwoDigits(parts)) {
+                throw new RangeErrorException("Invalid UTC offset: " + text);
+            }
+            hours = Integer.parseInt(parts[0]);
+            minutes = Integer.parseInt(parts[1]);
+            seconds = parts.length == 3 ? Integer.parseInt(parts[2]) : 0;
+        } else {
+            if ((body.length() != 2 && body.length() != 4 && body.length() != 6) || !body.matches("\\d+")) {
+                throw new RangeErrorException("Invalid UTC offset: " + text);
+            }
+            hours = Integer.parseInt(body.substring(0, 2));
+            minutes = body.length() >= 4 ? Integer.parseInt(body.substring(2, 4)) : 0;
+            seconds = body.length() >= 6 ? Integer.parseInt(body.substring(4, 6)) : 0;
+        }
+        final var totalSeconds = hours * 3600L + minutes * 60L + seconds;
+        if (totalSeconds >= 86400L) {
+            throw new RangeErrorException("Invalid UTC offset: " + text);
+        }
+        return sign * totalSeconds;
+    }
+
+    private static boolean allTwoDigits(String[] parts) {
+        for (final var part : parts) {
+            if (part.length() != 2 || !part.matches("\\d+")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // A `calendar` property that is itself a Temporal object (PlainDate/PlainDateTime/PlainYearMonth/
@@ -331,20 +393,29 @@ public final class TemporalDurationBuiltins {
         TemporalCalendarIdentifier.canonicalizeFlexible(s.getValue());
     }
 
+    // PrepareTemporalFields reads a fields object's recognized properties in a fixed alphabetical
+    // order (calendar, day, hour, microsecond, millisecond, minute, month, monthCode, nanosecond,
+    // offset, second, timeZone, year) - every read (and its value coercion) happens unconditionally
+    // in that order before any of them is actually used, so an observer-wrapped property records gets/
+    // valueOf/toString calls in that exact sequence regardless of which fields end up mattering.
     private static RelativeDurationMath.Anchor relativeToFromFields(JsValue obj, InterpreterOps ops) {
         requireValidCalendarField(obj, ops);
-        final var year = requiredRelativeToField(obj, "year", ops);
-        final var month = resolveRelativeToMonth(obj, ops);
         final var day = requiredRelativeToField(obj, "day", ops);
         final var hour = relativeToFieldOrDefault(obj, "hour", 0, ops);
-        final var minute = relativeToFieldOrDefault(obj, "minute", 0, ops);
-        final var second = relativeToFieldOrDefault(obj, "second", 0, ops);
-        final var millisecond = relativeToFieldOrDefault(obj, "millisecond", 0, ops);
         final var microsecond = relativeToFieldOrDefault(obj, "microsecond", 0, ops);
+        final var millisecond = relativeToFieldOrDefault(obj, "millisecond", 0, ops);
+        final var minute = relativeToFieldOrDefault(obj, "minute", 0, ops);
+        final var month = resolveRelativeToMonth(obj, ops);
         final var nanosecond = relativeToFieldOrDefault(obj, "nanosecond", 0, ops);
+        final var offset = relativeToOffsetField(obj, ops);
+        // A leap second (":60") is always clamped to :59 in a relativeTo fields object too, mirroring
+        // the ISO-string grammar's own unconditional clamp (TemporalParser.parseTimeSpec).
+        final var secondRaw = relativeToFieldOrDefault(obj, "second", 0, ops);
+        final var second = secondRaw == 60 ? 59 : secondRaw;
+        final var timeZoneRaw = ops.getMember(obj, new JsString("timeZone"));
+        final var year = requiredRelativeToField(obj, "year", ops);
         final var date = IsoCalendar.regulateDate(year, month, day, RegulateOverflow.CONSTRAIN);
         final var time = new IsoTimeFields(hour, minute, second, millisecond, microsecond, nanosecond);
-        final var timeZoneRaw = ops.getMember(obj, new JsString("timeZone"));
         if (timeZoneRaw instanceof JsUndefined) {
             return RelativeDurationMath.Anchor.plain(date, time);
         }
@@ -352,7 +423,28 @@ public final class TemporalDurationBuiltins {
             throw new TypeErrorException("timeZone must be a string");
         }
         final var timeZoneId = TemporalParser.parseTimeZoneIdentifierFlexible(s.getValue());
-        return RelativeDurationMath.Anchor.zoned(date, time, TemporalZonedDateTimeBuiltins.zoneOf(timeZoneId));
+        final var zone = TemporalZonedDateTimeBuiltins.zoneOf(timeZoneId);
+        if (offset != null && !"Z".equalsIgnoreCase(offset)) {
+            requireMatchingOffset(date, time, zone, offset, "relativeTo property bag");
+        }
+        return RelativeDurationMath.Anchor.zoned(date, time, zone);
+    }
+
+    // Unlike calendar/timeZone (always a plain string, per requireValidCalendarField/the timeZone
+    // check below), `offset` accepts anything object-like too (coerced via ToString) - only a bare
+    // non-string, non-object primitive (a number, boolean, bigint, or null) is rejected outright.
+    private static String relativeToOffsetField(JsValue obj, InterpreterOps ops) {
+        final var offsetRaw = ops.getMember(obj, new JsString("offset"));
+        if (offsetRaw instanceof JsUndefined) {
+            return null;
+        }
+        if (offsetRaw instanceof JsString s) {
+            return s.getValue();
+        }
+        if (InterpreterUtils.isObjectLike(offsetRaw)) {
+            return JsCoercion.toStr(offsetRaw, ops);
+        }
+        throw new TypeErrorException("offset must be a string");
     }
 
     private static int requiredRelativeToField(JsValue obj, String name, InterpreterOps ops) {
@@ -368,20 +460,25 @@ public final class TemporalDurationBuiltins {
         return value instanceof JsUndefined ? defaultValue : relativeToIntegerField(value, name, ops);
     }
 
+    // "month" sorts before "monthCode" alphabetically, so it is read (and coerced, if present) first
+    // - regardless of the fact that monthCode, when present, is what actually resolves the field.
     private static int resolveRelativeToMonth(JsValue obj, InterpreterOps ops) {
-        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
         final var monthValue = ops.getMember(obj, new JsString("month"));
+        final Integer monthNumeric = monthValue instanceof JsUndefined
+                ? null
+                : relativeToIntegerField(monthValue, "month", ops);
+        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
         if (!(monthCodeValue instanceof JsUndefined)) {
             final var resolved = parseRelativeToMonthCode(JsCoercion.toStr(monthCodeValue, ops));
-            if (!(monthValue instanceof JsUndefined) && relativeToIntegerField(monthValue, "month", ops) != resolved) {
+            if (monthNumeric != null && monthNumeric != resolved) {
                 throw new RangeErrorException("month and monthCode are inconsistent");
             }
             return resolved;
         }
-        if (monthValue instanceof JsUndefined) {
+        if (monthNumeric == null) {
             throw new TypeErrorException("month or monthCode is required in a relativeTo fields object");
         }
-        return relativeToIntegerField(monthValue, "month", ops);
+        return monthNumeric;
     }
 
     private static int parseRelativeToMonthCode(String code) {
@@ -425,7 +522,7 @@ public final class TemporalDurationBuiltins {
         }
         if (value instanceof JsString str) {
             final var fields = TemporalParser.parseDuration(str.getValue());
-            DurationMath.sign(fields);
+            DurationMath.validate(fields);
             return fields;
         }
         if (InterpreterUtils.isObjectLike(value)) {
@@ -497,9 +594,7 @@ public final class TemporalDurationBuiltins {
         if (!anyPresent) {
             throw new TypeErrorException("Duration-like object must contain at least one recognized property");
         }
-        final var fields = toFields(currentValues);
-        DurationMath.sign(fields);
-        return new JsTemporalDuration(fields);
+        return new JsTemporalDuration(toFields(currentValues));
     }
 
     private static JsValue negated(JsTemporalDuration receiver) {
@@ -516,9 +611,11 @@ public final class TemporalDurationBuiltins {
     // AddDurations, narrowed to the calendar-independent case. The two operands' nanosecond totals
     // are summed (not their raw fields - a signed per-field sum like {days:1} + {hours:-1} can
     // legitimately produce mixed-sign fields before carrying, which balanceDuration's own uniform-
-    // sign check would reject) and the signed total is then decomposed back into fields. Any nonzero
-    // year/month/week on either operand needs a relativeTo date to resolve and is rejected instead of
-    // guessed.
+    // sign check would reject) and the signed total is then decomposed back into fields, no coarser
+    // than the RECEIVER's own DefaultTemporalLargestUnit (e.g. adding to a microseconds-only duration
+    // keeps the result in microseconds, never coarsening it into seconds) - `other`'s shape plays no
+    // part in choosing the result's largestUnit. Any nonzero year/month/week on either operand needs a
+    // relativeTo date to resolve and is rejected instead of guessed.
     private static JsValue addOrSubtract(JsTemporalDuration receiver, JsValue otherArg, InterpreterOps ops,
             boolean subtract) {
         final var a = receiver.getFields();
@@ -528,12 +625,8 @@ public final class TemporalDurationBuiltins {
             DurationMath.requireCalendarIndependent(other, Unit.DAY);
             final var otherTotal = DurationMath.totalNanoseconds(other);
             final var totalNanos = DurationMath.totalNanoseconds(a).add(subtract ? otherTotal.negate() : otherTotal);
-            // The result balances no further than the coarser of the two operands' own largest
-            // day-and-below unit (e.g. adding to a pure-hours duration never introduces a "days"
-            // field) - never further than day, per requireCalendarIndependent above.
-            final var largestOrdinal = Math.min(tailLargestUnit(a).ordinal(), tailLargestUnit(other).ordinal());
-            return new JsTemporalDuration(
-                    DurationMath.balanceFromTotalNanoseconds(totalNanos, Unit.values()[largestOrdinal]));
+            final var largestUnit = coarserOf(defaultLargestUnit(a), defaultLargestUnit(other));
+            return new JsTemporalDuration(DurationMath.balanceFromTotalNanoseconds(totalNanos, largestUnit));
         } catch (UnsupportedOperationException e) {
             // add()/subtract() with a calendar-unit operand is out of this feature's scope (unlike
             // round/total/compare/since/until, add/subtract's relativeTo-anchored balancing was not
@@ -542,6 +635,13 @@ public final class TemporalDurationBuiltins {
         }
     }
 
+    // Every option is read (and, if present, coerced to its final type) in this fixed alphabetical
+    // order - largestUnit, relativeTo, roundingIncrement, roundingMode, smallestUnit - unconditionally
+    // and in full, before any cross-option ("algorithmic") validation runs: a bad relativeTo, an
+    // out-of-range roundingIncrement, or smallestUnit > largestUnit are all detected only after every
+    // option has already been observed. largestUnit's own "auto"/absent default resolution is
+    // deferred past this point (it needs smallestUnit, read later) without affecting observability -
+    // that resolution touches no JS-visible getter/valueOf/toString.
     private static JsValue round(JsTemporalDuration receiver, JsValue optionsArg, InterpreterOps ops) {
         if (optionsArg == null || optionsArg instanceof JsUndefined) {
             throw new TypeErrorException("Temporal.Duration.prototype.round requires an options argument");
@@ -550,31 +650,37 @@ public final class TemporalDurationBuiltins {
         if (!InterpreterUtils.isObjectLike(options)) {
             throw new TypeErrorException("options must be an object or a unit string");
         }
-        final var smallestUnitValue = ops.getMember(options, new JsString("smallestUnit"));
         final var largestUnitValue = ops.getMember(options, new JsString("largestUnit"));
-        final var incrementValue = ops.getMember(options, new JsString("roundingIncrement"));
-        final var modeValue = ops.getMember(options, new JsString("roundingMode"));
+        final var largestUnitRaw = isAbsent(largestUnitValue) ? null : JsCoercion.toStr(largestUnitValue, ops);
+        final var largestUnitParsed = largestUnitRaw == null || "auto".equals(largestUnitRaw)
+                ? null
+                : Unit.parseTemporalUnit(largestUnitRaw);
         final var relativeToValue = ops.getMember(options, new JsString("relativeTo"));
-        if (isAbsent(smallestUnitValue) && isAbsent(largestUnitValue)) {
-            throw new RangeErrorException("round requires at least one of smallestUnit or largestUnit");
-        }
-        final var fields = receiver.getFields();
-        final var smallestUnit = isAbsent(smallestUnitValue)
-                ? Unit.NANOSECOND
-                : Unit.parseTemporalUnit(JsCoercion.toStr(smallestUnitValue, ops));
-        final var largestUnit = resolveLargestUnit(largestUnitValue, fields, smallestUnit, ops);
-        if (smallestUnit.ordinal() < largestUnit.ordinal()) {
-            throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
-        }
+        final var anchor = isAbsent(relativeToValue) ? null : toRelativeToAnchor(relativeToValue, ops);
+        final var incrementValue = ops.getMember(options, new JsString("roundingIncrement"));
         final var increment = isAbsent(incrementValue) ? 1 : roundingIncrementValue(incrementValue, ops);
-        if (increment < 1 || increment > 1_000_000_000) {
-            throw new RangeErrorException("roundingIncrement out of range: " + increment);
-        }
+        final var modeValue = ops.getMember(options, new JsString("roundingMode"));
         final var mode = isAbsent(modeValue)
                 ? RoundingMode.HALF_EXPAND
                 : RoundingMode.parse(JsCoercion.toStr(modeValue, ops));
-        if (!isAbsent(relativeToValue)) {
-            final var anchor = toRelativeToAnchor(relativeToValue, ops);
+        final var smallestUnitValue = ops.getMember(options, new JsString("smallestUnit"));
+        final var smallestUnitRaw = isAbsent(smallestUnitValue) ? null : JsCoercion.toStr(smallestUnitValue, ops);
+
+        if (smallestUnitRaw == null && largestUnitRaw == null) {
+            throw new RangeErrorException("round requires at least one of smallestUnit or largestUnit");
+        }
+        final var fields = receiver.getFields();
+        final var smallestUnit = smallestUnitRaw == null ? Unit.NANOSECOND : Unit.parseTemporalUnit(smallestUnitRaw);
+        final var largestUnit = largestUnitParsed != null
+                ? largestUnitParsed
+                : coarserOf(defaultLargestUnit(fields), smallestUnit);
+        if (smallestUnit.ordinal() < largestUnit.ordinal()) {
+            throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
+        }
+        if (increment < 1 || increment > 1_000_000_000) {
+            throw new RangeErrorException("roundingIncrement out of range: " + increment);
+        }
+        if (anchor != null) {
             validateIncrementForBalancing(smallestUnit, largestUnit, increment);
             validateRoundingIncrementForUnit(increment, smallestUnit);
             final var endPoint = RelativeDurationMath.applyDuration(anchor, fields, RegulateOverflow.CONSTRAIN);
@@ -595,20 +701,6 @@ public final class TemporalDurationBuiltins {
             throw new RangeErrorException(RELATIVE_TO_REQUIRED);
         }
         return new JsTemporalDuration(DurationMath.roundDuration(fields, smallestUnit, increment, mode, largestUnit));
-    }
-
-    // largestUnit's "auto" (or absent) default is LargerOfTwoTemporalUnits(DefaultTemporalLargestUnit
-    // (duration), smallestUnit) - the largest unit already present in the duration, widened to
-    // smallestUnit if that is coarser still (e.g. a {days:364} duration rounded to "years" needs
-    // largestUnit to widen to "years" too, not stay at the duration's own natural "days").
-    private static Unit resolveLargestUnit(JsValue largestUnitValue, DurationFields fields, Unit smallestUnit,
-            InterpreterOps ops) {
-        final var autoDefault = coarserOf(defaultLargestUnit(fields), smallestUnit);
-        if (isAbsent(largestUnitValue)) {
-            return autoDefault;
-        }
-        final var raw = JsCoercion.toStr(largestUnitValue, ops);
-        return "auto".equals(raw) ? autoDefault : Unit.parseTemporalUnit(raw);
     }
 
     private static Unit defaultLargestUnit(DurationFields f) {
@@ -675,6 +767,8 @@ public final class TemporalDurationBuiltins {
         }
     }
 
+    // relativeTo is read (and, if a fields object, fully resolved) before unit, matching
+    // ToRelativeTemporalObject running ahead of GetTemporalUnit in the spec algorithm.
     private static JsValue total(JsTemporalDuration receiver, JsValue optionsArg, InterpreterOps ops) {
         if (optionsArg == null || optionsArg instanceof JsUndefined) {
             throw new TypeErrorException("Temporal.Duration.prototype.total requires an options argument");
@@ -683,15 +777,15 @@ public final class TemporalDurationBuiltins {
         if (!InterpreterUtils.isObjectLike(options)) {
             throw new TypeErrorException("options must be an object or a unit string");
         }
+        final var relativeToValue = ops.getMember(options, new JsString("relativeTo"));
+        final var anchor = isAbsent(relativeToValue) ? null : toRelativeToAnchor(relativeToValue, ops);
         final var unitValue = ops.getMember(options, new JsString("unit"));
         if (isAbsent(unitValue)) {
             throw new RangeErrorException("total requires a unit option");
         }
         final var unit = Unit.parseTemporalUnit(JsCoercion.toStr(unitValue, ops));
-        final var relativeToValue = ops.getMember(options, new JsString("relativeTo"));
         final var fields = receiver.getFields();
-        if (!isAbsent(relativeToValue)) {
-            final var anchor = toRelativeToAnchor(relativeToValue, ops);
+        if (anchor != null) {
             final var endPoint = RelativeDurationMath.applyDuration(anchor, fields, RegulateOverflow.CONSTRAIN);
             return new JsNumber(RelativeDurationMath.totalInUnit(anchor, endPoint.date(), endPoint.time(), unit));
         }
@@ -748,9 +842,14 @@ public final class TemporalDurationBuiltins {
         final var tail = new DurationFields(0, 0, 0, fields.days(), fields.hours(), fields.minutes(), fields.seconds(),
                 fields.milliseconds(), fields.microseconds(), fields.nanoseconds());
         final var rounded = DurationMath.roundDuration(tail, unit, roundingIncrement, mode, tailLargestUnit(fields));
-        return new DurationFields(fields.years(), fields.months(), fields.weeks(), rounded.days(), rounded.hours(),
-                rounded.minutes(), rounded.seconds(), rounded.milliseconds(), rounded.microseconds(),
+        final var result = new DurationFields(fields.years(), fields.months(), fields.weeks(), rounded.days(),
+                rounded.hours(), rounded.minutes(), rounded.seconds(), rounded.milliseconds(), rounded.microseconds(),
                 rounded.nanoseconds());
+        // toString()/toJSON() never wrap this result in a JsTemporalDuration (they only format it), so
+        // unlike every other rounding entry point this is its own CreateDurationRecord chokepoint - a
+        // roundingMode that pushes the tail's magnitude past IsValidDuration's range must still throw.
+        DurationMath.validate(result);
+        return result;
     }
 
     // A rounding-induced carry only reaches as far as the coarsest unit already present in the

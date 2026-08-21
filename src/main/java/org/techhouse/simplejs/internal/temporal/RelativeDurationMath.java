@@ -235,11 +235,43 @@ public final class RelativeDurationMath {
             Unit largestUnit, Unit smallestUnit, long increment, RoundingMode mode) {
         final var anchorNanos = toEpochNanos(anchor, anchor.date(), anchor.time());
         final var endNanos = toEpochNanos(anchor, endDate, endTime);
+        // largestUnit "days" specifically is what forces the result to carry a real "days" field,
+        // which for a zoned anchor requires resolving the day's actual (DST-sensitive) length via its
+        // next-day boundary - a finer largestUnit (e.g. "minutes") never expresses days at all, so it
+        // stays pure nanosecond arithmetic against the endpoint alone (already range-checked above) and
+        // must NOT additionally demand the next calendar day exist, or a zoned anchor legitimately
+        // sitting on the last representable day (with no calendar day left to advance into) would
+        // wrongly fail even when the rounding itself never needs to leave that day.
+        final var zonedSubDay = anchor.isZoned() && !smallestUnit.isLargerThan(Unit.DAY) && smallestUnit != Unit.DAY
+                && largestUnit == Unit.DAY;
+        if (zonedSubDay) {
+            // NormalizedTimeDurationToDays always resolves the anchor's calendar day's exact length
+            // (via its start and the next day's start) before measuring anything within it - even a
+            // zero-length span - so a relativeTo sitting at the very edge of the representable range
+            // still throws here rather than silently succeeding via the zero-difference shortcut below.
+            final var nextDay = IsoCalendar.addDate(anchor.date(), 0, 0, 0, 1, RegulateOverflow.CONSTRAIN);
+            toEpochNanos(anchor, nextDay, anchor.time());
+        }
         if (endNanos.compareTo(anchorNanos) == 0) {
             return DurationFields.ZERO;
         }
         final DateTimePoint roundedEnd;
-        if (!smallestUnit.isLargerThan(Unit.DAY)) {
+        if (zonedSubDay) {
+            // Unlike a plain anchor (where a day is always exactly 86400s, so folding it into the raw
+            // nanosecond total before rounding is equivalent to rounding the sub-day remainder alone),
+            // a zoned anchor's days can vary in exact length (DST) - so the whole-calendar-days portion
+            // of the span must be resolved via calendar arithmetic first (exactly as the day-and-above
+            // branch below does for week/month/year), and only the hour-and-finer remainder within that
+            // last day is rounded against a fixed nanosecond-per-unit bracket.
+            final var dayCount = IsoCalendar.differenceISODate(anchor.date(), endDate, Unit.DAY).days();
+            final var intermediateDate = IsoCalendar.addDate(anchor.date(), 0, 0, 0, dayCount,
+                    RegulateOverflow.CONSTRAIN);
+            final var intermediateNanos = toEpochNanos(anchor, intermediateDate, anchor.time());
+            final var subDayTotal = endNanos.subtract(intermediateNanos);
+            final var incrementNanos = DurationMath.nanosPerUnit(smallestUnit).multiply(BigInteger.valueOf(increment));
+            final var roundedSubDay = DurationMath.roundSignedTotalNanoseconds(subDayTotal, incrementNanos, mode);
+            roundedEnd = fromEpochNanos(anchor, intermediateNanos.add(roundedSubDay));
+        } else if (!smallestUnit.isLargerThan(Unit.DAY)) {
             final var totalNanos = endNanos.subtract(anchorNanos);
             final var incrementNanos = DurationMath.nanosPerUnit(smallestUnit).multiply(BigInteger.valueOf(increment));
             final var roundedTotal = DurationMath.roundSignedTotalNanoseconds(totalNanos, incrementNanos, mode);
@@ -299,6 +331,15 @@ public final class RelativeDurationMath {
     public static double totalInUnit(Anchor anchor, Iso8601Fields endDate, IsoTimeFields endTime, Unit unit) {
         final var anchorNanos = toEpochNanos(anchor, anchor.date(), anchor.time());
         final var endNanos = toEpochNanos(anchor, endDate, endTime);
+        if (anchor.isZoned() && unit == Unit.DAY) {
+            // Expressing a total in "days" relative to a zoned anchor implicitly measures against that
+            // day's actual (DST-sensitive) length - resolved via the next calendar day's start - even
+            // when the total itself is zero, so an anchor sitting at the very edge of the representable
+            // range still throws instead of silently answering 0. A finer unit never needs this (it
+            // stays pure nanosecond arithmetic against the already range-checked endpoint alone).
+            final var nextDay = IsoCalendar.addDate(anchor.date(), 0, 0, 0, 1, RegulateOverflow.CONSTRAIN);
+            toEpochNanos(anchor, nextDay, anchor.time());
+        }
         final var totalNanos = endNanos.subtract(anchorNanos);
         if (!unit.isLargerThan(Unit.DAY)) {
             return exactDivide(totalNanos, DurationMath.nanosPerUnit(unit));
