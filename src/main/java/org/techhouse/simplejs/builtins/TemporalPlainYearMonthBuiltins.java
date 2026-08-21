@@ -69,8 +69,8 @@ public final class TemporalPlainYearMonthBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("PlainYearMonth", (_, args) -> {
-            requireNewTarget();
+        final var ctor = new JsNativeFunction("PlainYearMonth", (thisArg, args) -> {
+            requireNewTarget(thisArg);
             return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(2);
@@ -167,11 +167,22 @@ public final class TemporalPlainYearMonthBuiltins {
                 "Temporal.PlainYearMonth.prototype." + method + " called on an incompatible receiver");
     }
 
-    private static void requireNewTarget() {
+    // Unlike Map/Set/Date (always reached as a bare global identifier, so a plain call's thisArg is
+    // reliably undefined), Temporal.PlainYearMonth only ever exists as a member of the Temporal
+    // namespace object - so a plain `Temporal.PlainYearMonth()` call's thisArg is that namespace
+    // object, not undefined, and a bare "thisArg is not undefined" check would wrongly accept it. A
+    // genuine subclass super() call is told apart instead by instance provenance: ClassEvaluator
+    // stamps the under-construction instance's klass before running any super constructor (see
+    // JsClass.construct), which a plain object such as the Temporal namespace never carries.
+    private static void requireNewTarget(JsValue thisArg) {
         final var newTarget = JsNativeFunction.currentNewTarget();
-        if (newTarget == null || newTarget instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor Temporal.PlainYearMonth requires 'new'");
+        if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+            return;
         }
+        if (thisArg instanceof JsObject object && object.getKlass() != null) {
+            return;
+        }
+        throw new TypeErrorException("Constructor Temporal.PlainYearMonth requires 'new'");
     }
 
     // OrdinaryCreateFromConstructor: Reflect.construct(Temporal.PlainYearMonth, args, Ctor) links the
@@ -202,7 +213,7 @@ public final class TemporalPlainYearMonthBuiltins {
         final var referenceISODay = referenceISODayArg instanceof JsUndefined
                 ? 1
                 : toIntegerField(referenceISODayArg, "referenceISODay", ops);
-        final var result = IsoCalendar.regulateDate(year, month, referenceISODay, RegulateOverflow.REJECT);
+        final var result = IsoCalendar.regulateCalendarDate(year, month, referenceISODay, RegulateOverflow.REJECT);
         requireYearMonthInRange(result.year(), result.month());
         return new JsTemporalPlainYearMonth(result);
     }
@@ -326,7 +337,7 @@ public final class TemporalPlainYearMonthBuiltins {
         final var year = toIntegerField(yearValue, "year", ops);
         final var overflow = readOverflowOption(optionsArg, ops);
         final var resolvedMonth = resolveMonthValue(month, monthCode);
-        final var result = IsoCalendar.regulateDate(year, resolvedMonth, 1, overflow);
+        final var result = IsoCalendar.regulateCalendarDate(year, resolvedMonth, 1, overflow);
         requireYearMonthInRange(result.year(), result.month());
         return new JsTemporalPlainYearMonth(result);
     }
@@ -562,7 +573,7 @@ public final class TemporalPlainYearMonthBuiltins {
                 ? receiver.month()
                 : resolveMonthValue(month, monthCode);
         final var resolvedYear = year != null ? year : receiver.year();
-        final var result = IsoCalendar.regulateDate(resolvedYear, resolvedMonth, 1, overflow);
+        final var result = IsoCalendar.regulateCalendarDate(resolvedYear, resolvedMonth, 1, overflow);
         requireYearMonthInRange(result.year(), result.month());
         return new JsTemporalPlainYearMonth(result);
     }

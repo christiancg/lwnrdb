@@ -56,10 +56,8 @@ public final class TemporalInstantBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("Instant", (_, args) -> {
-            if (JsNativeFunction.currentNewTarget() == null) {
-                throw new TypeErrorException("Constructor Temporal.Instant requires 'new'");
-            }
+        final var ctor = new JsNativeFunction("Instant", (thisArg, args) -> {
+            requireNewTarget(thisArg);
             return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(1);
@@ -79,6 +77,24 @@ public final class TemporalInstantBuiltins {
         fromEpochNanoseconds.setLength(1);
         ctor.setProperty("fromEpochNanoseconds", fromEpochNanoseconds);
         return ctor;
+    }
+
+    // Unlike Map/Date (always reached as a bare global identifier, so a plain call's thisArg is
+    // reliably undefined), Temporal.Instant only ever exists as a member of the Temporal namespace
+    // object - so a plain `Temporal.Instant()` call's thisArg is that namespace object, not undefined,
+    // and a bare "thisArg is not undefined" check would wrongly accept it. A genuine subclass super()
+    // call is told apart instead by instance provenance: ClassEvaluator stamps the under-construction
+    // instance's klass before running any super constructor (see JsClass.construct), which a plain
+    // object such as the Temporal namespace never carries.
+    private static void requireNewTarget(JsValue thisArg) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+            return;
+        }
+        if (thisArg instanceof JsObject object && object.getKlass() != null) {
+            return;
+        }
+        throw new TypeErrorException("Constructor Temporal.Instant requires 'new'");
     }
 
     // OrdinaryCreateFromConstructor, mirroring DateBuiltins' own helper: a `class X extends

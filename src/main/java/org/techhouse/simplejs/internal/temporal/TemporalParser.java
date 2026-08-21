@@ -145,7 +145,7 @@ public final class TemporalParser {
             return new ParsedYearMonth(reduced, annotations.calendar);
         }
         cursor.pos = 0;
-        final var full = parseDateTimeCore(cursor);
+        final var full = parseDateTimeCore(cursor, false);
         requireEnd(cursor);
         rejectUtcDesignator(full, input);
         return new ParsedYearMonth(full.date(), full.calendar());
@@ -163,7 +163,7 @@ public final class TemporalParser {
             return new ParsedMonthDay(reduced, annotations.calendar);
         }
         cursor.pos = 0;
-        final var full = parseDateTimeCore(cursor);
+        final var full = parseDateTimeCore(cursor, false);
         requireEnd(cursor);
         rejectUtcDesignator(full, input);
         return new ParsedMonthDay(full.date(), full.calendar());
@@ -197,7 +197,7 @@ public final class TemporalParser {
                 cursor.pos = savedPos;
                 return null;
             }
-            return IsoCalendar.regulateDate(year, month, 1, RegulateOverflow.REJECT);
+            return IsoCalendar.regulateCalendarDate(year, month, 1, RegulateOverflow.REJECT);
         } catch (RangeErrorException e) {
             cursor.pos = savedPos;
             return null;
@@ -464,7 +464,11 @@ public final class TemporalParser {
     }
 
     private static ParsedDateTime parseDateTimeCore(Cursor cursor) {
-        final var date = parseDateSpec(cursor);
+        return parseDateTimeCore(cursor, true);
+    }
+
+    private static ParsedDateTime parseDateTimeCore(Cursor cursor, boolean enforceRange) {
+        final var date = parseDateSpec(cursor, enforceRange);
         IsoTimeFields time = null;
         String offset = null;
         if (!cursor.atEnd() && (cursor.peek() == 'T' || cursor.peek() == 't' || cursor.peek() == ' ')) {
@@ -481,7 +485,7 @@ public final class TemporalParser {
         return new ParsedDateTime(date, time, offset, annotations.timeZoneId, annotations.calendar);
     }
 
-    private static Iso8601Fields parseDateSpec(Cursor cursor) {
+    private static Iso8601Fields parseDateSpec(Cursor cursor, boolean enforceRange) {
         var sign = 1;
         var expanded = false;
         if (!cursor.atEnd() && isSign(cursor.peek())) {
@@ -503,7 +507,9 @@ public final class TemporalParser {
             cursor.expect('-');
         }
         final var day = readDigits(cursor, 2);
-        return IsoCalendar.regulateDate(year, month, day, RegulateOverflow.REJECT);
+        return enforceRange
+                ? IsoCalendar.regulateDate(year, month, day, RegulateOverflow.REJECT)
+                : IsoCalendar.regulateCalendarDate(year, month, day, RegulateOverflow.REJECT);
     }
 
     private static IsoTimeFields parseTimeSpec(Cursor cursor) {

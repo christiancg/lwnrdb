@@ -60,8 +60,8 @@ public final class TemporalPlainMonthDayBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("PlainMonthDay", (_, args) -> {
-            requireNewTarget();
+        final var ctor = new JsNativeFunction("PlainMonthDay", (thisArg, args) -> {
+            requireNewTarget(thisArg);
             return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(2);
@@ -120,11 +120,22 @@ public final class TemporalPlainMonthDayBuiltins {
                 "Temporal.PlainMonthDay.prototype." + method + " called on an incompatible receiver");
     }
 
-    private static void requireNewTarget() {
+    // Unlike Map/Set/Date (always reached as a bare global identifier, so a plain call's thisArg is
+    // reliably undefined), Temporal.PlainMonthDay only ever exists as a member of the Temporal
+    // namespace object - so a plain `Temporal.PlainMonthDay()` call's thisArg is that namespace
+    // object, not undefined, and a bare "thisArg is not undefined" check would wrongly accept it. A
+    // genuine subclass super() call is told apart instead by instance provenance: ClassEvaluator
+    // stamps the under-construction instance's klass before running any super constructor (see
+    // JsClass.construct), which a plain object such as the Temporal namespace never carries.
+    private static void requireNewTarget(JsValue thisArg) {
         final var newTarget = JsNativeFunction.currentNewTarget();
-        if (newTarget == null || newTarget instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor Temporal.PlainMonthDay requires 'new'");
+        if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+            return;
         }
+        if (thisArg instanceof JsObject object && object.getKlass() != null) {
+            return;
+        }
+        throw new TypeErrorException("Constructor Temporal.PlainMonthDay requires 'new'");
     }
 
     // OrdinaryCreateFromConstructor: Reflect.construct(Temporal.PlainMonthDay, args, Ctor) links the
@@ -268,7 +279,7 @@ public final class TemporalPlainMonthDayBuiltins {
         }
         final var overflow = readOverflowOption(optionsArg, ops);
         final var resolvedMonth = resolveMonthValue(month, monthCode);
-        final var regulated = IsoCalendar.regulateDate(year, resolvedMonth, day, overflow);
+        final var regulated = IsoCalendar.regulateCalendarDate(year, resolvedMonth, day, overflow);
         return new JsTemporalPlainMonthDay(new Iso8601Fields(1972, regulated.month(), regulated.day()));
     }
 
@@ -443,7 +454,7 @@ public final class TemporalPlainMonthDayBuiltins {
                 : resolveMonthValue(month, monthCode);
         final var resolvedDay = day != null ? day : receiver.day();
         final var resolvedYear = year != null ? year : receiver.referenceISOYear();
-        final var regulated = IsoCalendar.regulateDate(resolvedYear, resolvedMonth, resolvedDay, overflow);
+        final var regulated = IsoCalendar.regulateCalendarDate(resolvedYear, resolvedMonth, resolvedDay, overflow);
         return new JsTemporalPlainMonthDay(new Iso8601Fields(1972, regulated.month(), regulated.day()));
     }
 

@@ -566,4 +566,15 @@ public class TemporalPlainDateTimeBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter
                 .run("new Temporal.PlainDateTime(2020, 6, 15, 1, 2, 3).toString({fractionalSecondDigits: 'bogus'})"));
     }
+
+    // compare() must use the subclass instance's internal slot directly, never the generic
+    // property-bag path (which would invoke overridable getters) - a subclass instance is a wrapper
+    // object once its prototype differs from the intrinsic one.
+    @Test
+    public void test_compare_uses_internal_slots_not_getters() {
+        assertEquals(-1, num("class AvoidGettersDateTime extends Temporal.PlainDateTime {"
+                + "  get year() { throw new Error('should not be called'); }" + "}"
+                + "const one = new AvoidGettersDateTime(2000, 5, 2);"
+                + "const two = new AvoidGettersDateTime(2006, 3, 25);" + "Temporal.PlainDateTime.compare(one, two)"));
+    }
 }

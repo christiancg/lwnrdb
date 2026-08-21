@@ -114,7 +114,7 @@ public final class BuiltinLengths {
         zeroArg("Temporal.PlainTime.prototype", "toJSON", "toLocaleString", "toString", "valueOf");
         zeroArg("Temporal.PlainYearMonth.prototype", "toJSON", "toLocaleString", "toString", "valueOf");
         zeroArg("Temporal.ZonedDateTime.prototype", "toInstant", "toJSON", "toLocaleString", "toPlainDate",
-                "toPlainDateTime", "toPlainTime", "toString", "valueOf", "withPlainTime");
+                "toPlainDateTime", "toPlainTime", "toString", "valueOf", "withPlainTime", "startOfDay");
     }
 
     private static void installDataView() {

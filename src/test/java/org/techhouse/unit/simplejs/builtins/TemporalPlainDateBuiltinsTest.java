@@ -405,4 +405,16 @@ public class TemporalPlainDateBuiltinsTest {
                         + "Object.defineProperty(f, 'prototype', { get() { throw new Error('boom'); } });"
                         + "Reflect.construct(Temporal.PlainDate, [2020, 6, 15], f)"));
     }
+
+    // compare() must use the subclass instance's internal slot directly, never the generic
+    // property-bag path (which would invoke overridable getters) - a subclass instance is a wrapper
+    // object once its prototype differs from the intrinsic one.
+    @Test
+    public void test_compare_uses_internal_slots_not_getters() {
+        assertEquals(-1,
+                num("class AvoidGettersDate extends Temporal.PlainDate {"
+                        + "  get year() { throw new Error('should not be called'); }" + "}"
+                        + "const one = new AvoidGettersDate(2000, 5, 2);"
+                        + "const two = new AvoidGettersDate(2006, 3, 25);" + "Temporal.PlainDate.compare(one, two)"));
+    }
 }

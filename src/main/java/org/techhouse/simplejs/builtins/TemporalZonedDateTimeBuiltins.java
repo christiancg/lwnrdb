@@ -69,9 +69,9 @@ import org.techhouse.simplejs.values.JsValue;
  */
 public final class TemporalZonedDateTimeBuiltins {
     public static final List<String> NAMES = List.of("with", "withCalendar", "withTimeZone", "withPlainDate",
-            "withPlainTime", "add", "subtract", "until", "since", "round", "equals", "toInstant", "toPlainDate",
-            "toPlainTime", "toPlainDateTime", "toPlainYearMonth", "toPlainMonthDay", "toString", "toJSON",
-            "toLocaleString", "getISOFields", "getTimeZoneTransition", "valueOf");
+            "withPlainTime", "add", "subtract", "until", "since", "round", "startOfDay", "equals", "toInstant",
+            "toPlainDate", "toPlainTime", "toPlainDateTime", "toPlainYearMonth", "toPlainMonthDay", "toString",
+            "toJSON", "toLocaleString", "getISOFields", "getTimeZoneTransition", "valueOf");
 
     private static final String[] TIME_FIELD_NAMES = {"hour", "minute", "second", "millisecond", "microsecond",
             "nanosecond"};
@@ -102,10 +102,8 @@ public final class TemporalZonedDateTimeBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("ZonedDateTime", (_, args) -> {
-            if (JsNativeFunction.currentNewTarget() == null) {
-                throw new TypeErrorException("Constructor Temporal.ZonedDateTime requires 'new'");
-            }
+        final var ctor = new JsNativeFunction("ZonedDateTime", (thisArg, args) -> {
+            requireNewTarget(thisArg);
             return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(2);
@@ -117,6 +115,24 @@ public final class TemporalZonedDateTimeBuiltins {
         compare.setLength(2);
         ctor.setProperty("compare", compare);
         return ctor;
+    }
+
+    // Unlike Map/Date (always reached as a bare global identifier, so a plain call's thisArg is
+    // reliably undefined), Temporal.ZonedDateTime only ever exists as a member of the Temporal
+    // namespace object - so a plain `Temporal.ZonedDateTime()` call's thisArg is that namespace
+    // object, not undefined, and a bare "thisArg is not undefined" check would wrongly accept it. A
+    // genuine subclass super() call is told apart instead by instance provenance: ClassEvaluator
+    // stamps the under-construction instance's klass before running any super constructor (see
+    // JsClass.construct), which a plain object such as the Temporal namespace never carries.
+    private static void requireNewTarget(JsValue thisArg) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+            return;
+        }
+        if (thisArg instanceof JsObject object && object.getKlass() != null) {
+            return;
+        }
+        throw new TypeErrorException("Constructor Temporal.ZonedDateTime requires 'new'");
     }
 
     // OrdinaryCreateFromConstructor, mirroring TemporalInstantBuiltins' own helper.
@@ -345,6 +361,18 @@ public final class TemporalZonedDateTimeBuiltins {
         return nanos.doubleValue() / 3_600_000_000_000.0;
     }
 
+    // GetStartOfDay: the receiver's own local calendar day at midnight, in the same time zone -
+    // java.time's own atStartOfDay already resolves a nonexistent midnight (a DST spring-forward
+    // whose transition starts before 00:00) to the first valid instant of that day. The result must
+    // still fall within Instant's own range - see startOfDay/throws-if-epoch-nanoseconds-outside-
+    // valid-limits.js.
+    private static JsValue startOfDay(JsTemporalZonedDateTime receiver) {
+        final var localDate = receiver.toJavaZonedDateTime().toLocalDate();
+        final var startOfDay = localDate.atStartOfDay(receiver.zone());
+        JsTemporalInstant.fromEpochNanoseconds(epochNanosOf(startOfDay));
+        return JsTemporalZonedDateTime.fromJavaZonedDateTime(startOfDay, receiver.timeZoneId());
+    }
+
     private static void installGetter(JsObject proto, String name, Function<JsValue, JsValue> impl) {
         final var getter = new JsNativeFunction("get " + name, (thisArg, _) -> impl.apply(thisArg));
         getter.setLength(0);
@@ -382,6 +410,7 @@ public final class TemporalZonedDateTimeBuiltins {
             case "since" ->
                 new JsNativeFunction("since", (_, args) -> since(receiver, arg(args, 0), arg(args, 1), ops));
             case "round" -> new JsNativeFunction("round", (_, args) -> round(receiver, arg(args, 0), ops));
+            case "startOfDay" -> new JsNativeFunction("startOfDay", (_, _) -> startOfDay(receiver));
             case "equals" -> new JsNativeFunction("equals", (_, args) -> equalsMethod(receiver, arg(args, 0), ops));
             case "toInstant" -> new JsNativeFunction("toInstant", (_, _) -> receiver.toInstant());
             case "toPlainDate" -> new JsNativeFunction("toPlainDate", (_, _) -> toPlainDate(receiver));

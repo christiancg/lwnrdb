@@ -30,23 +30,31 @@ public final class IsoCalendar {
     }
 
     public static Iso8601Fields regulateDate(int year, int month, int day, RegulateOverflow overflow) {
-        final Iso8601Fields result;
+        final var result = regulateCalendarDate(year, month, day, overflow);
+        requireWithinRepresentableRange(result);
+        return result;
+    }
+
+    // Calendar validity only (month range, day-in-month), without PlainDate's own representable-day-
+    // range check - for callers whose value isn't itself a PlainDate day (PlainYearMonth/PlainMonthDay
+    // string parsing, where a year can genuinely be far outside PlainDate's range while the resulting
+    // year-month/month-day is still perfectly valid - see PlainYearMonth/from/limits.js and
+    // PlainMonthDay/from/iso-year-used-only-for-overflow.js). Every other caller should keep using
+    // regulateDate.
+    public static Iso8601Fields regulateCalendarDate(int year, int month, int day, RegulateOverflow overflow) {
         if (overflow == RegulateOverflow.CONSTRAIN) {
             final var constrainedMonth = Math.clamp(month, 1, 12);
             final var constrainedDay = Math.clamp(day, 1, daysInMonth(year, constrainedMonth));
-            result = new Iso8601Fields(year, constrainedMonth, constrainedDay);
-        } else {
-            if (month < 1 || month > 12) {
-                throw new RangeErrorException("month must be in the range 1..12, got " + month);
-            }
-            final var maxDay = daysInMonth(year, month);
-            if (day < 1 || day > maxDay) {
-                throw new RangeErrorException("day must be in the range 1.." + maxDay + ", got " + day);
-            }
-            result = new Iso8601Fields(year, month, day);
+            return new Iso8601Fields(year, constrainedMonth, constrainedDay);
         }
-        requireWithinRepresentableRange(result);
-        return result;
+        if (month < 1 || month > 12) {
+            throw new RangeErrorException("month must be in the range 1..12, got " + month);
+        }
+        final var maxDay = daysInMonth(year, month);
+        if (day < 1 || day > maxDay) {
+            throw new RangeErrorException("day must be in the range 1.." + maxDay + ", got " + day);
+        }
+        return new Iso8601Fields(year, month, day);
     }
 
     // ISODateWithinLimits: every ISO date type (PlainDate, and by extension PlainDateTime/

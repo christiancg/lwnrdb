@@ -75,8 +75,8 @@ public final class TemporalPlainDateTimeBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        final var ctor = new JsNativeFunction("PlainDateTime", (_, args) -> {
-            requireNewTarget();
+        final var ctor = new JsNativeFunction("PlainDateTime", (thisArg, args) -> {
+            requireNewTarget(thisArg);
             return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(3);
@@ -90,15 +90,22 @@ public final class TemporalPlainDateTimeBuiltins {
         return ctor;
     }
 
-    // Same narrow requireNewTarget shape as TemporalPlainDateBuiltins: Temporal.PlainDateTime is only
-    // ever reached as a member of the Temporal namespace, so a plain call's thisArg is that namespace
-    // object rather than undefined - newTarget alone tells a genuine `new`/Reflect.construct call
-    // apart (a documented gap: a subclass's super() call is not supported).
-    private static void requireNewTarget() {
+    // Unlike Map/Set/Date (always reached as a bare global identifier, so a plain call's thisArg is
+    // reliably undefined), Temporal.PlainDateTime only ever exists as a member of the Temporal
+    // namespace object - so a plain `Temporal.PlainDateTime()` call's thisArg is that namespace
+    // object, not undefined, and a bare "thisArg is not undefined" check would wrongly accept it. A
+    // genuine subclass super() call is told apart instead by instance provenance: ClassEvaluator
+    // stamps the under-construction instance's klass before running any super constructor (see
+    // JsClass.construct), which a plain object such as the Temporal namespace never carries.
+    private static void requireNewTarget(JsValue thisArg) {
         final var newTarget = JsNativeFunction.currentNewTarget();
-        if (newTarget == null || newTarget instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor Temporal.PlainDateTime requires 'new'");
+        if (newTarget != null && !(newTarget instanceof JsUndefined)) {
+            return;
         }
+        if (thisArg instanceof JsObject object && object.getKlass() != null) {
+            return;
+        }
+        throw new TypeErrorException("Constructor Temporal.PlainDateTime requires 'new'");
     }
 
     // OrdinaryCreateFromConstructor: Reflect.construct(Temporal.PlainDateTime, args, Ctor) links the
@@ -332,6 +339,14 @@ public final class TemporalPlainDateTimeBuiltins {
         if (item instanceof JsTemporalPlainDateTime dt) {
             readOverflowOption(optionsArg, ops);
             return dateTime(dt.date(), dt.time());
+        }
+        // A subclass instance whose [[Prototype]] differs from the intrinsic one is wrapped (see
+        // withNewTargetPrototype) - internal-slot consumers must use it directly, never the generic
+        // property-bag path (which would invoke overridable getters) - see compare/use-internal-
+        // slots.js.
+        if (item instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsTemporalPlainDateTime wrapped) {
+            readOverflowOption(optionsArg, ops);
+            return dateTime(wrapped.date(), wrapped.time());
         }
         // ToTemporalDateTime's fast paths for other Temporal types carrying an ISO date: a PlainDate's
         // date fields are taken directly with the time defaulted to midnight, and a ZonedDateTime's
