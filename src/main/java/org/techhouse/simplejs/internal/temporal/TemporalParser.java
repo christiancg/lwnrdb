@@ -217,12 +217,22 @@ public final class TemporalParser {
                 }
             }
             final var month = readDigits(cursor, 2);
-            // The month-day separator, like the leading "--", is optional independently (e.g. "1001"
-            // and "--1001" are accepted alongside "10-01" and "--10-01").
-            if (!cursor.atEnd() && cursor.peek() == '-') {
+            // TemporalMonthDayString allows both the extended ("--10-01") and basic ("--1001",
+            // "1001") reduced forms - a separator is optional, exactly like the year-month reduced
+            // form's own extended/basic choice.
+            final var extended = !cursor.atEnd() && cursor.peek() == '-';
+            if (extended) {
                 cursor.advance();
             }
             final var day = readDigits(cursor, 2);
+            // A basic-form month+day immediately followed by more digits is really the start of a
+            // full "YYYYMMDD" basic date (e.g. a year whose first four digits happen to look like a
+            // valid month+day) - back off and let the full date-time parser consume it instead of
+            // silently truncating it.
+            if (!extended && !cursor.atEnd() && isDigit(cursor.peek())) {
+                cursor.pos = savedPos;
+                return null;
+            }
             if (!cursor.atEnd() && cursor.peek() == '-') {
                 cursor.pos = savedPos;
                 return null;

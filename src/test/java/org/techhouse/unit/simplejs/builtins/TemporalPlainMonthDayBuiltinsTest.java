@@ -125,6 +125,8 @@ public class TemporalPlainMonthDayBuiltinsTest {
                 str("var d = Temporal.PlainMonthDay.from('11-30');" + "d.monthCode.substring(1) + ',' + d.day"));
         assertEquals("11,30",
                 str("var d = Temporal.PlainMonthDay.from('--11-30');" + "d.monthCode.substring(1) + ',' + d.day"));
+        // referenceISOYear is always forced to 1972 when parsed from a string, per
+        // CalendarMonthDayFromFields - the parsed year is discarded, not preserved.
         assertEquals(1972, num("Temporal.PlainMonthDay.from('2020-11-30').getISOFields().isoYear"));
         assertEquals("11,30", str(
                 "var d = Temporal.PlainMonthDay.from({monthCode: 'M11', day: 30}); d.monthCode.substring(1) + ',' + d.day"));
