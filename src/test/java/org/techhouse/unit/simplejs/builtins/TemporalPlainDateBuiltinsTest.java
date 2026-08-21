@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
@@ -279,5 +280,129 @@ public class TemporalPlainDateBuiltinsTest {
                 str("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime({timeZone: 'UTC'}).toString()"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).toZonedDateTime({})"));
+    }
+
+    // The representable range is exactly -271821-04-19 .. +275760-09-13 (inclusive); one day beyond
+    // either boundary, or a syntactically valid but numerically far-out-of-range extended year, is a
+    // RangeError
+    @Test
+    public void test_representable_range_limits() {
+        assertEquals("-271821,4,19",
+                str("var d = new Temporal.PlainDate(-271821, 4, 19); d.year + ',' + d.month + ',' + d.day"));
+        assertEquals("275760,9,13",
+                str("var d = new Temporal.PlainDate(275760, 9, 13); d.year + ',' + d.month + ',' + d.day"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDate(-271821, 4, 18)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDate(275760, 9, 14)"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainDate.from('-999999-01-01')"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(-271821, 4, 19).add({days: -1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(275760, 9, 13).add({days: 1})"));
+    }
+
+    // month/day must be positive integers regardless of the `overflow` option - unlike an in-range
+    // value that overflows the calendar (e.g. day 32), which constrain/reject actually govern
+    @Test
+    public void test_from_fields_month_and_day_must_be_positive() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, month: -1, day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, month: 1, day: -1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, month: 0, day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2020, 1, 15).with({day: 0})"));
+    }
+
+    // monthCode must be a real string (never coerced from another type), well-formed
+    // ("M" + 2 digits + optional leap "L"), and - separately - suitable for iso8601 (a real month,
+    // never a leap month)
+    @Test
+    public void test_from_fields_month_code_validation() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, monthCode: 5, day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, monthCode: 'M1', day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, monthCode: 'M13', day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, monthCode: 'M06L', day: 1})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.PlainDate.from({year: 2020, month: 5, monthCode: 'M06', day: 1})"));
+        assertEquals("2020,6,15", str("var d = Temporal.PlainDate.from({year: 2020, monthCode: 'M06', day: 15});"
+                + "d.year + ',' + d.month + ',' + d.day"));
+    }
+
+    // with() rejects a Temporal-like argument, an argument carrying a calendar/timeZone property,
+    // and an argument with none of the four recognized date fields
+    @Test
+    public void test_with_rejects_invalid_argument_shapes() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).with(new Temporal.PlainDate(2021, 1, 1))"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).with({year: 2021, calendar: 'iso8601'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).with({year: 2021, timeZone: 'UTC'})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainDate(2020, 6, 15).with({})"));
+    }
+
+    // A duration's time units (hours..nanoseconds) are balanced into whole days - truncated toward
+    // zero - before being added to the days field
+    @Test
+    public void test_add_balances_time_units_into_days() {
+        assertEquals(19, num("new Temporal.PlainDate(1976, 11, 18).add({hours: 24}).day"));
+        assertEquals(18, num("new Temporal.PlainDate(1976, 11, 18).add({hours: 23}).day"));
+        assertEquals(1, num("new Temporal.PlainDate(2000, 5, 2).add('-PT24.5H').day"));
+    }
+
+    // toPlainYearMonth/toPlainMonthDay force the ISO reference fields (referenceISODay=1,
+    // referenceISOYear=1972) rather than preserving the source date's own day/year
+    @Test
+    public void test_to_plain_year_month_and_month_day_force_reference_fields() {
+        assertEquals("2020-06-01[u-ca=iso8601]",
+                str("new Temporal.PlainDate(2020, 6, 15).toPlainYearMonth().toString({calendarName: 'always'})"));
+        assertEquals("1972-06-15[u-ca=iso8601]",
+                str("new Temporal.PlainDate(2020, 6, 15).toPlainMonthDay().toString({calendarName: 'always'})"));
+    }
+
+    // toPlainDateTime clamps an out-of-range/leap-second time-like property bag (constrain
+    // semantics), requires at least one recognized time property, and rejects the sole
+    // representable-range gap - midnight on PlainDate's own minimum date
+    @Test
+    public void test_to_plain_date_time_object_argument_handling() {
+        assertEquals("23,59,23",
+                str("var dt = new Temporal.PlainDate(2000, 5, 2)"
+                        + ".toPlainDateTime({hour: 25, minute: 70, second: 23});"
+                        + "dt.hour + ',' + dt.minute + ',' + dt.second"));
+        assertEquals(59,
+                num("new Temporal.PlainDate(2000, 5, 2).toPlainDateTime({hour: 23, minute: 59, second: 60}).second"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(2000, 5, 2).toPlainDateTime({})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainDate(-271821, 4, 19).toPlainDateTime()"));
+        assertEquals(1, num("new Temporal.PlainDate(-271821, 4, 19).toPlainDateTime({nanosecond: 1}).nanosecond"));
+    }
+
+    // withCalendar accepts a fast-path Temporal object (its calendar getter is never read) or a full
+    // ISO date/time/year-month/month-day string carrying (or defaulting) a u-ca annotation - not just
+    // a bare calendar identifier like the constructor's own calendar argument
+    @Test
+    public void test_with_calendar_accepts_flexible_forms() {
+        assertEquals("iso8601", str("new Temporal.PlainDate(2020, 6, 15).withCalendar('2020-01-01').calendarId"));
+        assertEquals("iso8601", str("new Temporal.PlainDate(2020, 6, 15).withCalendar('15:23').calendarId"));
+        assertEquals("iso8601", str("new Temporal.PlainDate(2020, 6, 15)"
+                + ".withCalendar(new Temporal.PlainDateTime(2020, 1, 1, 10, 30)).calendarId"));
+    }
+
+    // Reflect.construct threads newTarget.prototype into the constructed instance's proto chain, and
+    // propagates an error thrown while reading it
+    @Test
+    public void test_reflect_construct_prototype_threading() {
+        assertTrue(bool("var proto = {}; var f = function () {}; f.prototype = proto;"
+                + "Object.getPrototypeOf(Reflect.construct(Temporal.PlainDate, [2020, 6, 15], f)) === proto"));
+        assertThrows(JsThrowException.class,
+                () -> Interpreter.run("var f = function () {}.bind();"
+                        + "Object.defineProperty(f, 'prototype', { get() { throw new Error('boom'); } });"
+                        + "Reflect.construct(Temporal.PlainDate, [2020, 6, 15], f)"));
     }
 }

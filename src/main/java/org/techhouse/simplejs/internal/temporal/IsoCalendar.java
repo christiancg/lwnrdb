@@ -30,19 +30,42 @@ public final class IsoCalendar {
     }
 
     public static Iso8601Fields regulateDate(int year, int month, int day, RegulateOverflow overflow) {
+        final Iso8601Fields result;
         if (overflow == RegulateOverflow.CONSTRAIN) {
             final var constrainedMonth = Math.clamp(month, 1, 12);
             final var constrainedDay = Math.clamp(day, 1, daysInMonth(year, constrainedMonth));
-            return new Iso8601Fields(year, constrainedMonth, constrainedDay);
+            result = new Iso8601Fields(year, constrainedMonth, constrainedDay);
+        } else {
+            if (month < 1 || month > 12) {
+                throw new RangeErrorException("month must be in the range 1..12, got " + month);
+            }
+            final var maxDay = daysInMonth(year, month);
+            if (day < 1 || day > maxDay) {
+                throw new RangeErrorException("day must be in the range 1.." + maxDay + ", got " + day);
+            }
+            result = new Iso8601Fields(year, month, day);
         }
-        if (month < 1 || month > 12) {
-            throw new RangeErrorException("month must be in the range 1..12, got " + month);
+        requireWithinRepresentableRange(result);
+        return result;
+    }
+
+    // ISODateWithinLimits: every ISO date type (PlainDate, and by extension PlainDateTime/
+    // ZonedDateTime's date part) is representable only within +-10**8 days of the epoch, with one
+    // extra day of headroom on the negative side (matching the exact published PlainDate range
+    // -271821-04-19 .. +275760-09-13). Applied here - the single choke point every regulated/balanced
+    // ISO date passes through - rather than duplicated per Temporal type.
+    private static final long EPOCH_DAYS_LIMIT = 100_000_000L;
+
+    private static void requireWithinRepresentableRange(Iso8601Fields date) {
+        final long epochDay;
+        try {
+            epochDay = LocalDate.of(date.year(), date.month(), date.day()).toEpochDay();
+        } catch (DateTimeException e) {
+            throw new RangeErrorException("date value is outside the representable range");
         }
-        final var maxDay = daysInMonth(year, month);
-        if (day < 1 || day > maxDay) {
-            throw new RangeErrorException("day must be in the range 1.." + maxDay + ", got " + day);
+        if (epochDay < -EPOCH_DAYS_LIMIT - 1 || epochDay > EPOCH_DAYS_LIMIT) {
+            throw new RangeErrorException("date value is outside the representable range: " + date);
         }
-        return new Iso8601Fields(year, month, day);
     }
 
     /**
@@ -55,7 +78,10 @@ public final class IsoCalendar {
         try {
             final var firstOfMonth = LocalDate.of(Math.toIntExact(year), 1, 1).plusMonths(month - 1);
             final var resolved = firstOfMonth.plusDays(day - 1);
-            return new Iso8601Fields(resolved.getYear(), resolved.getMonthValue(), resolved.getDayOfMonth());
+            final var result = new Iso8601Fields(resolved.getYear(), resolved.getMonthValue(),
+                    resolved.getDayOfMonth());
+            requireWithinRepresentableRange(result);
+            return result;
         } catch (ArithmeticException | DateTimeException e) {
             throw new RangeErrorException("date value is outside the representable range");
         }

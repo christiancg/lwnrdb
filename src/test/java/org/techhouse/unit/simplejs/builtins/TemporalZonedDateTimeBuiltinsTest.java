@@ -87,7 +87,8 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').withTimeZone(5)"));
     }
 
-    // "UTC" is matched ASCII-case-insensitively, java.time's ZoneId.of is not
+    // "UTC" is matched ASCII-case-insensitively (java.time's ZoneId.of is not) and always
+    // canonicalizes to uppercase "UTC" - unlike an arbitrary IANA name, which stays case-sensitive.
     @Test
     public void test_time_zone_utc_is_case_insensitive() {
         assertEquals("UTC", str("new Temporal.ZonedDateTime(0n, 'utc').timeZoneId"));
