@@ -162,9 +162,26 @@ public final class TemporalParser {
                 expanded = true;
                 cursor.advance();
             }
-            final var year = sign * readDigits(cursor, expanded ? 6 : 4);
-            cursor.expect('-');
+            final var yearDigits = readDigits(cursor, expanded ? 6 : 4);
+            if (expanded && sign < 0 && yearDigits == 0) {
+                throw new RangeErrorException("Invalid Temporal date: expanded year -000000 is not allowed");
+            }
+            final var year = sign * yearDigits;
+            // TemporalYearMonthString allows both the extended ("1976-11") and basic ("197611",
+            // "+00197611") reduced forms - a separator is optional, exactly like the full date's own
+            // extended/basic choice in parseDateSpec.
+            final var extended = !cursor.atEnd() && cursor.peek() == '-';
+            if (extended) {
+                cursor.advance();
+            }
             final var month = readDigits(cursor, 2);
+            // A basic-form year+month immediately followed by more digits is really the start of a
+            // full "YYYYMMDD" basic date (e.g. "19761118T...") - back off and let the full date-time
+            // parser consume the day (and beyond) instead of silently truncating it.
+            if (!extended && !cursor.atEnd() && isDigit(cursor.peek())) {
+                cursor.pos = savedPos;
+                return null;
+            }
             if (!cursor.atEnd() && cursor.peek() == '-') {
                 cursor.pos = savedPos;
                 return null;
@@ -189,8 +206,22 @@ public final class TemporalParser {
                 }
             }
             final var month = readDigits(cursor, 2);
-            cursor.expect('-');
+            // TemporalMonthDayString allows both the extended ("--10-01") and basic ("--1001",
+            // "1001") reduced forms - a separator is optional, exactly like the year-month reduced
+            // form's own extended/basic choice.
+            final var extended = !cursor.atEnd() && cursor.peek() == '-';
+            if (extended) {
+                cursor.advance();
+            }
             final var day = readDigits(cursor, 2);
+            // A basic-form month+day immediately followed by more digits is really the start of a
+            // full "YYYYMMDD" basic date (e.g. a year whose first four digits happen to look like a
+            // valid month+day) - back off and let the full date-time parser consume it instead of
+            // silently truncating it.
+            if (!extended && !cursor.atEnd() && isDigit(cursor.peek())) {
+                cursor.pos = savedPos;
+                return null;
+            }
             if (!cursor.atEnd() && cursor.peek() == '-') {
                 cursor.pos = savedPos;
                 return null;
@@ -468,7 +499,7 @@ public final class TemporalParser {
                     cursor.advance();
                 }
                 second = readDigits(cursor, 2);
-                if (!cursor.atEnd() && cursor.peek() == '.') {
+                if (!cursor.atEnd() && (cursor.peek() == '.' || cursor.peek() == ',')) {
                     cursor.advance();
                     readFractionDigits(cursor);
                 }

@@ -57,15 +57,16 @@ public class TemporalPlainMonthDayProgramTest {
                 + "a.equals(b) && a.equals(b.toString())"));
     }
 
-    // Round-tripping through toString()/from() preserves the value, including the reference year for
-    // a full-date-string input
+    // Round-tripping through toString()/from() preserves the value; the reference year is always
+    // forced to 1972 for a full-date-string input (CalendarMonthDayFromFields discards the parsed
+    // year), so it never survives the round trip either.
     @Test
     public void test_round_trips_through_string_form() {
         assertTrue(bool("var md = new Temporal.PlainMonthDay(3, 10);"
                 + "Temporal.PlainMonthDay.from(md.toString()).equals(md)"));
         assertTrue(bool("var md = Temporal.PlainMonthDay.from('2020-03-10');"
                 + "Temporal.PlainMonthDay.from(md.toString({calendarName: 'always'}))"
-                + ".getISOFields().isoYear === 2020"));
+                + ".getISOFields().isoYear === 1972"));
     }
 
     @Test

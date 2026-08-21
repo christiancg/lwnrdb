@@ -187,7 +187,9 @@ public class TemporalPlainYearMonthBuiltinsTest {
     public void test_from() {
         assertEquals("2020,6", str("var d = Temporal.PlainYearMonth.from('2020-06'); d.year + ',' + d.month"));
         assertEquals(1, num("Temporal.PlainYearMonth.from('2020-06').getISOFields().isoDay"));
-        assertEquals(15, num("Temporal.PlainYearMonth.from('2020-06-15').getISOFields().isoDay"));
+        // referenceISODay is always forced to 1 when parsed from a string, per
+        // CalendarYearMonthFromFields - the parsed day is discarded, not preserved.
+        assertEquals(1, num("Temporal.PlainYearMonth.from('2020-06-15').getISOFields().isoDay"));
         assertEquals("2020,6",
                 str("var d = Temporal.PlainYearMonth.from({year: 2020, month: 6}); d.year + ',' + d.month"));
         assertEquals("2020,6",

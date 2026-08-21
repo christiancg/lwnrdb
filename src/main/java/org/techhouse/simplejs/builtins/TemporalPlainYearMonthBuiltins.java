@@ -1,7 +1,10 @@
 package org.techhouse.simplejs.builtins;
 
+import java.time.DateTimeException;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -27,6 +30,7 @@ import org.techhouse.simplejs.values.JsTemporalDuration;
 import org.techhouse.simplejs.values.JsTemporalPlainDate;
 import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsTemporalPlainMonthDay;
+import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsTemporalPlainYearMonth;
 import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -47,13 +51,27 @@ public final class TemporalPlainYearMonthBuiltins {
     public static final List<String> NAMES = List.of("with", "add", "subtract", "until", "since", "equals",
             "toPlainDate", "toString", "toJSON", "toLocaleString", "getISOFields", "valueOf");
 
+    // TemporalMonthCode syntax: an uppercase "M", two digits, and an optional leap-month "L" suffix.
+    // Syntax is validated at read time (see monthCodeSyntaxChecked); numeric-range/leap suitability
+    // is validated later, only once the calendar has all the fields it needs - see monthCodeValue.
+    private static final Pattern MONTH_CODE_SYNTAX = Pattern.compile("M\\d{2}L?");
+
+    // ISOYearMonthWithinLimits: the representable range is independent of the referenceISODay, so a
+    // PlainYearMonth's own year/month combination is checked without regard to any particular day.
+    private static final int MIN_YEAR = -271_821;
+    private static final int MIN_YEAR_MIN_MONTH = 4;
+    private static final int MAX_YEAR = 275_760;
+    private static final int MAX_YEAR_MAX_MONTH = 9;
+
+    private static final IsoTimeFields MIDNIGHT = new IsoTimeFields(0, 0, 0, 0, 0, 0);
+
     private TemporalPlainYearMonthBuiltins() {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("PlainYearMonth", (_, args) -> {
             requireNewTarget();
-            return construct(args, ops);
+            return withNewTargetPrototype(construct(args, ops), ops);
         });
         ctor.setLength(2);
         final var from = new JsNativeFunction("from", (_, args) -> toPlainYearMonth(arg(args, 0), arg(args, 1), ops));
@@ -156,7 +174,24 @@ public final class TemporalPlainYearMonthBuiltins {
         }
     }
 
-    private static JsValue construct(List<JsValue> args, InterpreterOps ops) {
+    // OrdinaryCreateFromConstructor: Reflect.construct(Temporal.PlainYearMonth, args, Ctor) links the
+    // new instance's [[Prototype]] to Ctor.prototype rather than always to the intrinsic prototype.
+    private static JsValue withNewTargetPrototype(JsTemporalPlainYearMonth constructed, InterpreterOps ops) {
+        final var newTarget = JsNativeFunction.currentNewTarget();
+        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
+            return constructed;
+        }
+        final var proto = ops.getMember(newTarget, new JsString("prototype"));
+        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
+            return constructed;
+        }
+        final var wrapper = new JsObject();
+        wrapper.setPrimitive(constructed);
+        wrapper.setProto(requested);
+        return wrapper;
+    }
+
+    private static JsTemporalPlainYearMonth construct(List<JsValue> args, InterpreterOps ops) {
         final var year = toIntegerField(arg(args, 0), "year", ops);
         final var month = toIntegerField(arg(args, 1), "month", ops);
         final var calendarArg = arg(args, 2);
@@ -167,8 +202,9 @@ public final class TemporalPlainYearMonthBuiltins {
         final var referenceISODay = referenceISODayArg instanceof JsUndefined
                 ? 1
                 : toIntegerField(referenceISODayArg, "referenceISODay", ops);
-        return new JsTemporalPlainYearMonth(
-                IsoCalendar.regulateDate(year, month, referenceISODay, RegulateOverflow.REJECT));
+        final var result = IsoCalendar.regulateDate(year, month, referenceISODay, RegulateOverflow.REJECT);
+        requireYearMonthInRange(result.year(), result.month());
+        return new JsTemporalPlainYearMonth(result);
     }
 
     // Constructor argument: a bare calendar identifier only; a non-string value is a TypeError.
@@ -179,21 +215,56 @@ public final class TemporalPlainYearMonthBuiltins {
         return TemporalCalendarIdentifier.canonicalizeBare(s.getValue());
     }
 
+    // ISOYearMonthWithinLimits: April -271821 through September 275760, independent of the day.
+    private static void requireYearMonthInRange(int year, int month) {
+        if (year < MIN_YEAR || year > MAX_YEAR || (year == MIN_YEAR && month < MIN_YEAR_MIN_MONTH)
+                || (year == MAX_YEAR && month > MAX_YEAR_MAX_MONTH)) {
+            throw new RangeErrorException(
+                    "year-month " + year + "-" + month + " is outside the representable range of PlainYearMonth");
+        }
+    }
+
+    // The calendar arithmetic below (add/subtract/until/since) constructs a real day-1 ISO date as an
+    // internal pivot; that date must be within Temporal's representable PlainDate range, even though
+    // the PlainYearMonth value itself - which never exposes this pivot day - can be perfectly valid on
+    // its own (e.g. the minimum PlainYearMonth's default day 1 precedes the minimum representable
+    // date of day 19). This is deliberately NOT the exact-Instant nanosecond range (see
+    // RelativeDurationMath.MAX_INSTANT_NANOS, whose exact boundary is one day narrower on the min side
+    // - the min Instant is -271821-04-20T00:00Z, but the min PlainDate is one day earlier still, per
+    // PlainDate/limits.js): a plain calendar date's own representable range is the well-known
+    // -271821-04-19 .. +275760-09-13 span, confirmed exactly by that same PlainDate limits test.
+    private static final long MIN_PLAIN_DATE_EPOCH_DAY = -100_000_001L;
+    private static final long MAX_PLAIN_DATE_EPOCH_DAY = 100_000_000L;
+
+    private static void requireDateInRange(Iso8601Fields date) {
+        final long epochDay;
+        try {
+            epochDay = LocalDate.of(date.year(), date.month(), date.day()).toEpochDay();
+        } catch (DateTimeException e) {
+            throw new RangeErrorException("date value is outside the representable range: " + date);
+        }
+        if (epochDay < MIN_PLAIN_DATE_EPOCH_DAY || epochDay > MAX_PLAIN_DATE_EPOCH_DAY) {
+            throw new RangeErrorException("date value is outside the representable range: " + date);
+        }
+    }
+
     private static JsTemporalPlainYearMonth toPlainYearMonth(JsValue item, InterpreterOps ops) {
         return toPlainYearMonth(item, JsUndefined.getInstance(), ops);
     }
 
-    // ToTemporalYearMonth: accepts an existing PlainYearMonth (referenceISODay preserved), an ISO
-    // year-month or full-date string (referenceISODay taken from the parse), or a year-month-like
-    // object (year + month/monthCode, referenceISODay forced to 1, regulated per the `overflow`
-    // option). The overflow option is validated even along the copy/string branches, matching
-    // GetTemporalOverflowOption's unconditional call in the spec algorithm.
+    // ToTemporalYearMonth: an existing PlainYearMonth/other Temporal type and a string both read (and
+    // discard) the `overflow` option for its side effect before their own dispatch; a plain fields
+    // object instead prepares its fields first and only reads `overflow` at the very end (as part of
+    // resolving them) - see from/order-of-operations.js and from/observable-get-overflow-argument-
+    // string-invalid.js, which pin down exactly this asymmetry. A value that is neither an object nor
+    // a string never touches options at all.
     private static JsTemporalPlainYearMonth toPlainYearMonth(JsValue item, JsValue optionsArg, InterpreterOps ops) {
-        final var overflow = readOverflowOption(optionsArg, ops);
         if (item instanceof JsTemporalPlainYearMonth ym) {
+            readOverflowOption(optionsArg, ops);
             return new JsTemporalPlainYearMonth(ym.fields());
         }
         if (item instanceof JsObject wrapper && wrapper.getPrimitive() instanceof JsTemporalPlainYearMonth wrapped) {
+            readOverflowOption(optionsArg, ops);
             return new JsTemporalPlainYearMonth(wrapped.fields());
         }
         // ToTemporalYearMonth reads a Temporal object argument's year/month fields the same way it
@@ -201,33 +272,58 @@ public final class TemporalPlainYearMonthBuiltins {
         // these Temporal types are not JsObject, so they need their own branches here to reach the
         // same year+month result (referenceISODay forced to 1, per CalendarYearMonthFromFields).
         if (item instanceof JsTemporalPlainDate pd) {
+            readOverflowOption(optionsArg, ops);
             return new JsTemporalPlainYearMonth(new Iso8601Fields(pd.year(), pd.month(), 1));
         }
         if (item instanceof JsTemporalPlainDateTime dt) {
+            readOverflowOption(optionsArg, ops);
             return new JsTemporalPlainYearMonth(new Iso8601Fields(dt.year(), dt.month(), 1));
         }
         if (item instanceof JsTemporalZonedDateTime zdt) {
+            readOverflowOption(optionsArg, ops);
             final var date = zdt.isoFieldsAtLocal().date();
             return new JsTemporalPlainYearMonth(new Iso8601Fields(date.year(), date.month(), 1));
         }
         if (item instanceof JsString s) {
+            // A syntactically invalid string must never touch `options` at all - parse (and validate
+            // its calendar annotation) completely before reading `overflow` for its side effect.
             final var parsed = TemporalParser.parseYearMonth(s.getValue());
             if (parsed.calendar() != null) {
                 TemporalCalendarIdentifier.canonicalizeBare(parsed.calendar());
             }
-            return new JsTemporalPlainYearMonth(parsed.date());
+            requireYearMonthInRange(parsed.date().year(), parsed.date().month());
+            readOverflowOption(optionsArg, ops);
+            return new JsTemporalPlainYearMonth(new Iso8601Fields(parsed.date().year(), parsed.date().month(), 1));
         }
-        if (item instanceof JsObject obj) {
-            return new JsTemporalPlainYearMonth(yearMonthFromFields(obj, overflow, ops));
+        if (InterpreterUtils.isObjectLike(item)) {
+            return yearMonthFromFields(item, optionsArg, ops);
         }
         throw new TypeErrorException("Cannot convert value to a Temporal.PlainYearMonth");
     }
 
-    private static Iso8601Fields yearMonthFromFields(JsObject obj, RegulateOverflow overflow, InterpreterOps ops) {
+    // CalendarYearMonthFromFields, PrepareTemporalFields order: "month" and "monthCode" are always
+    // fetched (regardless of which is used) before "year" is even checked for presence - see
+    // from/missing-properties.js. Only once year is confirmed present is the month value actually
+    // resolved (its syntax was already checked at read time, but a monthCode/month conflict or an
+    // out-of-range monthCode is validated only now - see from/monthcode-invalid.js) and is `overflow`
+    // read, matching from/order-of-operations.js exactly.
+    private static JsTemporalPlainYearMonth yearMonthFromFields(JsValue obj, JsValue optionsArg, InterpreterOps ops) {
         requireValidCalendarField(obj, ops);
-        final var year = requiredIntegerField(obj, "year", ops);
-        final var month = resolveMonth(obj, ops);
-        return IsoCalendar.regulateDate(year, month, 1, overflow);
+        final var monthValue = ops.getMember(obj, new JsString("month"));
+        final var month = monthValue instanceof JsUndefined
+                ? null
+                : (Integer) requirePositiveIntegerField(monthValue, "month", ops);
+        final var monthCode = monthCodeSyntaxChecked(ops.getMember(obj, new JsString("monthCode")), ops);
+        final var yearValue = ops.getMember(obj, new JsString("year"));
+        if (yearValue instanceof JsUndefined) {
+            throw new TypeErrorException("year is required");
+        }
+        final var year = toIntegerField(yearValue, "year", ops);
+        final var overflow = readOverflowOption(optionsArg, ops);
+        final var resolvedMonth = resolveMonthValue(month, monthCode);
+        final var result = IsoCalendar.regulateDate(year, resolvedMonth, 1, overflow);
+        requireYearMonthInRange(result.year(), result.month());
+        return new JsTemporalPlainYearMonth(result);
     }
 
     // Property-bag `calendar` field: accepts a bare identifier or a full ISO string carrying (or
@@ -235,7 +331,7 @@ public final class TemporalPlainYearMonthBuiltins {
     // fast path (its calendar is implicitly "iso8601" in this ISO-only engine, so its
     // `calendar`/`calendarId` getters are never read, matching ToTemporalCalendar's own
     // internal-slot fast path).
-    private static void requireValidCalendarField(JsObject obj, InterpreterOps ops) {
+    private static void requireValidCalendarField(JsValue obj, InterpreterOps ops) {
         final var calendarValue = ops.getMember(obj, new JsString("calendar"));
         if (calendarValue instanceof JsUndefined || calendarValue instanceof JsTemporalPlainDate
                 || calendarValue instanceof JsTemporalPlainDateTime || calendarValue instanceof JsTemporalPlainMonthDay
@@ -257,34 +353,63 @@ public final class TemporalPlainYearMonthBuiltins {
         return toIntegerField(value, name, ops);
     }
 
-    private static int resolveMonth(JsObject obj, InterpreterOps ops) {
-        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
-        final var monthValue = ops.getMember(obj, new JsString("month"));
-        if (!(monthCodeValue instanceof JsUndefined)) {
-            final var resolved = parseMonthCode(JsCoercion.toStr(monthCodeValue, ops));
-            if (!(monthValue instanceof JsUndefined) && toIntegerField(monthValue, "month", ops) != resolved) {
+    // ToPositiveIntegerWithTruncation: "month" (and PlainMonthDay's "day") must truncate to a strictly
+    // positive integer regardless of the `overflow` option - a non-positive value is always a
+    // RangeError, even under overflow "constrain" (which only clamps the *upper* bound against the
+    // calendar). See from/negative-month.js and from/overflow-constrain.js.
+    private static int requirePositiveIntegerField(JsValue value, String name, InterpreterOps ops) {
+        final var truncated = toIntegerField(value, name, ops);
+        if (truncated < 1) {
+            throw new RangeErrorException(name + " must be a positive integer, got " + truncated);
+        }
+        return truncated;
+    }
+
+    // TemporalMonthCode field: must literally be (or ToPrimitive-resolve to, hint "string") a String -
+    // a non-string primitive result (e.g. a number returned by a custom toString) is a TypeError, not
+    // further coerced. Only the syntax (uppercase M, two digits, optional leap L) is validated here;
+    // numeric-range/leap suitability is deferred to monthCodeValue. See from/month-code-wrong-type.js
+    // and from/monthcode-invalid.js.
+    private static String monthCodeSyntaxChecked(JsValue value, InterpreterOps ops) {
+        if (value instanceof JsUndefined) {
+            return null;
+        }
+        final var primitive = InterpreterUtils.isObjectLike(value)
+                ? JsCoercion.toPrimitive(value, "string", ops)
+                : value;
+        if (!(primitive instanceof JsString s)) {
+            throw new TypeErrorException("monthCode must be a string");
+        }
+        final var code = s.getValue();
+        if (!MONTH_CODE_SYNTAX.matcher(code).matches()) {
+            throw new RangeErrorException("Invalid monthCode: " + code);
+        }
+        return code;
+    }
+
+    // The numeric month a syntactically-valid monthCode denotes for the iso8601 calendar, which never
+    // has leap months - an "L" suffix is always out of range here, however well-formed its syntax.
+    private static int monthCodeValue(String code) {
+        final var leap = code.endsWith("L");
+        final var value = Integer.parseInt(code.substring(1, 3));
+        if (leap || value < 1 || value > 12) {
+            throw new RangeErrorException("monthCode " + code + " is not valid for the ISO 8601 calendar");
+        }
+        return value;
+    }
+
+    private static int resolveMonthValue(Integer month, String monthCode) {
+        if (monthCode != null) {
+            final var resolved = monthCodeValue(monthCode);
+            if (month != null && month != resolved) {
                 throw new RangeErrorException("month and monthCode are inconsistent");
             }
             return resolved;
         }
-        if (monthValue instanceof JsUndefined) {
-            throw new TypeErrorException("month or monthCode is required");
+        if (month != null) {
+            return month;
         }
-        return toIntegerField(monthValue, "month", ops);
-    }
-
-    private static int parseMonthCode(String code) {
-        if (code.length() == 3 && code.charAt(0) == 'M') {
-            try {
-                final var value = Integer.parseInt(code.substring(1));
-                if (value >= 1 && value <= 12) {
-                    return value;
-                }
-            } catch (NumberFormatException ignored) {
-                // Falls through to the RangeError below.
-            }
-        }
-        throw new RangeErrorException("Invalid monthCode: " + code);
+        throw new TypeErrorException("month or monthCode is required");
     }
 
     private static int toIntegerField(JsValue value, String name, InterpreterOps ops) {
@@ -310,20 +435,25 @@ public final class TemporalPlainYearMonthBuiltins {
                 : RegulateOverflow.parse(JsCoercion.toStr(value, ops));
     }
 
-    private static Unit readLargestUnitOption(JsValue optionsArg, Unit fallback, InterpreterOps ops) {
-        final var value = optionOrUndefined(optionsArg, "largestUnit", ops);
-        if (value instanceof JsUndefined) {
-            return fallback;
-        }
-        final var raw = JsCoercion.toStr(value, ops);
-        return "auto".equals(raw) ? fallback : requireYearOrMonthUnit(raw, "largestUnit");
+    // Only the Get + ToString coercion happens at read time; the "must be year or month" restriction
+    // is deferred to resolveLargestUnit/resolveSmallestUnit so all four difference() options are read
+    // before any of them is algorithmically validated - see since/options-read-before-algorithmic-
+    // validation.js (a disallowed largestUnit must not skip reading roundingIncrement/roundingMode/
+    // smallestUnit).
+    private static String readUnitOptionRaw(JsValue optionsArg, String key, InterpreterOps ops) {
+        final var value = optionOrUndefined(optionsArg, key, ops);
+        return value instanceof JsUndefined ? null : JsCoercion.toStr(value, ops);
     }
 
-    private static Unit readSmallestUnitOption(JsValue optionsArg, InterpreterOps ops) {
-        final var value = optionOrUndefined(optionsArg, "smallestUnit", ops);
-        return value instanceof JsUndefined
-                ? Unit.MONTH
-                : requireYearOrMonthUnit(JsCoercion.toStr(value, ops), "smallestUnit");
+    private static Unit resolveLargestUnit(String raw, Unit fallback) {
+        if (raw == null || "auto".equals(raw)) {
+            return fallback;
+        }
+        return requireYearOrMonthUnit(raw, "largestUnit");
+    }
+
+    private static Unit resolveSmallestUnit(String raw) {
+        return raw == null ? Unit.MONTH : requireYearOrMonthUnit(raw, "smallestUnit");
     }
 
     private static Unit requireYearOrMonthUnit(String raw, String optionName) {
@@ -335,21 +465,26 @@ public final class TemporalPlainYearMonthBuiltins {
         return unit;
     }
 
-    private static long readIncrementOption(JsValue optionsArg, InterpreterOps ops) {
+    private static long readIncrementOptionRaw(JsValue optionsArg, InterpreterOps ops) {
         final var value = optionOrUndefined(optionsArg, "roundingIncrement", ops);
-        if (value instanceof JsUndefined) {
-            return 1;
-        }
-        final var number = toIntegerField(value, "roundingIncrement", ops);
+        return value instanceof JsUndefined ? 1 : toIntegerField(value, "roundingIncrement", ops);
+    }
+
+    // Deferred (see readUnitOptionRaw's note): the 1..1e9 bound is validated only after every
+    // difference() option has been read.
+    private static void requireValidIncrement(long number) {
         if (number < 1 || number > 1_000_000_000) {
             throw new RangeErrorException("roundingIncrement out of range: " + number);
         }
-        return number;
     }
 
-    private static RoundingMode readRoundingModeOption(JsValue optionsArg, InterpreterOps ops, RoundingMode fallback) {
+    private static String readRoundingModeOptionRaw(JsValue optionsArg, InterpreterOps ops) {
         final var value = optionOrUndefined(optionsArg, "roundingMode", ops);
-        return value instanceof JsUndefined ? fallback : RoundingMode.parse(JsCoercion.toStr(value, ops));
+        return value instanceof JsUndefined ? null : JsCoercion.toStr(value, ops);
+    }
+
+    private static RoundingMode resolveRoundingMode(String raw, RoundingMode fallback) {
+        return raw == null ? fallback : RoundingMode.parse(raw);
     }
 
     private static RoundingMode negateRoundingMode(RoundingMode mode) {
@@ -379,28 +514,52 @@ public final class TemporalPlainYearMonthBuiltins {
         return ops.getMember(optionsArg, new JsString(key));
     }
 
+    // IsPartialTemporalObject rejects any of the six built-in Temporal types outright (even another
+    // PlainYearMonth) - with()'s argument must be a plain fields-like object, never a Temporal
+    // instance. See with/yearmonthlike-invalid.js.
+    private static boolean isTemporalLikeObject(JsValue value) {
+        final var unwrapped = value instanceof JsObject wrapper ? wrapper.getPrimitive() : value;
+        return unwrapped instanceof JsTemporalPlainDate || unwrapped instanceof JsTemporalPlainDateTime
+                || unwrapped instanceof JsTemporalPlainMonthDay || unwrapped instanceof JsTemporalPlainTime
+                || unwrapped instanceof JsTemporalPlainYearMonth || unwrapped instanceof JsTemporalZonedDateTime;
+    }
+
+    // with(): RejectObjectWithCalendarOrTimeZone always reads (and rejects on) `calendar`/`timeZone`
+    // first, then PrepareTemporalFields reads month/monthCode/year (alphabetical, each coerced
+    // immediately) - all before `overflow` is read. A month/monthCode conflict or an argument with
+    // none of year/month/monthCode is a TypeError/RangeError only resolved at the end, mirroring
+    // from()'s own field resolution. See with/order-of-operations.js and with/yearmonthlike-invalid.js.
     private static JsValue with(JsTemporalPlainYearMonth receiver, JsValue fieldsLike, JsValue optionsArg,
             InterpreterOps ops) {
-        if (!InterpreterUtils.isObjectLike(fieldsLike)) {
+        if (!InterpreterUtils.isObjectLike(fieldsLike) || isTemporalLikeObject(fieldsLike)) {
             throw new TypeErrorException("Temporal.PlainYearMonth.prototype.with argument must be an object");
         }
-        final var overflow = readOverflowOption(optionsArg, ops);
-        final var year = fieldOrDefault(fieldsLike, "year", receiver.year(), ops);
-        final var month = resolveMonthWith(fieldsLike, receiver.month(), ops);
-        return new JsTemporalPlainYearMonth(IsoCalendar.regulateDate(year, month, 1, overflow));
-    }
-
-    private static int fieldOrDefault(JsValue obj, String name, int defaultValue, InterpreterOps ops) {
-        final var value = ops.getMember(obj, new JsString(name));
-        return value instanceof JsUndefined ? defaultValue : toIntegerField(value, name, ops);
-    }
-
-    private static int resolveMonthWith(JsValue obj, int defaultMonth, InterpreterOps ops) {
-        final var monthCodeValue = ops.getMember(obj, new JsString("monthCode"));
-        if (!(monthCodeValue instanceof JsUndefined)) {
-            return parseMonthCode(JsCoercion.toStr(monthCodeValue, ops));
+        final var calendarValue = ops.getMember(fieldsLike, new JsString("calendar"));
+        if (!(calendarValue instanceof JsUndefined)) {
+            throw new TypeErrorException("with() argument must not have a calendar property");
         }
-        return fieldOrDefault(obj, "month", defaultMonth, ops);
+        final var timeZoneValue = ops.getMember(fieldsLike, new JsString("timeZone"));
+        if (!(timeZoneValue instanceof JsUndefined)) {
+            throw new TypeErrorException("with() argument must not have a timeZone property");
+        }
+        final var monthValue = ops.getMember(fieldsLike, new JsString("month"));
+        final var month = monthValue instanceof JsUndefined
+                ? null
+                : (Integer) requirePositiveIntegerField(monthValue, "month", ops);
+        final var monthCode = monthCodeSyntaxChecked(ops.getMember(fieldsLike, new JsString("monthCode")), ops);
+        final var yearValue = ops.getMember(fieldsLike, new JsString("year"));
+        final var year = yearValue instanceof JsUndefined ? null : (Integer) toIntegerField(yearValue, "year", ops);
+        if (month == null && monthCode == null && year == null) {
+            throw new TypeErrorException("with() argument must contain at least one of year, month, monthCode");
+        }
+        final var overflow = readOverflowOption(optionsArg, ops);
+        final var resolvedMonth = month == null && monthCode == null
+                ? receiver.month()
+                : resolveMonthValue(month, monthCode);
+        final var resolvedYear = year != null ? year : receiver.year();
+        final var result = IsoCalendar.regulateDate(resolvedYear, resolvedMonth, 1, overflow);
+        requireYearMonthInRange(result.year(), result.month());
+        return new JsTemporalPlainYearMonth(result);
     }
 
     // The reference date every calendar computation below is anchored to: day 1, regardless of the
@@ -427,17 +586,19 @@ public final class TemporalPlainYearMonthBuiltins {
         return durationLikeFields(value, ops);
     }
 
+    // PrepareTemporalFields reads duration-like properties in alphabetical order, each coerced
+    // immediately at Get time - see prototype/add/order-of-operations.js.
     private static DurationFields durationLikeFields(JsValue value, InterpreterOps ops) {
-        final var years = readDurationField(value, "years", ops);
-        final var months = readDurationField(value, "months", ops);
-        final var weeks = readDurationField(value, "weeks", ops);
         final var days = readDurationField(value, "days", ops);
         final var hours = readDurationField(value, "hours", ops);
-        final var minutes = readDurationField(value, "minutes", ops);
-        final var seconds = readDurationField(value, "seconds", ops);
-        final var milliseconds = readDurationField(value, "milliseconds", ops);
         final var microseconds = readDurationField(value, "microseconds", ops);
+        final var milliseconds = readDurationField(value, "milliseconds", ops);
+        final var minutes = readDurationField(value, "minutes", ops);
+        final var months = readDurationField(value, "months", ops);
         final var nanoseconds = readDurationField(value, "nanoseconds", ops);
+        final var seconds = readDurationField(value, "seconds", ops);
+        final var weeks = readDurationField(value, "weeks", ops);
+        final var years = readDurationField(value, "years", ops);
         if (years == null && months == null && weeks == null && days == null && hours == null && minutes == null
                 && seconds == null && milliseconds == null && microseconds == null && nanoseconds == null) {
             throw new TypeErrorException("Duration-like object must contain at least one recognized property");
@@ -469,22 +630,45 @@ public final class TemporalPlainYearMonthBuiltins {
         return DurationMath.negate(d);
     }
 
+    // Temporal.PlainYearMonth only understands year/month calendar arithmetic - any nonzero
+    // week/day/time component is unconditionally a RangeError, regardless of the `overflow` option,
+    // but only once `overflow` has already been read for its side effect. See
+    // prototype/add/argument-lower-units.js and prototype/add/options-read-before-algorithmic-
+    // validation.js.
+    private static void requireDateOnlyDuration(DurationFields d) {
+        if (d.weeks() != 0 || d.days() != 0 || d.hours() != 0 || d.minutes() != 0 || d.seconds() != 0
+                || d.milliseconds() != 0 || d.microseconds() != 0 || d.nanoseconds() != 0) {
+            throw new RangeErrorException(
+                    "Temporal.PlainYearMonth.prototype.add/subtract only accepts year/month duration components");
+        }
+    }
+
     private static JsValue add(JsTemporalPlainYearMonth receiver, JsValue durationLike, JsValue optionsArg,
             InterpreterOps ops) {
         final var duration = toDurationFields(durationLike, ops);
         final var overflow = readOverflowOption(optionsArg, ops);
-        final var added = IsoCalendar.addDate(calendarDate(receiver), duration.years(), duration.months(),
-                duration.weeks(), duration.days(), overflow);
-        return new JsTemporalPlainYearMonth(new Iso8601Fields(added.year(), added.month(), 1));
+        requireDateOnlyDuration(duration);
+        final var receiverDate = calendarDate(receiver);
+        requireDateInRange(receiverDate);
+        final var added = IsoCalendar.addDate(receiverDate, duration.years(), duration.months(), duration.weeks(),
+                duration.days(), overflow);
+        final var result = new Iso8601Fields(added.year(), added.month(), 1);
+        requireDateInRange(result);
+        return new JsTemporalPlainYearMonth(result);
     }
 
     private static JsValue subtract(JsTemporalPlainYearMonth receiver, JsValue durationLike, JsValue optionsArg,
             InterpreterOps ops) {
         final var duration = negate(toDurationFields(durationLike, ops));
         final var overflow = readOverflowOption(optionsArg, ops);
-        final var added = IsoCalendar.addDate(calendarDate(receiver), duration.years(), duration.months(),
-                duration.weeks(), duration.days(), overflow);
-        return new JsTemporalPlainYearMonth(new Iso8601Fields(added.year(), added.month(), 1));
+        requireDateOnlyDuration(duration);
+        final var receiverDate = calendarDate(receiver);
+        requireDateInRange(receiverDate);
+        final var added = IsoCalendar.addDate(receiverDate, duration.years(), duration.months(), duration.weeks(),
+                duration.days(), overflow);
+        final var result = new Iso8601Fields(added.year(), added.month(), 1);
+        requireDateInRange(result);
+        return new JsTemporalPlainYearMonth(result);
     }
 
     private static JsValue until(JsTemporalPlainYearMonth receiver, JsValue otherArg, JsValue optionsArg,
@@ -497,23 +681,38 @@ public final class TemporalPlainYearMonthBuiltins {
         return difference(receiver, otherArg, optionsArg, true, ops);
     }
 
-    private static final IsoTimeFields MIDNIGHT = new IsoTimeFields(0, 0, 0, 0, 0, 0);
-
+    // GetDifferenceSettings reads its four options in alphabetical order (largestUnit,
+    // roundingIncrement, roundingMode, smallestUnit) fully before the smallestUnit/largestUnit
+    // ordering is validated - see prototype/since/options-read-before-algorithmic-validation.js. A
+    // receiver equal to `other` short-circuits to a zero duration before ever constructing either
+    // side's day-1 pivot date, which is why minYearMonth.since(minYearMonth) never triggers the
+    // representable-range check that minYearMonth.since(anythingElse) does - see prototype/since/
+    // throws-if-year-outside-valid-iso-range.js.
     private static JsValue difference(JsTemporalPlainYearMonth receiver, JsValue otherArg, JsValue optionsArg,
             boolean isSince, InterpreterOps ops) {
         final var other = toPlainYearMonth(otherArg, ops);
-        final var smallestUnit = readSmallestUnitOption(optionsArg, ops);
-        final var largestUnit = readLargestUnitOption(optionsArg, Unit.YEAR, ops);
+        final var largestUnitRaw = readUnitOptionRaw(optionsArg, "largestUnit", ops);
+        final var incrementRaw = readIncrementOptionRaw(optionsArg, ops);
+        final var roundingModeRaw = readRoundingModeOptionRaw(optionsArg, ops);
+        final var smallestUnitRaw = readUnitOptionRaw(optionsArg, "smallestUnit", ops);
+        final var largestUnit = resolveLargestUnit(largestUnitRaw, Unit.YEAR);
+        requireValidIncrement(incrementRaw);
+        final var increment = incrementRaw;
+        var mode = resolveRoundingMode(roundingModeRaw, RoundingMode.TRUNC);
+        final var smallestUnit = resolveSmallestUnit(smallestUnitRaw);
         if (smallestUnit.ordinal() < largestUnit.ordinal()) {
             throw new RangeErrorException("smallestUnit must not be larger than largestUnit");
         }
-        final var increment = readIncrementOption(optionsArg, ops);
-        var mode = readRoundingModeOption(optionsArg, ops, RoundingMode.TRUNC);
         if (isSince) {
             mode = negateRoundingMode(mode);
         }
+        if (receiver.year() == other.year() && receiver.month() == other.month()) {
+            return new JsTemporalDuration(DurationFields.ZERO);
+        }
         final var receiverDate = calendarDate(receiver);
         final var otherDate = calendarDate(other);
+        requireDateInRange(receiverDate);
+        requireDateInRange(otherDate);
         var fields = IsoCalendar.differenceISODate(receiverDate, otherDate, largestUnit);
         if (smallestUnit != Unit.MONTH || increment != 1) {
             final var anchor = RelativeDurationMath.Anchor.plain(receiverDate, MIDNIGHT);
@@ -540,8 +739,9 @@ public final class TemporalPlainYearMonthBuiltins {
                     "Temporal.PlainYearMonth.prototype.toPlainDate requires an object with a day property");
         }
         final var day = requiredIntegerField(item, "day", ops);
-        return new JsTemporalPlainDate(
-                IsoCalendar.regulateDate(receiver.year(), receiver.month(), day, RegulateOverflow.CONSTRAIN));
+        final var result = IsoCalendar.regulateDate(receiver.year(), receiver.month(), day, RegulateOverflow.CONSTRAIN);
+        requireDateInRange(result);
+        return new JsTemporalPlainDate(result);
     }
 
     private static JsValue toStringMethod(JsTemporalPlainYearMonth receiver, JsValue optionsArg, InterpreterOps ops) {
