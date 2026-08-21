@@ -765,7 +765,11 @@ public class TemporalZonedDateTimeBuiltinsTest {
 
     @Test
     public void test_round_signed_nanoseconds_negative_epoch() {
-        // -30 minutes (half of an hour) before epoch, exercising the sign<0 branches.
+        // -30 minutes (half of an hour) before epoch, exercising the sign<0 branches. round()
+        // rounds the receiver's LOCAL wall-clock time (a UTC receiver's local time coincides with its
+        // epoch nanoseconds), so trunc/expand behave as floor/ceil unconditionally (there is no
+        // negative-number sign concept once the value is a nanosecond-of-day) - see
+        // round/negative-time.js and round/rounding-direction.js in the test262 corpus.
         final var halfHourNs = "-1800000000000n";
         assertEquals("1969-12-31T23:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
                 + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'floor'}).toString()"));
@@ -777,9 +781,9 @@ public class TemporalZonedDateTimeBuiltinsTest {
                 + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'halfCeil'}).toString()"));
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
                 + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'halfEven'}).toString()"));
-        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
-                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'trunc'}).toString()"));
         assertEquals("1969-12-31T23:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
+                + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'trunc'}).toString()"));
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
                 + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'expand'}).toString()"));
     }
 
@@ -799,5 +803,183 @@ public class TemporalZonedDateTimeBuiltinsTest {
     public void test_to_string_numeric_fractional_second_digits() {
         assertEquals("1970-01-01T00:00:00.500+00:00[UTC]",
                 str("new Temporal.ZonedDateTime(500000000n, 'UTC').toString({fractionalSecondDigits: 3})"));
+    }
+
+    @Test
+    public void test_from_offset_option_use_trusts_explicit_offset() {
+        // "use" trusts the explicit +05:00 offset to compute the exact instant directly (2020-01-01
+        // 00:00 minus +05:00 = 2019-12-31T19:00:00 UTC), rather than resolving 00:00 against what the
+        // UTC zone itself observes (which would give the wall time unchanged, per "ignore").
+        assertEquals("2019-12-31T19:00:00+00:00[UTC]",
+                str("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',timeZone:'UTC'}, "
+                        + "{offset:'use'}).toString()"));
+    }
+
+    @Test
+    public void test_from_offset_option_ignore_uses_wall_time() {
+        // "ignore" discards the (mismatched) explicit offset, falling back to disambiguation with UTC.
+        assertEquals("2020-01-01T00:00:00+00:00[UTC]",
+                str("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',timeZone:'UTC'}, "
+                        + "{offset:'ignore'}).toString()"));
+    }
+
+    @Test
+    public void test_from_offset_option_prefer_falls_back_on_mismatch() {
+        assertEquals("2020-01-01T00:00:00+00:00[UTC]",
+                str("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',timeZone:'UTC'}, "
+                        + "{offset:'prefer'}).toString()"));
+    }
+
+    @Test
+    public void test_from_offset_option_reject_default_throws_on_mismatch() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',timeZone:'UTC'})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',"
+                        + "timeZone:'UTC'}, {offset:'reject'})"));
+    }
+
+    @Test
+    public void test_from_offset_option_matching_offset_never_throws() {
+        assertEquals("2020-01-01T05:00:00+05:00[+05:00]",
+                str("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:5,offset:'+05:00',"
+                        + "timeZone:'+05:00'}, {offset:'reject'}).toString()"));
+    }
+
+    @Test
+    public void test_from_offset_option_invalid_value_throws() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,timeZone:'UTC'}, " + "{offset:'bogus'})"));
+    }
+
+    @Test
+    public void test_with_offset_field_z_is_accepted() {
+        final var instance = "new Temporal.ZonedDateTime(0n, 'UTC')";
+        assertEquals("1970-01-01T05:00:00+00:00[UTC]",
+                str(instance + ".with({hour: 5, offset: 'Z'}, {offset: 'use'}).toString()"));
+    }
+
+    @Test
+    public void test_with_offset_field_wrong_type_throws() {
+        final var instance = "new Temporal.ZonedDateTime(0n, 'UTC')";
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(instance + ".with({offset: null})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(instance + ".with({offset: true})"));
+    }
+
+    @Test
+    public void test_get_time_zone_transition_accepts_property_bag() {
+        final var instance = "new Temporal.ZonedDateTime(0n, 'America/New_York')";
+        assertTrue(bool(instance + ".getTimeZoneTransition({direction: 'next'}) !== null"));
+    }
+
+    @Test
+    public void test_get_time_zone_transition_rejects_wrong_type() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').getTimeZoneTransition(5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').getTimeZoneTransition(undefined)"));
+    }
+
+    @Test
+    public void test_with_calendar_accepts_flexible_string_and_temporal_object() {
+        final var instance = "new Temporal.ZonedDateTime(0n, 'UTC')";
+        assertEquals("iso8601", str(instance + ".withCalendar('2020-01-01[u-ca=iso8601]').calendarId"));
+        assertEquals("iso8601", str(instance + ".withCalendar(new Temporal.PlainDate(2020, 1, 1)).calendarId"));
+    }
+
+    @Test
+    public void test_from_month_code_wrong_type_throws() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year:2020,monthCode:5,day:1,timeZone:'UTC'})"));
+    }
+
+    @Test
+    public void test_from_month_code_numeric_out_of_range_throws() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year:2020,monthCode:'M99',day:1,timeZone:'UTC'})"));
+    }
+
+    @Test
+    public void test_from_requires_month_or_month_code() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year:2020,day:1,timeZone:'UTC'})"));
+    }
+
+    @Test
+    public void test_from_rejects_non_positive_day_and_month() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year:2020,month:1,day:0,timeZone:'UTC'})"));
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("Temporal.ZonedDateTime.from({year:2020,month:0,day:1,timeZone:'UTC'})"));
+    }
+
+    @Test
+    public void test_start_of_day_method() {
+        assertEquals("1970-01-01T00:00:00+00:00[UTC]",
+                str("new Temporal.ZonedDateTime(500000000n, 'UTC').startOfDay().toString()"));
+    }
+
+    @Test
+    public void test_with_requires_at_least_one_recognized_property() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').with({})"));
+    }
+
+    @Test
+    public void test_with_rejects_calendar_and_time_zone_fields() {
+        final var instance = "new Temporal.ZonedDateTime(0n, 'UTC')";
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run(instance + ".with({day: 5, calendar: 'iso8601'})"));
+        assertThrows(TypeErrorException.class, () -> Interpreter.run(instance + ".with({day: 5, timeZone: 'UTC'})"));
+    }
+
+    @Test
+    public void test_since_with_equal_instants_and_day_unit_does_not_throw() {
+        assertEquals(0.0, num("new Temporal.ZonedDateTime(0n, 'UTC').since("
+                + "new Temporal.ZonedDateTime(0n, 'UTC'), {smallestUnit: 'day'}).days"));
+    }
+
+    @Test
+    public void test_round_half_even_majority_remainder() {
+        // A 40-minute offset into the hour (doubled remainder 80 > increment 60) is a genuine
+        // majority, not a tie, so halfEven behaves like halfExpand here.
+        assertEquals("1970-01-01T01:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(2400000000000n, 'UTC').round("
+                + "{smallestUnit: 'hour', roundingMode: 'halfEven'}).toString()"));
+    }
+
+    @Test
+    public void test_to_string_fractional_second_digits_nan_throws() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').toString({fractionalSecondDigits: NaN})"));
+    }
+
+    @Test
+    public void test_to_string_fractional_second_digits_invalid_string_throws() {
+        assertThrows(RangeErrorException.class, () -> Interpreter
+                .run("new Temporal.ZonedDateTime(0n, 'UTC').toString({fractionalSecondDigits: 'bogus'})"));
+    }
+
+    @Test
+    public void test_to_string_smallest_unit_plural_accepted() {
+        assertEquals("1970-01-01T00:00:00.500+00:00[UTC]",
+                str("new Temporal.ZonedDateTime(500000000n, 'UTC').toString({smallestUnit: 'milliseconds'})"));
+    }
+
+    @Test
+    public void test_month_and_month_code_must_agree_in_with() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').with({month: 5, monthCode: 'M06'})"));
+    }
+
+    @Test
+    public void test_from_time_zone_accepts_zoned_date_time_instance() {
+        assertEquals("UTC", str("Temporal.ZonedDateTime.from({year:2020,month:5,day:2,"
+                + "timeZone: new Temporal.ZonedDateTime(0n, 'UTC')}).timeZoneId"));
+    }
+
+    @Test
+    public void test_with_calendar_time_string_and_leap_second() {
+        final var instance = "new Temporal.ZonedDateTime(0n, 'UTC')";
+        assertEquals("iso8601", str(instance + ".withCalendar('15:23').calendarId"));
+        assertEquals("iso8601", str(instance + ".withCalendar('2016-12-31T23:59:60').calendarId"));
     }
 }

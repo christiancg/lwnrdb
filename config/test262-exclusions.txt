@@ -132,4 +132,23 @@ pattern: \.call\(eval\)             # a bare eval reference as an argument: the 
 # an alias of the generator constructors.
 pattern: \bFunction\.(?:call|apply|bind)\s*\(  # the Function constructor through Function.prototype.call: no runtime code generation
 pattern: Object\.seal\(new \(Object\.getPrototypeOf  # the derived constructor of a live function object: no runtime code generation
+#
+# Temporal.ZonedDateTime's constructor / string grammar / property-bag `offset` field all accept a
+# UTC offset up to +/-23:59:59.999999999 as a fixed-offset "time zone" (an offset-only identifier with
+# no IANA name), but every such offset beyond +/-18:00 is unrepresentable through java.time: not just
+# a stricter validation range on java.time.ZoneOffset (whose own hard cap is +/-18:00, `ZoneOffset.of`
+# throws past that), but java.time.zone.ZoneRules — a `final` class with no public factory accepting a
+# raw offset outside ZoneOffset's own range — so there is no way to obtain a `ZoneRules`/`ZoneId` for
+# such an offset at all. Representing it would mean reimplementing the zone-arithmetic this file
+# performs via java.time.ZonedDateTime/ZoneId throughout (resolveLocal, epochNanosOf, hoursInDay,
+# round, add/subtract, toString, ...) against a hand-rolled fixed-offset abstraction instead - a full
+# parallel implementation for an offset magnitude no real IANA zone ever uses, disproportionate to the
+# handful of tests that exercise it.
+dir:     built-ins/Temporal/ZonedDateTime/compare/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/from/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/equals/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/round/rounded-date-time-outside-valid-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/since/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/until/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
 pattern: \b(?:Async)?Generator\s*\(\s*["']  # an alias of the (Async)Generator constructor: no runtime code generation

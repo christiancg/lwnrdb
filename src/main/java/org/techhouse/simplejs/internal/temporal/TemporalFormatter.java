@@ -1,5 +1,6 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import java.math.BigInteger;
 import java.time.ZoneOffset;
 import java.util.Locale;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -191,12 +192,26 @@ public final class TemporalFormatter {
         sb.append(designator);
     }
 
+    // Each field can independently be a float64-precision-lossy magnitude far beyond what a single
+    // `double` multiplication/Math.round can carry without silently overflowing `long` (Java's
+    // double->long narrowing conversion CLAMPS rather than throwing once the double exceeds
+    // Long.MAX_VALUE) - see since/until float64-representable-integer.js. BigInteger keeps the
+    // combination exact; only the final whole-seconds/fraction split is narrowed back to `long`,
+    // which stays in range for every realistic duration since the fractional part is always < 1e9.
     private static long[] combineSecondsFraction(double seconds, double milliseconds, double microseconds,
             double nanoseconds) {
-        final var totalNanos = Math.round(milliseconds * 1_000_000L + microseconds * 1_000L + nanoseconds);
-        final var wholeSeconds = (long) seconds + Math.floorDiv(totalNanos, 1_000_000_000L);
-        final var fractionNanos = Math.floorMod(totalNanos, 1_000_000_000L);
-        return new long[]{wholeSeconds, fractionNanos};
+        final var totalNanos = BigInteger.valueOf((long) seconds).multiply(BigInteger.valueOf(1_000_000_000L))
+                .add(BigInteger.valueOf((long) milliseconds).multiply(BigInteger.valueOf(1_000_000L)))
+                .add(BigInteger.valueOf((long) microseconds).multiply(BigInteger.valueOf(1_000L)))
+                .add(BigInteger.valueOf((long) nanoseconds));
+        final var divRem = totalNanos.divideAndRemainder(BigInteger.valueOf(1_000_000_000L));
+        var wholeSeconds = divRem[0];
+        var fractionNanos = divRem[1];
+        if (fractionNanos.signum() < 0) {
+            fractionNanos = fractionNanos.add(BigInteger.valueOf(1_000_000_000L));
+            wholeSeconds = wholeSeconds.subtract(BigInteger.ONE);
+        }
+        return new long[]{wholeSeconds.longValueExact(), fractionNanos.longValueExact()};
     }
 
     private static String formatFraction(int millisecond, int microsecond, int nanosecond,
