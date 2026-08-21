@@ -458,4 +458,75 @@ public class TemporalPlainTimeBuiltinsTest {
     public void test_add_rejects_duration_like_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({})"));
     }
+
+    @Test
+    public void test_with_rejects_calendar_and_time_zone_properties() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).with({hour: 2, calendar: 'iso8601'})"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).with({hour: 2, timeZone: 'UTC'})"));
+    }
+
+    @Test
+    public void test_add_rejects_non_integer_duration_component() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({hours: 1.5})"));
+    }
+
+    @Test
+    public void test_round_rejects_invalid_rounding_increment() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).round({smallestUnit: 'hour', roundingIncrement: 5})"));
+    }
+
+    @Test
+    public void test_until_rejects_non_object_options() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.PlainTime(1).until(new Temporal.PlainTime(2), 5)"));
+    }
+
+    @Test
+    public void test_round_requires_smallest_unit() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).round({})"));
+    }
+
+    @Test
+    public void test_to_locale_string() {
+        assertEquals("01:00:00", str("new Temporal.PlainTime(1).toLocaleString()"));
+    }
+
+    @Test
+    public void test_from_plain_date_time_and_zoned_date_time() {
+        assertEquals("10:30:00",
+                str("Temporal.PlainTime.from(new Temporal.PlainDateTime(2020, 1, 1, 10, 30))" + ".toString()"));
+        assertEquals("10:30:00", str("Temporal.PlainTime.from(Temporal.ZonedDateTime.from("
+                + "'2020-01-01T10:30:00+00:00[UTC]')).toString()"));
+    }
+
+    @Test
+    public void test_from_reduced_month_day_string_is_rejected() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('12-31')"));
+    }
+
+    // Every ambiguous-with-a-date-form shape (extended/basic year-month, extended/basic month-day)
+    // requires a leading 'T' to be accepted as a bare time string
+    @Test
+    public void test_from_rejects_every_ambiguous_date_like_shape() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('2020-06')"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('202006')"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('1231')"));
+    }
+
+    // A 'T'-prefixed ambiguous-looking string is unambiguous and parses as a time
+    @Test
+    public void test_from_accepts_t_prefixed_ambiguous_looking_string() {
+        assertEquals("12:31:00", str("Temporal.PlainTime.from('T12:31').toString()"));
+    }
+
+    // A shape that merely looks date-like but has an invalid month/day is not actually ambiguous -
+    // it just fails to parse as a time on its own merits
+    @Test
+    public void test_from_rejects_invalid_looking_date_shape_as_a_bad_time() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('13-31')"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('209913')"));
+    }
 }

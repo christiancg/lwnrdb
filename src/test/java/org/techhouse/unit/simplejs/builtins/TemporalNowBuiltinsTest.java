@@ -92,6 +92,7 @@ public class TemporalNowBuiltinsTest {
     public void test_zoned_date_time_argument_reuses_its_time_zone() {
         assertEquals("America/New_York", str("Temporal.Now.zonedDateTimeISO("
                 + "Temporal.ZonedDateTime.from('2020-06-15T10:00:00-04:00[America/New_York]')).timeZoneId"));
+        assertEquals("UTC", str("Temporal.Now.zonedDateTimeISO(new Temporal.ZonedDateTime(0n, 'UTC')).timeZoneId"));
     }
 
     @Test

@@ -505,4 +505,59 @@ public class TemporalInstantBuiltinsTest {
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("Temporal.Instant.from('1970-01-01T00:00:00−01:00')"));
     }
+
+    @Test
+    public void test_to_locale_string() {
+        assertEquals("1970-01-01T00:00:00Z", str("new Temporal.Instant(0n).toLocaleString()"));
+    }
+
+    @Test
+    public void test_round_rejects_non_object_options() {
+        assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).round(5)"));
+    }
+
+    @Test
+    public void test_round_string_shorthand() {
+        assertEquals("1970-01-01T01:00:00Z", str("new Temporal.Instant(1800000000000n).round('hour').toString()"));
+    }
+
+    @Test
+    public void test_round_rejects_invalid_rounding_increment_for_day() {
+        assertThrows(RangeErrorException.class,
+                () -> Interpreter.run("new Temporal.Instant(0n).round({smallestUnit: 'day', roundingIncrement: 2})"));
+    }
+
+    @Test
+    public void test_round_half_ceil_half_floor_half_even() {
+        // 1500 is exactly halfway between 1000 and 2000; halfCeil breaks the tie toward +infinity.
+        assertEquals("2000", str("new Temporal.Instant(1500n).round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 1000, roundingMode: 'halfCeil'}).epochNanoseconds.toString()"));
+        // -1500 is exactly halfway between -2000 and -1000; halfFloor breaks the tie toward -infinity.
+        assertEquals("-2000", str("new Temporal.Instant(-1500n).round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 1000, roundingMode: 'halfFloor'}).epochNanoseconds.toString()"));
+        // 2500 is exactly halfway between 2000 and 3000; halfEven picks the even multiple (2).
+        assertEquals("2000", str("new Temporal.Instant(2500n).round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 1000, roundingMode: 'halfEven'}).epochNanoseconds.toString()"));
+        // -1500 is exactly halfway between -2000 and -1000; halfCeil breaks the tie toward
+        // +infinity, i.e. the less-negative side this time (the mirror image of the positive case).
+        assertEquals("-1000", str("new Temporal.Instant(-1500n).round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 1000, roundingMode: 'halfCeil'}).epochNanoseconds.toString()"));
+        // 1500 is exactly halfway between 1000 and 2000; halfFloor breaks the tie toward -infinity,
+        // i.e. the smaller side this time.
+        assertEquals("1000", str("new Temporal.Instant(1500n).round({smallestUnit: 'nanosecond', "
+                + "roundingIncrement: 1000, roundingMode: 'halfFloor'}).epochNanoseconds.toString()"));
+    }
+
+    @Test
+    public void test_to_zoned_date_time_iso_returns_real_zoned_date_time() {
+        assertTrue(bool("new Temporal.Instant(0n).toZonedDateTimeISO('UTC') instanceof Temporal.ZonedDateTime"));
+    }
+
+    @Test
+    public void test_until_since_reject_non_object_options() {
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.Instant(0n).until(new Temporal.Instant(1n), 5)"));
+        assertThrows(TypeErrorException.class,
+                () -> Interpreter.run("new Temporal.Instant(0n).since(new Temporal.Instant(1n), 5)"));
+    }
 }
