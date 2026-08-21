@@ -625,8 +625,13 @@ public final class TemporalDurationBuiltins {
             DurationMath.requireCalendarIndependent(other, Unit.DAY);
             final var otherTotal = DurationMath.totalNanoseconds(other);
             final var totalNanos = DurationMath.totalNanoseconds(a).add(subtract ? otherTotal.negate() : otherTotal);
-            final var largestUnit = coarserOf(defaultLargestUnit(a), defaultLargestUnit(other));
-            return new JsTemporalDuration(DurationMath.balanceFromTotalNanoseconds(totalNanos, largestUnit));
+            // The result balances no further than the coarser of the two operands' own largest
+            // day-and-below unit (e.g. adding to a pure-hours duration never introduces a "days"
+            // field) - never further than day, per requireCalendarIndependent above.
+            final var largestOrdinal = Math.min(tailLargestUnitForAdd(a).ordinal(),
+                    tailLargestUnitForAdd(other).ordinal());
+            return new JsTemporalDuration(
+                    DurationMath.balanceFromTotalNanoseconds(totalNanos, Unit.values()[largestOrdinal]));
         } catch (UnsupportedOperationException e) {
             // add()/subtract() with a calendar-unit operand is out of this feature's scope (unlike
             // round/total/compare/since/until, add/subtract's relativeTo-anchored balancing was not
@@ -866,6 +871,37 @@ public final class TemporalDurationBuiltins {
             return Unit.MINUTE;
         }
         return Unit.SECOND;
+    }
+
+    // Like tailLargestUnit, but for AddDurations' balance-no-further-than-necessary logic: unlike
+    // round()'s carry destination (which never needs to distinguish "nothing populated" from "only
+    // seconds-and-below populated" - both round to a second-or-coarser result anyway), an add() whose
+    // operands are both purely sub-second (e.g. two microsecond-only durations, as produced by
+    // ZonedDateTime.prototype.since with largestUnit "microseconds") must balance no further than
+    // whichever of second/millisecond/microsecond is actually the coarsest populated field -
+    // defaulting to "second" here would wrongly re-decompose the summed total down through seconds
+    // first, discarding almost all of the sub-second magnitude into a spurious seconds field - see
+    // ZonedDateTime/prototype/since/float64-representable-integer.js.
+    private static Unit tailLargestUnitForAdd(DurationFields fields) {
+        if (fields.days() != 0) {
+            return Unit.DAY;
+        }
+        if (fields.hours() != 0) {
+            return Unit.HOUR;
+        }
+        if (fields.minutes() != 0) {
+            return Unit.MINUTE;
+        }
+        if (fields.seconds() != 0) {
+            return Unit.SECOND;
+        }
+        if (fields.milliseconds() != 0) {
+            return Unit.MILLISECOND;
+        }
+        if (fields.microseconds() != 0) {
+            return Unit.MICROSECOND;
+        }
+        return Unit.NANOSECOND;
     }
 
     private static Unit parseFractionalUnit(String value) {

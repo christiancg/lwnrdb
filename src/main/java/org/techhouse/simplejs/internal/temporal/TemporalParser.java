@@ -282,16 +282,27 @@ public final class TemporalParser {
     // date-time string, where sub-minute precision is accepted but purely informational. The minute
     // part itself is optional (e.g. "+00", not just "+00:00"/"+0000").
     private static String parseTimeZoneOffset(Cursor cursor) {
-        final var start = cursor.pos;
+        final var sign = cursor.peek();
         cursor.advance();
+        final var hourStart = cursor.pos;
         readDigits(cursor, 2);
+        final var hour = cursor.source.substring(hourStart, cursor.pos);
+        var minute = "00";
         if (!cursor.atEnd() && cursor.peek() == ':') {
             cursor.advance();
+            final var minuteStart = cursor.pos;
             readDigits(cursor, 2);
+            minute = cursor.source.substring(minuteStart, cursor.pos);
         } else if (!cursor.atEnd() && isDigit(cursor.peek())) {
+            final var minuteStart = cursor.pos;
             readDigits(cursor, 2);
+            minute = cursor.source.substring(minuteStart, cursor.pos);
         }
-        return cursor.source.substring(start, cursor.pos);
+        // CanonicalizeTimeZoneIdentifier: a bare numeric offset identifier is always normalized to
+        // sign+HH:MM (zero-padded, minutes defaulted to 00 when omitted) so two spellings of the same
+        // offset (e.g. "+0330" and "+03:30") compare equal wherever timeZoneId is compared as text
+        // (Temporal.ZonedDateTime.prototype.equals).
+        return sign + hour + ":" + minute;
     }
 
     // TimeZoneString ::: TimeZoneIdentifier | Date TimeZoneNameRequired? Annotations - the broader
@@ -556,6 +567,23 @@ public final class TemporalParser {
             throw new RangeErrorException("second must be in the range 0..59, got " + second);
         }
         return new IsoTimeFields(hour, minute, second, millisecond, microsecond, nanosecond);
+    }
+
+    // Validates a standalone UTC offset string - used for Temporal.ZonedDateTime's `offset` field/
+    // argument and for a bare offset-only time zone identifier. Unlike an offset embedded inside a
+    // larger date-time string (parseOffset, which stops as soon as it has read a valid prefix and
+    // leaves the remainder for the caller to interpret), the ENTIRE input must be consumed - a
+    // trailing leftover (e.g. "+00:00.0", where the fraction has no preceding seconds component to
+    // attach to, or "-00:000", whose extra digit belongs to no component) is a RangeError, not silently
+    // ignored - see ZonedDateTime/from/offset-string-invalid.js.
+    public static String parseUtcOffsetString(String input) {
+        final var cursor = new Cursor(input);
+        if (cursor.atEnd() || !isSign(cursor.peek())) {
+            throw new RangeErrorException("Invalid UTC offset: " + input);
+        }
+        final var offset = parseOffset(cursor);
+        requireEnd(cursor);
+        return offset;
     }
 
     private static String parseOffset(Cursor cursor) {
