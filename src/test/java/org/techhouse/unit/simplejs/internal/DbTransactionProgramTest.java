@@ -206,4 +206,50 @@ public class DbTransactionProgramTest {
         assertNull(read("prog-contender"));
         assertCollectionLockFree();
     }
+
+    // The checklist's regression guard: the geo/vector aggregation operators must work against
+    // documents written *through a script* rather than the wire. This is what would break if
+    // EJsonInterop emitted a plain string instead of a real JsonGeo/JsonVector — the documents would
+    // still read back fine, but the type-specific operators would no longer match them.
+    @Test
+    public void test_geo_and_vector_operators_match_script_written_documents() {
+        final var result = run(script("""
+                db.bulkSave(DB, C, [
+                    { _id: 'op-close', location: new Geo(40.001, -74.001), embedding: new Vector([1, 0, 0]) },
+                    { _id: 'op-far', location: new Geo(10, 10), embedding: new Vector([0, 0, 1]) }
+                ]);
+                const near = db.aggregate(DB, C, [{
+                    type: 'FILTER',
+                    operator: {
+                        customOperatorName: 'distance',
+                        field: 'location',
+                        value: new Geo(40, -74),
+                        comparator: 'SMALLER_THAN',
+                        distance: 1000
+                    }
+                }]);
+                const inside = db.aggregate(DB, C, [{
+                    type: 'FILTER',
+                    operator: {
+                        customOperatorName: 'within',
+                        field: 'location',
+                        value: new Geo(40, -74),
+                        polygon: [new Geo(39, -75), new Geo(41, -75), new Geo(41, -73), new Geo(39, -73)]
+                    }
+                }]);
+                const closest = db.aggregate(DB, C, [{
+                    type: 'FILTER',
+                    operator: {
+                        customOperatorName: 'nearest',
+                        field: 'embedding',
+                        value: new Vector([1, 0, 0]),
+                        k: 1
+                    }
+                }]);
+                return [near.map(d => d._id).join(','), inside.map(d => d._id).join(','),
+                        closest.map(d => d._id).join(',')].join('|');
+                """));
+        assertFalse(result.isError(), () -> result.getErrorName() + ": " + result.getErrorMessage());
+        assertEquals("op-close|op-close|op-close", result.getValue().asJsonString().getValue());
+    }
 }
