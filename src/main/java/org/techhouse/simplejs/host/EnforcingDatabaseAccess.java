@@ -3,6 +3,8 @@ package org.techhouse.simplejs.host;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterConfig;
+import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
@@ -31,6 +33,7 @@ import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -40,6 +43,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
+    private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final EJson eJson = IocContainer.get(EJson.class);
 
     private final String username;
@@ -74,8 +79,9 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         message.add("databaseName", new JsonString(db));
         message.add("collectionName", new JsonString(coll));
         message.add("aggregationSteps", pipeline);
-        final OperationRequest request = RequestParser.parseRequest(eJson.toJson(message));
-        final var response = dispatch(request);
+        final var rawJson = eJson.toJson(message);
+        final OperationRequest request = RequestParser.parseRequest(rawJson);
+        final var response = dispatch(request, rawJson);
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
@@ -172,6 +178,9 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     }
 
     private void clearSession() {
+        if (sessionClientId != null) {
+            clientTracker.clearTransactionState(sessionClientId);
+        }
         if (sessionClientId != null && !sessionClientId.equals(clientId)) {
             clientTracker.removeById(sessionClientId);
         }
@@ -194,6 +203,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     }
 
     private OperationResponse dispatch(OperationRequest request) {
+        return dispatch(request, null);
+    }
+
+    private OperationResponse dispatch(OperationRequest request, String rawJson) {
         assertSessionThread();
         final var user = cache.getAdminUserEntry(username);
         if (user == null) {
@@ -213,17 +226,34 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             throw jsError(schemaError.getMessage());
         }
         if (sessionClientId != null) {
-            return operationProcessor.processMessage(request, sessionClientId);
+            return routeOrProcess(request, rawJson, sessionClientId);
         }
         if (clientId != null) {
-            return operationProcessor.processMessage(request, clientId);
+            return routeOrProcess(request, rawJson, clientId);
         }
+        // Registered before routing, not after: ClusterRouter records the transaction's local slice and
+        // remote participants against this id, and silently no-ops when the tracker has no such client.
         final var forwardedClientId = clientTracker.registerForwardedClient(username);
         try {
-            return operationProcessor.processMessage(request, forwardedClientId);
+            return routeOrProcess(request, rawJson, forwardedClientId);
         } finally {
             clientTracker.removeById(forwardedClientId);
         }
+    }
+
+    private OperationResponse routeOrProcess(OperationRequest request, String rawJson, UUID effectiveClientId) {
+        if (clusterConfig.isEnabled()) {
+            final var forwarded = clusterRouter.forward(request, rawJson != null ? rawJson : eJson.toJson(request),
+                    sessionClientId != null, username, effectiveClientId);
+            if (forwarded != null) {
+                try {
+                    return ResponseParser.parseResponse(forwarded);
+                } catch (RuntimeException e) {
+                    throw jsError("Unreadable response from the collection's owner: " + e.getMessage());
+                }
+            }
+        }
+        return operationProcessor.processMessage(request, effectiveClientId);
     }
 
     private static boolean isTransactionControl(OperationRequest request) {

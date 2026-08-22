@@ -903,7 +903,10 @@ commands above; the limitations below are the ones that need an explanation rath
 | 5 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
 | 6 | **The Unicode version is the build JDK's, not a pinned one** | A conformant engine pins the UCD version the spec requires; with no ICU dependency ours is whatever the JDK ships — Unicode 16.0 on JDK 25, 17.0 on JDK 26. `internal/regex/UnicodeProperty` resolves a `\p{…}` name to a `CodePointSet` by using `java.util.regex.Pattern` purely as a one-time, per-property *oracle* (compiled once, then every code point tested against it and the truth table cached) — never as the matching engine itself (see *Regex engine* below) — so it still inherits the JDK's Unicode version for anything not covered by the pinned resource below. So `\p{…}` escapes answer differently across the two supported build JDKs for anything added in 17.0, and on JDK 25 the scripts added there (`Sidetic`, `Tolong_Siki`, `Tai_Yo`, `Beria_Erfe`) throw a `SyntaxError` instead of compiling. This is why `built-ins/RegExp/property-escapes/generated/` is excluded from the gate rather than baselined — see `config/test262-exclusions.txt`. **Properties of strings** (`\p{RGI_Emoji}` and its six siblings) are the one exception: they are sets of *strings*, so the JDK has no data for them at all, and `UnicodeProperty.StringProperties` expands each into an alternation of literal sequences from `src/main/resources/simplejs/emoji-sequences.txt` — data that is **ours and pinned to Unicode 17.0** (regenerate with `test_utils/gen_emoji_sequences.py`, which reads the UTS #51 sequence files). These escapes therefore answer identically on JDK 25 and 26, unlike every other `\p{…}`; the price is that the table must be regenerated when the pinned corpus moves to a new UCD. Property names are now matched **exactly** — loose matching (`\p{ gc = X }`) is an early error — and the `Hex` alias is supported. |
 | 7 | **`String.prototype.localeCompare` ignores its `locales`/`options` arguments** | It always collates with the host's locale (`InterpreterOps.locale()`, i.e. `scriptLocale` under the database binding) rather than the requested one. Honouring the argument means deciding how much of `Intl` to take on, which is a separate call — the host-boundary work only made the *default* host-controlled instead of the JVM's. |
-| 8 | **A script transaction cannot span collections owned by different cluster nodes** | `host/EnforcingDatabaseAccess.dispatch` never consults `ClusterRouter`, so a `db.transaction` runs entirely against the local node. A buffered write to a collection this node does not own is rejected by `TransactionOperationHelper.bufferSave` with `421-2 CROSS_OWNER_TRANSACTION`, so the failure is explicit rather than silent data loss — but the 2PC path that the wire protocol's cross-owner transactions use (`cluster/Tx2pcCoordinator`) is not reachable from a script. |
+
+Row 8 (a script transaction being local-only under clustering) is gone: `EnforcingDatabaseAccess`
+now routes through `ClusterRouter`, so cross-owner script transactions run the same 2PC the wire
+protocol uses. See *Script operations under clustering* below.
 
 None left: the table above previously carried four more rows (`\k<name>` on a duplicated name
 always resolving to the first alias; a capturing group inside a repeated group not resetting
@@ -925,7 +928,13 @@ was replaced; see *Regex engine* below.
   becomes an early `SyntaxError`, as the spec requires of a Script. The flag arrives through
   `HostBindings.limits()`; `SimpleJs.run` keeps its signature, and `SimpleHostBindings` /
   `EnforcingDatabaseAccess` leave it off.
-- **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet.
+- **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet. The
+  sandbox's `ResourceLimits` — `instructionBudget`, `wallClockMillis`, `maxDepth`, the `fetch`
+  settings, `maxLogLines`/`maxLogLineChars` — have no `lwnrdb.cfg` keys yet either; they are one
+  configuration-surface decision that lands with the wire op.
+- **A script's console output is returned to the caller.** `SimpleJs.run` captures it into
+  `ScriptResult.getLogs()` on every exit path and tees it to `host.console()`; see *Captured
+  console output* below.
 - **The host supplies the time zone and locale.** `HostBindings.timeZone()`/`locale()` default to
   the JVM's (so every existing embedding and the test262 worker are unaffected) and are threaded to
   the builtins through `InterpreterOps.timeZone()`/`locale()`. `host/DatabaseHostBindings` overrides
@@ -991,15 +1000,62 @@ Three documented limitations:
   whitelist that rejects `LIST_COLLECTIONS`/`LIST_DATABASES` with `409-6`; `db.listCollections`/
   `listDatabases` keep the pre-existing swallow-the-error shape, so a script observes an **empty
   list**, not a throw.
-- **A script transaction is local-only under clustering.** `EnforcingDatabaseAccess.dispatch` never
-  consults `ClusterRouter`, so writes are not routed to a collection's owner.
-  `TransactionOperationHelper.bufferSave` rejects a write to a non-owned collection with
-  `421-2 CROSS_OWNER_TRANSACTION`, so the failure is explicit rather than silent, but cross-owner
-  script transactions are unsupported.
+- **A script transaction blocks on its 2PC round trips.** Under clustering the callback still may
+  not suspend (see above), so the `PREPARE_TX`/`COMMIT_TX` exchanges with remote participants run
+  synchronously on the thread that owns the transaction's locks. A slow or unreachable participant
+  therefore stalls the script until `replicationAckTimeoutMs` elapses.
 - **The transaction control ops skip `AuthorizationChecker`.** `START`/`COMMIT`/`ROLLBACK` carry no
   database or collection to authorize and are absent from `ALWAYS_ALLOWED_OPERATIONS`, so checking
   them would deny every non-admin. Each buffered write inside the transaction is still authorized on
   its own request. Wire behaviour for socket clients is unchanged.
+
+### Script operations under clustering
+
+`host/EnforcingDatabaseAccess.dispatch` consults `cluster/ClusterRouter` before running an operation
+locally, so a script sees the same routing a socket client does. `ClusterRouter.forward` returns
+`null` when clustering is off, which keeps the standalone path exactly as it was.
+
+- **Non-transactional reads and writes** to a collection this node does not own are forwarded to the
+  owner (`FORWARD_REQUEST`) and the owner's response is used. Before this, a write was rejected by
+  `ClusterWriteHelper.guard` with `421-1 NOT_COLLECTION_OWNER`; a read now also concentrates on the
+  owner's cache, falling back to the local replica when the owner is unreachable
+  (`readFallbackToLocal`).
+- **Transactional writes** register each foreign collection's owner as a participant
+  (`FORWARD_TX_REQUEST`), so `db.transaction` spans owners and commits through
+  `cluster/Tx2pcCoordinator` — the same 2PC the wire protocol uses. A single remote owner keeps the
+  5a fast path. Reads inside a transaction are forwarded only to an owner already holding a slice
+  (read-your-writes) and otherwise run locally.
+- **`ops/resp/ResponseParser`** rebuilds a typed `OperationResponse` from the owner's response JSON,
+  mirroring `ops/req/RequestParser`. It constructs each subclass through its public constructor
+  rather than reflectively: the four fields inherited from `OperationResponse` are final with no
+  matching constructor arity, so the reflective path would fall through to unsafe allocation. An
+  unreadable response becomes a catchable script `Error`.
+- **`aggregate` forwards the caller's own pipeline JSON**, not a re-serialization of the parsed
+  operator tree — the aggregation operator hierarchy is polymorphic and `RequestParser` hand-parses
+  it, so a round trip through `eJson.toJson` would mangle a `CUSTOM` (geo/vector) operator.
+- Thread affinity is unchanged: the 2PC round trips block on the thread that owns the transaction's
+  locks, which is what `assertSessionThread` and `ResourceLocking`'s thread-owned release require.
+
+### Captured console output
+
+`SimpleJs.run` wraps the host's console sink in a `host/ConsoleCapture` and attaches the collected
+lines to the `ScriptResult` on **every** exit path — value, thrown error, syntax error and sandbox
+abort alike — reachable as `getLogs()` and `isLogsTruncated()`.
+
+- The capture is a **ring buffer keeping the most recent lines**: over `ResourceLimits.maxLogLines`
+  (default 1000) the oldest line is evicted and `logsTruncated` is set. A single line longer than
+  `maxLogLineChars` (default 4096) is clipped, which also sets the flag. `ResourceLimits.unlimited()`
+  still applies both caps — an unbounded compute budget is about compute, and an unbounded log buffer
+  is a heap risk regardless.
+- Output is **teed**: the capture always receives the line, and `host.console()` additionally
+  receives it when the host supplied a sink. Because `SimpleJs.run` now always passes a non-null
+  `console()`, `GlobalScope` never falls back to `ConsoleBuiltins`' static `System.out::println`, so
+  a script embedded through `SimpleJs.run` no longer writes to the server's stdout by default.
+- `ConsoleCapture.accept` is synchronized: a `fetch` settlement and a coroutine body reach it from
+  different virtual threads, and it is the one piece of interpreter-adjacent state the coroutine lock
+  does not cover.
+- Like `instructionBudget`/`wallClockMillis`, the two log caps have no `lwnrdb.cfg` key yet; they
+  surface as one configuration-surface decision when `RUN_SCRIPT` is wired.
 
 ### `crypto`
 

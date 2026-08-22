@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNull;
@@ -329,5 +330,102 @@ public class SimpleJsTest {
         final var result = run("return JSON.stringify(1n);");
         assertTrue(result.isError());
         assertEquals("TypeError", result.getErrorName());
+    }
+
+    // console output is captured and returned alongside the value
+    @Test
+    public void test_returns_logs_with_value() {
+        final var result = run("console.log('a'); console.log('b'); return 1;");
+        assertFalse(result.isError());
+        assertEquals(List.of("a", "b"), result.getLogs());
+        assertFalse(result.isLogsTruncated());
+    }
+
+    // Logs written before a throw are still returned on the error result
+    @Test
+    public void test_returns_logs_when_script_throws() {
+        final var result = run("console.log('a'); throw new Error('boom');");
+        assertTrue(result.isError());
+        assertEquals("Error", result.getErrorName());
+        assertEquals(List.of("a"), result.getLogs());
+    }
+
+    // A parse failure happens before any capture, so logs are empty but never null
+    @Test
+    public void test_returns_logs_on_syntax_error() {
+        final var result = run("let = ;");
+        assertTrue(result.isError());
+        assertEquals("SyntaxError", result.getErrorName());
+        assertTrue(result.getLogs().isEmpty());
+    }
+
+    // A wall-clock timeout still carries the logs written before the abort
+    @Test
+    public void test_returns_logs_on_timeout() {
+        final var limits = new ResourceLimits(-1, 1, -1);
+        final var host = new SimpleHostBindings(new JsonObject(), null, null, limits);
+        final var result = engine.run("console.log('a'); while (true) {}", host);
+        assertTrue(result.isError());
+        assertEquals("ScriptTimeoutError", result.getErrorName());
+        assertEquals(List.of("a"), result.getLogs());
+    }
+
+    // An instruction-budget abort still carries the logs written before the abort
+    @Test
+    public void test_returns_logs_on_instruction_limit() {
+        final var limits = new ResourceLimits(50, -1, -1);
+        final var host = new SimpleHostBindings(new JsonObject(), null, null, limits);
+        final var result = engine.run("console.log('a'); while (true) {}", host);
+        assertTrue(result.isError());
+        assertEquals(List.of("a"), result.getLogs());
+    }
+
+    // A TypeError thrown by the runtime still carries the logs
+    @Test
+    public void test_returns_logs_on_runtime_type_error() {
+        final var result = run("console.log('a'); null.x;");
+        assertTrue(result.isError());
+        assertEquals(List.of("a"), result.getLogs());
+    }
+
+    // All four console methods land in the capture
+    @Test
+    public void test_captures_error_warn_info() {
+        final var result = run("console.log('l'); console.error('e'); console.warn('w'); console.info('i');");
+        assertEquals(List.of("l", "e", "w", "i"), result.getLogs());
+    }
+
+    // Output is teed: the host's own sink sees every line and the result carries them too
+    @Test
+    public void test_tees_to_host_sink() {
+        final var sink = new ArrayList<String>();
+        final var host = new SimpleHostBindings(new JsonObject(), null, sink::add, ResourceLimits.unlimited());
+        final var result = engine.run("console.log('a'); console.log('b');", host);
+        assertEquals(List.of("a", "b"), sink);
+        assertEquals(List.of("a", "b"), result.getLogs());
+    }
+
+    // With a null host sink the capture still collects, so nothing leaks to stdout
+    @Test
+    public void test_null_host_sink_still_captures() {
+        final var host = new SimpleHostBindings(new JsonObject(), null, null, ResourceLimits.unlimited());
+        assertEquals(List.of("a"), engine.run("console.log('a');", host).getLogs());
+    }
+
+    // Overflowing the line cap keeps the newest lines and flags truncation on the result
+    @Test
+    public void test_logs_truncated_flag_surfaces_to_result() {
+        final var limits = new ResourceLimits(-1, -1, -1, true, false, List.of(), -1, -1, false, false,
+                ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, 2, 100);
+        final var host = new SimpleHostBindings(new JsonObject(), null, null, limits);
+        final var result = engine.run("for (let i = 0; i < 5; i++) { console.log(String(i)); }", host);
+        assertTrue(result.isLogsTruncated());
+        assertEquals(List.of("3", "4"), result.getLogs());
+    }
+
+    // Multiple console arguments are joined into one captured line
+    @Test
+    public void test_multiple_arguments_join_into_one_line() {
+        assertEquals(List.of("a b 1"), run("console.log('a', 'b', 1);").getLogs());
     }
 }

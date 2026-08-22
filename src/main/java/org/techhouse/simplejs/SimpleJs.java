@@ -1,5 +1,6 @@
 package org.techhouse.simplejs;
 
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -17,7 +18,10 @@ import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
 import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
 import org.techhouse.simplejs.exceptions.UnterminatedStringException;
 import org.techhouse.simplejs.exceptions.UnterminatedTemplateException;
+import org.techhouse.simplejs.host.CapturingHostBindings;
+import org.techhouse.simplejs.host.ConsoleCapture;
 import org.techhouse.simplejs.host.HostBindings;
+import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
@@ -34,32 +38,45 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class SimpleJs {
     public ScriptResult run(String source, HostBindings host) {
+        final var limits = host.limits();
+        final var capture = new ConsoleCapture(
+                limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINES : limits.maxLogLines(),
+                limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS : limits.maxLogLineChars());
+        final var capturing = CapturingHostBindings.wrap(host, capture);
         try {
-            final var program = Parser.parse(Lexer.lexWithPositions(source), host.strictScriptGoal());
-            final var outcome = Interpreter.run(program, host);
+            final var program = Parser.parse(Lexer.lexWithPositions(source), capturing.strictScriptGoal());
+            final var outcome = Interpreter.run(program, capturing);
             final var value = EJsonInterop.toHostEjson(contractResult(outcome));
-            return ScriptResult.value(value == null ? JsonNull.INSTANCE : value);
+            return ok(value == null ? JsonNull.INSTANCE : value, capture);
         } catch (ScriptTimeoutException timeout) {
-            return ScriptResult.error("ScriptTimeoutError", timeout.getMessage());
+            return failed("ScriptTimeoutError", timeout.getMessage(), capture);
         } catch (ScriptAbortException limit) {
-            return ScriptResult.error("ScriptLimitError", limit.getMessage());
+            return failed("ScriptLimitError", limit.getMessage(), capture);
         } catch (JsThrowException thrown) {
-            return errorFromThrow(thrown);
+            return errorFromThrow(thrown, capture);
         } catch (TypeErrorException error) {
-            return ScriptResult.error("TypeError", error.getMessage());
+            return failed("TypeError", error.getMessage(), capture);
         } catch (ReferenceErrorException error) {
-            return ScriptResult.error("ReferenceError", error.getMessage());
+            return failed("ReferenceError", error.getMessage(), capture);
         } catch (RangeErrorException error) {
-            return ScriptResult.error("RangeError", error.getMessage());
+            return failed("RangeError", error.getMessage(), capture);
         } catch (SyntaxErrorException | UnexpectedTokenException | UnexpectedEndOfInputException
                 | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
                 | UnterminatedCommentException | UnterminatedRegexException error) {
-            return ScriptResult.error("SyntaxError", error.getMessage());
+            return failed("SyntaxError", error.getMessage(), capture);
         } catch (UnsupportedNodeException error) {
-            return ScriptResult.error("SyntaxError", "Unsupported syntax: " + error.getMessage());
+            return failed("SyntaxError", "Unsupported syntax: " + error.getMessage(), capture);
         } catch (SimpleJsRuntimeException error) {
-            return ScriptResult.error("InternalError", error.getMessage());
+            return failed("InternalError", error.getMessage(), capture);
         }
+    }
+
+    private ScriptResult ok(JsonBaseElement value, ConsoleCapture capture) {
+        return ScriptResult.value(value, capture.lines(), capture.isTruncated());
+    }
+
+    private ScriptResult failed(String name, String message, ConsoleCapture capture) {
+        return ScriptResult.error(name, message, capture.lines(), capture.isTruncated());
     }
 
     private JsValue contractResult(Interpreter.ProgramOutcome outcome) {
@@ -91,12 +108,12 @@ public final class SimpleJs {
         };
     }
 
-    private ScriptResult errorFromThrow(JsThrowException thrown) {
+    private ScriptResult errorFromThrow(JsThrowException thrown, ConsoleCapture capture) {
         final var value = thrown.getValue();
         if (value instanceof JsObject object) {
-            return ScriptResult.error(errorName(object), field(object));
+            return failed(errorName(object), field(object), capture);
         }
-        return ScriptResult.error("Error", JsCoercion.toStr(value));
+        return failed("Error", JsCoercion.toStr(value), capture);
     }
 
     // A thrown value may have no "name" anywhere on its prototype chain (e.g. the test262 harness's

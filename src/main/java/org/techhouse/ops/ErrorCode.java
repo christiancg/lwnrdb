@@ -142,4 +142,16 @@ public enum ErrorCode {
     public OperationStatus getStatus() {
         return status;
     }
+
+    public static ErrorCode byCode(String code) {
+        if (code == null) {
+            return null;
+        }
+        for (final var errorCode : values()) {
+            if (errorCode.code.equals(code)) {
+                return errorCode;
+            }
+        }
+        return null;
+    }
 }

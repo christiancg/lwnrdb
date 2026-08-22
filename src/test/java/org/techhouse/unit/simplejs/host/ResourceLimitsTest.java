@@ -59,4 +59,35 @@ public class ResourceLimitsTest {
         assertTrue(limits.textImportEnabled());
         assertEquals(7, limits.maxModuleDepth());
     }
+
+    // Every convenience constructor supplies the default log caps
+    @Test
+    public void test_defaults_supply_log_caps() {
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES, new ResourceLimits(100, 200, 3).maxLogLines());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, new ResourceLimits(100, 200, 3).maxLogLineChars());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES, new ResourceLimits(100, 200, 3, true).maxLogLines());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES, new ResourceLimits(100, 200, 3, true, true).maxLogLines());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES,
+                new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1).maxLogLines());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES,
+                new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true).maxLogLines());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES,
+                new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4).maxLogLines());
+    }
+
+    // An unlimited compute budget still caps logs: an unbounded buffer is a heap risk regardless
+    @Test
+    public void test_unlimited_still_caps_logs() {
+        final var limits = ResourceLimits.unlimited();
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINES, limits.maxLogLines());
+        assertEquals(ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS, limits.maxLogLineChars());
+    }
+
+    // The full canonical constructor carries explicit log caps through
+    @Test
+    public void test_explicit_log_caps() {
+        final var limits = new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, false, false, 4, 7, 9);
+        assertEquals(7, limits.maxLogLines());
+        assertEquals(9, limits.maxLogLineChars());
+    }
 }
