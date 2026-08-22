@@ -331,14 +331,15 @@ The authoritative statement of what is *still* missing is
 - **6f — modules & host integration ✅** — the engine is wired to LWNRDB through the
   `simplejs/host/` seam. `SimpleJs.run(String source, HostBindings host)` is the sole public
   entrypoint: it lexes/parses/interprets and returns a `ScriptResult` (an EJson value, or an
-  error name+message). **Modules:** a script is one module; `import` resolves only against two
+  error name+message). **Modules:** a script is one module; `import` resolves three
   host-provided built-in modules — `import args from "args"` (the request payload as a map, so
-  `args[0]`, `args.name` and `args['name']` all work) and `import db from "db"` (the
+  `args[0]`, `args.name` and `args['name']` all work), `import db from "db"` (the
   `DatabaseAccess` surfaced as an object of methods `findById`/`aggregate`/`save`/`delete`/
-  `listCollections`/`listDatabases`, built by `builtins/DbModule`). All `import` forms
-  (default/named/namespace) bind these; any other specifier throws a catchable
-  `Cannot find module '…'` error. Import attributes (`with { type: "json" }`) are parsed and
-  ignored. **Result contract:** a top-level `return` if the module runs one, else the collected
+  `listCollections`/`listDatabases`, built by `builtins/DbModule`) and `import script from "script"`
+  (see *Module loading* below). Any other specifier is offered to the host's
+  `ModuleResolver` and, if it is unclaimed, throws a catchable `Cannot find module '…'` error. All
+  `import` forms (default/named/namespace) bind these. Import attributes (`with { type: "json" }`)
+  are parsed and ignored. **Result contract:** a top-level `return` if the module runs one, else the collected
   `export default`, else an object of the named exports, else `undefined` (→ JSON null).
   **Sandboxing (`ResourceLimits`):** the interpreter checks a per-step instruction budget and a
   wall-clock deadline at loop back-edges and call entries, and a recursion depth cap on each
@@ -601,8 +602,47 @@ allowlist (rejected before any call), the response-size cap and a per-call timeo
 bounded worker join), all producing a catchable `TypeError`. `host/JdkNetworkAccess`
 (`java.net.http.HttpClient`) is the only place performing real network I/O and is never
 wired by default — a host opts in by supplying it via `network()`. **Deliberate
-limitations**: dynamic import resolves only the `args`/`db` built-ins (import options are
-ignored), and the `Response` is a plain object (no streaming body, single-value headers).
+limitations**: dynamic import resolves the `args`/`db`/`script` built-ins plus whatever the
+host's `ModuleResolver` claims (import options are ignored), and the `Response` is a plain object
+(no streaming body, single-value headers).
+
+**Module loading.** Every specifier — static `import`, `import()`, `export … from` — funnels
+through `ModuleEvaluator.resolveModule` into the interpreter's **per-run module registry**
+(`internal/interpreter/ModuleRegistry`). The registry keys modules by an opaque **module id**, which
+gives three properties: a module evaluates at most once per run (a second import of the same id
+returns the cached namespace), a module that threw stays failed and rethrows the original error
+rather than re-running its side effects, and an import of a module that is still evaluating is a
+**cycle** — reported as a catchable `Error("Circular import of module '…'")`. The registry is
+per-run and never shared between runs, because an evaluated module holds mutable state that would
+otherwise leak from one caller to the next. The built-ins are seeded into it under the fixed ids
+`builtin:args`, `builtin:db` and `builtin:script`.
+
+An imported module is evaluated **in the importer's own realm**: the same `Interpreter`, the same
+`Intrinsics`, the same `EventLoop`, the same coroutine and thread, and the same instruction counter
+and deadline, in a fresh module `Environment` whose parent is the global one (so its `var`s stay
+private while globals remain visible). That is what makes the boundary transparent — an array or
+error crossing it still satisfies `instanceof`, a promise or timer created by imported code settles
+on the loop the importer drains, an open `db.transaction` keeps its thread affinity, and an imported
+module's work is spent from the importer's single budget rather than a fresh one. A top-level
+`await` in an imported module parks the importer's coroutine, matching ESM's semantics. Nesting is
+bounded by `ResourceLimits.maxModuleDepth` (default 16, `-1` unlimited) purely as a guard on Java
+recursion; exceeding it throws the uncatchable `ScriptLimitException`.
+
+Beyond the built-ins, resolution is the **host's** responsibility through `host/ModuleResolver`
+(`ResolvedModule resolve(String specifier, String referrer)`, reached via
+`HostBindings.moduleResolver()`, **default `null`**). Returning `null` — or having no resolver at
+all — produces the standard catchable `Cannot find module '…'`. The returned `moduleId` is the
+registry key, so two specifiers naming the same module must return the same id or it is evaluated
+twice.
+
+The `"script"` built-in is the in-sandbox entry to the same pipeline:
+`script.importText(source[, moduleId])` runs a **string** as a module and returns its namespace,
+skipping only the resolution step. Without an explicit id the id is content-addressed
+(`"text:" + sha256(source)`), so importing the same text twice evaluates it once. Parse failure is a
+catchable `SyntaxError`; an error thrown by the module body propagates to the importer's own
+`try/catch`. Obtaining the text is deliberately not the module's job — a script composes
+`db.findById(...)` with `importText(...)` itself. The capability is off unless the host sets
+`ResourceLimits.textImportEnabled` (default `false`, the same posture as `fetchEnabled`).
 
 **Typed arrays (spec-gap Phase E).** Binary data is backed by three new isolated value
 types. `values/JsArrayBuffer` wraps a fixed-length shared `byte[]` (`byteLength`, `slice`);
@@ -1152,7 +1192,11 @@ design decision, not a bug. This list is the **specification of the conformance 
 be kept in step — an exclusion with no entry here is a number being flattered.
 
 - **`eval` / the `Function` constructor** — no runtime code generation from strings. Allowing it
-  would defeat the instruction-budget/deadline sandbox and open an injection surface. The `Function`
+  would defeat the instruction-budget/deadline sandbox and open an injection surface. The `"script"`
+  module's `importText` runs a string as a *module*, which does not reopen the first half of that
+  reasoning — the imported module shares the caller's realm, event loop, instruction budget and
+  deadline, so it can never buy extra compute — but it does share the second half, which is why it is
+  gated off by default behind `ResourceLimits.textImportEnabled`. The `Function`
   constructor is filtered by source pattern in both spellings (`Function(…)` and `new Function(…)`);
   the deliberately narrower `\bnew\s+Function\s*;` line exists so that `new Function.prototype.apply()`
   and friends — which test `[[Construct]]`, not the constructor — stay measured.
@@ -1229,8 +1273,11 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   ES2026 snapshot; buffers are mutable or detached, with no third state.
 - **`WeakRef` / `FinalizationRegistry`** — GC-observable behavior cannot be exposed safely or
   deterministically; `WeakMap`/`WeakSet` exist but are strong (weakness is unobservable in-sandbox).
-- **Arbitrary module resolution** — `import` resolves only the host `args`/`db` built-ins;
-  filesystem/URL module loading would be a sandbox escape.
+- **Arbitrary module resolution** — the engine itself performs no filesystem or URL loading; a
+  specifier beyond the `args`/`db`/`script` built-ins resolves only if the host's `ModuleResolver`
+  claims it, so what is importable is entirely the host's decision. Loading an npm package through
+  that seam additionally needs work that is not built: CommonJS/`require`, node core-module shims,
+  `package.json` `exports` resolution, and ESM live-binding cycles (a cycle currently throws).
 - **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;
   by-copy methods always allocate the default type. The same gap means a derived-construction builtin
   method (e.g. `ArrayBuffer.prototype.slice`) always returns a base-type instance even on a subclass

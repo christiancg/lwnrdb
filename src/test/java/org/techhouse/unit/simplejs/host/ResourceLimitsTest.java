@@ -1,7 +1,10 @@
 package org.techhouse.unit.simplejs.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.host.ResourceLimits;
 
@@ -22,5 +25,38 @@ public class ResourceLimitsTest {
         assertEquals(-1, limits.instructionBudget());
         assertEquals(-1, limits.wallClockMillis());
         assertEquals(-1, limits.maxDepth());
+    }
+
+    // Text import is a capability, not a budget: every shorter constructor leaves it off
+    @Test
+    public void test_default_text_import_disabled() {
+        assertFalse(new ResourceLimits(100, 200, 3).textImportEnabled());
+        assertFalse(new ResourceLimits(100, 200, 3, true).textImportEnabled());
+        assertFalse(new ResourceLimits(100, 200, 3, true, true).textImportEnabled());
+        assertFalse(new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1).textImportEnabled());
+        assertFalse(new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true).textImportEnabled());
+    }
+
+    // unlimited() budgets do not imply new capabilities, matching fetchEnabled
+    @Test
+    public void test_unlimited_keeps_text_import_disabled() {
+        assertFalse(ResourceLimits.unlimited().textImportEnabled());
+        assertFalse(ResourceLimits.unlimited().fetchEnabled());
+    }
+
+    // The module depth cap defaults to the shared constant on every shorter constructor
+    @Test
+    public void test_default_max_module_depth() {
+        assertEquals(ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, new ResourceLimits(100, 200, 3).maxModuleDepth());
+        assertEquals(ResourceLimits.DEFAULT_MAX_MODULE_DEPTH, ResourceLimits.unlimited().maxModuleDepth());
+        assertEquals(16, ResourceLimits.DEFAULT_MAX_MODULE_DEPTH);
+    }
+
+    // The canonical constructor carries both new fields through
+    @Test
+    public void test_canonical_constructor_carries_new_fields() {
+        final var limits = new ResourceLimits(1, 2, 3, true, false, List.of(), -1, -1, false, true, 7);
+        assertTrue(limits.textImportEnabled());
+        assertEquals(7, limits.maxModuleDepth());
     }
 }

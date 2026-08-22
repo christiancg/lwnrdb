@@ -12,6 +12,19 @@ public interface HostBindings {
 
     ResourceLimits limits();
 
+    // Null-safe view of the parse goal, shared by the top-level entrypoint and every imported module
+    // so a script and its imports are parsed under the same rules.
+    default boolean strictScriptGoal() {
+        final var limits = limits();
+        return limits != null && limits.strictScriptGoal();
+    }
+
+    // Module resolution beyond the "args"/"db"/"script" built-ins is opt-in: a null resolver means a
+    // bare specifier is unresolvable, which is the standalone behaviour.
+    default ModuleResolver moduleResolver() {
+        return null;
+    }
+
     // Network access is opt-in and off by default: a null binding means `fetch` is unavailable.
     default NetworkAccess network() {
         return null;

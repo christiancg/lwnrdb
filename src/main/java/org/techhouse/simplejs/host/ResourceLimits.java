@@ -7,10 +7,21 @@ import java.util.List;
 // raises the ECMAScript Script goal's early errors instead.
 public record ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth,
         boolean reportUnhandledRejections, boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes,
-        long fetchTimeoutMillis, boolean strictScriptGoal) {
+        long fetchTimeoutMillis, boolean strictScriptGoal, boolean textImportEnabled, int maxModuleDepth) {
+
+    // Not the cycle mechanism (the module registry detects cycles); a bound on genuine Java recursion,
+    // since each nested module evaluation nests the interpreter's own stack.
+    public static final int DEFAULT_MAX_MODULE_DEPTH = 16;
 
     public ResourceLimits {
         fetchHostAllowlist = fetchHostAllowlist == null ? List.of() : List.copyOf(fetchHostAllowlist);
+    }
+
+    public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,
+            boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes, long fetchTimeoutMillis,
+            boolean strictScriptGoal) {
+        this(instructionBudget, wallClockMillis, maxDepth, reportUnhandledRejections, fetchEnabled, fetchHostAllowlist,
+                maxResponseBytes, fetchTimeoutMillis, strictScriptGoal, false, DEFAULT_MAX_MODULE_DEPTH);
     }
 
     public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,

@@ -7,6 +7,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.GlobalScope;
 import org.techhouse.simplejs.builtins.InterpreterOps;
@@ -29,6 +30,7 @@ import org.techhouse.simplejs.internal.interpreter.ExpressionEvaluator;
 import org.techhouse.simplejs.internal.interpreter.Iteration;
 import org.techhouse.simplejs.internal.interpreter.MemberEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ModuleEvaluator;
+import org.techhouse.simplejs.internal.interpreter.ModuleRegistry;
 import org.techhouse.simplejs.internal.interpreter.ProxyDispatch;
 import org.techhouse.simplejs.internal.interpreter.StatementEvaluator;
 import org.techhouse.simplejs.internal.interpreter.VarHoisting;
@@ -255,10 +257,14 @@ public final class Interpreter {
     private final ModuleEvaluator modules;
 
     private final HostBindings host;
+    private final ModuleRegistry moduleRegistry = new ModuleRegistry();
     private final int maxDepth;
+    private final int maxModuleDepth;
     private long instructionsRemaining;
     private final long deadlineNanos;
     private int depth;
+    private int moduleDepth;
+    private Environment globalEnv;
     // Set once by runModule (one Interpreter per script run/realm). GetBindingValue on a Global
     // Environment Record consults HasProperty/Get on the global object itself, not just its
     // declared var/function bindings - a property added directly on globalThis via
@@ -274,6 +280,7 @@ public final class Interpreter {
         eventLoop.wireInterpreter(ops, intrinsics);
         final var limits = host.limits();
         this.maxDepth = limits.maxDepth();
+        this.maxModuleDepth = limits.maxModuleDepth();
         this.instructionsRemaining = limits.instructionBudget();
         this.deadlineNanos = limits.wallClockMillis() > 0
                 ? System.nanoTime() + limits.wallClockMillis() * 1_000_000L
@@ -318,13 +325,7 @@ public final class Interpreter {
                 host.console(), ops, host.network(), host.limits(), intrinsics);
         env.defineThis(globalThis);
         globalObjectValue = globalThis;
-        for (final var statement : program.getBody()) {
-            if (statement instanceof ImportDeclaration importDeclaration) {
-                modules.bindImport(importDeclaration, env);
-            }
-        }
-        VarHoisting.hoistVars(program.getBody(), env);
-        hoist(program.getBody(), env);
+        globalEnv = env;
         final var result = new ModuleResult();
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
@@ -332,7 +333,7 @@ public final class Interpreter {
         try {
             coroutine.startAsync(() -> {
                 currentCoroutine.set(coroutine);
-                runModuleBody(program, env, result);
+                evaluateModuleBody(program, env, result);
                 return JsUndefined.getInstance();
             });
             markContractPromiseHandled(result);
@@ -373,7 +374,14 @@ public final class Interpreter {
         }
     }
 
-    private void runModuleBody(Program program, Environment env, ModuleResult result) {
+    private void evaluateModuleBody(Program program, Environment env, ModuleResult result) {
+        for (final var statement : program.getBody()) {
+            if (statement instanceof ImportDeclaration importDeclaration) {
+                modules.bindImport(importDeclaration, env);
+            }
+        }
+        VarHoisting.hoistVars(program.getBody(), env);
+        hoist(program.getBody(), env);
         RuntimeException pending = null;
         try {
             runModuleStatements(program, env, result);
@@ -383,6 +391,57 @@ public final class Interpreter {
             pending = error;
         }
         statements.disposeScope(env, Completion.empty(), pending);
+    }
+
+    // An imported module shares this interpreter's realm, event loop, coroutine and instruction
+    // counter: a second Interpreter would give it prototypes the importer cannot match, an event loop
+    // nothing drains, a thread that breaks an open transaction's affinity, and a fresh budget.
+    public JsValue importModule(String moduleId, Supplier<Program> parser) {
+        final var state = moduleRegistry.stateOf(moduleId);
+        if (state == ModuleRegistry.State.EVALUATED) {
+            return moduleRegistry.namespaceOf(moduleId);
+        }
+        if (state == ModuleRegistry.State.FAILED) {
+            throw moduleRegistry.failureOf(moduleId);
+        }
+        if (state == ModuleRegistry.State.EVALUATING) {
+            throw new JsThrowException(intrinsics.makeError("Error", "Circular import of module '" + moduleId + "'"));
+        }
+        if (maxModuleDepth >= 0 && moduleDepth >= maxModuleDepth) {
+            throw new ScriptLimitException("Script exceeded its maximum module nesting depth");
+        }
+        moduleRegistry.beginEvaluation(moduleId);
+        moduleDepth++;
+        try {
+            final var namespace = evaluateModule(parser.get());
+            moduleRegistry.complete(moduleId, namespace);
+            return namespace;
+        } catch (RuntimeException error) {
+            moduleRegistry.fail(moduleId, error);
+            throw error;
+        } finally {
+            moduleDepth--;
+        }
+    }
+
+    public JsValue cacheBuiltinModule(String moduleId, Supplier<JsValue> factory) {
+        final var state = moduleRegistry.stateOf(moduleId);
+        if (state == ModuleRegistry.State.EVALUATED) {
+            return moduleRegistry.namespaceOf(moduleId);
+        }
+        final var module = factory.get();
+        moduleRegistry.complete(moduleId, module);
+        return module;
+    }
+
+    private JsValue evaluateModule(Program program) {
+        final var env = globalEnv.functionChild();
+        final var result = new ModuleResult();
+        evaluateModuleBody(program, env, result);
+        final var namespace = new JsObject();
+        result.namedExports.forEach(namespace::set);
+        namespace.set("default", result.exportDefault == null ? JsUndefined.getInstance() : result.exportDefault);
+        return namespace;
     }
 
     private void runModuleStatements(Program program, Environment env, ModuleResult result) {

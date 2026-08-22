@@ -5,13 +5,24 @@ import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.colle
 import java.util.ArrayList;
 import java.util.Map;
 import org.techhouse.simplejs.builtins.DbModule;
+import org.techhouse.simplejs.builtins.ScriptModule;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
+import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
+import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
+import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
+import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
+import org.techhouse.simplejs.exceptions.UnterminatedStringException;
+import org.techhouse.simplejs.exceptions.UnterminatedTemplateException;
 import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.internal.Lexer;
+import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ClassDeclaration;
 import org.techhouse.simplejs.nodes.ExportAllDeclaration;
 import org.techhouse.simplejs.nodes.ExportDefaultDeclaration;
@@ -25,6 +36,7 @@ import org.techhouse.simplejs.nodes.ImportExpression;
 import org.techhouse.simplejs.nodes.ImportNamespaceSpecifier;
 import org.techhouse.simplejs.nodes.ImportSpecifier;
 import org.techhouse.simplejs.nodes.JsNode;
+import org.techhouse.simplejs.nodes.Program;
 import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.StringLiteral;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
@@ -35,9 +47,12 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// The module system: resolving the two host-provided built-ins ("args"/"db"), binding static
-// import declarations, dynamic import()/import.meta, and collecting the named/default/re-exports.
-// Declaration evaluation and class building route through the Interpreter and ClassEvaluator seams.
+// The module system: resolving the host-provided built-ins ("args"/"db"/"script") and any specifier
+// the host's ModuleResolver claims, binding static import declarations, dynamic import()/import.meta,
+// and collecting the named/default/re-exports. Every resolution funnels through the Interpreter's
+// module registry, so a module evaluates at most once per run and a cycle is detected rather than
+// recursed into. Declaration evaluation and class building route through the Interpreter and
+// ClassEvaluator seams.
 public final class ModuleEvaluator {
     private final Interpreter interp;
     private final ClassEvaluator classes;
@@ -53,19 +68,45 @@ public final class ModuleEvaluator {
 
     private JsValue resolveModule(String source) {
         return switch (source) {
-            case "args" -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args());
-            case "db" -> {
-                final var database = host.database();
-                if (database == null) {
-                    throw new JsThrowException(
-                            interp.intrinsics().makeError("Error", "Database access is not available"));
-                }
-                database.useErrorPrototype(interp.intrinsics().errorProto("Error"));
-                yield DbModule.create(database, interp.ops());
-            }
-            default -> throw new JsThrowException(
-                    interp.intrinsics().makeError("Error", "Cannot find module '" + source + "'"));
+            case "args" -> interp.cacheBuiltinModule("builtin:args",
+                    () -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args()));
+            case "db" -> interp.cacheBuiltinModule("builtin:db", this::createDbModule);
+            case "script" -> interp.cacheBuiltinModule("builtin:script",
+                    () -> ScriptModule.create(this::importText, host.limits(), interp.intrinsics()));
+            default -> resolveHostModule(source);
         };
+    }
+
+    private JsValue createDbModule() {
+        final var database = host.database();
+        if (database == null) {
+            throw new JsThrowException(interp.intrinsics().makeError("Error", "Database access is not available"));
+        }
+        database.useErrorPrototype(interp.intrinsics().errorProto("Error"));
+        return DbModule.create(database, interp.ops());
+    }
+
+    private JsValue resolveHostModule(String source) {
+        final var resolver = host.moduleResolver();
+        final var resolved = resolver == null ? null : resolver.resolve(source, "main");
+        if (resolved == null) {
+            throw new JsThrowException(interp.intrinsics().makeError("Error", "Cannot find module '" + source + "'"));
+        }
+        return interp.importModule(resolved.moduleId(), () -> parse(resolved.source()));
+    }
+
+    private JsValue importText(String moduleId, String source) {
+        return interp.importModule(moduleId, () -> parse(source));
+    }
+
+    private Program parse(String source) {
+        try {
+            return Parser.parse(Lexer.lexWithPositions(source), host.strictScriptGoal());
+        } catch (SyntaxErrorException | UnexpectedTokenException | UnexpectedEndOfInputException
+                | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
+                | UnterminatedCommentException | UnterminatedRegexException error) {
+            throw new JsThrowException(interp.intrinsics().makeError("SyntaxError", error.getMessage()));
+        }
     }
 
     // A module namespace object: the resolved module's own members plus a `default` binding that
