@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.InterpreterOps.locale;
+
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
@@ -131,20 +133,20 @@ public final class NumberBuiltins {
             case "toString" ->
                 new JsNativeFunction("toString", (_, args) -> new JsString(toStringRadix(value, args, ops)));
             case "toLocaleString" ->
-                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(value)));
+                new JsNativeFunction("toLocaleString", (_, _) -> new JsString(toLocaleString(value, ops)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> new JsNumber(value));
             default -> null;
         };
     }
 
-    private static String toLocaleString(double value) {
+    private static String toLocaleString(double value, InterpreterOps ops) {
         if (Double.isNaN(value)) {
             return "NaN";
         }
         if (Double.isInfinite(value)) {
             return value > 0 ? "∞" : "-∞";
         }
-        return java.text.NumberFormat.getInstance(java.util.Locale.getDefault()).format(value);
+        return java.text.NumberFormat.getInstance(locale(ops)).format(value);
     }
 
     @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")

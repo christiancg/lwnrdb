@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
@@ -17,7 +19,10 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.builtins.ArrayBuiltins;
 import org.techhouse.simplejs.builtins.BigIntBuiltins;
 import org.techhouse.simplejs.builtins.DateBuiltins;
+import org.techhouse.simplejs.builtins.DbDateTimeBuiltins;
+import org.techhouse.simplejs.builtins.DbTimeBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
+import org.techhouse.simplejs.builtins.GeoBuiltins;
 import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.builtins.MapBuiltins;
 import org.techhouse.simplejs.builtins.NumberBuiltins;
@@ -27,6 +32,7 @@ import org.techhouse.simplejs.builtins.SetBuiltins;
 import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
+import org.techhouse.simplejs.builtins.VectorBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.RegexTranslator;
@@ -36,7 +42,10 @@ import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsDbDateTime;
+import org.techhouse.simplejs.values.JsDbTime;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGeo;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
@@ -47,6 +56,8 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.JsVector;
+import org.techhouse.utils.GeoPoint;
 
 public class IntrinsicsTest {
     private static String run(String source) {
@@ -81,6 +92,10 @@ public class IntrinsicsTest {
                 Map.entry(new JsDate(0), realm.dateProto()), Map.entry(buffer, realm.arrayBufferProto()),
                 Map.entry(new JsDataView(buffer, 0, 8), realm.dataViewProto()),
                 Map.entry(new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance()), realm.functionProto()),
+                Map.entry(new JsGeo(new GeoPoint(1, 2)), realm.geoProto()),
+                Map.entry(new JsVector(new double[]{1, 2}), realm.vectorProto()),
+                Map.entry(new JsDbDateTime(LocalDateTime.of(2020, 1, 2, 3, 4, 5)), realm.dbDateTimeProto()),
+                Map.entry(new JsDbTime(LocalTime.of(3, 4, 5)), realm.dbTimeProto()),
                 Map.entry(new JsObject(), realm.objectProto()),
                 Map.entry(JsUndefined.getInstance(), realm.objectProto()));
         for (final var entry : expected.entrySet()) {
@@ -139,6 +154,10 @@ public class IntrinsicsTest {
         assertKeys(realm.dataViewProto(), TypedArrayBuiltins.VIEW_NAMES, TypedArrayBuiltins.viewAccessorNames());
         assertKeys(realm.mapProto(), MapBuiltins.NAMES, List.of("size"));
         assertKeys(realm.setProto(), SetBuiltins.NAMES, List.of("size"));
+        assertKeys(realm.geoProto(), GeoBuiltins.NAMES, GeoBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.vectorProto(), VectorBuiltins.NAMES, VectorBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.dbDateTimeProto(), DbDateTimeBuiltins.NAMES, DbDateTimeBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.dbTimeProto(), DbTimeBuiltins.NAMES, DbTimeBuiltins.FIELD_ACCESSORS);
     }
 
     private static void assertKeys(JsObject proto, List<String> names) {

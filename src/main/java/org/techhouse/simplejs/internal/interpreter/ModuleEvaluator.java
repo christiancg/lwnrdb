@@ -61,7 +61,7 @@ public final class ModuleEvaluator {
                             interp.intrinsics().makeError("Error", "Database access is not available"));
                 }
                 database.useErrorPrototype(interp.intrinsics().errorProto("Error"));
-                yield DbModule.create(database);
+                yield DbModule.create(database, interp.ops());
             }
             default -> throw new JsThrowException(
                     interp.intrinsics().makeError("Error", "Cannot find module '" + source + "'"));

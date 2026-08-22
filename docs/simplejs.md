@@ -42,7 +42,7 @@ for closing) and the
 | `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phases 6a–6f). Phase 6f adds the host-aware `Interpreter.run(Program, HostBindings) → ProgramOutcome` (the legacy `run(Program)`/`run(String)` overloads keep returning the last value, now allowing a top-level `return`), `import`/`export` handling (module binding + the return/export result contract), and the sandbox `tick()` checked at loop back-edges and call entries plus a recursion depth cap. Async/generator execution runs on `Coroutine` (a virtual-thread cooperative coroutine) driven by an `EventLoop` microtask queue, both in this package. Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; it resolves array/string instance methods lazily via `ArrayBuiltins`/`StringBuiltins`, runs a single unified destructuring routine (declarations, params, assignment LHS, `catch`) parameterized by a leaf binder, and (phase 6d) evaluates classes — building a `JsClass`, constructing instances via the field-ordering constructor chain, dispatching methods/getters/setters and `super`, and evaluating private-member access and `instanceof`. The interpreter's runtime helpers `Environment` (scope chain, `this` binding, home-class binding for `super`, function-scope hoisting), `Completion` (control-flow signal), `JsCoercion` (type conversions), `JsOperators` (operator semantics) and `RegexTranslator` (JS regex pattern/flags → an `internal/regex/RegexProgram`, compiled and matched by the custom engine — see *Regex engine*) live here too. Both big classes were later split into sub-packages for maintainability: `internal/parser/` (`ParserTables` precedences, `TokenStream` cursor + `newlineBefore` access, `PatternConverter` cover-grammar conversion) and `internal/interpreter/` (`ExpressionEvaluator`, `StatementEvaluator`, `MemberEvaluator`, `BindingEvaluator`, `ClassEvaluator`, `ModuleEvaluator`, `Iteration`, `ProxyDispatch`, `InterpreterUtils`) — `Parser`/`Interpreter` remain the entry points. |
 | `simplejs/values/` | ✅ (phases 6a–6e) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map, with a `freeze` flag for `Object.freeze`, plus a nullable `klass` link + lazy private-field map for class instances), `JsArray`, `JsFunction` (a closure: params, body, captured `Environment`, arrow/expression-body flags), `JsNativeFunction` (a host/built-in function backed by a `BiFunction`, plus an optional static-property map for callable namespaces like `Number.isNaN`), and `JsClass` (phase 6d: a constructable class value holding constructor/instance/static method+accessor tables, static properties, the instance-field list, private-member tables and the shared method scope; `typeof` a class is `"function"`). `EJsonInterop` converts `JsValue ↔ org.techhouse.ejson` elements (used by `JSON.parse`/`stringify`; custom-type mapping is minimal until the DB sub-phase). A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful. Phase 6e adds `JsPromise` (a pending/fulfilled/rejected promise whose reactions are scheduled on the `EventLoop`) and `JsGenerator` (a generator object wrapping a `Coroutine`); both are `typeof "object"`. `JsAsyncGenerator` (an `async function*` object wrapping a `Coroutine` plus the in-flight next-`JsPromise`; `typeof "object"`) drives the async-iterator protocol. `JsRegExp` (a compiled `internal/regex/RegexProgram` — see *Regex engine* — plus the JS `source`/`flags` and a mutable `lastIndex` for `g`/`y` matching; `typeof "object"`, `toStr` renders `/source/flags`) backs regex literals and the `RegExp` global. Later phases add `JsSymbol` (+ `SameValueZero`), `JsMap`/`JsSet`/`JsDate`, `JsProxy`, `JsArguments` (mapped/unmapped) and `JsGlobalObject` (the live `globalThis`), and the binary trio `JsArrayBuffer`/`JsTypedArray`/`JsDataView`; `JsObject` grows a prototype link, accessor descriptors, per-key `PropertyFlags` and an `extensible` flag, and `JsFunction` a lazy `prototype`. |
 | `simplejs/builtins/` | ✅ (phases 6b–6e) Standard-library values installed into the global scope by `GlobalScope.install`. `ErrorBuiltins` registers the `Error`/`TypeError`/`RangeError`/`SyntaxError`/`URIError`/`ReferenceError`/`EvalError` constructors and the `{name, message}` error shape. `ObjectBuiltins` (`keys`/`values`/`entries`/`assign`/`freeze`/`isFrozen`/`seal`/`isSealed`/`preventExtensions`/`isExtensible` — the enumeration methods skip non-enumerable own keys, spec-gap Phase C), `ArrayBuiltins` (callable `Array` + `isArray` and the instance methods `map`/`filter`/`reduce`/`forEach`/`find`/`some`/`every`/`includes`/`indexOf`/`slice`/`splice`/`concat`/`join`/`push`/`pop`/`shift`/`unshift`/`sort`/`flat`), `StringBuiltins` (`slice`/`substring`/`split`/`replace`/`replaceAll`/`match`/`matchAll`/`search`/`toUpperCase`/`toLowerCase`/`trim`/`includes`/`startsWith`/`endsWith`/`padStart`/`repeat`/`charAt`/`indexOf` — the `split`/`replace`/`replaceAll`/`match`/`matchAll`/`search` methods accept a `JsRegExp`; `replace`/`replaceAll` support `$1`/`$<name>`/`$&`/`` $` ``/`$'` tokens and a function replacer), `NumberBuiltins` (callable `Number` + `isNaN`/`isInteger`/`isFinite`/`parseInt`/`parseFloat`), `MathBuiltins`, `JsonBuiltins` (`JSON.parse`/`stringify`, delegating to EJson via `EJsonInterop`), and `ConsoleBuiltins` (`log`/`error`/`warn`/`info`, routed to a per-run sink supplied by `HostBindings.console()`, falling back to a redirectable static sink → stdout). `PromiseBuiltins` (phase 6e) installs `Promise` (`new Promise(executor)`, `resolve`/`reject`/`all`/`race`/`allSettled`/`any`; `any` rejects with an `ErrorBuiltins.makeAggregateError` when all reject). `DbModule` (phase 6f) builds the `db` module object over a `host/DatabaseAccess`. `RegexBuiltins` installs the `RegExp` global (constructable from a string pattern or by cloning a regex) and the `JsRegExp` `test`/`exec` methods + `source`/`flags`/`global`/`ignoreCase`/`multiline`/`dotAll`/`sticky`/`lastIndex` accessors; JS patterns compile via `internal/RegexTranslator` → `internal/regex/RegexParser` to an `RxNode` AST that `internal/regex/RegexMatcher` executes directly — see *Regex engine* (flags `dgimsuyv`; `g`/`y` drive stateful matching, a bad pattern/flag throws a JS `SyntaxError`). `exec`/`match` (non-global)/`matchAll` return a match result object (`[0..n]`, `index`, `input`, named `groups`) rather than a real Array. Callback-taking array methods call back into user functions through the `Invoker` seam. Later phases add `ObjectProtoBuiltins`, `FunctionProtoBuiltins`, `SymbolBuiltins`, `MapBuiltins`/`SetBuiltins`/`DateBuiltins`, `JsIterators`, `TimerBuiltins`, `ReflectBuiltins`/`ProxyBuiltins`, `TypedArrayBuiltins`, `FetchBuiltins`, `IteratorBuiltins`/`AsyncIteratorBuiltins` and `GlobalFunctionsBuiltins` (URI functions, `queueMicrotask`, `structuredClone`, Annex-B `escape`/`unescape`), plus the `InterpreterOps` and `IterableToList` seams back into the interpreter. |
-| `simplejs/host/` | ✅ (phase 6f) The DB-integration seam and public entrypoint — the only place the interpreter touches the `ops`/`cache`/`conn`/`ioc` layers. `SimpleJs.run(String, HostBindings) → ScriptResult` is the public API. `HostBindings` carries the `args` payload, a nullable `DatabaseAccess`, a console sink and `ResourceLimits`; `SimpleHostBindings` is a record impl. `DatabaseAccess` is the EJson-typed DB interface (mockable for tests); `EnforcingDatabaseAccess` is the real impl that enforces auth + schema before calling `OperationProcessor`. `ScriptResult` holds the returned/exported EJson value or a thrown error's name+message. |
+| `simplejs/host/` | ✅ (phase 6f) The DB-integration seam and public entrypoint — the only place the interpreter touches the `ops`/`cache`/`conn`/`ioc` layers. `SimpleJs.run(String, HostBindings) → ScriptResult` is the public API. `HostBindings` carries the `args` payload, a nullable `DatabaseAccess`, a console sink and `ResourceLimits`; `SimpleHostBindings` is a record impl. `DatabaseAccess` is the EJson-typed DB interface (mockable for tests); `EnforcingDatabaseAccess` is the real impl that enforces auth + schema before calling `OperationProcessor`. `ScriptResult` holds the returned/exported EJson value or a thrown error's name+message. `DatabaseAccess` also carries `bulkSave` and the `beginTransaction`/`commitTransaction`/`rollbackTransaction` trio (see *`db.transaction` and `db.bulkSave`*), and `HostBindings` supplies the script's `timeZone()`/`locale()`; `DatabaseHostBindings` pins both from configuration. |
 | `simplejs/exceptions/` | ✅ Dedicated `RuntimeException` subclasses. Lexer errors: `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors: `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). Interpreter errors extend `SimpleJsRuntimeException`: `ReferenceErrorException`, `TypeErrorException`, `RangeErrorException`, `SyntaxErrorException`, `UnsupportedNodeException` (a parsed node outside the current interpreter phase's scope), and `JsThrowException` (carries the `JsValue` thrown by a `throw` statement; unwound by the nearest `try`/`catch`). Phase 6f adds `ScriptAbortException` and its subclasses `ScriptTimeoutException`/`ScriptLimitException` — resource-limit aborts that extend `RuntimeException` directly (not `SimpleJsRuntimeException`), so user `try`/`catch` cannot intercept them. |
 
 ## The lexer
@@ -884,6 +884,97 @@ was replaced; see *Regex engine* below.
   `HostBindings.limits()`; `SimpleJs.run` keeps its signature, and `SimpleHostBindings` /
   `EnforcingDatabaseAccess` leave it off.
 - **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet.
+- **The host supplies the time zone and locale.** `HostBindings.timeZone()`/`locale()` default to
+  the JVM's (so every existing embedding and the test262 worker are unaffected) and are threaded to
+  the builtins through `InterpreterOps.timeZone()`/`locale()`. `host/DatabaseHostBindings` overrides
+  them from the `scriptTimeZone` (default `UTC`) and `scriptLocale` (default `en-US`) configuration
+  keys, so `Date`'s local-time surface, `Temporal.Now`, `toLocaleString` and `localeCompare` answer
+  the same on every cluster node. `String.prototype.localeCompare` still ignores its own `locales`
+  argument — only the *default* is host-controlled; honouring the argument belongs with a broader
+  `Intl` decision.
+- **BigInt has two conversions at the boundary.** `EJsonInterop.toEjson` is the spec path shared with
+  `JSON.stringify` and throws on a BigInt, as test262 requires. `EJsonInterop.toHostEjson` is the host
+  path (the script result contract and everything heading into the database): a BigInt whose absolute
+  value is at most 2^53−1 becomes a number, anything larger throws a `TypeError` naming the property
+  path (`Cannot serialize BigInt at 'items[2].total': value exceeds the exact integer range`).
+
+### EJson custom types
+
+The four custom types the database stores cross the boundary as real value types rather than
+vanishing as `undefined`, so a `geo`/`vector` field is readable, mutable and constructable from a
+script. Each is installed as a non-enumerable global constructor with a realm-scoped prototype.
+
+| Global | Wraps | Accessors | Methods | Statics |
+|---|---|---|---|---|
+| `Geo` | `#geo(lat,lng)` | `lat`, `lng`, `geoHash` | `toString`, `toJSON` | `Geo.from(value)` |
+| `Vector` | `#vector(v0,…,vn)` | `length`, `simHash` | `at`, `toArray`, `toString`, `toJSON` | `Vector.from(value)` |
+| `DbDateTime` | `#datetime(…)` | `year`, `month`, `day`, `hour`, `minute`, `second` | `toString`, `toJSON`, `toTemporal` | `DbDateTime.from(value)` |
+| `DbTime` | `#time(…)` | `hour`, `minute`, `second` | `toString`, `toJSON`, `toTemporal` | `DbTime.from(value)` |
+
+`DateTime`/`Time` carry the `Db` prefix because the bare names are generic enough to collide with
+library code and future proposals; `Geo`/`Vector` are not. `toTemporal()` bridges to the existing
+`Temporal.PlainDateTime`/`Temporal.PlainTime`, so the calendar arithmetic already shipped is reachable
+from a stored `datetime` field without a second implementation. `from(value)` accepts an instance of
+its own type, the wire string, a bare ISO string (the two date/time types), a property bag, or — for
+`Vector` — an array; `new Vector([1, 2, 3])` and `new Vector(1, 2, 3)` are equivalent.
+
+`EJsonInterop.toEjson` emits a real `JsonGeo`/`JsonVector`/`JsonDateTime`/`JsonTime`, so a document
+saved from a script keeps the type the storage and index layers already understand, and `fromEjson`
+maps each back. A custom type registered later, with no value type here, degrades to its wire text as
+a string rather than silently vanishing — that fallback is the actual bug this closes. (Note that
+`JsonCustom extends JsonString`, so `getJsonType()` answers `STRING` for a custom value and
+`fromEjson` recognises them by their Java type instead.)
+
+### `db.transaction` and `db.bulkSave`
+
+`db.bulkSave(database, collection, documents)` saves a batch in one dispatch and returns
+`{inserted, updated}` (mirroring `BulkSaveResponse`) rather than the saved documents — re-reading N
+documents the way single `save` does would defeat the point of the batch. Unlike single `save`, a
+batch refused wholesale throws into the script rather than reading as "nothing changed".
+
+`db.transaction(fn)` runs `fn` inside a database transaction, committing when it returns and rolling
+back when it throws. The scoped-callback form is what makes it safe: a transaction holds each written
+collection's exclusive write lock across calls, and `ResourceLocking.releaseWrite` is thread-owned
+(releasing from another thread silently does nothing and strands the lock for the process's
+lifetime). So the callback **may not suspend** — an `async` function, a generator and a callback that
+returns a promise are all rejected with a `TypeError`, and a non-async body cannot contain `await`.
+`EnforcingDatabaseAccess` additionally pins the session to the thread that opened it and throws on a
+cross-thread touch. Because the rollback lives in Java, outside the interpreter, a sandbox abort
+(`ScriptAbortException` — not catchable by user `try/catch`, skips `finally`) still rolls back and
+releases the locks.
+
+Three documented limitations:
+
+- **No `list*` inside a transaction.** `TransactionOperationHelper.isAllowedDuringTransaction` is a
+  whitelist that rejects `LIST_COLLECTIONS`/`LIST_DATABASES` with `409-6`; `db.listCollections`/
+  `listDatabases` keep the pre-existing swallow-the-error shape, so a script observes an **empty
+  list**, not a throw.
+- **A script transaction is local-only under clustering.** `EnforcingDatabaseAccess.dispatch` never
+  consults `ClusterRouter`, so writes are not routed to a collection's owner.
+  `TransactionOperationHelper.bufferSave` rejects a write to a non-owned collection with
+  `421-2 CROSS_OWNER_TRANSACTION`, so the failure is explicit rather than silent, but cross-owner
+  script transactions are unsupported.
+- **The transaction control ops skip `AuthorizationChecker`.** `START`/`COMMIT`/`ROLLBACK` carry no
+  database or collection to authorize and are absent from `ALWAYS_ALLOWED_OPERATIONS`, so checking
+  them would deny every non-admin. Each buffered write inside the transaction is still authorized on
+  its own request. Wire behaviour for socket clients is unchanged.
+
+### `crypto`
+
+A namespace object like `Math`/`JSON`/`Reflect`, so a stored procedure can mint ids and hash content
+without reaching for `Math.random()`.
+
+| Member | Behaviour |
+|---|---|
+| `crypto.randomUUID()` | a `SecureRandom`-backed version 4 UUID string |
+| `crypto.getRandomValues(typedArray)` | fills an integer typed array in place and returns it |
+| `crypto.hash(algorithm, data[, encoding])` | `"sha-1"`/`"sha-256"`/`"sha-512"` over a string or `Uint8Array`; `"hex"` (default) or `"base64"` |
+
+Two deliberate divergences from WHATWG: `hash` is **synchronous** and Node-shaped rather than the
+promise-returning `crypto.subtle.digest` (the digest is CPU-bound and in-process, and a stored
+procedure computing a content hash wants a value, not a microtask), and a request over 65,536 bytes
+is a `RangeError` rather than a `QuotaExceededError` (which would need a `DOMException` the engine
+does not have). A non-integer typed array and an unknown algorithm/encoding are `TypeError`s.
 
 ### Numbers
 

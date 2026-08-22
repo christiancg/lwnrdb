@@ -15,8 +15,8 @@ public final class BuiltinLengths {
     // lengths come from the same table (keyed by the owner's global name), defaulting to 1.
     private static final List<String> STATIC_OWNERS = List.of("Object", "Array", "String", "Number", "Boolean", "Math",
             "JSON", "Promise", "RegExp", "Symbol", "Map", "Set", "WeakMap", "WeakSet", "Date", "Reflect", "Proxy",
-            "ArrayBuffer", "DataView", "BigInt", "Iterator", "AsyncIterator", "DisposableStack",
-            "AsyncDisposableStack");
+            "ArrayBuffer", "DataView", "BigInt", "Iterator", "AsyncIterator", "DisposableStack", "AsyncDisposableStack",
+            "Geo", "Vector", "DbDateTime", "DbTime", "crypto");
 
     private static final List<String> PLAIN_GLOBALS = List.of("Function", "parseInt", "parseFloat", "isNaN", "isFinite",
             "encodeURI", "decodeURI", "encodeURIComponent", "decodeURIComponent", "escape", "unescape",
@@ -59,6 +59,20 @@ public final class BuiltinLengths {
         installDataView();
         installStatics();
         installTemporal();
+        installCustomTypes();
+    }
+
+    private static void installCustomTypes() {
+        zeroArg("Geo.prototype", "toString", "toJSON");
+        zeroArg("Vector.prototype", "toString", "toJSON", "toArray");
+        zeroArg("DbDateTime.prototype", "toString", "toJSON", "toTemporal");
+        zeroArg("DbTime.prototype", "toString", "toJSON", "toTemporal");
+        globals(2, "Geo");
+        globals(1, "Vector");
+        globals(6, "DbDateTime");
+        globals(3, "DbTime");
+        put("crypto", 0, "randomUUID");
+        put("crypto", 2, "hash");
     }
 
     private static void installStatics() {

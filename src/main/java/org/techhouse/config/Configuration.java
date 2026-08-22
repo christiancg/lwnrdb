@@ -1,5 +1,6 @@
 package org.techhouse.config;
 
+import java.util.Map;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.log.Logger;
 
@@ -39,6 +40,8 @@ public final class Configuration {
     private String clusterSecret;
     private long antiEntropyIntervalMs;
     private long tombstoneRetentionMs;
+    private String scriptTimeZone;
+    private String scriptLocale;
 
     private Configuration() {
     }
@@ -51,44 +54,68 @@ public final class Configuration {
                     + String.join(Globals.NEWLINE, errors));
             throw new InvalidConfigurationException(errors);
         }
-        for (var config : configs.entrySet()) {
-            switch (config.getKey()) {
-                case "port" -> port = Integer.parseInt(config.getValue());
-                case "maxConnections" -> maxConnections = Integer.parseInt(config.getValue());
-                case "filePath" -> filePath = config.getValue();
-                case "backgroundProcessingThreads" -> backgroundProcessingThreads = Integer.parseInt(config.getValue());
-                case "logPath" -> logPath = config.getValue();
-                case "maxLogFiles" -> maxLogFiles = Integer.parseInt(config.getValue());
-                case "maxPageSize" -> maxPageSize = SizeParser.parse(config.getValue());
-                case "maxEntrySize" -> maxEntrySize = SizeParser.parse(config.getValue());
-                case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
-                case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
-                case "maxMemory" -> maxMemoryBytes = SizeParser.parse(config.getValue());
-                case "transactionLockTimeoutMs" -> transactionLockTimeoutMs = Long.parseLong(config.getValue());
-                case "tlsEnabled" -> tlsEnabled = Boolean.parseBoolean(config.getValue());
-                case "tlsKeystorePath" -> tlsKeystorePath = config.getValue();
-                case "tlsKeystorePassword" -> tlsKeystorePassword = config.getValue();
-                case "clusterEnabled" -> clusterEnabled = Boolean.parseBoolean(config.getValue());
-                case "clusterPort" -> clusterPort = Integer.parseInt(config.getValue());
-                case "clusterBindAddress" -> clusterBindAddress = config.getValue();
-                case "clusterAdvertisedAddress" -> clusterAdvertisedAddress = config.getValue();
-                case "clusterSeeds" -> clusterSeeds = config.getValue();
-                case "nodeId" -> nodeId = config.getValue();
-                case "clusterExpectedSize" -> clusterExpectedSize = Integer.parseInt(config.getValue());
-                case "gossipIntervalMs" -> gossipIntervalMs = Long.parseLong(config.getValue());
-                case "suspectTimeoutMs" -> suspectTimeoutMs = Long.parseLong(config.getValue());
-                case "deadTimeoutMs" -> deadTimeoutMs = Long.parseLong(config.getValue());
-                case "replicationAckTimeoutMs" -> replicationAckTimeoutMs = Long.parseLong(config.getValue());
-                case "virtualNodesPerNode" -> virtualNodesPerNode = Integer.parseInt(config.getValue());
-                case "readFallbackToLocal" -> readFallbackToLocal = Boolean.parseBoolean(config.getValue());
-                case "clusterTlsEnabled" -> clusterTlsEnabled = Boolean.parseBoolean(config.getValue());
-                case "clusterSecret" -> clusterSecret = config.getValue();
-                case "antiEntropyIntervalMs" -> antiEntropyIntervalMs = Long.parseLong(config.getValue());
-                case "tombstoneRetentionMs" -> tombstoneRetentionMs = Long.parseLong(config.getValue());
-                default -> {
-                }
-            }
-        }
+        apply(configs);
+    }
+
+    // One unconditional assignment per field, read straight out of the merged map, rather than a
+    // switch inside a loop over the entries: a per-key case can only be reached on the iteration that
+    // happens to carry that key, so every write reads as a possibly-dead store and the field's value
+    // silently depends on iteration order. A key absent from both the bundled defaults and the config
+    // file leaves the field at its Java default, exactly as the unmatched-case arm used to.
+    private void apply(Map<String, String> configs) {
+        port = intOf(configs, "port");
+        maxConnections = intOf(configs, "maxConnections");
+        filePath = configs.get("filePath");
+        backgroundProcessingThreads = intOf(configs, "backgroundProcessingThreads");
+        logPath = configs.get("logPath");
+        maxLogFiles = intOf(configs, "maxLogFiles");
+        maxPageSize = sizeOf(configs, "maxPageSize");
+        maxEntrySize = sizeOf(configs, "maxEntrySize");
+        defaultAdminUsername = configs.get("defaultAdminUsername");
+        defaultAdminPassword = configs.get("defaultAdminPassword");
+        maxMemoryBytes = sizeOf(configs, "maxMemory");
+        transactionLockTimeoutMs = longOf(configs, "transactionLockTimeoutMs");
+        tlsEnabled = booleanOf(configs, "tlsEnabled");
+        tlsKeystorePath = configs.get("tlsKeystorePath");
+        tlsKeystorePassword = configs.get("tlsKeystorePassword");
+        clusterEnabled = booleanOf(configs, "clusterEnabled");
+        clusterPort = intOf(configs, "clusterPort");
+        clusterBindAddress = configs.get("clusterBindAddress");
+        clusterAdvertisedAddress = configs.get("clusterAdvertisedAddress");
+        clusterSeeds = configs.get("clusterSeeds");
+        nodeId = configs.get("nodeId");
+        clusterExpectedSize = intOf(configs, "clusterExpectedSize");
+        gossipIntervalMs = longOf(configs, "gossipIntervalMs");
+        suspectTimeoutMs = longOf(configs, "suspectTimeoutMs");
+        deadTimeoutMs = longOf(configs, "deadTimeoutMs");
+        replicationAckTimeoutMs = longOf(configs, "replicationAckTimeoutMs");
+        virtualNodesPerNode = intOf(configs, "virtualNodesPerNode");
+        readFallbackToLocal = booleanOf(configs, "readFallbackToLocal");
+        clusterTlsEnabled = booleanOf(configs, "clusterTlsEnabled");
+        clusterSecret = configs.get("clusterSecret");
+        antiEntropyIntervalMs = longOf(configs, "antiEntropyIntervalMs");
+        tombstoneRetentionMs = longOf(configs, "tombstoneRetentionMs");
+        scriptTimeZone = configs.get("scriptTimeZone");
+        scriptLocale = configs.get("scriptLocale");
+    }
+
+    private static int intOf(Map<String, String> configs, String key) {
+        final var value = configs.get(key);
+        return value == null ? 0 : Integer.parseInt(value);
+    }
+
+    private static long longOf(Map<String, String> configs, String key) {
+        final var value = configs.get(key);
+        return value == null ? 0L : Long.parseLong(value);
+    }
+
+    private static long sizeOf(Map<String, String> configs, String key) {
+        final var value = configs.get(key);
+        return value == null ? 0L : SizeParser.parse(value);
+    }
+
+    private static boolean booleanOf(Map<String, String> configs, String key) {
+        return Boolean.parseBoolean(configs.get(key));
     }
 
     public static Configuration getInstance() {
@@ -232,5 +259,13 @@ public final class Configuration {
 
     public long getTombstoneRetentionMs() {
         return tombstoneRetentionMs;
+    }
+
+    public String getScriptTimeZone() {
+        return scriptTimeZone;
+    }
+
+    public String getScriptLocale() {
+        return scriptLocale;
     }
 }

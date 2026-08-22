@@ -16,4 +16,14 @@ public interface HostBindings {
     default NetworkAccess network() {
         return null;
     }
+
+    // The JVM defaults keep every existing embedding (and the test262 worker) on today's behaviour;
+    // only a binding that overrides these makes a script answer the same on every cluster node.
+    default java.time.ZoneId timeZone() {
+        return java.time.ZoneId.systemDefault();
+    }
+
+    default java.util.Locale locale() {
+        return java.util.Locale.getDefault();
+    }
 }

@@ -23,7 +23,8 @@ import org.techhouse.simplejs.values.JsValue;
  * for {@code java.time.Instant.now()}'s finer platform-dependent precision: consistency with the
  * rest of the engine's single time source matters more here than sub-millisecond precision the JVM
  * is not guaranteed to reliably provide anyway. Zone-aware members default to
- * {@code ZoneId.systemDefault()} when no {@code temporalTimeZoneLike} argument is given.
+ * the host's time zone ({@link InterpreterOps#timeZone}) when no {@code temporalTimeZoneLike} argument is
+ * given.
  */
 public final class TemporalNowBuiltins {
     private record TimeZoneRef(ZoneId zone, String id) {
@@ -35,17 +36,17 @@ public final class TemporalNowBuiltins {
     public static void install(JsObject now, InterpreterOps ops) {
         Intrinsics.installMethod(now, "instant", new JsNativeFunction("instant", (_, _) -> instant()));
         Intrinsics.installMethod(now, "timeZoneId",
-                new JsNativeFunction("timeZoneId", (_, _) -> new JsString(ZoneId.systemDefault().getId())));
+                new JsNativeFunction("timeZoneId", (_, _) -> new JsString(InterpreterOps.timeZone(ops).getId())));
         Intrinsics.installMethod(now, "plainDateISO", new JsNativeFunction("plainDateISO",
-                (_, args) -> new JsTemporalPlainDate(fieldsAt(resolveTimeZone(args)).date())));
+                (_, args) -> new JsTemporalPlainDate(fieldsAt(resolveTimeZone(args, ops)).date())));
         Intrinsics.installMethod(now, "plainTimeISO", new JsNativeFunction("plainTimeISO",
-                (_, args) -> new JsTemporalPlainTime(fieldsAt(resolveTimeZone(args)).time())));
+                (_, args) -> new JsTemporalPlainTime(fieldsAt(resolveTimeZone(args, ops)).time())));
         Intrinsics.installMethod(now, "plainDateTimeISO", new JsNativeFunction("plainDateTimeISO", (_, args) -> {
-            final var fields = fieldsAt(resolveTimeZone(args));
+            final var fields = fieldsAt(resolveTimeZone(args, ops));
             return new JsTemporalPlainDateTime(fields.date(), fields.time());
         }));
         Intrinsics.installMethod(now, "zonedDateTimeISO",
-                new JsNativeFunction("zonedDateTimeISO", (_, args) -> zonedDateTimeISO(resolveTimeZone(args))));
+                new JsNativeFunction("zonedDateTimeISO", (_, args) -> zonedDateTimeISO(resolveTimeZone(args, ops))));
     }
 
     // Date.now()'s own source of "now" - see the class-level note on why this is not
@@ -65,14 +66,14 @@ public final class TemporalNowBuiltins {
         return new JsTemporalZonedDateTime(current.epochSecondsPart(), current.nanoAdjustment(), ref.zone(), ref.id());
     }
 
-    // ToTemporalTimeZoneIdentifier: an omitted/undefined argument is the system default; a
+    // ToTemporalTimeZoneIdentifier: an omitted/undefined argument is the host's time zone; a
     // ZonedDateTime-like argument (including a subclass wrapper) reuses its own time zone; anything
     // else is coerced to a string and parsed as a time zone identifier, mirroring
     // TemporalInstantBuiltins/TemporalZonedDateTimeBuiltins' own zoneOf helpers.
-    private static TimeZoneRef resolveTimeZone(List<JsValue> args) {
+    private static TimeZoneRef resolveTimeZone(List<JsValue> args, InterpreterOps ops) {
         final var arg = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         if (arg instanceof JsUndefined) {
-            final var zone = ZoneId.systemDefault();
+            final var zone = InterpreterOps.timeZone(ops);
             return new TimeZoneRef(zone, zone.getId());
         }
         final var zoned = asZonedDateTime(arg);

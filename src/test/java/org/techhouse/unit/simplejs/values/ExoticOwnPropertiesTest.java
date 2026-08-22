@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,8 +27,11 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsDbDateTime;
+import org.techhouse.simplejs.values.JsDbTime;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsGeo;
 import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -41,6 +46,8 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.JsVector;
+import org.techhouse.utils.GeoPoint;
 
 public class ExoticOwnPropertiesTest {
     private static final JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(false, false, false);
@@ -65,6 +72,10 @@ public class ExoticOwnPropertiesTest {
         types.put("JsGlobalObject", new JsGlobalObject(Environment.global()));
         types.put("JsGenerator", new JsGenerator(null));
         types.put("JsAsyncGenerator", new JsAsyncGenerator(null));
+        types.put("JsGeo", new JsGeo(new GeoPoint(1, 2)));
+        types.put("JsVector", new JsVector(new double[]{1, 2}));
+        types.put("JsDbDateTime", new JsDbDateTime(LocalDateTime.of(2020, 1, 2, 3, 4, 5)));
+        types.put("JsDbTime", new JsDbTime(LocalTime.of(3, 4, 5)));
         return types;
     }
 

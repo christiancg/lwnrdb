@@ -23,7 +23,7 @@ public final class ConfigReader {
             "clusterAdvertisedAddress", "clusterSeeds", "nodeId", "clusterExpectedSize", "gossipIntervalMs",
             "suspectTimeoutMs", "deadTimeoutMs", "replicationAckTimeoutMs", "virtualNodesPerNode",
             "readFallbackToLocal", "clusterTlsEnabled", "clusterSecret", "antiEntropyIntervalMs",
-            "tombstoneRetentionMs");
+            "tombstoneRetentionMs", "scriptTimeZone", "scriptLocale");
     private static final String COMMENT_PREFIX = "#";
     private static final String DEFAULT_CONFIG_PATH = "/default.cfg";
     private static final Logger logger = Logger.logFor(ConfigReader.class);

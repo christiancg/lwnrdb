@@ -361,9 +361,9 @@ public final class StringBuiltins {
             case "toWellFormed" -> new JsNativeFunction("toWellFormed", (_, _) -> new JsString(toWellFormed(value)));
             case "substr" -> new JsNativeFunction("substr", (_, args) -> new JsString(substr(value, args, ops)));
             case "toLocaleUpperCase" -> new JsNativeFunction("toLocaleUpperCase",
-                    (_, _) -> new JsString(value.toUpperCase(Locale.getDefault())));
+                    (_, _) -> new JsString(value.toUpperCase(InterpreterOps.locale(ops))));
             case "toLocaleLowerCase" -> new JsNativeFunction("toLocaleLowerCase",
-                    (_, _) -> new JsString(toLowerCaseWithFinalSigma(value, Locale.getDefault())));
+                    (_, _) -> new JsString(toLowerCaseWithFinalSigma(value, InterpreterOps.locale(ops))));
             case "trimLeft" -> new JsNativeFunction("trimLeft", (_, _) -> new JsString(trim(value, true, false)));
             case "trimRight" -> new JsNativeFunction("trimRight", (_, _) -> new JsString(trim(value, false, true)));
             default -> null;
@@ -537,7 +537,7 @@ public final class StringBuiltins {
         // compare as 0. `Collator.getInstance()` defaults to NO_DECOMPOSITION, which treats two
         // differently-ordered combining-mark sequences for the same canonical text as unequal;
         // CANONICAL_DECOMPOSITION is what makes the comparison normalization-aware.
-        final var collator = java.text.Collator.getInstance(Locale.getDefault());
+        final var collator = java.text.Collator.getInstance(InterpreterOps.locale(ops));
         collator.setDecomposition(java.text.Collator.CANONICAL_DECOMPOSITION);
         return Integer.signum(collator.compare(value, str(args, 0, ops)));
     }

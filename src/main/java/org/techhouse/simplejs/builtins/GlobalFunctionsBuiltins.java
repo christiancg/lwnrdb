@@ -17,7 +17,10 @@ import org.techhouse.simplejs.values.JsArrayBuffer;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsDbDateTime;
+import org.techhouse.simplejs.values.JsDbTime;
 import org.techhouse.simplejs.values.JsFunction;
+import org.techhouse.simplejs.values.JsGeo;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -30,6 +33,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.JsVector;
 
 public final class GlobalFunctionsBuiltins {
     private static final String URI_UNESCAPED = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
@@ -275,6 +279,10 @@ public final class GlobalFunctionsBuiltins {
                 yield copy;
             }
             case JsDate date -> new JsDate(date.getTime());
+            case JsGeo geo -> new JsGeo(geo.getPoint());
+            case JsVector vector -> new JsVector(vector.getComponents());
+            case JsDbDateTime dateTime -> new JsDbDateTime(dateTime.getValue());
+            case JsDbTime time -> new JsDbTime(time.getValue());
             case JsArrayBuffer buffer -> new JsArrayBuffer(buffer.getBytes().clone());
             case JsTypedArray typed -> {
                 final var buffer = new JsArrayBuffer(typed.getBuffer().getBytes().clone());

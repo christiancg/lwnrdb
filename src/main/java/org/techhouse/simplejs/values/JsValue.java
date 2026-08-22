@@ -5,7 +5,7 @@ import java.util.List;
 
 public abstract class JsValue {
     public enum JsValueType {
-        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW, TEMPORAL_DURATION, TEMPORAL_PLAIN_TIME, TEMPORAL_PLAIN_DATE, TEMPORAL_INSTANT, TEMPORAL_PLAIN_YEAR_MONTH, TEMPORAL_PLAIN_MONTH_DAY, TEMPORAL_PLAIN_DATE_TIME, TEMPORAL_ZONED_DATE_TIME
+        NUMBER, STRING, BOOLEAN, BIGINT, UNDEFINED, NULL, OBJECT, ARRAY, FUNCTION, CLASS, PROMISE, GENERATOR, ASYNC_GENERATOR, REGEXP, SYMBOL, MAP, SET, DATE, PROXY, ARGUMENTS, GLOBAL, ARRAY_BUFFER, TYPED_ARRAY, DATA_VIEW, TEMPORAL_DURATION, TEMPORAL_PLAIN_TIME, TEMPORAL_PLAIN_DATE, TEMPORAL_INSTANT, TEMPORAL_PLAIN_YEAR_MONTH, TEMPORAL_PLAIN_MONTH_DAY, TEMPORAL_PLAIN_DATE_TIME, TEMPORAL_ZONED_DATE_TIME, GEO, VECTOR, DB_DATE_TIME, DB_TIME
     }
 
     public JsValueType getType() {
@@ -157,6 +157,10 @@ public abstract class JsValue {
             case JsTemporalPlainMonthDay ignored -> JsValueType.TEMPORAL_PLAIN_MONTH_DAY;
             case JsTemporalPlainDateTime ignored -> JsValueType.TEMPORAL_PLAIN_DATE_TIME;
             case JsTemporalZonedDateTime ignored -> JsValueType.TEMPORAL_ZONED_DATE_TIME;
+            case JsGeo ignored -> JsValueType.GEO;
+            case JsVector ignored -> JsValueType.VECTOR;
+            case JsDbDateTime ignored -> JsValueType.DB_DATE_TIME;
+            case JsDbTime ignored -> JsValueType.DB_TIME;
             default -> throw new IllegalStateException("Unexpected value: " + object);
         };
     }

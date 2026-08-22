@@ -149,6 +149,8 @@ public class ConfigurationTest {
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");
         map.put("tombstoneRetentionMs", "86400000");
+        map.put("scriptTimeZone", "UTC");
+        map.put("scriptLocale", "en-US");
         return map;
     }
 

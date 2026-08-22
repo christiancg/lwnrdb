@@ -37,7 +37,7 @@ public final class SimpleJs {
         try {
             final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal(host));
             final var outcome = Interpreter.run(program, host);
-            final var value = EJsonInterop.toEjson(contractResult(outcome));
+            final var value = EJsonInterop.toHostEjson(contractResult(outcome));
             return ScriptResult.value(value == null ? JsonNull.INSTANCE : value);
         } catch (ScriptTimeoutException timeout) {
             return ScriptResult.error("ScriptTimeoutError", timeout.getMessage());

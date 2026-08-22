@@ -16,8 +16,11 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsDbDateTime;
+import org.techhouse.simplejs.values.JsDbTime;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsGeo;
 import org.techhouse.simplejs.values.JsGlobalObject;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
@@ -41,6 +44,7 @@ import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.JsVector;
 
 public final class JsCoercion {
     private JsCoercion() {
@@ -115,6 +119,10 @@ public final class JsCoercion {
             case JsTemporalPlainMonthDay monthDay -> monthDay.toString();
             case JsTemporalPlainDateTime dt -> dt.toString();
             case JsTemporalZonedDateTime zdt -> zdt.toString();
+            case JsGeo geo -> geo.toString();
+            case JsVector vector -> vector.toString();
+            case JsDbDateTime dateTime -> dateTime.toString();
+            case JsDbTime time -> time.toString();
             // A proxy has no [[SourceText]] of its own, so a callable target's retained text must not
             // leak through it: Function.prototype.toString on a proxy is the NativeFunction form.
             case JsProxy proxy when proxy.isCallable() -> FunctionProtoBuiltins.nativeFunctionForm(proxy.getTarget());

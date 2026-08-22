@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -213,5 +214,134 @@ public class EnforcingDatabaseAccessIntegrationTest {
         final var stored = db.findById(TestGlobals.DB, TestGlobals.COLL, "u-clientid");
         assertNotNull(stored);
         assertEquals("hello", stored.get("value").asJsonString().getValue());
+    }
+
+    private static void assertCollectionLockFree() {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL), "the collection write lock is still held");
+        locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+    }
+
+    // bulkSave inserts new ids, updates existing ones and reports both lists
+    @Test
+    public void test_bulk_save_reports_inserted_and_updated() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        db.save(TestGlobals.DB, TestGlobals.COLL, doc("bulk-existing"));
+        final var outcome = db.bulkSave(TestGlobals.DB, TestGlobals.COLL,
+                List.of(doc("bulk-new"), doc("bulk-existing")));
+        assertEquals(List.of("bulk-new"), outcome.inserted());
+        assertEquals(List.of("bulk-existing"), outcome.updated());
+        assertNotNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "bulk-new"));
+    }
+
+    // An oversized document rejects the whole batch rather than reading as "nothing changed"
+    @Test
+    public void test_bulk_save_oversized_document_is_rejected() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        final var big = new JsonObject();
+        big.add("_id", new JsonString("bulk-big"));
+        big.add("bigField", new JsonString("x".repeat(1_048_600)));
+        assertThrows(JsThrowException.class, () -> db.bulkSave(TestGlobals.DB, TestGlobals.COLL, List.of(big)));
+        assertNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "bulk-big"));
+    }
+
+    // A duplicate id inside one batch is rejected
+    @Test
+    public void test_bulk_save_duplicate_id_in_one_batch_is_rejected() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertThrows(JsThrowException.class,
+                () -> db.bulkSave(TestGlobals.DB, TestGlobals.COLL, List.of(doc("bulk-dup"), doc("bulk-dup"))));
+    }
+
+    // A user without READ_WRITE is denied before the batch reaches the ops layer
+    @Test
+    public void test_bulk_save_denied_for_unauthorized_user() {
+        final var db = new EnforcingDatabaseAccess(NOBODY, null);
+        assertThrows(JsThrowException.class,
+                () -> db.bulkSave(TestGlobals.DB, TestGlobals.COLL, List.of(doc("bulk-denied"))));
+    }
+
+    // A committed transaction applies every buffered write and releases the collection lock
+    @Test
+    public void test_transaction_commits_atomically() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        db.beginTransaction();
+        db.save(TestGlobals.DB, TestGlobals.COLL, doc("tx-a"));
+        db.save(TestGlobals.DB, TestGlobals.COLL, doc("tx-b"));
+        db.commitTransaction();
+        assertNotNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "tx-a"));
+        assertNotNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "tx-b"));
+        assertCollectionLockFree();
+    }
+
+    // A rolled-back transaction leaves the collection untouched and releases the lock
+    @Test
+    public void test_transaction_rollback_leaves_no_partial_write() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        db.beginTransaction();
+        db.save(TestGlobals.DB, TestGlobals.COLL, doc("tx-rolled-back"));
+        db.rollbackTransaction();
+        assertNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "tx-rolled-back"));
+        assertCollectionLockFree();
+    }
+
+    // A non-admin can open a script transaction: the three control ops carry no database to authorize
+    @Test
+    public void test_transaction_control_ops_skip_authorization() {
+        final var db = new EnforcingDatabaseAccess(NOBODY, null);
+        db.beginTransaction();
+        db.rollbackTransaction();
+        assertCollectionLockFree();
+    }
+
+    // TransactionOperationHelper's whitelist rejects LIST_COLLECTIONS with 409-6 while a transaction
+    // is open. list* keeps the pre-existing swallow-the-error shape (as save/findById do), so a
+    // script observes an empty list rather than a throw - documented in docs/simplejs.md.
+    @Test
+    public void test_list_collections_inside_a_transaction_is_empty() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        db.beginTransaction();
+        try {
+            assertEquals(List.of(), db.listCollections(TestGlobals.DB));
+        } finally {
+            db.rollbackTransaction();
+        }
+        assertCollectionLockFree();
+    }
+
+    // Touching an open session from another thread fails loudly instead of stranding the write lock
+    @Test
+    public void test_cross_thread_use_of_an_open_transaction_throws() throws Exception {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        db.beginTransaction();
+        try {
+            final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            final var other = new Thread(() -> {
+                try {
+                    db.save(TestGlobals.DB, TestGlobals.COLL, doc("tx-other-thread"));
+                } catch (Throwable t) {
+                    failure.set(t);
+                }
+            });
+            other.start();
+            other.join();
+            assertInstanceOf(JsThrowException.class, failure.get());
+        } finally {
+            db.rollbackTransaction();
+        }
+        assertCollectionLockFree();
+    }
+
+    // A second beginTransaction on the same access object is rejected before it reaches START
+    @Test
+    public void test_nested_begin_transaction_is_rejected() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        db.beginTransaction();
+        try {
+            assertThrows(JsThrowException.class, db::beginTransaction);
+        } finally {
+            db.rollbackTransaction();
+        }
+        assertCollectionLockFree();
     }
 }

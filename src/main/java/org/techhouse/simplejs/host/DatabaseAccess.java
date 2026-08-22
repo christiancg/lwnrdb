@@ -17,9 +17,20 @@ public interface DatabaseAccess {
 
     JsonObject save(String db, String coll, JsonObject document);
 
+    BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents);
+
     void delete(String db, String coll, String id);
 
     List<String> listCollections(String db);
 
     List<String> listDatabases();
+
+    // A transaction holds each written collection's exclusive write lock across calls, and the lock is
+    // thread-owned (ResourceLocking.releaseWrite silently no-ops from another thread, leaking it), so
+    // an implementation must pin the session to the thread that opened it.
+    void beginTransaction();
+
+    void commitTransaction();
+
+    void rollbackTransaction();
 }

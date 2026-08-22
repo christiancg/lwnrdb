@@ -48,4 +48,13 @@ public class BuiltinLengthsTest {
                 str("const d = Object.getOwnPropertyDescriptor(Array.prototype.slice, 'length');"
                         + " [d.writable, d.enumerable, d.configurable].join(',')"));
     }
+
+    // The four custom-type globals and crypto carry their own declared arities
+    @Test
+    public void test_host_boundary_lengths() {
+        assertEquals("2,1,6,3", str("[Geo.length, Vector.length, DbDateTime.length, DbTime.length].join(',')"));
+        assertEquals("0,0", str("[Geo.prototype.toString.length, Geo.prototype.toJSON.length].join(',')"));
+        assertEquals("0,1,2",
+                str("[crypto.randomUUID.length, crypto.getRandomValues.length, crypto.hash.length].join(',')"));
+    }
 }

@@ -8,6 +8,8 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public class JsonDateTime extends JsonCustom<LocalDateTime> {
+    public static final String CUSTOM_TYPE_NAME = "datetime";
+
     public JsonDateTime(LocalDateTime customValue) {
         super(customValue);
     }
@@ -22,7 +24,7 @@ public class JsonDateTime extends JsonCustom<LocalDateTime> {
 
     @Override
     public String getCustomTypeName() {
-        return "datetime";
+        return CUSTOM_TYPE_NAME;
     }
 
     @Override

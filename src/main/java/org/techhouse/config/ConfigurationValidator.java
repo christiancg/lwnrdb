@@ -4,8 +4,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.DateTimeException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
 import java.util.function.LongPredicate;
@@ -31,10 +34,31 @@ public final class ConfigurationValidator {
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateMaxMemory(configs, errors);
-        validateLong(configs, "transactionLockTimeoutMs", 1, errors);
+        validatePositiveLong(configs, "transactionLockTimeoutMs", errors);
         validateTls(configs, errors);
         validateCluster(configs, errors);
+        validateScript(configs, errors);
         return errors;
+    }
+
+    private static void validateScript(Map<String, String> configs, List<String> errors) {
+        final var zone = configs.get("scriptTimeZone");
+        if (isBlank(zone)) {
+            errors.add("scriptTimeZone must be a non-blank IANA time zone id (e.g. UTC)");
+        } else {
+            try {
+                // Parsing is the validation: ZoneId.of rejects an unknown id by throwing.
+                var _ = ZoneId.of(zone.trim());
+            } catch (DateTimeException e) {
+                errors.add("scriptTimeZone must be a valid time zone id, but was: " + zone);
+            }
+        }
+        final var locale = configs.get("scriptLocale");
+        // Locale.forLanguageTag never throws — it answers the undetermined locale for a malformed tag,
+        // so the round-trip is what actually rejects one.
+        if (isBlank(locale) || !Locale.forLanguageTag(locale.trim()).toLanguageTag().equals(locale.trim())) {
+            errors.add("scriptLocale must be a valid BCP 47 language tag (e.g. en-US), but was: " + locale);
+        }
     }
 
     private static void validateCluster(Map<String, String> configs, List<String> errors) {
@@ -47,12 +71,12 @@ public final class ConfigurationValidator {
         }
         validateInt(configs, "clusterExpectedSize", 1, errors);
         validateInt(configs, "virtualNodesPerNode", 1, errors);
-        validateLong(configs, "gossipIntervalMs", 1, errors);
-        validateLong(configs, "suspectTimeoutMs", 1, errors);
-        validateLong(configs, "deadTimeoutMs", 1, errors);
-        validateLong(configs, "replicationAckTimeoutMs", 1, errors);
-        validateLong(configs, "antiEntropyIntervalMs", 1, errors);
-        validateLong(configs, "tombstoneRetentionMs", 1, errors);
+        validatePositiveLong(configs, "gossipIntervalMs", errors);
+        validatePositiveLong(configs, "suspectTimeoutMs", errors);
+        validatePositiveLong(configs, "deadTimeoutMs", errors);
+        validatePositiveLong(configs, "replicationAckTimeoutMs", errors);
+        validatePositiveLong(configs, "antiEntropyIntervalMs", errors);
+        validatePositiveLong(configs, "tombstoneRetentionMs", errors);
         final var enabledValue = configs.get("clusterEnabled");
         if (enabledValue == null || isNotBoolean(enabledValue) || !Boolean.parseBoolean(enabledValue.trim())) {
             return;
@@ -197,10 +221,12 @@ public final class ConfigurationValidator {
         }
     }
 
-    private static void validateLong(Map<String, String> configs, String key, long min, List<String> errors) {
+    // Every long-valued key is a duration or a count with the same lower bound, so the bound is not a
+    // parameter; a key needing a different one would want its own message anyway.
+    private static void validatePositiveLong(Map<String, String> configs, String key, List<String> errors) {
         final var value = configs.get(key);
-        if (notALong(value, parsed -> parsed >= min)) {
-            errors.add(key + " must be a valid number greater than or equal to " + min + ", but was: " + value);
+        if (notALong(value, parsed -> parsed >= 1)) {
+            errors.add(key + " must be a valid number greater than or equal to 1, but was: " + value);
         }
     }
 

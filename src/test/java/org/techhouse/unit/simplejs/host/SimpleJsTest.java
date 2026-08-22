@@ -302,4 +302,32 @@ public class SimpleJsTest {
         assertFalse(run("import args from 'args'; return 1;").isError());
     }
 
+    // The host result contract converts a losslessly-representable BigInt to a number, at the top
+    // level and nested inside arrays and objects alike
+    @Test
+    public void test_big_int_result_is_converted_losslessly() {
+        assertEquals(7, run("return 7n;").getValue().asJsonNumber().asInteger());
+        assertEquals(9007199254740991L,
+                run("return 9007199254740991n;").getValue().asJsonNumber().getValue().longValue());
+        assertEquals(2, run("return [1n, 2n];").getValue().asJsonArray().get(1).asJsonNumber().asInteger());
+        assertEquals(3, run("return { a: { b: [3n] } };").getValue().asJsonObject().get("a").asJsonObject().get("b")
+                .asJsonArray().get(0).asJsonNumber().asInteger());
+    }
+
+    // Past the exact integer range it fails at the boundary, naming the property path
+    @Test
+    public void test_big_int_result_beyond_the_exact_range_fails_with_a_path() {
+        final var result = run("return { items: [{ total: 2n ** 64n }] };");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+        assertTrue(result.getErrorMessage().contains("items[0].total"), result.getErrorMessage());
+    }
+
+    // The spec path is untouched: JSON.stringify of a BigInt still throws, as test262 requires
+    @Test
+    public void test_json_stringify_of_a_big_int_still_throws() {
+        final var result = run("return JSON.stringify(1n);");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+    }
 }

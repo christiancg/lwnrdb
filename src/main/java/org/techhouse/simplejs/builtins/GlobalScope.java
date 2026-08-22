@@ -42,6 +42,7 @@ public final class GlobalScope {
         constructor(global, "Boolean", booleanFunction(), intrinsics.booleanProto());
         namespace(global, "Math", MathBuiltins.create(ops), intrinsics);
         namespace(global, "JSON", JsonBuiltins.create(ops, invoker, intrinsics.objectProto()), intrinsics);
+        namespace(global, "crypto", CryptoBuiltins.create(ops), intrinsics);
         namespace(global, "console",
                 consoleSink == null ? ConsoleBuiltins.create() : ConsoleBuiltins.create(consoleSink), intrinsics);
         constructor(global, "Promise", PromiseBuiltins.create(eventLoop, invoker, intrinsics),
@@ -66,6 +67,10 @@ public final class GlobalScope {
         constructor(global, "Set", SetBuiltins.create(ops, false), intrinsics.setProto());
         constructor(global, "WeakSet", SetBuiltins.create(ops, true), intrinsics.weakSetProto());
         constructor(global, "Date", DateBuiltins.create(ops), intrinsics.dateProto());
+        constructor(global, "Geo", GeoBuiltins.create(ops), intrinsics.geoProto());
+        constructor(global, "Vector", VectorBuiltins.create(ops), intrinsics.vectorProto());
+        constructor(global, "DbDateTime", DbDateTimeBuiltins.create(ops), intrinsics.dbDateTimeProto());
+        constructor(global, "DbTime", DbTimeBuiltins.create(ops), intrinsics.dbTimeProto());
         TemporalBuiltins.install(global, intrinsics, ops);
         constructor(global, "DisposableStack",
                 DisposableStackBuiltins.create(intrinsics.disposableStackProto(), false, ops),

@@ -2,7 +2,6 @@ package org.techhouse.simplejs.builtins;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.zone.ZoneRules;
 import java.util.List;
@@ -63,10 +62,10 @@ public final class DateBuiltins {
         final var date = new JsNativeFunction("Date",
                 (thisArg,
                         args) -> JsNativeFunction.currentNewTarget() == null && !InterpreterUtils.isObjectLike(thisArg)
-                                ? new JsString(toDateString(System.currentTimeMillis()))
+                                ? new JsString(toDateString(System.currentTimeMillis(), ops))
                                 : withNewTargetPrototype(new JsDate(construct(args, ops)), ops));
         date.setProperty("now", new JsNativeFunction("now", (_, _) -> new JsNumber(System.currentTimeMillis())));
-        date.setProperty("parse", new JsNativeFunction("parse", (_, args) -> new JsNumber(parse(str(args, ops)))));
+        date.setProperty("parse", new JsNativeFunction("parse", (_, args) -> new JsNumber(parse(str(args, ops), ops))));
         date.setProperty("UTC",
                 new JsNativeFunction("UTC", (_, args) -> new JsNumber(timeClip(fromComponents(args, ops)))));
         return date;
@@ -103,9 +102,9 @@ public final class DateBuiltins {
             }
             final var primitive = JsCoercion.toPrimitive(arg, "default", ops);
             return timeClip(
-                    primitive instanceof JsString s ? parse(s.getValue()) : JsCoercion.toNumber(primitive, ops));
+                    primitive instanceof JsString s ? parse(s.getValue(), ops) : JsCoercion.toNumber(primitive, ops));
         }
-        return timeClip(utcFromLocal(fromComponents(args, ops)));
+        return timeClip(utcFromLocal(fromComponents(args, ops), ops));
     }
 
     private static double fromComponents(List<JsValue> args, InterpreterOps ops) {
@@ -121,9 +120,9 @@ public final class DateBuiltins {
         return makeDate(day, time);
     }
 
-    private static double parse(String value) {
+    private static double parse(String value, InterpreterOps ops) {
         final var trimmed = JsCoercion.stripJs(value);
-        final var iso = parseIso(trimmed);
+        final var iso = parseIso(trimmed, ops);
         if (!Double.isNaN(iso)) {
             return iso;
         }
@@ -164,7 +163,7 @@ public final class DateBuiltins {
 
     // The Date Time String Format: a date-only form is UTC, a date-time form without an offset is
     // local time, and the year may carry the extended six-digit ±YYYYYY spelling.
-    private static double parseIso(String text) {
+    private static double parseIso(String text, InterpreterOps ops) {
         final var matcher = ISO.matcher(text);
         if (!matcher.matches()) {
             return Double.NaN;
@@ -187,7 +186,7 @@ public final class DateBuiltins {
         final var value = makeDate(makeDay(year, month, day), makeTime(hour, minute, second, millis));
         final var zone = matcher.group(8);
         if (zone == null) {
-            return matcher.group(4) == null ? timeClip(value) : timeClip(utcFromLocal(value));
+            return matcher.group(4) == null ? timeClip(value) : timeClip(utcFromLocal(value, ops));
         }
         if ("Z".equals(zone)) {
             return timeClip(value);
@@ -219,7 +218,7 @@ public final class DateBuiltins {
         if (method != null) {
             return method;
         }
-        return getter(receiver, name);
+        return getter(receiver, name, ops);
     }
 
     private static JsValue instanceMethod(JsDate receiver, String name, InterpreterOps ops) {
@@ -230,17 +229,18 @@ public final class DateBuiltins {
                 return new JsNumber(receiver.getTime());
             });
             case "toISOString" -> new JsNativeFunction("toISOString", (_, _) -> toISOString(receiver));
-            case "toString" -> new JsNativeFunction(name, (_, _) -> new JsString(toDateString(receiver.getTime())));
+            case "toString" ->
+                new JsNativeFunction(name, (_, _) -> new JsString(toDateString(receiver.getTime(), ops)));
             case "toDateString" ->
-                new JsNativeFunction(name, (_, _) -> new JsString(localPart(receiver.getTime(), true, false)));
+                new JsNativeFunction(name, (_, _) -> new JsString(localPart(receiver.getTime(), true, false, ops)));
             case "toTimeString" ->
-                new JsNativeFunction(name, (_, _) -> new JsString(localPart(receiver.getTime(), false, true)));
+                new JsNativeFunction(name, (_, _) -> new JsString(localPart(receiver.getTime(), false, true, ops)));
             case "toUTCString" -> new JsNativeFunction(name, (_, _) -> new JsString(utcString(receiver.getTime())));
             case "toLocaleString", "toLocaleDateString", "toLocaleTimeString" ->
-                new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(receiver, name)));
+                new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(receiver, name, ops)));
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(
                     // 0.0 - x (not unary -x) so a zero offset stays +0, matching SameValue expectations.
-                    receiver.isValid() ? (0.0 - localOffset(receiver.getTime())) / MS_PER_MINUTE : Double.NaN));
+                    receiver.isValid() ? (0.0 - localOffset(receiver.getTime(), ops)) / MS_PER_MINUTE : Double.NaN));
             case "toTemporalInstant" ->
                 new JsNativeFunction(name, (_, _) -> JsTemporalInstant.fromEpochMilliseconds(receiver.getTime()));
             default -> setter(receiver, name, ops);
@@ -268,9 +268,9 @@ public final class DateBuiltins {
             if (Double.isNaN(start) && !isYear) {
                 return new JsNumber(Double.NaN);
             }
-            final var base = Double.isNaN(start) ? 0 : utc ? start : localTime(start);
+            final var base = Double.isNaN(start) ? 0 : utc ? start : localTime(start, ops);
             final var recomposed = recompose(name, base, values, provided);
-            receiver.setTime(timeClip(utc ? recomposed : utcFromLocal(recomposed)));
+            receiver.setTime(timeClip(utc ? recomposed : utcFromLocal(recomposed, ops)));
             return new JsNumber(receiver.getTime());
         });
     }
@@ -352,33 +352,33 @@ public final class DateBuiltins {
         return value < 0 ? Math.ceil(value) : Math.floor(value);
     }
 
-    private static ZoneRules zoneRules() {
-        return ZoneId.systemDefault().getRules();
+    private static ZoneRules zoneRules(InterpreterOps ops) {
+        return InterpreterOps.timeZone(ops).getRules();
     }
 
     // LocalTZA at a UTC instant. Kept out of JsDate so the value type stays a bare epoch-millis
     // carrier and EJsonInterop's ISO mapping is unaffected by the local-time work.
-    private static double localOffset(double utcTime) {
+    private static double localOffset(double utcTime, InterpreterOps ops) {
         if (!Double.isFinite(utcTime) || Math.abs(utcTime) > MAX_TIME) {
             return 0;
         }
-        return zoneRules().getOffset(Instant.ofEpochMilli((long) utcTime)).getTotalSeconds() * MS_PER_SECOND;
+        return zoneRules(ops).getOffset(Instant.ofEpochMilli((long) utcTime)).getTotalSeconds() * MS_PER_SECOND;
     }
 
-    private static double localTime(double utcTime) {
-        return Double.isNaN(utcTime) ? utcTime : utcTime + localOffset(utcTime);
+    private static double localTime(double utcTime, InterpreterOps ops) {
+        return Double.isNaN(utcTime) ? utcTime : utcTime + localOffset(utcTime, ops);
     }
 
     // The inverse of LocalTime: a local wall-clock reading back to a UTC instant, preferring the
     // earlier offset when the reading is ambiguous (a fall-back transition) as the spec does.
-    private static double utcFromLocal(double localTimeValue) {
+    private static double utcFromLocal(double localTimeValue, InterpreterOps ops) {
         if (!Double.isFinite(localTimeValue) || Math.abs(localTimeValue) > MAX_TIME + MS_PER_DAY) {
             return localTimeValue;
         }
         final var millis = (long) localTimeValue;
         final var local = LocalDateTime.ofEpochSecond(Math.floorDiv(millis, 1000L),
                 (int) (Math.floorMod(millis, 1000L) * 1_000_000L), ZoneOffset.UTC);
-        final var rules = zoneRules();
+        final var rules = zoneRules(ops);
         final var offsets = rules.getValidOffsets(local);
         final var offset = offsets.isEmpty() ? rules.getOffset(local) : offsets.getFirst();
         return localTimeValue - offset.getTotalSeconds() * MS_PER_SECOND;
@@ -428,7 +428,7 @@ public final class DateBuiltins {
         return value - Math.floor(value / modulus) * modulus;
     }
 
-    private static JsValue getter(JsDate receiver, String name) {
+    private static JsValue getter(JsDate receiver, String name, InterpreterOps ops) {
         final var component = componentName(name);
         if (component == null) {
             return null;
@@ -438,7 +438,7 @@ public final class DateBuiltins {
             if (!receiver.isValid()) {
                 return new JsNumber(Double.NaN);
             }
-            final var t = utc ? receiver.getTime() : localTime(receiver.getTime());
+            final var t = utc ? receiver.getTime() : localTime(receiver.getTime(), ops);
             final double value = switch (component) {
                 case "year" -> yearFromTime(t);
                 case "month" -> monthFromTime(t);
@@ -482,31 +482,31 @@ public final class DateBuiltins {
                 (long) secFromTime(t));
     }
 
-    private static String timeZoneStringOf(double utcTime) {
-        final var offset = (long) (localOffset(utcTime) / MS_PER_MINUTE);
+    private static String timeZoneStringOf(double utcTime, InterpreterOps ops) {
+        final var offset = (long) (localOffset(utcTime, ops) / MS_PER_MINUTE);
         final var sign = offset < 0 ? "-" : "+";
         final var magnitude = Math.abs(offset);
         return sign + String.format(Locale.US, "%02d%02d", magnitude / 60, magnitude % 60) + " ("
-                + ZoneId.systemDefault().getDisplayName(java.time.format.TextStyle.FULL, Locale.US) + ")";
+                + InterpreterOps.timeZone(ops).getDisplayName(java.time.format.TextStyle.FULL, Locale.US) + ")";
     }
 
-    private static String toDateString(double utcTime) {
+    private static String toDateString(double utcTime, InterpreterOps ops) {
         if (Double.isNaN(utcTime)) {
             return INVALID;
         }
-        final var t = localTime(utcTime);
-        return dateStringOf(t) + " " + timeStringOf(t) + timeZoneStringOf(utcTime);
+        final var t = localTime(utcTime, ops);
+        return dateStringOf(t) + " " + timeStringOf(t) + timeZoneStringOf(utcTime, ops);
     }
 
-    private static String localPart(double utcTime, boolean datePart, boolean timePart) {
+    private static String localPart(double utcTime, boolean datePart, boolean timePart, InterpreterOps ops) {
         if (Double.isNaN(utcTime)) {
             return INVALID;
         }
-        final var t = localTime(utcTime);
+        final var t = localTime(utcTime, ops);
         if (datePart) {
             return dateStringOf(t);
         }
-        return timePart ? timeStringOf(t) + timeZoneStringOf(utcTime) : "";
+        return timePart ? timeStringOf(t) + timeZoneStringOf(utcTime, ops) : "";
     }
 
     private static String utcString(double utcTime) {
@@ -542,7 +542,7 @@ public final class DateBuiltins {
                 (long) msFromTime(t));
     }
 
-    private static String toLocaleString(JsDate receiver, String name) {
+    private static String toLocaleString(JsDate receiver, String name, InterpreterOps ops) {
         if (!receiver.isValid()) {
             return INVALID;
         }
@@ -552,8 +552,8 @@ public final class DateBuiltins {
             case "toLocaleTimeString" -> java.time.format.DateTimeFormatter.ofLocalizedTime(style);
             default -> java.time.format.DateTimeFormatter.ofLocalizedDateTime(style);
         };
-        final var zoned = Instant.ofEpochMilli((long) receiver.getTime()).atZone(ZoneId.systemDefault());
-        return zoned.format(formatter.withLocale(java.util.Locale.getDefault()));
+        final var zoned = Instant.ofEpochMilli((long) receiver.getTime()).atZone(InterpreterOps.timeZone(ops));
+        return zoned.format(formatter.withLocale(InterpreterOps.locale(ops)));
     }
 
     private static JsValue toJSON(JsValue receiver, InterpreterOps ops) {

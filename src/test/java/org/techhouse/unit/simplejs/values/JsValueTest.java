@@ -66,6 +66,15 @@ public class JsValueTest {
         assertEquals(JsValue.JsValueType.DATA_VIEW,
                 new org.techhouse.simplejs.values.JsDataView(new org.techhouse.simplejs.values.JsArrayBuffer(4), 0, 4)
                         .getType());
+        assertEquals(JsValue.JsValueType.GEO,
+                new org.techhouse.simplejs.values.JsGeo(new org.techhouse.utils.GeoPoint(1, 2)).getType());
+        assertEquals(JsValue.JsValueType.VECTOR,
+                new org.techhouse.simplejs.values.JsVector(new double[]{1, 2}).getType());
+        assertEquals(JsValue.JsValueType.DB_DATE_TIME,
+                new org.techhouse.simplejs.values.JsDbDateTime(java.time.LocalDateTime.of(2024, 1, 2, 3, 4, 5))
+                        .getType());
+        assertEquals(JsValue.JsValueType.DB_TIME,
+                new org.techhouse.simplejs.values.JsDbTime(java.time.LocalTime.of(3, 4, 5)).getType());
     }
 
     // Arguments and global objects are typeof "object" and stringify as tagged objects

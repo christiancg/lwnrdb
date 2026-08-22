@@ -80,6 +80,8 @@ public class ConfigReaderTest {
         expectedConfig.put("clusterSecret", "");
         expectedConfig.put("antiEntropyIntervalMs", "60000");
         expectedConfig.put("tombstoneRetentionMs", "86400000");
+        expectedConfig.put("scriptTimeZone", "UTC");
+        expectedConfig.put("scriptLocale", "en-US");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

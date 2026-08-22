@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.InterpreterOps.locale;
+
 import java.math.BigInteger;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -41,8 +43,8 @@ public final class BigIntBuiltins {
             case "toString" ->
                 new JsNativeFunction("toString", (_, args) -> new JsString(toString(receiver, args, ops)));
             case "valueOf" -> new JsNativeFunction("valueOf", (_, _) -> receiver);
-            case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> new JsString(
-                    java.text.NumberFormat.getInstance(java.util.Locale.getDefault()).format(receiver.getValue())));
+            case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_,
+                    _) -> new JsString(java.text.NumberFormat.getInstance(locale(ops)).format(receiver.getValue())));
             default -> null;
         };
     }

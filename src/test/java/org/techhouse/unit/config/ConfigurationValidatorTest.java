@@ -45,6 +45,8 @@ public class ConfigurationValidatorTest {
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");
         map.put("tombstoneRetentionMs", "86400000");
+        map.put("scriptTimeZone", "UTC");
+        map.put("scriptLocale", "en-US");
         return map;
     }
 
@@ -246,5 +248,32 @@ public class ConfigurationValidatorTest {
         config.remove("port");
         final var errors = ConfigurationValidator.validate(config);
         assertFalse(errors.isEmpty());
+    }
+
+    @Test
+    public void test_script_time_zone_accepts_a_fixed_offset_zone(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("scriptTimeZone", "+05:30");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_script_time_zone_rejects_an_unknown_zone(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptTimeZone", "Mars/Olympus", "scriptTimeZone");
+    }
+
+    @Test
+    public void test_script_time_zone_rejects_a_blank_value(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptTimeZone", "  ", "scriptTimeZone");
+    }
+
+    @Test
+    public void test_script_locale_rejects_a_malformed_tag(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptLocale", "not a locale", "scriptLocale");
+    }
+
+    @Test
+    public void test_script_locale_rejects_a_blank_value(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptLocale", "", "scriptLocale");
     }
 }

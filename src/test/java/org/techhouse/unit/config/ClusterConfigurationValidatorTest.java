@@ -44,6 +44,8 @@ public class ClusterConfigurationValidatorTest {
         map.put("clusterSecret", "shared-secret");
         map.put("antiEntropyIntervalMs", "60000");
         map.put("tombstoneRetentionMs", "86400000");
+        map.put("scriptTimeZone", "UTC");
+        map.put("scriptLocale", "en-US");
         return map;
     }
 

@@ -17,8 +17,11 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsDataView;
 import org.techhouse.simplejs.values.JsDate;
+import org.techhouse.simplejs.values.JsDbDateTime;
+import org.techhouse.simplejs.values.JsDbTime;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsGenerator;
+import org.techhouse.simplejs.values.JsGeo;
 import org.techhouse.simplejs.values.JsMap;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
@@ -42,6 +45,7 @@ import org.techhouse.simplejs.values.JsTemporalZonedDateTime;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.simplejs.values.JsVector;
 
 // The realm's intrinsic prototype objects. Deliberately per-Interpreter (never static): a shared
 // Array.prototype would let one script's monkey-patch leak into every later script in the JVM.
@@ -83,6 +87,10 @@ public final class Intrinsics {
     private final JsObject temporalPlainMonthDayProto;
     private final JsObject temporalPlainDateTimeProto;
     private final JsObject temporalZonedDateTimeProto;
+    private final JsObject geoProto;
+    private final JsObject vectorProto;
+    private final JsObject dbDateTimeProto;
+    private final JsObject dbTimeProto;
     private final JsObject promiseProto;
     private final JsObject iteratorProto;
     private final JsObject asyncIteratorProto;
@@ -203,6 +211,22 @@ public final class Intrinsics {
                 "Temporal.ZonedDateTime.prototype", (receiver, name) -> TemporalZonedDateTimeBuiltins
                         .getMethod(requireTemporalZonedDateTime(receiver, name), name, ops));
         TemporalZonedDateTimeBuiltins.installAccessors(temporalZonedDateTimeProto);
+        geoProto = prototypeOf(GeoBuiltins.NAMES, "Geo.prototype",
+                (receiver, name) -> GeoBuiltins.getMethod(requireGeo(receiver, name), name));
+        GeoBuiltins.installAccessors(geoProto);
+        defineToStringTag(geoProto, "Geo");
+        vectorProto = prototypeOf(VectorBuiltins.NAMES, "Vector.prototype",
+                (receiver, name) -> VectorBuiltins.getMethod(requireVector(receiver, name), name, ops));
+        VectorBuiltins.installAccessors(vectorProto);
+        defineToStringTag(vectorProto, "Vector");
+        dbDateTimeProto = prototypeOf(DbDateTimeBuiltins.NAMES, "DbDateTime.prototype",
+                (receiver, name) -> DbDateTimeBuiltins.getMethod(requireDbDateTime(receiver, name), name));
+        DbDateTimeBuiltins.installAccessors(dbDateTimeProto);
+        defineToStringTag(dbDateTimeProto, "DbDateTime");
+        dbTimeProto = prototypeOf(DbTimeBuiltins.NAMES, "DbTime.prototype",
+                (receiver, name) -> DbTimeBuiltins.getMethod(requireDbTime(receiver, name), name));
+        DbTimeBuiltins.installAccessors(dbTimeProto);
+        defineToStringTag(dbTimeProto, "DbTime");
         arrayBufferProto = prototypeOf(TypedArrayBuiltins.BUFFER_NAMES, "ArrayBuffer.prototype",
                 (receiver, name) -> TypedArrayBuiltins.bufferMethod(requireBuffer(receiver, name), name, ops));
         dataViewProto = prototypeOf(TypedArrayBuiltins.VIEW_NAMES, "DataView.prototype",
@@ -725,6 +749,10 @@ public final class Intrinsics {
             case JsTemporalPlainMonthDay ignored -> temporalPlainMonthDayProto;
             case JsTemporalPlainDateTime ignored -> temporalPlainDateTimeProto;
             case JsTemporalZonedDateTime ignored -> temporalZonedDateTimeProto;
+            case JsGeo ignored -> geoProto;
+            case JsVector ignored -> vectorProto;
+            case JsDbDateTime ignored -> dbDateTimeProto;
+            case JsDbTime ignored -> dbTimeProto;
             case JsPromise ignored -> promiseProto;
             case JsGenerator ignored -> iteratorProto;
             case JsAsyncGenerator ignored -> asyncIteratorProto;
@@ -838,6 +866,22 @@ public final class Intrinsics {
 
     public JsObject temporalZonedDateTimeProto() {
         return temporalZonedDateTimeProto;
+    }
+
+    public JsObject geoProto() {
+        return geoProto;
+    }
+
+    public JsObject vectorProto() {
+        return vectorProto;
+    }
+
+    public JsObject dbDateTimeProto() {
+        return dbDateTimeProto;
+    }
+
+    public JsObject dbTimeProto() {
+        return dbTimeProto;
     }
 
     public JsObject promiseProto() {
@@ -1212,6 +1256,46 @@ public final class Intrinsics {
             return wrapped;
         }
         throw incompatible("Temporal.ZonedDateTime.prototype." + method, receiver);
+    }
+
+    private JsGeo requireGeo(JsValue receiver, String method) {
+        if (receiver instanceof JsGeo geo) {
+            return geo;
+        }
+        if (unwrap(receiver) instanceof JsGeo wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Geo.prototype." + method, receiver);
+    }
+
+    private JsVector requireVector(JsValue receiver, String method) {
+        if (receiver instanceof JsVector vector) {
+            return vector;
+        }
+        if (unwrap(receiver) instanceof JsVector wrapped) {
+            return wrapped;
+        }
+        throw incompatible("Vector.prototype." + method, receiver);
+    }
+
+    private JsDbDateTime requireDbDateTime(JsValue receiver, String method) {
+        if (receiver instanceof JsDbDateTime dateTime) {
+            return dateTime;
+        }
+        if (unwrap(receiver) instanceof JsDbDateTime wrapped) {
+            return wrapped;
+        }
+        throw incompatible("DbDateTime.prototype." + method, receiver);
+    }
+
+    private JsDbTime requireDbTime(JsValue receiver, String method) {
+        if (receiver instanceof JsDbTime time) {
+            return time;
+        }
+        if (unwrap(receiver) instanceof JsDbTime wrapped) {
+            return wrapped;
+        }
+        throw incompatible("DbTime.prototype." + method, receiver);
     }
 
     private JsArrayBuffer requireBuffer(JsValue receiver, String method) {

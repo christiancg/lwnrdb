@@ -5,6 +5,7 @@ import java.util.List;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.host.BulkSaveOutcome;
 import org.techhouse.simplejs.host.DatabaseAccess;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsObject;
@@ -16,6 +17,8 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     public final List<String> calls = new ArrayList<>();
     public JsonObject nextFindResult;
     public String denyMessage;
+    public boolean rejectNestedTransaction;
+    private boolean inTransaction;
 
     @Override
     public JsonObject findById(String db, String coll, String id) {
@@ -39,9 +42,38 @@ public class FakeDatabaseAccess implements DatabaseAccess {
     }
 
     @Override
+    public BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents) {
+        calls.add("bulkSave:" + db + "/" + coll + "/" + documents.size());
+        maybeDeny();
+        return new BulkSaveOutcome(List.of("b1"), List.of("b2"));
+    }
+
+    @Override
     public void delete(String db, String coll, String id) {
         calls.add("delete:" + db + "/" + coll + "/" + id);
         maybeDeny();
+    }
+
+    @Override
+    public void beginTransaction() {
+        calls.add("beginTransaction");
+        maybeDeny();
+        if (rejectNestedTransaction && inTransaction) {
+            throwError("A transaction is already active on this script");
+        }
+        inTransaction = true;
+    }
+
+    @Override
+    public void commitTransaction() {
+        calls.add("commitTransaction");
+        inTransaction = false;
+    }
+
+    @Override
+    public void rollbackTransaction() {
+        calls.add("rollbackTransaction");
+        inTransaction = false;
     }
 
     @Override
@@ -60,11 +92,15 @@ public class FakeDatabaseAccess implements DatabaseAccess {
 
     private void maybeDeny() {
         if (denyMessage != null) {
-            final var error = new JsObject();
-            error.set("name", new JsString("Error"));
-            error.set("message", new JsString(denyMessage));
-            throw new JsThrowException(error);
+            throwError(denyMessage);
         }
+    }
+
+    private static void throwError(String message) {
+        final var error = new JsObject();
+        error.set("name", new JsString("Error"));
+        error.set("message", new JsString(message));
+        throw new JsThrowException(error);
     }
 
     private static JsonObject single() {

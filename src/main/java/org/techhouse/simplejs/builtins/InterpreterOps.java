@@ -37,4 +37,24 @@ public interface InterpreterOps {
     boolean defineProperty(JsValue target, JsValue key, JsValue descriptor);
 
     JsValue getOwnPropertyDescriptor(JsValue target, JsValue key);
+
+    // The single seam the static builtins families reach the host's locale/time zone through, so a
+    // Date/Temporal/toLocaleString answer is the host's choice rather than the JVM's.
+    default java.time.ZoneId timeZone() {
+        return java.time.ZoneId.systemDefault();
+    }
+
+    default java.util.Locale locale() {
+        return java.util.Locale.getDefault();
+    }
+
+    // Several getMethod overloads are reachable with a null seam (the no-ops convenience variants),
+    // so the two readers below are the single place that decides what "no host" means.
+    static java.time.ZoneId timeZone(InterpreterOps ops) {
+        return ops == null ? java.time.ZoneId.systemDefault() : ops.timeZone();
+    }
+
+    static java.util.Locale locale(InterpreterOps ops) {
+        return ops == null ? java.util.Locale.getDefault() : ops.locale();
+    }
 }

@@ -234,6 +234,16 @@ public final class Interpreter {
                     ? proxies.getOwnPropertyDescriptor(proxy, propertyKey)
                     : ObjectBuiltins.getOwnPropertyDescriptor(List.of(target, propertyKey));
         }
+
+        @Override
+        public java.time.ZoneId timeZone() {
+            return host.timeZone();
+        }
+
+        @Override
+        public java.util.Locale locale() {
+            return host.locale();
+        }
     };
     private final ProxyDispatch proxies = new ProxyDispatch(ops);
     private final Intrinsics intrinsics = new Intrinsics(this::callValue, ops, eventLoop, this::driveAsyncGenerator);
