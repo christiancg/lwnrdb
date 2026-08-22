@@ -1,6 +1,6 @@
 /*---
 description: A deliberately unimplemented feature is excluded.
-features: [Temporal]
+features: [SharedArrayBuffer]
 ---*/
 
-assert.sameValue(typeof Temporal, "object");
+assert.sameValue(typeof SharedArrayBuffer, "function");

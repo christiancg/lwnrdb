@@ -901,7 +901,7 @@ def self_test_classify():
     rules = {
         "dirs": [("area/skipme/", "excluded subtree")],
         "keeps": [("area/skipme/inner/", "measured anyway")],
-        "features": {"Temporal": "deliberate"},
+        "features": {"SharedArrayBuffer": "deliberate"},
         "includes": {"needsCodegen.js": "helper needs the Function constructor"},
         "patterns": [],
     }
@@ -910,7 +910,7 @@ def self_test_classify():
         ("keep beats dir", "area/skipme/inner/a.js", "", empty_meta, "RUN"),
         ("dir leaves siblings alone", "area/other/a.js", "", empty_meta, "RUN"),
         ("feature still applies under keep", "area/skipme/inner/b.js", "",
-         {"flags": [], "features": ["Temporal"], "includes": [], "negative": {}}, "EXCLUDED"),
+         {"flags": [], "features": ["SharedArrayBuffer"], "includes": [], "negative": {}}, "EXCLUDED"),
         ("include excludes", "area/other/c.js", "",
          {"flags": [], "features": [], "includes": ["needsCodegen.js"], "negative": {}}, "EXCLUDED"),
         ("unlisted include runs", "area/other/d.js", "",
