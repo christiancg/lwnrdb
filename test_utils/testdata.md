@@ -792,34 +792,34 @@ Re-authenticate after reconnecting
 {"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
 ```
 
-Create a non-admin user with read-write access to one database
+Create a non-admin user with read-write access to one database, allowed to run scripts on it
 
 ```json
-{"type": "CREATE_USER", "username": "Alice", "password": "secret1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
+{"type": "CREATE_USER", "username": "Alice", "password": "secret1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {"test": true}}
 ```
 
 Create a read-only user scoped to a single collection
 
 ```json
-{"type": "CREATE_USER", "username": "readonly", "password": "readonly1234", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {"test|testCollection": "READ"}}
+{"type": "CREATE_USER", "username": "readonly", "password": "readonly1234", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {"test|testCollection": "READ"}, "scriptPermissions": {}}
 ```
 
 Create a user that can create and drop databases
 
 ```json
-{"type": "CREATE_USER", "username": "dbadmin", "password": "dbadmin1234", "admin": false, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
+{"type": "CREATE_USER", "username": "dbadmin", "password": "dbadmin1234", "admin": false, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {}}
 ```
 
-Grant Alice admin rights and update her permissions
+Grant Alice admin rights and update her permissions (an admin needs no script grant)
 
 ```json
-{"type": "CHANGE_PERMISSIONS", "username": "Alice", "admin": true, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}}
+{"type": "CHANGE_PERMISSIONS", "username": "Alice", "admin": true, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {}}
 ```
 
-Downgrade Alice back to a regular user
+Downgrade Alice back to a regular user, keeping her script grant on `test`
 
 ```json
-{"type": "CHANGE_PERMISSIONS", "username": "Alice", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}}
+{"type": "CHANGE_PERMISSIONS", "username": "Alice", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {"test": true}}
 ```
 
 Authenticate as Alice
@@ -846,10 +846,272 @@ Delete readonly
 {"type": "DELETE_USER", "username": "readonly"}
 ```
 
-Delete db_admin
+Delete dbadmin
 
 ```json
-{"type": "DELETE_USER", "username": "db_admin"}
+{"type": "DELETE_USER", "username": "dbadmin"}
+```
+
+Scripts (`RUN_SCRIPT`)
+
+Scripting is off by default: set `scriptsEnabled=true` in `lwnrdb.cfg` and restart, otherwise every
+`RUN_SCRIPT` below is refused with `403-2`. A script is scoped to the request's `databaseName` and may
+use any collection in it; `db.name` is that database, so a script never hardcodes it.
+
+Simplest script — the top-level `return` value comes back in `result`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 1 + 1;"}
+```
+
+Console output is returned in `logs` (newest `scriptMaxLogLines` lines)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "console.log('hello from the script');\nconsole.log('and again');\nreturn 'done';"}
+```
+
+Arguments — the optional `args` object is read through `import args from "args"`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import args from \"args\";\nreturn args.name + ' is ' + args.age;", "args": {"name": "Alice", "age": 30}}
+```
+
+Read a document by id
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.findById(db.name, 'testCollection', 'findme');"}
+```
+
+Run an aggregation pipeline from a script
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nconst pipeline = [{ type: 'FILTER', operator: { fieldOperatorType: 'GREATER_THAN_EQUALS', field: 'aNumber', value: 10 } }];\nconst rows = db.aggregate(db.name, 'testCollection', pipeline);\nconsole.log(`matched ${rows.length} documents`);\nreturn rows.length;"}
+```
+
+List the collections of the scoped database
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.listCollections(db.name);"}
+```
+
+Save a document and read it back
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ndb.save(db.name, 'testCollection', { _id: 'scripted-1', scripted: true, aNumber: 42 });\nreturn db.findById(db.name, 'testCollection', 'scripted-1');"}
+```
+
+Bulk save — returns the inserted and updated ids
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\nreturn db.bulkSave(db.name, 'testCollection', [{ _id: 'bulk-1', n: 1 }, { _id: 'bulk-2', n: 2 }]);"}
+```
+
+Delete a document (deleting one that is not there is a no-op)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ndb.delete(db.name, 'testCollection', 'scripted-1');\ndb.delete(db.name, 'testCollection', 'never-existed');\nreturn db.findById(db.name, 'testCollection', 'scripted-1') === null;"}
+```
+
+Transaction spanning two collections — both writes commit together
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ndb.transaction(() => {\n    db.save(db.name, 'testCollection', { _id: 'tx-1', from: 'transaction' });\n    db.save(db.name, 'joinMe', { _id: 'tx-2', joinField: 99 });\n});\nreturn 'committed';"}
+```
+
+A throw inside the callback rolls the whole transaction back
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ntry {\n    db.transaction(() => {\n        db.save(db.name, 'testCollection', { _id: 'tx-rolled-back', from: 'transaction' });\n        throw new Error('abort');\n    });\n} catch (e) {\n    return { message: e.message, written: db.findById(db.name, 'testCollection', 'tx-rolled-back') !== null };\n}"}
+```
+
+Named exports are the result when there is no top-level `return`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "export const total = 3;\nexport const label = 'exported';"}
+```
+
+A failed database operation throws into the script and can be caught
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ntry {\n    db.save(db.name, 'neverCreatedCollection', { _id: 'x' });\n    return 'wrote';\n} catch (e) {\n    return { caught: e instanceof Error, message: e.message };\n}"}
+```
+
+A script cannot leave its database — not even `admin` (caught inside the script)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import db from \"db\";\ntry {\n    return db.findById('admin', 'users', 'admin');\n} catch (e) {\n    return e.message;\n}"}
+```
+
+An uncaught throw fails the run with `400-9` (`logs` are still returned)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "console.log('before the throw');\nthrow new TypeError('boom');"}
+```
+
+A syntax error also fails with `400-9`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "function ("}
+```
+
+A tight loop exhausts `scriptInstructionBudget` → `400-11`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "while (true) {}"}
+```
+
+Waiting past `scriptTimeoutMs` → `408-1`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (async () => { await new Promise(r => setTimeout(r, 60000)); return 'never'; })();"}
+```
+
+Unknown database → `404-4`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "nosuchdb", "script": "return 1;"}
+```
+
+The reserved `admin` database cannot be scripted → `400-1`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "admin", "script": "return 1;"}
+```
+
+A missing or blank `script` → `400-1`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test"}
+```
+
+Not allowed while a transaction is open on the connection → `409-6`
+
+```json
+{"type": "START_TRANSACTION"}
+```
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 1;"}
+```
+
+```json
+{"type": "ROLLBACK_TRANSACTION"}
+```
+
+Per-database script permissions
+
+Admins may script any database and database owners the databases they own. Anybody else needs a grant
+for that specific database in `scriptPermissions`; an absent entry or an explicit `false` is a denial.
+
+A second database, to show that a grant does not carry over
+
+```json
+{"type": "CREATE_DATABASE", "databaseName": "test2"}
+```
+
+A user allowed to script `test` only (read access to the data, script grant on `test`)
+
+```json
+{"type": "CREATE_USER", "username": "scripter", "password": "scripter1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE", "test2": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {"test": true}}
+```
+
+A user with data access but no script grant at all
+
+```json
+{"type": "CREATE_USER", "username": "noscripts", "password": "noscripts1234", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {}}
+```
+
+Authenticate as scripter
+
+```json
+{"type": "AUTHENTICATE", "username": "scripter", "password": "scripter1234"}
+```
+
+Allowed on the granted database
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 'scripter ran this';"}
+```
+
+Refused on `test2` despite having READ_WRITE there → `403-1`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test2", "script": "return 1;"}
+```
+
+Authenticate as noscripts
+
+```json
+{"type": "AUTHENTICATE", "username": "noscripts", "password": "noscripts1234"}
+```
+
+Refused everywhere → `403-1`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 1;"}
+```
+
+Back to admin
+
+```json
+{"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
+```
+
+`CHANGE_PERMISSIONS` replaces **all** permissions, so omitting `scriptPermissions` (or sending `{}`)
+revokes every script grant the user had.
+
+Revoke scripter's grant
+
+```json
+{"type": "CHANGE_PERMISSIONS", "username": "scripter", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {}}
+```
+
+Grant it again, on both databases this time
+
+```json
+{"type": "CHANGE_PERMISSIONS", "username": "scripter", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE", "test2": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {"test": true, "test2": true}}
+```
+
+An explicit `false` is a denial, not a grant
+
+```json
+{"type": "CHANGE_PERMISSIONS", "username": "scripter", "admin": false, "globalPermissions": [], "databasePermissions": {"test": "READ_WRITE"}, "collectionPermissions": {}, "scriptPermissions": {"test": false}}
+```
+
+A grant naming the reserved `admin` database is rejected → `400-1`
+
+```json
+{"type": "CHANGE_PERMISSIONS", "username": "scripter", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {"admin": true}}
+```
+
+A non-boolean grant value is rejected → `400-1`
+
+```json
+{"type": "CHANGE_PERMISSIONS", "username": "scripter", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {"test": "READ"}}
+```
+
+Script grants show up in `LIST_USERS`
+
+```json
+{"type": "LIST_USERS", "aggregationSteps": [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "scripter"}}]}
+```
+
+Clean up
+
+```json
+{"type": "DELETE_USER", "username": "scripter"}
+```
+
+Clean up
+
+```json
+{"type": "DELETE_USER", "username": "noscripts"}
+```
+
+Clean up
+
+```json
+{"type": "DROP_DATABASE", "databaseName": "test2"}
 ```
 
 Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown)
