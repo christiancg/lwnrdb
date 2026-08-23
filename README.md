@@ -39,6 +39,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Stored procedures
   - [ ] Jobs
   - [ ] Triggers
+  - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
+- [ ] Script node selection under clustering: `RUN_SCRIPT` currently always runs on the node that received it. It should instead check node availability (and prefer a node that owns the collections the script uses) rather than always running locally — see [docs/clustering.md](docs/clustering.md) → *Scripts*
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
 - [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
@@ -463,6 +465,37 @@ Manually forces the outcome of an in-doubt distributed transaction identified by
 ```
 Returns `400-1` if `dtxId` is missing or `decision` is not `commit`/`abort`.
 
+#### `RUN_SCRIPT`
+Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simplejs.md) for the engine). The script is **scoped to one database** — the `databaseName` of the request — and may use any collection in it. Disabled by default: set `scriptsEnabled=true` to accept the operation.
+
+```json
+{
+  "type": "RUN_SCRIPT",
+  "databaseName": "mydb",
+  "script": "import db from \"db\";\nimport args from \"args\";\nconst u = db.findById(db.name, \"users\", args.userId);\nconsole.log(`found ${u._id}`);\nreturn { name: u.name };",
+  "args": { "userId": "u1" }
+}
+```
+```json
+{
+  "type": "RUN_SCRIPT",
+  "status": "OK",
+  "message": "Script executed successfully",
+  "result": {"name": "Alice"},
+  "logs": ["found u1"],
+  "logsTruncated": false
+}
+```
+
+- `script` (required) is the program source, `args` (optional) is an arbitrary object the script reads through `import args from "args"`, and `db.name` is the scoped database name — so one script can run against any database without hardcoding it.
+- `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles yields `null`.
+- `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
+- **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": true}` on their user record. Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
+- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
+- **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `408-1` when it exceeds `scriptTimeoutMs`, and `409-6` if sent while a transaction is open on the connection.
+- Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
+
 #### `CLOSE_CONNECTION`
 ```json
 {"type":"CLOSE_CONNECTION"}
@@ -494,7 +527,7 @@ Every connection must authenticate before sending any protected operation. `LIST
 ```
 
 #### `CREATE_USER` (admin only)
-`globalPermissions`, `databasePermissions`, and `collectionPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format.
+`globalPermissions`, `databasePermissions`, `collectionPermissions`, and `scriptPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format; `scriptPermissions` keys are database names and its values must be `true`/`false`.
 ```json
 {
   "type": "CREATE_USER",
@@ -503,7 +536,8 @@ Every connection must authenticate before sending any protected operation. `LIST
   "admin": false,
   "globalPermissions": ["CREATE_DATABASE"],
   "databasePermissions": {"ordersDb": "READ_WRITE"},
-  "collectionPermissions": {"analyticsDb|events": "READ"}
+  "collectionPermissions": {"analyticsDb|events": "READ"},
+  "scriptPermissions": {"ordersDb": true}
 }
 ```
 
@@ -521,7 +555,8 @@ Replaces all permissions for the user in full.
   "admin": false,
   "globalPermissions": [],
   "databasePermissions": {"ordersDb": "READ"},
-  "collectionPermissions": {}
+  "collectionPermissions": {},
+  "scriptPermissions": {"ordersDb": true}
 }
 ```
 
@@ -617,6 +652,7 @@ Each user object in the response contains:
 | `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
 | `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
 | `collectionPermissions` | object | e.g. `{"mydb&#124;coll": "READ"}` |
+| `scriptPermissions` | object | Per-database script grants, e.g. `{"mydb": true}` |
 | `ownedDatabases` | array | Databases where this user is an owner |
 
 ```json
@@ -650,12 +686,15 @@ Example filters:
 | `admin` flag            | Superadmin — bypasses all permission checks                                           |
 | Database ownership      | Full access to the database and all its collections, including the ability to drop it |
 | `globalPermissions`     | `CREATE_DATABASE` — required to create new databases                                  |
+| `scriptPermissions`     | Per database: `true` allows running scripts ([`RUN_SCRIPT`](#run_script)) scoped to it |
 | `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
 | `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
 Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
+
+`RUN_SCRIPT` requires admin privileges, ownership of the requested database, or a script grant **for that database** (`scriptPermissions: {"mydb": true}` — an absent entry or an explicit `false` is a denial, and a grant on one database says nothing about another). Being allowed to start a script is separate from what it may do: every operation the script issues is authorized again on its own request against `databasePermissions`/`collectionPermissions`, so a user granted scripting plus `READ` can run a script that reads but not one that writes.
 
 Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
@@ -683,10 +722,14 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-6` | `ERROR` | Current password is incorrect |
 | `400-7` | `ERROR` | Document does not comply with the collection schema |
 | `400-8` | `ERROR` | The provided JSON schema is not valid |
+| `400-9` | `ERROR` | Script execution failed |
+| `400-10` | `ERROR` | Script exceeds the maximum allowed size |
+| `400-11` | `ERROR` | Script exceeded a sandbox limit |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
 | `403-1` | `FORBIDDEN` | Action is forbidden, no permissions |
+| `403-2` | `FORBIDDEN` | Script execution is disabled on this server |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -694,6 +737,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-5` | `NOT_FOUND` | No users found |
 | `404-6` | `NOT_FOUND` | No index registered for the specified field |
 | `404-7` | `NOT_FOUND` | Listen registration not found |
+| `408-1` | `ERROR` | Script exceeded its time budget |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `409-3` | `ERROR` | A transaction is already in progress for this connection |
@@ -783,6 +827,14 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `tombstoneRetentionMs` | Valid number ≥ 1. How long delete tombstones are kept before anti-entropy GC; must exceed the longest expected node downtime |
 | `scriptTimeZone` | A valid IANA time zone id (e.g. `UTC`, `Europe/Madrid`) or fixed offset. The zone a stored script's `Date`/`Temporal`/`toLocaleString` answers in, so the same script returns the same answer on every node |
 | `scriptLocale` | A valid BCP 47 language tag (e.g. `en-US`). The locale a stored script's locale-sensitive formatting and collation use |
+| `scriptsEnabled` | `true` or `false` (default `false`). Whether clients may run scripts at all ([`RUN_SCRIPT`](#run_script)); when `false` the operation is refused with `403-2` |
+| `scriptInstructionBudget` | Valid number ≥ 1. Max interpreter instructions per script run; exceeding it aborts with `400-11` |
+| `scriptTimeoutMs` | Valid number ≥ 1. Max wall-clock time per script run; exceeding it aborts with `408-1` |
+| `scriptMaxDepth` | Valid number ≥ 1. Max nested call depth per script run; exceeding it aborts with `400-11` |
+| `scriptMaxSourceBytes` | Human-readable size > 0. Max accepted script source; larger is rejected with `400-10` |
+| `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
+| `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
+| `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
 
 ```
 # the port the server listens on
@@ -802,6 +854,12 @@ transactionLockTimeoutMs=5000
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
 tlsKeystorePassword=change_it
+# scripts (RUN_SCRIPT) are off by default; the sandbox is server-fixed, never client-supplied
+scriptsEnabled=false
+scriptInstructionBudget=10000000
+scriptTimeoutMs=5000
+scriptMaxDepth=200
+scriptMaxSourceBytes=256Kb
 ```
 
 ### TLS / secure connections

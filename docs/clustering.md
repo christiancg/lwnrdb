@@ -128,6 +128,29 @@ follow:
 was down when B was created — both implemented; see *Admin / DDL replication* and
 *Admin/DDL anti-entropy* below.)
 
+### Scripts (`RUN_SCRIPT`)
+
+A script is **not routed**: it executes on the node that received it. There is no single node to
+route it to — a script is scoped to a database but may touch any number of collections in it, owned
+by different nodes — so `RUN_SCRIPT` is deliberately absent from `ClusterRouter`'s routable set.
+Each operation the script issues is routed normally by `host/EnforcingDatabaseAccess.routeOrProcess`
+(forwarded to its collection's owner, with `db.transaction` spanning owners through the same 2PC the
+wire protocol uses). The consequence is one round trip per operation against remote-owned
+collections, so a script doing many small reads is fastest on the owner of the collections it reads.
+
+> **Future work — node selection for scripts.** Always executing on the receiving node is a
+> deliberate first cut, not the intended end state. The node that happens to accept the connection is
+> not necessarily a good place to run the script: it may be the owner of none of the collections the
+> script touches (paying a round trip per operation), or it may be the busiest node in the cluster
+> while others are idle. A later phase should let `RUN_SCRIPT` **choose** its execution node —
+> consulting live membership and node availability/load, and preferring a node that owns the
+> collections the script will actually use — and forward the whole script there, the way
+> `ClusterRouter` already forwards a per-collection operation to its owner. Open questions to settle
+> then: how to know which collections a script will touch before running it (declare them on the
+> request, or learn them from previous runs), what "available" means (liveness only, or a load/queue
+> signal gossiped with the heartbeat), and how to avoid forwarding loops and thrashing when several
+> nodes each think another is the better host.
+
 ## Admin / DDL replication
 
 Admin and DDL operations mutate cluster-wide metadata (databases, collections,

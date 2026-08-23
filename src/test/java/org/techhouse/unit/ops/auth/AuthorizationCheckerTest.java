@@ -247,4 +247,66 @@ public class AuthorizationCheckerTest {
         final var req = aggregateWithSteps(steps);
         assertTrue(AuthorizationChecker.check(req, user).isAllowed());
     }
+
+    @Test
+    public void test_run_script_allowed_for_admin() {
+        final var request = new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null);
+        assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
+    }
+
+    @Test
+    public void test_run_script_denied_without_script_permission() {
+        final var dbPerms = new HashMap<String, PermissionLevel>();
+        dbPerms.put("testDb", PermissionLevel.READ_WRITE);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), dbPerms, new HashMap<>());
+        final var request = new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null);
+        assertFalse(AuthorizationChecker.check(request, user).isAllowed());
+    }
+
+    @Test
+    public void test_run_script_allowed_with_script_permission_for_that_database() {
+        final var scriptPerms = new HashMap<String, Boolean>();
+        scriptPerms.put("testDb", true);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>(),
+                scriptPerms);
+        final var request = new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null);
+        assertTrue(AuthorizationChecker.check(request, user).isAllowed());
+    }
+
+    // The grant is per database: it does not carry over to another one
+    @Test
+    public void test_run_script_denied_for_a_different_database() {
+        final var scriptPerms = new HashMap<String, Boolean>();
+        scriptPerms.put("testDb", true);
+        final var dbPerms = new HashMap<String, PermissionLevel>();
+        dbPerms.put("otherDb", PermissionLevel.READ_WRITE);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), dbPerms, new HashMap<>(),
+                scriptPerms);
+        final var request = new org.techhouse.ops.req.RunScriptRequest("otherDb", "return 1;", null);
+        assertFalse(AuthorizationChecker.check(request, user).isAllowed());
+    }
+
+    // An explicit false is a denial, not a grant
+    @Test
+    public void test_run_script_denied_when_grant_is_false() {
+        final var scriptPerms = new HashMap<String, Boolean>();
+        scriptPerms.put("testDb", false);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>(),
+                scriptPerms);
+        final var request = new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null);
+        assertFalse(AuthorizationChecker.check(request, user).isAllowed());
+    }
+
+    // The script grant alone starts the script; what it may do is still the database/collection permissions
+    @Test
+    public void test_run_script_grant_does_not_imply_data_access() {
+        final var scriptPerms = new HashMap<String, Boolean>();
+        scriptPerms.put("testDb", true);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>(),
+                scriptPerms);
+        assertTrue(AuthorizationChecker
+                .check(new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null), user).isAllowed());
+        assertFalse(AuthorizationChecker.check(new SaveRequest("testDb", "testColl"), user).isAllowed());
+        assertFalse(AuthorizationChecker.check(new FindByIdRequest("testDb", "testColl"), user).isAllowed());
+    }
 }

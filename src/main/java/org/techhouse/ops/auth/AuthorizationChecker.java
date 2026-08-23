@@ -73,6 +73,15 @@ public final class AuthorizationChecker {
             return AuthorizationResult.allow();
         }
 
+        // Admins (allowed above) and owners (just above) may always run a script; anybody else needs the
+        // script permission for this specific database. Each operation the script issues is authorized on
+        // its own request, so the grant alone never widens what the script may read or write.
+        if (type == OperationType.RUN_SCRIPT) {
+            return user.canRunScripts(dbName)
+                    ? AuthorizationResult.allow()
+                    : AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
         final var requiredLevel = getRequiredPermissionLevel(type);
         final var collName = req.getCollectionName();
 

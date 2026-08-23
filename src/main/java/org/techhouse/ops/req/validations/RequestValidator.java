@@ -4,6 +4,7 @@ import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
@@ -21,6 +22,7 @@ import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
+import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
@@ -65,7 +67,20 @@ public class RequestValidator {
             case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, LIST_TRANSACTIONS ->
                 ValidationResult.ok();
             case RESOLVE_TRANSACTION -> validateResolveTransaction((ResolveTransactionRequest) request);
+            case RUN_SCRIPT -> validateRunScript((RunScriptRequest) request);
         };
+    }
+
+    private static ValidationResult validateRunScript(RunScriptRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        final var script = request.getScript();
+        if (script == null || script.isBlank()) {
+            return ValidationResult.fail("RUN_SCRIPT request requires a script");
+        }
+        return ValidationResult.ok();
     }
 
     private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {
@@ -282,7 +297,7 @@ public class RequestValidator {
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
         }
-        return ValidationResult.ok();
+        return validateRawScriptPermissions(request.getRawScriptPermissions());
     }
 
     private static ValidationResult validateDeleteUser(DeleteUserRequest request) {
@@ -307,7 +322,7 @@ public class RequestValidator {
         if (!dbPermsResult.isValid()) {
             return dbPermsResult;
         }
-        return ValidationResult.ok();
+        return validateRawScriptPermissions(request.getRawScriptPermissions());
     }
 
     private static ValidationResult validateSetPassword(SetPasswordRequest request) {
@@ -363,6 +378,26 @@ public class RequestValidator {
             java.util.UUID.fromString(request.getListenId());
         } catch (IllegalArgumentException e) {
             return ValidationResult.fail("STOP_LISTEN listenId must be a valid UUID");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateRawScriptPermissions(JsonObject scriptPermissions) {
+        if (scriptPermissions == null) {
+            return ValidationResult.ok();
+        }
+        for (var entry : scriptPermissions.entrySet()) {
+            final var dbName = entry.getKey();
+            if (isReservedDbName(dbName)) {
+                return ValidationResult.fail("databaseName '" + dbName + "' is reserved");
+            }
+            if (!dbName.matches(NAME_PATTERN)) {
+                return ValidationResult.fail(
+                        "database name in script permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
+            }
+            if (entry.getValue() == null || entry.getValue().getJsonType() != JsonBaseElement.JsonType.BOOLEAN) {
+                return ValidationResult.fail("script permission for database '" + dbName + "' must be true or false");
+            }
         }
         return ValidationResult.ok();
     }

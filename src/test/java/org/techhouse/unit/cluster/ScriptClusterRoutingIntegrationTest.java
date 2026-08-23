@@ -292,8 +292,9 @@ public class ScriptClusterRoutingIntegrationTest {
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
-        assertNull(db.save(TestGlobals.DB, coll, doc("unreachable")));
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, coll, doc("unreachable")));
         assertThrows(JsThrowException.class, () -> db.bulkSave(TestGlobals.DB, coll, List.of(doc("unreachable-2"))));
+        assertThrows(JsThrowException.class, () -> db.delete(TestGlobals.DB, coll, "unreachable"));
     }
 
     // With clustering disabled every dispatch runs locally, exactly as before

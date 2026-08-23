@@ -82,6 +82,14 @@ public class ConfigReaderTest {
         expectedConfig.put("tombstoneRetentionMs", "86400000");
         expectedConfig.put("scriptTimeZone", "UTC");
         expectedConfig.put("scriptLocale", "en-US");
+        expectedConfig.put("scriptsEnabled", "false");
+        expectedConfig.put("scriptInstructionBudget", "10000000");
+        expectedConfig.put("scriptTimeoutMs", "5000");
+        expectedConfig.put("scriptMaxDepth", "200");
+        expectedConfig.put("scriptMaxSourceBytes", "256Kb");
+        expectedConfig.put("scriptMaxLogLines", "1000");
+        expectedConfig.put("scriptMaxLogLineChars", "4096");
+        expectedConfig.put("scriptTextImportEnabled", "false");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

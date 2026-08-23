@@ -15,6 +15,10 @@ public enum ErrorCode {
                                                             "The provided JSON schema is not valid",
                                                             OperationStatus.ERROR),
 
+    SCRIPT_FAILED("400-9", "Script execution failed", OperationStatus.ERROR), SCRIPT_TOO_LARGE("400-10",
+            "Script exceeds the maximum allowed size", OperationStatus.ERROR), SCRIPT_LIMIT_EXCEEDED("400-11",
+                    "Script exceeded a sandbox limit", OperationStatus.ERROR),
+
     // ── 401 Unauthenticated ───────────────────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(
             "401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED), WRONG_CREDENTIALS("401-3",
@@ -22,6 +26,8 @@ public enum ErrorCode {
 
     // ── 403 Forbidden ─────────────────────────────────────────────────────
     NO_PERMISSIONS("403-1", "Action is forbidden, no permissions", OperationStatus.FORBIDDEN),
+
+    SCRIPTS_DISABLED("403-2", "Script execution is disabled on this server", OperationStatus.FORBIDDEN),
 
     // ── 404 Not Found ─────────────────────────────────────────────────────
     USER_NOT_FOUND("404-1", "User not found", OperationStatus.NOT_FOUND), ENTRY_NOT_FOUND("404-2", "Entry not found",
@@ -32,6 +38,9 @@ public enum ErrorCode {
                                             "No index registered for the specified field",
                                             OperationStatus.NOT_FOUND), LISTEN_NOT_FOUND("404-7",
                                                     "Listen registration not found", OperationStatus.NOT_FOUND),
+
+    // ── 408 Request Timeout ───────────────────────────────────────────────
+    SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
 
     // ── 409 Conflict ──────────────────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",

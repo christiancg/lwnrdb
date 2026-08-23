@@ -98,4 +98,23 @@ public class ErrorCodeTest {
     public void no_permissions_has_forbidden_status() {
         assertEquals(OperationStatus.FORBIDDEN, ErrorCode.NO_PERMISSIONS.getStatus());
     }
+
+    @Test
+    public void script_error_codes_carry_expected_statuses() {
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_FAILED.getStatus());
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_TOO_LARGE.getStatus());
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_LIMIT_EXCEEDED.getStatus());
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_TIMEOUT.getStatus());
+        assertEquals(OperationStatus.FORBIDDEN, ErrorCode.SCRIPTS_DISABLED.getStatus());
+    }
+
+    @Test
+    public void script_error_codes_have_expected_codes() {
+        assertEquals("400-9", ErrorCode.SCRIPT_FAILED.getCode());
+        assertEquals("400-10", ErrorCode.SCRIPT_TOO_LARGE.getCode());
+        assertEquals("400-11", ErrorCode.SCRIPT_LIMIT_EXCEEDED.getCode());
+        assertEquals("403-2", ErrorCode.SCRIPTS_DISABLED.getCode());
+        assertEquals("408-1", ErrorCode.SCRIPT_TIMEOUT.getCode());
+        assertEquals(ErrorCode.SCRIPT_TIMEOUT, ErrorCode.byCode("408-1"));
+    }
 }

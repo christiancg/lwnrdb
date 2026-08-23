@@ -11,6 +11,12 @@ public interface DatabaseAccess {
     default void useErrorPrototype(JsObject prototype) {
     }
 
+    // The single database a script is restricted to, or null when unrestricted. Exposed to the script
+    // as `db.name` so one script can run against any database instead of hardcoding the name.
+    default String scopedDatabase() {
+        return null;
+    }
+
     JsonObject findById(String db, String coll, String id);
 
     List<JsonObject> aggregate(String db, String coll, JsonArray pipeline);

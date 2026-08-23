@@ -38,6 +38,10 @@ public final class DbModule {
         db.set("listDatabases",
                 new JsNativeFunction("listDatabases", (_, _) -> toStringArray(database.listDatabases())));
         db.set("transaction", new JsNativeFunction("transaction", (_, args) -> transaction(database, ops, args)));
+        final var scopedDatabase = database.scopedDatabase();
+        if (scopedDatabase != null) {
+            db.set("name", new JsString(scopedDatabase));
+        }
         return db;
     }
 

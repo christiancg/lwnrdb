@@ -447,4 +447,40 @@ public class RequestValidatorTest {
     public void validate_reindex_adminDatabase_returnsFail() {
         assertFalse(RequestValidator.validate(new ReindexRequest("admin", "myColl", null)).isValid());
     }
+
+    @Test
+    public void validate_runScript_valid() {
+        assertTrue(RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest("myDb", "return 1;", null))
+                .isValid());
+    }
+
+    @Test
+    public void validate_runScript_missingScript_returnsFail() {
+        assertFalse(
+                RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest("myDb", null, null)).isValid());
+    }
+
+    @Test
+    public void validate_runScript_blankScript_returnsFail() {
+        assertFalse(
+                RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest("myDb", "   ", null)).isValid());
+    }
+
+    @Test
+    public void validate_runScript_missingDatabaseName_returnsFail() {
+        assertFalse(RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest(null, "return 1;", null))
+                .isValid());
+    }
+
+    @Test
+    public void validate_runScript_invalidDatabaseName_returnsFail() {
+        assertFalse(RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest("a", "return 1;", null))
+                .isValid());
+    }
+
+    @Test
+    public void validate_runScript_adminDatabase_returnsFail() {
+        assertFalse(RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest("admin", "return 1;", null))
+                .isValid());
+    }
 }

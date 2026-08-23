@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.host;
 
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Locale;
 import java.util.function.Consumer;
 import org.techhouse.config.Configuration;
@@ -20,5 +21,15 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
         final var configuration = Configuration.getInstance();
         return new DatabaseHostBindings(args, database, console, limits, ZoneId.of(configuration.getScriptTimeZone()),
                 Locale.forLanguageTag(configuration.getScriptLocale()));
+    }
+
+    // Network access is deliberately absent (a null NetworkAccess makes `fetch` unavailable) and the
+    // parse goal stays relaxed, since the wire contract allows a top-level `return`.
+    public static ResourceLimits limitsFromConfiguration() {
+        final var configuration = Configuration.getInstance();
+        return new ResourceLimits(configuration.getScriptInstructionBudget(), configuration.getScriptTimeoutMs(),
+                configuration.getScriptMaxDepth(), true, false, List.of(), -1, -1, false,
+                configuration.isScriptTextImportEnabled(), ResourceLimits.DEFAULT_MAX_MODULE_DEPTH,
+                configuration.getScriptMaxLogLines(), configuration.getScriptMaxLogLineChars());
     }
 }

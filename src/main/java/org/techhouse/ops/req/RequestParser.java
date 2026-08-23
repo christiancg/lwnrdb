@@ -83,6 +83,7 @@ public final class RequestParser {
                 case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
                 case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
                 case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
+                case RUN_SCRIPT -> eJson.fromJson(message, RunScriptRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

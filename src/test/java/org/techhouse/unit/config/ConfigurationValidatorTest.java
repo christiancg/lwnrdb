@@ -47,6 +47,14 @@ public class ConfigurationValidatorTest {
         map.put("tombstoneRetentionMs", "86400000");
         map.put("scriptTimeZone", "UTC");
         map.put("scriptLocale", "en-US");
+        map.put("scriptsEnabled", "false");
+        map.put("scriptInstructionBudget", "10000000");
+        map.put("scriptTimeoutMs", "5000");
+        map.put("scriptMaxDepth", "200");
+        map.put("scriptMaxSourceBytes", "256Kb");
+        map.put("scriptMaxLogLines", "1000");
+        map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptTextImportEnabled", "false");
         return map;
     }
 
@@ -275,5 +283,27 @@ public class ConfigurationValidatorTest {
     @Test
     public void test_script_locale_rejects_a_blank_value(@TempDir Path tempDir) {
         assertHasError(tempDir, "scriptLocale", "", "scriptLocale");
+    }
+
+    @Test
+    public void test_invalid_script_sandbox_values(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptsEnabled", "maybe", "scriptsEnabled");
+        assertHasError(tempDir, "scriptTextImportEnabled", "maybe", "scriptTextImportEnabled");
+        assertHasError(tempDir, "scriptInstructionBudget", "0", "scriptInstructionBudget");
+        assertHasError(tempDir, "scriptInstructionBudget", "not-a-number", "scriptInstructionBudget");
+        assertHasError(tempDir, "scriptTimeoutMs", "0", "scriptTimeoutMs");
+        assertHasError(tempDir, "scriptMaxDepth", "0", "scriptMaxDepth");
+        assertHasError(tempDir, "scriptMaxSourceBytes", "nonsense", "scriptMaxSourceBytes");
+        assertHasError(tempDir, "scriptMaxSourceBytes", "0", "scriptMaxSourceBytes");
+        assertHasError(tempDir, "scriptMaxLogLines", "0", "scriptMaxLogLines");
+        assertHasError(tempDir, "scriptMaxLogLineChars", "0", "scriptMaxLogLineChars");
+    }
+
+    @Test
+    public void test_scripts_enabled_true_is_valid(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("scriptsEnabled", "true");
+        config.put("scriptTextImportEnabled", "true");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
     }
 }

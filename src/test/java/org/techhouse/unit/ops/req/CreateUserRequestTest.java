@@ -78,4 +78,27 @@ public class CreateUserRequestTest {
         assertTrue(req.getDatabasePermissions().isEmpty());
         assertTrue(req.getCollectionPermissions().isEmpty());
     }
+
+    @Test
+    public void test_script_permissions_default_to_empty() {
+        final var request = new CreateUserRequest();
+        assertTrue(request.getScriptPermissions().isEmpty());
+        assertNotNull(request.getRawScriptPermissions());
+    }
+
+    @Test
+    public void test_script_permissions_setter_and_getter() {
+        final var request = new CreateUserRequest();
+        request.setScriptPermissions(Map.of("mydb", true, "otherdb", false));
+        assertEquals(Map.of("mydb", true, "otherdb", false), request.getScriptPermissions());
+        assertTrue(request.getRawScriptPermissions().get("mydb").asJsonBoolean().getValue());
+    }
+
+    // A request that omits the field reads as no grants rather than failing
+    @Test
+    public void test_absent_script_permissions_reads_as_empty() {
+        final var request = (CreateUserRequest) org.techhouse.ops.req.RequestParser
+                .parseRequest("{\"type\":\"CREATE_USER\",\"username\":\"user\",\"password\":\"password123\"}");
+        assertTrue(request.getScriptPermissions().isEmpty());
+    }
 }

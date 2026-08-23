@@ -267,4 +267,63 @@ public class UserRequestValidationTest {
         }
         assertFalse(RequestValidator.validate(req).isValid());
     }
+
+    @Test
+    public void test_create_user_accepts_script_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setScriptPermissions(Map.of("mydb", true));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_reserved_database_in_script_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setScriptPermissions(Map.of("admin", true));
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_invalid_database_name_in_script_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setScriptPermissions(Map.of("a", true));
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_rejects_non_boolean_script_permission() {
+        final var req = org.techhouse.ops.req.RequestParser.parseRequest(
+                "{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\",\"scriptPermissions\":{\"mydb\":\"READ\"}}");
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_parses_boolean_script_permission() {
+        final var req = (ChangePermissionsRequest) org.techhouse.ops.req.RequestParser.parseRequest(
+                "{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\",\"scriptPermissions\":{\"mydb\":true}}");
+        assertTrue(RequestValidator.validate(req).isValid());
+        assertEquals(Map.of("mydb", true), req.getScriptPermissions());
+    }
+
+    @Test
+    public void test_change_permissions_accepts_script_permissions() {
+        final var req = new ChangePermissionsRequest();
+        req.setUsername("user");
+        req.setScriptPermissions(Map.of("mydb", false));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_without_script_permissions_reads_as_empty() {
+        final var req = (ChangePermissionsRequest) org.techhouse.ops.req.RequestParser
+                .parseRequest("{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\"}");
+        assertTrue(RequestValidator.validate(req).isValid());
+        assertTrue(req.getScriptPermissions().isEmpty());
+        assertTrue(req.getRawScriptPermissions().entrySet().isEmpty());
+    }
 }

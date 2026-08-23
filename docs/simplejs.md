@@ -20,9 +20,9 @@ syntactic surface. The **interpreter** is complete: sub-phases **6a–6f** plus 
 follow-up (async generators, regex, tagged templates, `using`, the engine-completion
 phases, spec-gap Phases A–G, the ES2022–2026 stdlib additions, ASI, always-on strict
 mode and the ES2026 conformance phases) are done, so the whole document below
-describes the engine **as built**. The engine is reachable only through
-`SimpleJs.run(source, HostBindings)`; the `RUN_SCRIPT` wire operation that would
-expose it to clients is still a deferred follow-up.
+describes the engine **as built**. The engine is reached through
+`SimpleJs.run(source, HostBindings)`, and clients reach that through the `RUN_SCRIPT`
+wire operation (see *The `RUN_SCRIPT` operation* below).
 
 Two lists bound what the engine does **not** do: the
 [verified gaps and divergences](#known-gaps-and-divergences)
@@ -350,9 +350,8 @@ The authoritative statement of what is *still* missing is
   `AuthorizationChecker.check` and `SchemaValidationHelper.check`, then calls
   `OperationProcessor.processMessage`; a denial/schema violation throws a JS `Error` into the
   script (catchable). Documented limitations: module resolution is restricted to `args`/`db`
-  (no filesystem/network) and import attributes are validated-only. The
-  `RUN_SCRIPT` operation that would expose `SimpleJs.run` over the wire is a deferred follow-up
-  (not built here).
+  (no filesystem/network) and import attributes are validated-only. Exposing this over the wire
+  came later, as the `RUN_SCRIPT` operation described below.
 
 **Explicit resource management (`using`/`await using`).** A `using`/`await using` declaration
 binds a block-scoped const-like resource and runs its disposer when the enclosing scope exits —
@@ -928,10 +927,9 @@ was replaced; see *Regex engine* below.
   becomes an early `SyntaxError`, as the spec requires of a Script. The flag arrives through
   `HostBindings.limits()`; `SimpleJs.run` keeps its signature, and `SimpleHostBindings` /
   `EnforcingDatabaseAccess` leave it off.
-- **`RUN_SCRIPT` is still not wired**, so none of the above is reachable by a client yet. The
-  sandbox's `ResourceLimits` — `instructionBudget`, `wallClockMillis`, `maxDepth`, the `fetch`
-  settings, `maxLogLines`/`maxLogLineChars` — have no `lwnrdb.cfg` keys yet either; they are one
-  configuration-surface decision that lands with the wire op.
+- **`RUN_SCRIPT` exposes all of the above to clients**, with the sandbox's `ResourceLimits` built
+  from configuration (`DatabaseHostBindings.limitsFromConfiguration`) rather than supplied by the
+  caller. See *The `RUN_SCRIPT` operation* below.
 - **A script's console output is returned to the caller.** `SimpleJs.run` captures it into
   `ScriptResult.getLogs()` on every exit path and tees it to `host.console()`; see *Captured
   console output* below.
@@ -948,6 +946,63 @@ was replaced; see *Regex engine* below.
   path (the script result contract and everything heading into the database): a BigInt whose absolute
   value is at most 2^53−1 becomes a number, anything larger throws a `TypeError` naming the property
   path (`Cannot serialize BigInt at 'items[2].total': value exceeds the exact integer range`).
+
+### The `RUN_SCRIPT` operation
+
+`RUN_SCRIPT` is the wire entry point: `{"type":"RUN_SCRIPT","databaseName":"…","script":"…","args":{…}}`
+(see the README's protocol reference for the full request/response shape). The path is
+`conn/MessageProcessor` → `RequestParser` → `RequestValidator` → `AuthorizationChecker` →
+`ops/OperationProcessor.processRunScriptOperation` → `ops/ScriptOperationHelper.execute` →
+`SimpleJs.run`, and the response is a `RunScriptResponse` carrying `result`, `logs` and
+`logsTruncated`.
+
+**Who may run one.** Admins may run a script against any database and a database owner against the
+databases it owns (both already short-circuit `AuthorizationChecker.check` ahead of the per-operation
+logic); anyone else needs a **per-database** grant — `AdminUserEntry.scriptPermissions`, a
+`{database -> boolean}` map set through `CREATE_USER`/`CHANGE_PERMISSIONS` and read by
+`AdminUserEntry.canRunScripts(db)`, where an absent entry or an explicit `false` denies. Starting a
+script is deliberately a separate capability from what it may do: each operation the script issues
+still runs `AuthorizationChecker` and `SchemaValidationHelper` on its own request against the caller's
+`databasePermissions`/`collectionPermissions`, so the grant never widens the caller's reach. The field
+is absent from user records written before it existed, which `fromJsonObject` reads as "no grants".
+
+**Database scope.** The request's `databaseName` becomes the `scopedDatabase` of the
+`host/EnforcingDatabaseAccess` the script is given. `dispatch` rejects any request naming a different
+database with a catchable JS `Error`, and `listDatabases()` answers only the scope. Since
+`RequestValidator` rejects the reserved `admin` name as a scope, a script — even one run by an admin
+user — cannot read `admin/users`, which an unscoped in-process embedding still can. The scope is
+exposed to the script as `db.name`, so a script need not hardcode its database.
+
+**Sandbox from configuration.** `DatabaseHostBindings.limitsFromConfiguration()` builds the
+`ResourceLimits` from `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`,
+`scriptMaxLogLines`, `scriptMaxLogLineChars` and `scriptTextImportEnabled`; the request cannot
+influence any of them. `scriptMaxSourceBytes` caps the accepted source (`400-10`) and
+`scriptsEnabled` (default `false`) gates the operation entirely (`403-2`). `fetch` stays unreachable
+from the wire: no `NetworkAccess` is wired, so `HostBindings.network()` is `null`.
+
+**Failure contract of the `db` surface.** Every method throws a catchable JS `Error` (built with the
+script's own realm `Error.prototype`, so `e instanceof Error` holds) whenever the underlying
+`OperationResponse` is not OK — an `AuthorizationChecker` denial, a schema violation, `400-2`
+(entry too large), a cluster rejection (`421-1`/`503-2`/`503-3`/`503-4`) or an internal `500-x`.
+Only genuine absence stays a value: `findById` answers `null` on `404-2`, `aggregate` answers `[]` on
+`404-3` (the wire's `NO_RESULTS`), and `delete` treats `404-2` as a no-op since the intended state
+already holds. This closed a real gap: `save` used to return `null` and `delete` ignored its response
+entirely, so a script could not tell a refused write from a successful one — a script writing to an
+unreachable owner saw no error at all.
+
+**Outcome mapping.** A `ScriptResult` error becomes `408-1` for `ScriptTimeoutError`, `400-11` for
+`ScriptLimitError` and `400-9` for everything else (a thrown value, a syntax error, a rejected
+top-level promise), with the message `"<ErrorName>: <message>"`. Captured `console` output rides
+along on **every** outcome, so a failed run is still debuggable.
+
+**Not capped.** The response carries the script's result verbatim, so a script returning a very large
+value produces a very large response line — there is no `maxEntrySize`-style guard on `result` yet.
+
+**Runs where it lands (for now).** Under clustering the script always executes on the node that
+received the request; only its individual operations are routed to their collections' owners. That is
+a deliberate first cut — a future phase should pick the execution node from live membership and node
+availability instead of defaulting to the local one. See *Scripts* in
+[clustering.md](clustering.md) for the open questions.
 
 ### EJson custom types
 
@@ -1054,8 +1109,8 @@ abort alike — reachable as `getLogs()` and `isLogsTruncated()`.
 - `ConsoleCapture.accept` is synchronized: a `fetch` settlement and a coroutine body reach it from
   different virtual threads, and it is the one piece of interpreter-adjacent state the coroutine lock
   does not cover.
-- Like `instructionBudget`/`wallClockMillis`, the two log caps have no `lwnrdb.cfg` key yet; they
-  surface as one configuration-surface decision when `RUN_SCRIPT` is wired.
+- Under `RUN_SCRIPT` the two caps come from `scriptMaxLogLines`/`scriptMaxLogLineChars`, and the
+  lines travel back to the client on the response (`logs`/`logsTruncated`).
 
 ### `crypto`
 

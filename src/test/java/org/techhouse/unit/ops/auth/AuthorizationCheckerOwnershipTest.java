@@ -122,4 +122,21 @@ public class AuthorizationCheckerOwnershipTest {
         final var req = new org.techhouse.ops.req.ListUsersRequest();
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
+
+    // A database owner may run scripts on it without holding the RUN_SCRIPT global permission
+    @Test
+    public void test_run_script_allowed_for_owner() {
+        setOwnerInCache("scripted_db");
+        final var request = new org.techhouse.ops.req.RunScriptRequest("scripted_db", "return 1;", null);
+        assertTrue(AuthorizationChecker.check(request, nonAdminNoPerms()).isAllowed());
+    }
+
+    @Test
+    public void test_run_script_denied_for_non_owner_without_permission() {
+        setOwnerInCache("other_owned_db");
+        final var request = new org.techhouse.ops.req.RunScriptRequest("other_owned_db", "return 1;", null);
+        final var stranger = new AdminUserEntry("stranger", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
+        assertFalse(AuthorizationChecker.check(request, stranger).isAllowed());
+    }
 }

@@ -38,6 +38,7 @@ import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
+import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
@@ -128,8 +129,13 @@ public class OperationProcessor {
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
             case RESOLVE_TRANSACTION -> processResolveTransaction((ResolveTransactionRequest) operationRequest);
             case LIST_TRANSACTIONS -> processListTransactions();
+            case RUN_SCRIPT -> processRunScriptOperation((RunScriptRequest) operationRequest, actingUser, clientId);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
+    }
+
+    private OperationResponse processRunScriptOperation(RunScriptRequest request, String actingUser, UUID clientId) {
+        return ScriptOperationHelper.execute(request, actingUser, clientId);
     }
 
     private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction) {

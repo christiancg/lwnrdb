@@ -8,6 +8,7 @@ import java.util.stream.Collectors;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.OperationType;
@@ -19,6 +20,7 @@ public class CreateUserRequest extends OperationRequest {
     private JsonArray globalPermissions;
     private JsonObject databasePermissions;
     private JsonObject collectionPermissions;
+    private JsonObject scriptPermissions;
 
     public CreateUserRequest() {
         super(OperationType.CREATE_USER, null, null);
@@ -26,6 +28,7 @@ public class CreateUserRequest extends OperationRequest {
         this.globalPermissions = new JsonArray();
         this.databasePermissions = new JsonObject();
         this.collectionPermissions = new JsonObject();
+        this.scriptPermissions = new JsonObject();
     }
 
     public String getUsername() {
@@ -45,7 +48,7 @@ public class CreateUserRequest extends OperationRequest {
     }
 
     public Boolean getAdmin() {
-        return admin != null ? admin : false;
+        return admin != null && admin;
     }
 
     public void setAdmin(Boolean admin) {
@@ -94,11 +97,30 @@ public class CreateUserRequest extends OperationRequest {
         perms.forEach((k, v) -> this.collectionPermissions.add(k, new JsonString(v.name())));
     }
 
+    public void setScriptPermissions(Map<String, Boolean> perms) {
+        this.scriptPermissions = new JsonObject();
+        perms.forEach((k, v) -> this.scriptPermissions.add(k, new JsonBoolean(v)));
+    }
+
     public JsonObject getRawDatabasePermissions() {
         return databasePermissions;
     }
 
+    public Map<String, Boolean> getScriptPermissions() {
+        if (scriptPermissions == null)
+            return new HashMap<>();
+        final var result = new HashMap<String, Boolean>();
+        for (var entry : scriptPermissions.entrySet()) {
+            result.put(entry.getKey(), entry.getValue().asJsonBoolean().getValue());
+        }
+        return result;
+    }
+
     public JsonObject getRawCollectionPermissions() {
         return collectionPermissions;
+    }
+
+    public JsonObject getRawScriptPermissions() {
+        return scriptPermissions;
     }
 }

@@ -151,6 +151,14 @@ public class ConfigurationTest {
         map.put("tombstoneRetentionMs", "86400000");
         map.put("scriptTimeZone", "UTC");
         map.put("scriptLocale", "en-US");
+        map.put("scriptsEnabled", "false");
+        map.put("scriptInstructionBudget", "10000000");
+        map.put("scriptTimeoutMs", "5000");
+        map.put("scriptMaxDepth", "200");
+        map.put("scriptMaxSourceBytes", "256Kb");
+        map.put("scriptMaxLogLines", "1000");
+        map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptTextImportEnabled", "false");
         return map;
     }
 
@@ -169,6 +177,14 @@ public class ConfigurationTest {
             assertEquals(2L * 1024L * 1024L, config.getMaxPageSize());
             assertEquals(1024L * 1024L, config.getMaxEntrySize());
             assertEquals(5000L, config.getTransactionLockTimeoutMs());
+            assertFalse(config.isScriptsEnabled());
+            assertFalse(config.isScriptTextImportEnabled());
+            assertEquals(10_000_000L, config.getScriptInstructionBudget());
+            assertEquals(5000L, config.getScriptTimeoutMs());
+            assertEquals(200, config.getScriptMaxDepth());
+            assertEquals(256L * 1024L, config.getScriptMaxSourceBytes());
+            assertEquals(1000, config.getScriptMaxLogLines());
+            assertEquals(4096, config.getScriptMaxLogLineChars());
         }
     }
 

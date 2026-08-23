@@ -86,4 +86,69 @@ public class AdminUserEntryTest {
         assertNotNull(entry1.toString());
         assertTrue(entry1.toString().contains("test_user"));
     }
+
+    @Test
+    public void test_script_permissions_round_trip() {
+        final var scriptPerms = new HashMap<String, Boolean>();
+        scriptPerms.put("mydb", true);
+        scriptPerms.put("otherdb", false);
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>(), scriptPerms);
+
+        assertTrue(entry.getData().get("scriptPermissions").asJsonObject().get("mydb").asJsonBoolean().getValue());
+        final var parsed = AdminUserEntry.fromJsonObject(entry.getData());
+        assertEquals(scriptPerms, parsed.getScriptPermissions());
+        assertTrue(parsed.canRunScripts("mydb"));
+        assertFalse(parsed.canRunScripts("otherdb"));
+        assertFalse(parsed.canRunScripts("unknowndb"));
+    }
+
+    @Test
+    public void test_script_permissions_default_to_empty() {
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
+        assertTrue(entry.getScriptPermissions().isEmpty());
+        assertFalse(entry.canRunScripts("mydb"));
+    }
+
+    @Test
+    public void test_null_script_permissions_is_treated_as_empty() {
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>(), null);
+        assertTrue(entry.getScriptPermissions().isEmpty());
+    }
+
+    // Records written before per-database script permissions existed must still load
+    @Test
+    public void test_from_json_object_without_script_permissions_field() {
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
+        final var legacy = entry.getData();
+        legacy.remove("scriptPermissions");
+        final var parsed = AdminUserEntry.fromJsonObject(legacy);
+        assertTrue(parsed.getScriptPermissions().isEmpty());
+        assertFalse(parsed.canRunScripts("mydb"));
+    }
+
+    @Test
+    public void test_response_json_exposes_script_permissions() {
+        final var scriptPerms = new HashMap<String, Boolean>();
+        scriptPerms.put("mydb", true);
+        final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>(), scriptPerms);
+        final var response = entry.toResponseJson(java.util.List.of());
+        assertTrue(response.get("scriptPermissions").asJsonObject().get("mydb").asJsonBoolean().getValue());
+    }
+
+    @Test
+    public void test_script_permissions_participate_in_equality() {
+        final var granted = new HashMap<String, Boolean>();
+        granted.put("mydb", true);
+        final var withGrant = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>(), granted);
+        final var without = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
+                new HashMap<>());
+        assertNotEquals(withGrant, without);
+        assertTrue(withGrant.toString().contains("scriptPermissions"));
+    }
 }

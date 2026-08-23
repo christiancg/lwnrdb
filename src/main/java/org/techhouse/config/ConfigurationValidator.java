@@ -59,6 +59,14 @@ public final class ConfigurationValidator {
         if (isBlank(locale) || !Locale.forLanguageTag(locale.trim()).toLanguageTag().equals(locale.trim())) {
             errors.add("scriptLocale must be a valid BCP 47 language tag (e.g. en-US), but was: " + locale);
         }
+        validateBoolean(configs, "scriptsEnabled", errors);
+        validateBoolean(configs, "scriptTextImportEnabled", errors);
+        validatePositiveLong(configs, "scriptInstructionBudget", errors);
+        validatePositiveLong(configs, "scriptTimeoutMs", errors);
+        validateInt(configs, "scriptMaxDepth", 1, errors);
+        validatePositiveSize(configs, "scriptMaxSourceBytes", errors);
+        validateInt(configs, "scriptMaxLogLines", 1, errors);
+        validateInt(configs, "scriptMaxLogLineChars", 1, errors);
     }
 
     private static void validateCluster(Map<String, String> configs, List<String> errors) {

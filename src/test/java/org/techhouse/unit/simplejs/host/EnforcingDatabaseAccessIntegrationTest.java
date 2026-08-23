@@ -188,22 +188,22 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertEquals(List.of(), results);
     }
 
-    // save() returns null when the underlying operation is rejected without throwing (an oversized
-    // entry, rather than an authorization/schema denial)
+    // A rejection that is not an authorization/schema denial (here an oversized entry) must still reach
+    // the script
     @Test
-    public void test_save_oversized_entry_returns_null() {
+    public void test_save_oversized_entry_throws() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         final var big = new JsonObject();
         big.add("_id", new JsonString("bigDoc"));
         big.add("bigField", new JsonString("x".repeat(1_048_600)));
-        assertNull(db.save(TestGlobals.DB, TestGlobals.COLL, big));
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL, big));
     }
 
-    // listCollections() returns an empty list (not null) for a database that does not exist
+    // A database that does not exist is a refused operation, not an empty collection list
     @Test
-    public void test_list_collections_for_nonexistent_database_returns_empty() {
+    public void test_list_collections_for_nonexistent_database_throws() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
-        assertEquals(List.of(), db.listCollections("this-db-does-not-exist"));
+        assertThrows(JsThrowException.class, () -> db.listCollections("this-db-does-not-exist"));
     }
 
     // dispatch() routes through processMessage with an explicit (non-null) clientId
@@ -298,11 +298,11 @@ public class EnforcingDatabaseAccessIntegrationTest {
     // is open. list* keeps the pre-existing swallow-the-error shape (as save/findById do), so a
     // script observes an empty list rather than a throw - documented in docs/simplejs.md.
     @Test
-    public void test_list_collections_inside_a_transaction_is_empty() {
+    public void test_list_collections_inside_a_transaction_throws() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         db.beginTransaction();
         try {
-            assertEquals(List.of(), db.listCollections(TestGlobals.DB));
+            assertThrows(JsThrowException.class, () -> db.listCollections(TestGlobals.DB));
         } finally {
             db.rollbackTransaction();
         }
@@ -343,5 +343,54 @@ public class EnforcingDatabaseAccessIntegrationTest {
             db.rollbackTransaction();
         }
         assertCollectionLockFree();
+    }
+
+    // A save that the server refuses (here: a collection that was never created) must throw rather than
+    // return null, which a script cannot distinguish from a successful write
+    @Test
+    public void test_failed_save_throws_instead_of_returning_null() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, "neverCreated", doc("s1")));
+    }
+
+    @Test
+    public void test_failed_bulk_save_throws() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertThrows(JsThrowException.class,
+                () -> db.bulkSave(TestGlobals.DB, "neverCreated", java.util.List.of(doc("s2"))));
+    }
+
+    // Deleting a document that is not there leaves the intended state, so it stays a no-op
+    @Test
+    public void test_delete_of_absent_document_is_a_no_op() {
+        final var db = new EnforcingDatabaseAccess(ADMIN, null);
+        assertDoesNotThrow(() -> db.delete(TestGlobals.DB, TestGlobals.COLL, "never-existed"));
+    }
+
+    // ... but a delete the server refuses for any other reason surfaces
+    @Test
+    public void test_failed_delete_throws() {
+        final var db = new EnforcingDatabaseAccess(NOBODY, null);
+        assertThrows(JsThrowException.class, () -> db.delete(TestGlobals.DB, TestGlobals.COLL, "u1"));
+    }
+
+    @Test
+    public void test_failed_aggregate_throws() {
+        final var db = new EnforcingDatabaseAccess(NOBODY, null);
+        assertThrows(JsThrowException.class,
+                () -> db.aggregate(TestGlobals.DB, TestGlobals.COLL, equalsFilterPipeline("hello")));
+    }
+
+    @Test
+    public void test_failed_find_by_id_throws_but_missing_document_is_null() {
+        assertNull(new EnforcingDatabaseAccess(ADMIN, null).findById(TestGlobals.DB, TestGlobals.COLL, "absent"));
+        assertThrows(JsThrowException.class,
+                () -> new EnforcingDatabaseAccess(NOBODY, null).findById(TestGlobals.DB, TestGlobals.COLL, "u1"));
+    }
+
+    @Test
+    public void test_failed_list_collections_throws() {
+        final var db = new EnforcingDatabaseAccess(NOBODY, null);
+        assertThrows(JsThrowException.class, () -> db.listCollections(TestGlobals.DB));
     }
 }

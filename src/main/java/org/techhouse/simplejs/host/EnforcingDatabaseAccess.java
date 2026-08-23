@@ -12,6 +12,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SchemaValidationHelper;
@@ -49,6 +50,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     private final String username;
     private final UUID clientId;
+    // Null means unrestricted (an in-process embedding); RUN_SCRIPT pins it to the requested database.
+    private final String scopedDatabase;
     private JsObject errorPrototype;
     // Held for the transaction's lifetime rather than per dispatch: TransactionOperationHelper keys
     // purely on the client id, so a throwaway forwarded client would be unreachable on the next call.
@@ -57,8 +60,18 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private Thread sessionThread;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
+        this(username, clientId, null);
+    }
+
+    public EnforcingDatabaseAccess(String username, UUID clientId, String scopedDatabase) {
         this.username = username;
         this.clientId = clientId;
+        this.scopedDatabase = scopedDatabase;
+    }
+
+    @Override
+    public String scopedDatabase() {
+        return scopedDatabase;
     }
 
     @Override
@@ -69,7 +82,16 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof FindByIdResponse findByIdResponse) {
             return findByIdResponse.getObject();
         }
-        return null;
+        // An absent document is data, not a failure; any other non-OK response is a real error (entry too
+        // large, a cluster rejection, an internal failure) that the script must be able to see and catch.
+        if (isNotFound(response)) {
+            return null;
+        }
+        throw jsError(response.getMessage());
+    }
+
+    private static boolean isNotFound(OperationResponse response) {
+        return ErrorCode.ENTRY_NOT_FOUND.getCode().equals(response.getErrorCode());
     }
 
     @Override
@@ -85,7 +107,11 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
-        return List.of();
+        // An empty pipeline result is reported as NO_RESULTS, which is an empty list to a script.
+        if (ErrorCode.NO_RESULTS.getCode().equals(response.getErrorCode())) {
+            return List.of();
+        }
+        throw jsError(response.getMessage());
     }
 
     @Override
@@ -99,7 +125,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof SaveResponse saveResponse) {
             return findById(db, coll, saveResponse.get_id());
         }
-        return null;
+        throw jsError(response.getMessage());
     }
 
     @Override
@@ -110,8 +136,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof BulkSaveResponse bulkSaveResponse) {
             return new BulkSaveOutcome(bulkSaveResponse.getInserted(), bulkSaveResponse.getUpdated());
         }
-        // Unlike single save, a batch that was refused wholesale has no per-document result to fall
-        // back to, so the rejection surfaces into the script instead of reading as "nothing changed".
         throw jsError(response.getMessage());
     }
 
@@ -119,7 +143,11 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     public void delete(String db, String coll, String id) {
         final var request = new DeleteRequest(db, coll);
         request.set_id(id);
-        dispatch(request);
+        final var response = dispatch(request);
+        // Deleting an absent document leaves the intended state, so it stays a no-op like findById's null.
+        if (response.getStatus() != OperationStatus.OK && !isNotFound(response)) {
+            throw jsError(response.getMessage());
+        }
     }
 
     @Override
@@ -128,16 +156,19 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof ListCollectionsResponse listCollectionsResponse) {
             return listCollectionsResponse.getCollections();
         }
-        return List.of();
+        throw jsError(response.getMessage());
     }
 
     @Override
     public List<String> listDatabases() {
+        if (scopedDatabase != null) {
+            return List.of(scopedDatabase);
+        }
         final var response = dispatch(new ListDatabasesRequest());
         if (response instanceof ListDatabasesResponse listDatabasesResponse) {
             return listDatabasesResponse.getDatabases();
         }
-        return List.of();
+        throw jsError(response.getMessage());
     }
 
     @Override
@@ -208,6 +239,12 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     private OperationResponse dispatch(OperationRequest request, String rawJson) {
         assertSessionThread();
+        if (scopedDatabase != null) {
+            final var targetDatabase = request.getDatabaseName();
+            if (targetDatabase != null && !scopedDatabase.equals(targetDatabase)) {
+                throw jsError("This script may only access database '" + scopedDatabase + "'");
+            }
+        }
         final var user = cache.getAdminUserEntry(username);
         if (user == null) {
             throw jsError("User '" + username + "' not found");

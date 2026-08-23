@@ -42,6 +42,14 @@ public final class Configuration {
     private long tombstoneRetentionMs;
     private String scriptTimeZone;
     private String scriptLocale;
+    private boolean scriptsEnabled;
+    private long scriptInstructionBudget;
+    private long scriptTimeoutMs;
+    private int scriptMaxDepth;
+    private long scriptMaxSourceBytes;
+    private int scriptMaxLogLines;
+    private int scriptMaxLogLineChars;
+    private boolean scriptTextImportEnabled;
 
     private Configuration() {
     }
@@ -97,6 +105,14 @@ public final class Configuration {
         tombstoneRetentionMs = longOf(configs, "tombstoneRetentionMs");
         scriptTimeZone = configs.get("scriptTimeZone");
         scriptLocale = configs.get("scriptLocale");
+        scriptsEnabled = booleanOf(configs, "scriptsEnabled");
+        scriptInstructionBudget = longOf(configs, "scriptInstructionBudget");
+        scriptTimeoutMs = longOf(configs, "scriptTimeoutMs");
+        scriptMaxDepth = intOf(configs, "scriptMaxDepth");
+        scriptMaxSourceBytes = sizeOf(configs, "scriptMaxSourceBytes");
+        scriptMaxLogLines = intOf(configs, "scriptMaxLogLines");
+        scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
+        scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
     }
 
     private static int intOf(Map<String, String> configs, String key) {
@@ -267,5 +283,37 @@ public final class Configuration {
 
     public String getScriptLocale() {
         return scriptLocale;
+    }
+
+    public boolean isScriptsEnabled() {
+        return scriptsEnabled;
+    }
+
+    public long getScriptInstructionBudget() {
+        return scriptInstructionBudget;
+    }
+
+    public long getScriptTimeoutMs() {
+        return scriptTimeoutMs;
+    }
+
+    public int getScriptMaxDepth() {
+        return scriptMaxDepth;
+    }
+
+    public long getScriptMaxSourceBytes() {
+        return scriptMaxSourceBytes;
+    }
+
+    public int getScriptMaxLogLines() {
+        return scriptMaxLogLines;
+    }
+
+    public int getScriptMaxLogLineChars() {
+        return scriptMaxLogLineChars;
+    }
+
+    public boolean isScriptTextImportEnabled() {
+        return scriptTextImportEnabled;
     }
 }
