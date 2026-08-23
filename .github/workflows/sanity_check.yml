@@ -126,6 +126,14 @@ jobs:
             run: |
               python3 test_utils/test_clustering.py
 
+          # Self-contained: RUN_SCRIPT needs a configured script sandbox the shared
+          # server does not have, and the suite restarts its own instance (port 8995)
+          # with scriptsEnabled=false to prove the master switch.
+          - name: run-script
+            start_server: false
+            run: |
+              python3 test_utils/test_run_script.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench
