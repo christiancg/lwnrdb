@@ -2445,8 +2445,15 @@ public final class Parser {
 
         private StaticBlock parseStaticBlock() {
             return inFunctionScope(List.of(), () -> inBreakableBoundary(() -> {
+                // Restored on the way out: the flag rejects `return`/`arguments`, and leaking it past the
+                // class body made both an error for the rest of the enclosing scope.
+                final var wasInStaticBlock = inStaticBlock;
                 inStaticBlock = true;
-                return parseStaticBlockBody();
+                try {
+                    return parseStaticBlockBody();
+                } finally {
+                    inStaticBlock = wasInStaticBlock;
+                }
             }));
         }
 

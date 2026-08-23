@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
 import org.techhouse.simplejs.nodes.ArrayExpression;
@@ -440,6 +442,47 @@ public class ParserProgramTest {
         assertTrue(((FieldDefinition) members.get(1)).isStatic());
         assertInstanceOf(StaticBlock.class, members.get(2));
         assertInstanceOf(MethodDefinition.class, members.get(3));
+    }
+
+    // A class static block must not leave the parser in "inside a static block" state: the flag rejects
+    // `return` and `arguments`, so leaking it made both an early error for the rest of the enclosing
+    // scope. Only reachable under the relaxed script goal (a top-level return), so test262 cannot see it.
+    @Test
+    public void test_static_block_does_not_leak_return_restriction() {
+        final var source = """
+                class Counter {
+                    static created = 0;
+                    static { Counter.created = 1; }
+                }
+                return Counter.created;
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(2, body.size());
+        assertInstanceOf(ClassDeclaration.class, body.getFirst());
+        assertInstanceOf(ReturnStatement.class, body.get(1));
+    }
+
+    @Test
+    public void test_static_block_does_not_leak_arguments_restriction() {
+        final var source = """
+                class Holder {
+                    static { Holder.ready = true; }
+                }
+                function reader() {
+                    return arguments.length;
+                }
+                return reader(1, 2);
+                """;
+        final var body = parse(source).getBody();
+        assertEquals(3, body.size());
+        assertInstanceOf(ReturnStatement.class, body.get(2));
+    }
+
+    // The restriction still applies *inside* the static block
+    @Test
+    public void test_return_inside_a_static_block_is_still_an_early_error() {
+        assertThrows(SyntaxErrorException.class, () -> parse("class A { static { return 1; } }"));
+        assertThrows(SyntaxErrorException.class, () -> parse("class A { static { arguments; } }"));
     }
 
     // Phase 5e: a labeled outer loop with a nested do-while and a labeled break parses end-to-end
