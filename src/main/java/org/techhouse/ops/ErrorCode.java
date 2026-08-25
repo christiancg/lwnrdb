@@ -17,7 +17,8 @@ public enum ErrorCode {
 
     SCRIPT_FAILED("400-9", "Script execution failed", OperationStatus.ERROR), SCRIPT_TOO_LARGE("400-10",
             "Script exceeds the maximum allowed size", OperationStatus.ERROR), SCRIPT_LIMIT_EXCEEDED("400-11",
-                    "Script exceeded a sandbox limit", OperationStatus.ERROR),
+                    "Script exceeded a sandbox limit", OperationStatus.ERROR), SCRIPT_MEMORY_EXCEEDED("400-12",
+                            "Script exceeded its memory budget", OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(

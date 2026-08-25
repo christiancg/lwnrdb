@@ -21,7 +21,7 @@ public final class JsArray extends JsValue {
     // `sparseValues` instead (or, past Integer.MAX_VALUE, as an ordinary named property; see
     // defineOwnProperty) - so a spec-legal length up to MAX_ARRAY_LENGTH never requires padding a
     // dense list hole by hole all the way out.
-    private static final int MAX_DENSE_LENGTH = 1 << 24;
+    public static final int MAX_DENSE_LENGTH = 1 << 24;
     // ECMA-262 array index/length ceiling: 2^32 - 1. A property named "4294967295" is not a canonical
     // array index (ToUint32(P) must not equal 2^32-1), so this doubles as the maximum legal `length`.
     public static final long MAX_ARRAY_LENGTH = 4_294_967_295L;

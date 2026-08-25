@@ -88,7 +88,7 @@ public final class ArrayBuiltins {
         final var length = args.size();
         final var result = InterpreterUtils.isConstructor(receiver)
                 ? ops.construct(receiver, List.of(new JsNumber(length)))
-                : newArray(length);
+                : newArray(length, ops);
         for (var i = 0; i < length; i++) {
             createDataPropertyOrThrow(result, i, args.get(i), ops);
         }
@@ -144,10 +144,12 @@ public final class ArrayBuiltins {
             Invoker invoker, InterpreterOps ops) {
         final var arrayLike = new ArrayLike(requireObjectSource(source), ops);
         final var length = arrayLike.length();
+        InterpreterOps.chargeElements(ops, length);
         final var result = InterpreterUtils.isConstructor(receiver)
                 ? ops.construct(receiver, List.of(new JsNumber(length)))
-                : newArray(length);
+                : newArray(length, ops);
         for (var i = 0L; i < length; i++) {
+            InterpreterOps.tick(ops);
             final var element = arrayLike.get(i);
             final var mapped = mapFn instanceof JsUndefined
                     ? element
@@ -217,7 +219,7 @@ public final class ArrayBuiltins {
             if (length < 0 || length != Math.floor(length) || length > 4294967295D) {
                 throw new RangeErrorException("Invalid array length");
             }
-            constructed = newArray((long) length);
+            constructed = newArray((long) length, ops);
         } else {
             constructed = new JsArray(new ArrayList<>(args));
         }
@@ -508,22 +510,31 @@ public final class ArrayBuiltins {
         return position < args.size() ? args.get(position) : JsUndefined.getInstance();
     }
 
-    private static JsArray newArray(long length) {
+    private static JsArray newArray(long length, InterpreterOps ops) {
         // ArrayCreate(length) throws RangeError past the spec's own ceiling (2^32-1) - not past
         // Integer.MAX_VALUE, an implementation detail of how JsArray used to store its dense elements.
         if (length > JsArray.MAX_ARRAY_LENGTH) {
             throw new RangeErrorException("Invalid array length");
         }
+        chargeDenseGrowth(length, ops);
         final var result = new JsArray();
         result.setLength(length);
         return result;
+    }
+
+    // Only a length that JsArray actually materialises is charged. At or below MAX_DENSE_LENGTH it
+    // pads a dense list hole by hole; above it nothing is allocated up front and the elements go to
+    // the sparse map, so charging the logical length would reject `new Array(4294967295)` - which
+    // allocates almost nothing and which test262 requires to work.
+    static void chargeDenseGrowth(long length, InterpreterOps ops) {
+        InterpreterOps.chargeElements(ops, length <= JsArray.MAX_DENSE_LENGTH ? length : 0);
     }
 
     // ArraySpeciesCreate: only an array receiver consults its constructor, and the intrinsic Array
     // carries no @@species, so the common case still lands on a plain array.
     private static JsValue speciesCreate(ArrayLike target, long length, InterpreterOps ops) {
         if (ops == null || !isArray(target.value)) {
-            return newArray(length);
+            return newArray(length, ops);
         }
         var constructor = ops.getMember(target.value, new JsString("constructor"));
         if (InterpreterUtils.isObjectLike(constructor)) {
@@ -533,7 +544,7 @@ public final class ArrayBuiltins {
             }
         }
         if (constructor instanceof JsUndefined) {
-            return newArray(length);
+            return newArray(length, ops);
         }
         if (!InterpreterUtils.isConstructor(constructor)) {
             throw new TypeErrorException("The constructor property is not a constructor");
@@ -543,7 +554,8 @@ public final class ArrayBuiltins {
 
     private static void setResultLength(JsValue result, long length, InterpreterOps ops) {
         if (result instanceof JsArray array) {
-            array.setLength((int) length);
+            chargeDenseGrowth(length, ops);
+            array.setLength(length);
         } else if (ops != null) {
             ops.setMember(result, LENGTH, new JsNumber(length));
         }
@@ -880,6 +892,7 @@ public final class ArrayBuiltins {
                     written++;
                 }
             } else {
+                InterpreterOps.chargeElements(ops, 1);
                 if (written >= MAX_SAFE_INTEGER) {
                     throw new TypeErrorException("Invalid array length");
                 }
@@ -927,6 +940,7 @@ public final class ArrayBuiltins {
 
     private static String join(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
         final var length = target.length();
+        var charged = 0;
         final var separator = args.isEmpty() || args.getFirst() instanceof JsUndefined
                 ? ","
                 : JsCoercion.toStr(args.getFirst(), ops);
@@ -939,6 +953,8 @@ public final class ArrayBuiltins {
             if (!(element instanceof JsUndefined) && !(element instanceof JsNull)) {
                 sb.append(JsCoercion.toStr(element, ops));
             }
+            InterpreterOps.chargeChars(ops, sb.length() - charged);
+            charged = sb.length();
         }
         return sb.toString();
     }
@@ -1044,6 +1060,7 @@ public final class ArrayBuiltins {
                 ? length
                 : relativeIndex(toIntegerOrInfinity(args.get(2), ops), length);
         for (var i = start; i < end; i++) {
+            InterpreterOps.tick(ops);
             target.set(i, value);
         }
         return target.value;
@@ -1102,8 +1119,8 @@ public final class ArrayBuiltins {
     private static JsValue sort(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
         final var comparator = comparator(args);
         final var length = target.length();
-        final var items = sortIndexedProperties(target, length, false);
-        final var sorted = sorted(items, sortCompare(comparator, invoker, ops));
+        final var items = sortIndexedProperties(target, length, false, ops);
+        final var sorted = sorted(items, sortCompare(comparator, invoker, ops), ops);
         for (var i = 0; i < sorted.size(); i++) {
             target.set(i, sorted.get(i));
         }
@@ -1116,8 +1133,9 @@ public final class ArrayBuiltins {
     private static JsValue toSorted(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
         final var comparator = comparator(args);
         final var length = target.length();
-        final var sorted = sorted(sortIndexedProperties(target, length, true), sortCompare(comparator, invoker, ops));
-        final var result = newArray(length);
+        final var sorted = sorted(sortIndexedProperties(target, length, true, ops),
+                sortCompare(comparator, invoker, ops), ops);
+        final var result = newArray(length, ops);
         for (var i = 0; i < sorted.size(); i++) {
             createDataPropertyOrThrow(result, i, sorted.get(i), ops);
         }
@@ -1141,14 +1159,16 @@ public final class ArrayBuiltins {
     // this implementation's dense-storage ceiling without hanging/exhausting memory - every such
     // method (sort/toSorted via sortIndexedProperties, toReversed, toSpliced, with) must reject a
     // length beyond it instead of trying.
-    private static void requireMaterializableLength(long length) {
+    private static void requireMaterializableLength(long length, InterpreterOps ops) {
         if (length > Integer.MAX_VALUE) {
             throw new RangeErrorException("Invalid array length");
         }
+        InterpreterOps.chargeElements(ops, length);
     }
 
-    private static List<JsValue> sortIndexedProperties(ArrayLike target, long length, boolean readThroughHoles) {
-        requireMaterializableLength(length);
+    private static List<JsValue> sortIndexedProperties(ArrayLike target, long length, boolean readThroughHoles,
+            InterpreterOps ops) {
+        requireMaterializableLength(length, ops);
         final var items = new ArrayList<JsValue>();
         for (var i = 0L; i < length; i++) {
             if (readThroughHoles || target.has(i)) {
@@ -1180,13 +1200,14 @@ public final class ArrayBuiltins {
 
     // A hand-rolled stable merge sort: a user comparator is free to be inconsistent, which
     // List.sort answers with an IllegalArgumentException rather than an arbitrary order.
-    private static List<JsValue> sorted(List<JsValue> items, Comparator<JsValue> comparator) {
+    private static List<JsValue> sorted(List<JsValue> items, Comparator<JsValue> comparator, InterpreterOps ops) {
         if (items.size() < 2) {
             return items;
         }
         final var middle = items.size() / 2;
-        final var left = sorted(new ArrayList<>(items.subList(0, middle)), comparator);
-        final var right = sorted(new ArrayList<>(items.subList(middle, items.size())), comparator);
+        InterpreterOps.chargeElements(ops, items.size() * 2L);
+        final var left = sorted(new ArrayList<>(items.subList(0, middle)), comparator, ops);
+        final var right = sorted(new ArrayList<>(items.subList(middle, items.size())), comparator, ops);
         final var merged = new ArrayList<JsValue>(items.size());
         var i = 0;
         var j = 0;
@@ -1252,8 +1273,8 @@ public final class ArrayBuiltins {
 
     private static JsValue toReversed(ArrayLike target, InterpreterOps ops) {
         final var length = target.length();
-        requireMaterializableLength(length);
-        final var result = newArray(length);
+        requireMaterializableLength(length, ops);
+        final var result = newArray(length, ops);
         for (var i = 0L; i < length; i++) {
             createDataPropertyOrThrow(result, i, target.get(length - i - 1), ops);
         }
@@ -1276,8 +1297,8 @@ public final class ArrayBuiltins {
         if (newLength > MAX_SAFE_INTEGER) {
             throw new TypeErrorException("Invalid array length");
         }
-        requireMaterializableLength(newLength);
-        final var result = newArray(newLength);
+        requireMaterializableLength(newLength, ops);
+        final var result = newArray(newLength, ops);
         var written = 0L;
         while (written < start) {
             createDataPropertyOrThrow(result, written, target.get(written), ops);
@@ -1304,8 +1325,8 @@ public final class ArrayBuiltins {
             throw new RangeErrorException("Invalid index : " + relative);
         }
         final var replacement = arg(args, 1);
-        requireMaterializableLength(length);
-        final var result = newArray(length);
+        requireMaterializableLength(length, ops);
+        final var result = newArray(length, ops);
         for (var i = 0L; i < length; i++) {
             createDataPropertyOrThrow(result, i, i == (long) index ? replacement : target.get(i), ops);
         }

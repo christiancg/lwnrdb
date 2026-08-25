@@ -153,7 +153,14 @@ public final class JsOperators {
         final var leftPrim = JsCoercion.toPrimitive(left, "default", ops);
         final var rightPrim = JsCoercion.toPrimitive(right, "default", ops);
         if (leftPrim instanceof JsString || rightPrim instanceof JsString) {
-            return new JsString(JsCoercion.toStr(leftPrim) + JsCoercion.toStr(rightPrim));
+            final var leftText = JsCoercion.toStr(leftPrim);
+            final var rightText = JsCoercion.toStr(rightPrim);
+            // Only the appended delta is charged, not the combined result: `s += "x"` in a loop would
+            // otherwise cost quadratically and reject ordinary string building, while `s = s + s` -
+            // the case tick() cannot see, since it doubles in one instruction - has a delta equal to
+            // the whole accumulated string and is still bounded.
+            InterpreterOps.chargeChars(ops, rightText.length());
+            return new JsString(leftText + rightText);
         }
         if (leftPrim instanceof JsBigInt && rightPrim instanceof JsBigInt) {
             return new JsBigInt(((JsBigInt) leftPrim).getValue().add(((JsBigInt) rightPrim).getValue()));

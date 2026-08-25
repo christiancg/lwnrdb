@@ -18,6 +18,7 @@ import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.ScriptLimitException;
+import org.techhouse.simplejs.exceptions.ScriptMemoryException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -246,6 +247,16 @@ public final class Interpreter {
         public java.util.Locale locale() {
             return host.locale();
         }
+
+        @Override
+        public void charge(long bytes) {
+            Interpreter.this.charge(bytes);
+        }
+
+        @Override
+        public void tick() {
+            Interpreter.this.tick();
+        }
     };
     private final ProxyDispatch proxies = new ProxyDispatch(ops);
     private final Intrinsics intrinsics = new Intrinsics(this::callValue, ops, eventLoop, this::driveAsyncGenerator);
@@ -261,6 +272,7 @@ public final class Interpreter {
     private final int maxDepth;
     private final int maxModuleDepth;
     private long instructionsRemaining;
+    private long bytesRemaining;
     private final long deadlineNanos;
     private int depth;
     private int moduleDepth;
@@ -282,6 +294,7 @@ public final class Interpreter {
         this.maxDepth = limits.maxDepth();
         this.maxModuleDepth = limits.maxModuleDepth();
         this.instructionsRemaining = limits.instructionBudget();
+        this.bytesRemaining = limits.memoryBudget();
         this.deadlineNanos = limits.wallClockMillis() > 0
                 ? System.nanoTime() + limits.wallClockMillis() * 1_000_000L
                 : -1;
@@ -313,6 +326,16 @@ public final class Interpreter {
         if (deadlineNanos >= 0 && System.nanoTime() >= deadlineNanos) {
             throw new ScriptTimeoutException("Script exceeded its time limit");
         }
+    }
+
+    public void charge(long bytes) {
+        if (bytesRemaining < 0 || bytes <= 0) {
+            return;
+        }
+        if (bytes > bytesRemaining) {
+            throw new ScriptMemoryException("Script exceeded its memory budget");
+        }
+        bytesRemaining -= bytes;
     }
 
     private JsValue evalProgram(Program program) {

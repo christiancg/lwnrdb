@@ -316,8 +316,21 @@ public final class ObjectBuiltins {
         return bucket;
     }
 
+    // One JsString per own key, and for entries a two-element JsArray on top of it, so a dense
+    // 16M-element array (or an object with as many keys) turns one call into tens of millions of
+    // objects. A proxy is left to its own ownKeys trap, which is charged when it builds its result.
+    private static void chargeEnumeration(JsValue target, int perKey, InterpreterOps ops) {
+        final var count = switch (target) {
+            case JsArray array -> array.length() + array.namedPropertyKeys().size();
+            case JsObject object -> object.keys().size();
+            default -> 0L;
+        };
+        InterpreterOps.chargeElements(ops, count * perKey);
+    }
+
     private static JsValue keys(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
+        chargeEnumeration(first(args), 1, ops);
         switch (first(args)) {
             case JsProxy proxy -> {
                 for (final var key : enumerableProxyStringKeys(proxy, ops)) {
@@ -374,6 +387,7 @@ public final class ObjectBuiltins {
 
     private static JsValue values(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
+        chargeEnumeration(first(args), 1, ops);
         switch (first(args)) {
             case JsProxy proxy -> {
                 // EnumerableOwnPropertyNames(kind=value): GetOwnProperty then, if enumerable, Get -
@@ -421,6 +435,7 @@ public final class ObjectBuiltins {
 
     private static JsValue entries(List<JsValue> args, InterpreterOps ops) {
         final var result = new JsArray();
+        chargeEnumeration(first(args), 3, ops);
         switch (first(args)) {
             case JsProxy proxy -> {
                 for (final var key : ops.ownKeys(proxy)) {

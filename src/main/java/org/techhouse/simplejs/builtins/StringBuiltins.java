@@ -22,6 +22,8 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class StringBuiltins {
+    // The largest string this engine will build, matching what V8 reports on 64-bit.
+    private static final double MAX_STRING_LENGTH = (1 << 29) - 24;
     public static final List<String> NAMES = List.of("slice", "substring", "split", "replace", "replaceAll", "match",
             "matchAll", "search", "toUpperCase", "toLowerCase", "trim", "includes", "startsWith", "endsWith",
             "padStart", "repeat", "charAt", "indexOf", "lastIndexOf", "charCodeAt", "codePointAt", "at", "padEnd",
@@ -259,6 +261,7 @@ public final class StringBuiltins {
         }
         final var result = new StringBuilder();
         for (var i = 0; i < count; i++) {
+            InterpreterOps.tick(ops);
             final var segment = ops == null
                     ? elementOf(literals, i)
                     : ops.getMember(literals, new JsString(Integer.toString(i)));
@@ -507,14 +510,15 @@ public final class StringBuiltins {
     }
 
     private static String padEnd(String value, List<JsValue> args, InterpreterOps ops) {
-        final var target = intArg(args, 0, 0, ops);
-        if (value.length() >= target) {
+        final var requested = rawLengthArg(args, ops);
+        if (value.length() >= requested) {
             return value;
         }
         final var pad = args.size() < 2 || args.get(1) instanceof JsUndefined ? " " : str(args, 1, ops);
         if (pad.isEmpty()) {
             return value;
         }
+        final var target = (int) requireStringLength(requested, ops);
         final var sb = new StringBuilder(value);
         while (sb.length() < target) {
             sb.append(pad);
@@ -545,7 +549,9 @@ public final class StringBuiltins {
     private static String concat(String value, List<JsValue> args, InterpreterOps ops) {
         final var sb = new StringBuilder(value);
         for (final var arg : args) {
-            sb.append(JsCoercion.toStr(arg, ops));
+            final var text = JsCoercion.toStr(arg, ops);
+            InterpreterOps.chargeChars(ops, text.length());
+            sb.append(text);
         }
         return sb.toString();
     }
@@ -609,12 +615,13 @@ public final class StringBuiltins {
             single.push(new JsString(value));
             return single;
         }
-        return limited(splitAll(value, separator), limit);
+        return limited(splitAll(value, separator, ops), limit);
     }
 
-    private static JsArray splitAll(String value, String separator) {
+    private static JsArray splitAll(String value, String separator, InterpreterOps ops) {
         final var result = new JsArray();
         if (separator.isEmpty()) {
+            InterpreterOps.chargeElements(ops, value.length());
             for (var i = 0; i < value.length(); i++) {
                 result.push(new JsString(String.valueOf(value.charAt(i))));
             }
@@ -697,7 +704,9 @@ public final class StringBuiltins {
         var index = value.indexOf(search);
         while (index >= 0) {
             sb.append(value, from, index);
-            sb.append(literalPiece(value, search, index, args, invoker, callable, replacement, ops));
+            final var piece = literalPiece(value, search, index, args, invoker, callable, replacement, ops);
+            InterpreterOps.chargeChars(ops, (long) piece.length() + index - from);
+            sb.append(piece);
             from = index + search.length();
             final var next = index + advanceBy;
             if (next > value.length()) {
@@ -706,6 +715,7 @@ public final class StringBuiltins {
             index = value.indexOf(search, next);
         }
         sb.append(value.substring(Math.min(from, value.length())));
+        InterpreterOps.chargeChars(ops, sb.length());
         return sb.toString();
     }
 
@@ -714,14 +724,15 @@ public final class StringBuiltins {
     }
 
     private static String padStart(String value, List<JsValue> args, InterpreterOps ops) {
-        final var target = intArg(args, 0, 0, ops);
-        if (value.length() >= target) {
+        final var requested = rawLengthArg(args, ops);
+        if (value.length() >= requested) {
             return value;
         }
         final var pad = args.size() < 2 || args.get(1) instanceof JsUndefined ? " " : str(args, 1, ops);
         if (pad.isEmpty()) {
             return value;
         }
+        final var target = (int) requireStringLength(requested, ops);
         final var sb = new StringBuilder();
         while (sb.length() < target - value.length()) {
             sb.append(pad);
@@ -736,7 +747,9 @@ public final class StringBuiltins {
         if (requested < 0 || Double.isInfinite(requested)) {
             throw new org.techhouse.simplejs.exceptions.RangeErrorException("Invalid count value: " + requested);
         }
-        return value.repeat(Double.isNaN(requested) ? 0 : (int) requested);
+        final var count = Double.isNaN(requested) ? 0 : requested;
+        requireStringLength(count * value.length(), ops);
+        return value.isEmpty() ? value : value.repeat((int) count);
     }
 
     private static String charAt(String value, List<JsValue> args, InterpreterOps ops) {
@@ -809,6 +822,26 @@ public final class StringBuiltins {
             return length;
         }
         return (int) pos;
+    }
+
+    // The string counterpart of TypedArrayBuiltins.toIndex: a requested result length is an
+    // allocation size, so a value past the ceiling is a RangeError rather than an `(int)` cast that
+    // silently saturates at Integer.MAX_VALUE and turns into a multi-gigabyte attempt.
+    private static double rawLengthArg(List<JsValue> args, InterpreterOps ops) {
+        if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
+            return 0;
+        }
+        final var value = JsCoercion.toNumber(args.getFirst(), ops);
+        return Double.isNaN(value) ? 0 : value;
+    }
+
+    private static long requireStringLength(double length, InterpreterOps ops) {
+        if (length > MAX_STRING_LENGTH) {
+            throw new org.techhouse.simplejs.exceptions.RangeErrorException("Invalid string length");
+        }
+        final var safe = (long) Math.max(length, 0);
+        InterpreterOps.chargeChars(ops, safe);
+        return safe;
     }
 
     private static int intArg(List<JsValue> args, int position, int fallback, InterpreterOps ops) {

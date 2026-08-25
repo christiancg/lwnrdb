@@ -55,6 +55,7 @@ public final class JsonBuiltins {
 
     private static JsValue parse(List<JsValue> args, InterpreterOps ops, Invoker invoker, JsObject objectProto) {
         final var text = args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
+        InterpreterOps.chargeChars(ops, text.length());
         final var parsed = new JsonTextParser(text, objectProto).parseText();
         final var reviver = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
         if (!isCallable(reviver)) {
@@ -344,7 +345,9 @@ public final class JsonBuiltins {
         if (tree == null) {
             return JsUndefined.getInstance();
         }
-        return new JsString(EJSON.toJson(tree, indentFor(args, ops)));
+        final var text = EJSON.toJson(tree, indentFor(args, ops));
+        InterpreterOps.chargeChars(ops, text.length());
+        return new JsString(text);
     }
 
     private static Set<JsValue> newSeen() {
@@ -490,6 +493,7 @@ public final class JsonBuiltins {
             // counts as its primitive, anything else is skipped entirely.
             final var keys = new ArrayList<String>();
             final var length = (long) JsCoercion.toNumber(ops.getMember(replacer, new JsString("length")), ops);
+            InterpreterOps.chargeElements(ops, length);
             for (var i = 0L; i < length; i++) {
                 final var item = propertyListItem(ops.getMember(replacer, new JsString(Long.toString(i))), ops);
                 if (item != null && !keys.contains(item)) {

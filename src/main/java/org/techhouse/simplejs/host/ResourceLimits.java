@@ -8,7 +8,7 @@ import java.util.List;
 public record ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth,
         boolean reportUnhandledRejections, boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes,
         long fetchTimeoutMillis, boolean strictScriptGoal, boolean textImportEnabled, int maxModuleDepth,
-        int maxLogLines, int maxLogLineChars) {
+        int maxLogLines, int maxLogLineChars, long memoryBudget) {
 
     // Not the cycle mechanism (the module registry detects cycles); a bound on genuine Java recursion,
     // since each nested module evaluation nests the interpreter's own stack.
@@ -18,6 +18,15 @@ public record ResourceLimits(long instructionBudget, long wallClockMillis, int m
 
     public ResourceLimits {
         fetchHostAllowlist = fetchHostAllowlist == null ? List.of() : List.copyOf(fetchHostAllowlist);
+    }
+
+    public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,
+            boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes, long fetchTimeoutMillis,
+            boolean strictScriptGoal, boolean textImportEnabled, int maxModuleDepth, int maxLogLines,
+            int maxLogLineChars) {
+        this(instructionBudget, wallClockMillis, maxDepth, reportUnhandledRejections, fetchEnabled, fetchHostAllowlist,
+                maxResponseBytes, fetchTimeoutMillis, strictScriptGoal, textImportEnabled, maxModuleDepth, maxLogLines,
+                maxLogLineChars, -1);
     }
 
     public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,
@@ -54,6 +63,11 @@ public record ResourceLimits(long instructionBudget, long wallClockMillis, int m
 
     public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth) {
         this(instructionBudget, wallClockMillis, maxDepth, true);
+    }
+
+    public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, long memoryBudget) {
+        this(instructionBudget, wallClockMillis, maxDepth, true, false, List.of(), -1, -1, false, false,
+                DEFAULT_MAX_MODULE_DEPTH, DEFAULT_MAX_LOG_LINES, DEFAULT_MAX_LOG_LINE_CHARS, memoryBudget);
     }
 
     // An unlimited compute budget still caps logs: an unbounded buffer is a heap risk regardless.

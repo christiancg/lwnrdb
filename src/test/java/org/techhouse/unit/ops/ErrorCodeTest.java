@@ -105,6 +105,7 @@ public class ErrorCodeTest {
         assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_TOO_LARGE.getStatus());
         assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_LIMIT_EXCEEDED.getStatus());
         assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_TIMEOUT.getStatus());
+        assertEquals(OperationStatus.ERROR, ErrorCode.SCRIPT_MEMORY_EXCEEDED.getStatus());
         assertEquals(OperationStatus.FORBIDDEN, ErrorCode.SCRIPTS_DISABLED.getStatus());
     }
 
@@ -115,6 +116,8 @@ public class ErrorCodeTest {
         assertEquals("400-11", ErrorCode.SCRIPT_LIMIT_EXCEEDED.getCode());
         assertEquals("403-2", ErrorCode.SCRIPTS_DISABLED.getCode());
         assertEquals("408-1", ErrorCode.SCRIPT_TIMEOUT.getCode());
+        assertEquals("400-12", ErrorCode.SCRIPT_MEMORY_EXCEEDED.getCode());
         assertEquals(ErrorCode.SCRIPT_TIMEOUT, ErrorCode.byCode("408-1"));
+        assertEquals(ErrorCode.SCRIPT_MEMORY_EXCEEDED, ErrorCode.byCode("400-12"));
     }
 }

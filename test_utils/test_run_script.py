@@ -63,6 +63,7 @@ MAX_DEPTH = 64
 MAX_SOURCE_BYTES = 8 * 1024
 MAX_LOG_LINES = 5
 MAX_LOG_LINE_CHARS = 200
+MAX_MEMORY_BYTES = 4 * 1024 * 1024
 
 failures = 0
 
@@ -177,6 +178,7 @@ def write_config(work_dir: str, scripts_enabled: bool):
         f"scriptMaxSourceBytes={MAX_SOURCE_BYTES}\n"
         f"scriptMaxLogLines={MAX_LOG_LINES}\n"
         f"scriptMaxLogLineChars={MAX_LOG_LINE_CHARS}\n"
+        f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
         "scriptTextImportEnabled=false\n"
         "scriptTimeZone=UTC\n"
         "scriptLocale=en-US\n"
@@ -314,6 +316,17 @@ def test_sandbox_limits(conn: Conn):
     check_code("a source over the size cap is rejected", conn.run(oversized), "ERROR", "400-10")
     check_result("a script just under the caps still runs",
                  conn.run("let total = 0;\nfor (let i = 0; i < 1000; i++) total += i;\nreturn total;"), 499500)
+    check_code("a single oversized allocation exceeds the memory budget",
+               conn.run('return "x".repeat(100000000);'), "ERROR", "400-12")
+    check_code("string doubling exceeds the memory budget",
+               conn.run('let s = "x";\nfor (let i = 0; i < 40; i++) { s = s + s; }\nreturn s.length;'),
+               "ERROR", "400-12")
+    check_code("a pre-sized array-like exceeds the memory budget",
+               conn.run("return Array.from({length: 2000000000}).length;"), "ERROR", "400-12")
+    check_result("a script allocating well under the memory budget still runs",
+                 conn.run('return "x".repeat(1000).length;'), 1000)
+    check_result("incremental string building is not penalised by the memory budget",
+                 conn.run('let s = "";\nfor (let i = 0; i < 20000; i++) s += "x";\nreturn s.length;'), 20000)
 
 
 def test_request_validation(conn: Conn):

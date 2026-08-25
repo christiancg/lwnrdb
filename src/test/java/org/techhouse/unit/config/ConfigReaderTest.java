@@ -89,6 +89,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptMaxSourceBytes", "256Kb");
         expectedConfig.put("scriptMaxLogLines", "1000");
         expectedConfig.put("scriptMaxLogLineChars", "4096");
+        expectedConfig.put("scriptMaxMemoryBytes", "64Mb");
         expectedConfig.put("scriptTextImportEnabled", "false");
 
         // Act

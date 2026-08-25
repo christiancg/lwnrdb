@@ -54,6 +54,7 @@ public class ScriptOperationHelperTest {
         setConfig("scriptMaxSourceBytes", 262_144L);
         setConfig("scriptMaxLogLines", 1_000);
         setConfig("scriptMaxLogLineChars", 4_096);
+        setConfig("scriptMaxMemoryBytes", 67_108_864L);
         setConfig("scriptTextImportEnabled", false);
     }
 
@@ -170,6 +171,13 @@ public class ScriptOperationHelperTest {
         setConfig("scriptInstructionBudget", 1L);
         final var response = run("let i = 0; while (i < 1000) { i++; }");
         assertEquals(ErrorCode.SCRIPT_LIMIT_EXCEEDED.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_maps_memory_budget_to_400_12() throws Exception {
+        setConfig("scriptMaxMemoryBytes", 1024L);
+        final var response = run("return \"x\".repeat(100000000);");
+        assertEquals(ErrorCode.SCRIPT_MEMORY_EXCEEDED.getCode(), response.getErrorCode());
     }
 
     @Test

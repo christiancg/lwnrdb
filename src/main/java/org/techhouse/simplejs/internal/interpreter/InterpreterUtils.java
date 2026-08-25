@@ -299,6 +299,7 @@ public final class InterpreterUtils {
             return arrayLikeElements(value);
         }
         final var length = toLength(ops.getMember(value, new JsString("length")), ops);
+        InterpreterOps.chargeElements(ops, length);
         final var elements = new ArrayList<JsValue>(length);
         for (var i = 0; i < length; i++) {
             final var index = fromEnd ? length - 1 - i : i;

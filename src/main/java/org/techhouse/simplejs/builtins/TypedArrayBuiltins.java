@@ -156,9 +156,11 @@ public final class TypedArrayBuiltins {
         }
         final var observedProto = observePrototype(ops);
         JsArrayBuffer.checkAllocation(byteLength);
+        InterpreterOps.charge(ops, byteLength);
         final JsValue buffer;
         if (hasMaxByteLength) {
             JsArrayBuffer.checkAllocation(maxByteLength);
+            InterpreterOps.charge(ops, maxByteLength);
             buffer = new JsArrayBuffer((int) byteLength, (int) maxByteLength, true);
         } else {
             buffer = new JsArrayBuffer((int) byteLength);
@@ -320,6 +322,7 @@ public final class TypedArrayBuiltins {
         final var safe = Math.max(length, 0);
         final var byteLength = safe * kind.bytesPerElement();
         JsArrayBuffer.checkAllocation(byteLength);
+        InterpreterOps.charge(ops, byteLength);
         return new JsTypedArray(kind, new JsArrayBuffer((int) byteLength), 0, (int) safe).withOps(ops);
     }
 
@@ -505,6 +508,7 @@ public final class TypedArrayBuiltins {
         final var options = arg(args, 1);
         final var alphabet = optionString(options, "alphabet", "base64", ALPHABETS, ops);
         final var lastChunk = optionString(options, "lastChunkHandling", "loose", CHUNK_HANDLINGS, ops);
+        chargeDecode(source, ops);
         return fromBase64(source, alphabet, lastChunk, maxLength);
     }
 
@@ -513,6 +517,7 @@ public final class TypedArrayBuiltins {
         if (ops != null && !(arg(args, 1) instanceof JsUndefined) && !InterpreterUtils.isObjectLike(arg(args, 1))) {
             throw new TypeErrorException("Options must be an object");
         }
+        chargeDecode(source, ops);
         return fromHex(source, maxLength);
     }
 
@@ -695,6 +700,10 @@ public final class TypedArrayBuiltins {
         return result;
     }
 
+    private static void chargeDecode(String source, InterpreterOps ops) {
+        InterpreterOps.chargeElements(ops, source.length());
+    }
+
     public static List<JsValue> elements(JsTypedArray typed) {
         final var result = new ArrayList<JsValue>();
         for (var i = 0; i < typed.length(); i++) {
@@ -714,19 +723,27 @@ public final class TypedArrayBuiltins {
             case "resizable" -> JsBoolean.of(buffer.isResizable());
             case "detached" -> JsBoolean.of(buffer.isDetached());
             case "slice" -> new JsNativeFunction("slice", (_, args) -> {
-                final var sliced = buffer.slice((int) intArg(args, 0, 0, ops),
-                        (int) intArg(args, 1, buffer.byteLength(), ops));
+                final var from = (int) intArg(args, 0, 0, ops);
+                final var to = (int) intArg(args, 1, buffer.byteLength(), ops);
+                InterpreterOps.charge(ops, Math.max(to - from, 0));
+                final var sliced = buffer.slice(from, to);
                 requireBufferSpecies(buffer, ops);
                 return sliced;
             });
             case "resize" -> new JsNativeFunction("resize", (_, args) -> {
-                buffer.resize((int) toIndex(arg(args, 0), "ArrayBuffer length", ops));
+                final var resized = (int) toIndex(arg(args, 0), "ArrayBuffer length", ops);
+                InterpreterOps.charge(ops, (long) resized + buffer.byteLength());
+                buffer.resize(resized);
                 return JsUndefined.getInstance();
             });
-            case "transfer" ->
-                new JsNativeFunction("transfer", (_, args) -> buffer.transfer(transferLength(args, ops), false));
-            case "transferToFixedLength" -> new JsNativeFunction("transferToFixedLength",
-                    (_, args) -> buffer.transfer(transferLength(args, ops), true));
+            case "transfer" -> new JsNativeFunction("transfer", (_, args) -> {
+                InterpreterOps.charge(ops, args.isEmpty() ? (long) buffer.byteLength() * 3 : 0);
+                return buffer.transfer(transferLength(args, ops), false);
+            });
+            case "transferToFixedLength" -> new JsNativeFunction("transferToFixedLength", (_, args) -> {
+                InterpreterOps.charge(ops, args.isEmpty() ? (long) buffer.byteLength() * 3 : 0);
+                return buffer.transfer(transferLength(args, ops), true);
+            });
             default -> null;
         };
     }
@@ -1429,6 +1446,7 @@ public final class TypedArrayBuiltins {
         }
         final var length = toIndex(args.getFirst(), "ArrayBuffer length", ops);
         JsArrayBuffer.checkAllocation(length);
+        InterpreterOps.charge(ops, length * 3);
         return (int) length;
     }
 

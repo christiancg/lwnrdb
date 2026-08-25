@@ -6,6 +6,7 @@ import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
+import org.techhouse.simplejs.exceptions.ScriptMemoryException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
@@ -50,6 +51,8 @@ public final class SimpleJs {
             return ok(value == null ? JsonNull.INSTANCE : value, capture);
         } catch (ScriptTimeoutException timeout) {
             return failed("ScriptTimeoutError", timeout.getMessage(), capture);
+        } catch (ScriptMemoryException memory) {
+            return failed("ScriptMemoryError", memory.getMessage(), capture);
         } catch (ScriptAbortException limit) {
             return failed("ScriptLimitError", limit.getMessage(), capture);
         } catch (JsThrowException thrown) {
@@ -68,6 +71,15 @@ public final class SimpleJs {
             return failed("SyntaxError", "Unsupported syntax: " + error.getMessage(), capture);
         } catch (SimpleJsRuntimeException error) {
             return failed("InternalError", error.getMessage(), capture);
+        } catch (OutOfMemoryError | StackOverflowError exhausted) {
+            // A deliberate, narrow exception to "never catch these": the throw originates at one
+            // script-driven allocation (or one runaway recursion in the regex matcher / JSON parser,
+            // neither of which passes through the interpreter's depth counter), the oversized object
+            // becomes garbage on the way out, and the alternative is an unhandled error killing the
+            // connection's thread. The budget above is what should make this unreachable; reaching it
+            // may also mean the JVM was already under pressure from something other than this script,
+            // which is why ScriptOperationHelper logs it at WARN rather than treating it as routine.
+            return failed("ScriptMemoryError", "Script exhausted available memory", capture);
         }
     }
 

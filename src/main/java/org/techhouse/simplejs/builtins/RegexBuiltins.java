@@ -557,6 +557,7 @@ public final class RegexBuiltins {
                 return result.length() == 0 ? JsNull.getInstance() : result;
             }
             final var matchStr = JsCoercion.toStr(ops.getMember(match, new JsString("0")), ops);
+            InterpreterOps.chargeChars(ops, matchStr.length() + InterpreterOps.BYTES_PER_ELEMENT);
             result.push(new JsString(matchStr));
             if (matchStr.isEmpty()) {
                 final var lastIndex = toLength(readLastIndex(rx, ops), ops);
@@ -610,6 +611,7 @@ public final class RegexBuiltins {
             if (result instanceof JsNull) {
                 break;
             }
+            InterpreterOps.chargeElements(ops, 1);
             results.add(result);
             if (!global) {
                 break;
@@ -621,6 +623,7 @@ public final class RegexBuiltins {
             }
         }
         final var accumulated = new StringBuilder();
+        var chargedChars = 0;
         var nextSourcePosition = 0;
         for (final var result : results) {
             final var length = (int) JsCoercion.toNumber(ops.getMember(result, new JsString("length")), ops);
@@ -656,6 +659,8 @@ public final class RegexBuiltins {
             }
             if (position >= nextSourcePosition) {
                 accumulated.append(s, nextSourcePosition, position).append(replacement);
+                InterpreterOps.chargeChars(ops, accumulated.length() - chargedChars);
+                chargedChars = accumulated.length();
                 nextSourcePosition = position + matched.length();
             }
         }

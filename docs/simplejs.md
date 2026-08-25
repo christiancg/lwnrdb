@@ -901,7 +901,8 @@ commands above; the limitations below are the ones that need an explanation rath
 | 4 | **`e.stack` is one synthetic frame**, and `Function.prototype.toString` retains no source for a function parsed from a template substitution | No interpreter call stack is kept. Source text *is* retained now (see *Function source text*), except inside a template literal's substitution: the lexer re-lexes each `${…}` into its own token list with no positions, so a function written there has no span to slice and falls back to the `NativeFunction` form — legal, since `HostHasSourceTextAvailable` is false for it. |
 | 5 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
 | 6 | **The Unicode version is the build JDK's, not a pinned one** | A conformant engine pins the UCD version the spec requires; with no ICU dependency ours is whatever the JDK ships — Unicode 16.0 on JDK 25, 17.0 on JDK 26. `internal/regex/UnicodeProperty` resolves a `\p{…}` name to a `CodePointSet` by using `java.util.regex.Pattern` purely as a one-time, per-property *oracle* (compiled once, then every code point tested against it and the truth table cached) — never as the matching engine itself (see *Regex engine* below) — so it still inherits the JDK's Unicode version for anything not covered by the pinned resource below. So `\p{…}` escapes answer differently across the two supported build JDKs for anything added in 17.0, and on JDK 25 the scripts added there (`Sidetic`, `Tolong_Siki`, `Tai_Yo`, `Beria_Erfe`) throw a `SyntaxError` instead of compiling. This is why `built-ins/RegExp/property-escapes/generated/` is excluded from the gate rather than baselined — see `config/test262-exclusions.txt`. **Properties of strings** (`\p{RGI_Emoji}` and its six siblings) are the one exception: they are sets of *strings*, so the JDK has no data for them at all, and `UnicodeProperty.StringProperties` expands each into an alternation of literal sequences from `src/main/resources/simplejs/emoji-sequences.txt` — data that is **ours and pinned to Unicode 17.0** (regenerate with `test_utils/gen_emoji_sequences.py`, which reads the UTS #51 sequence files). These escapes therefore answer identically on JDK 25 and 26, unlike every other `\p{…}`; the price is that the table must be regenerated when the pinned corpus moves to a new UCD. Property names are now matched **exactly** — loose matching (`\p{ gc = X }`) is an early error — and the `Hex` alias is supported. |
-| 7 | **`String.prototype.localeCompare` ignores its `locales`/`options` arguments** | It always collates with the host's locale (`InterpreterOps.locale()`, i.e. `scriptLocale` under the database binding) rather than the requested one. Honouring the argument means deciding how much of `Intl` to take on, which is a separate call — the host-boundary work only made the *default* host-controlled instead of the JVM's. |
+| 7 | **Allocation that is O(1) per instruction is bounded only by the instruction budget** | `scriptMaxMemoryBytes` charges the allocations proportional to a script-supplied length (see *Host-contract notes*), which is what escapes `tick()`. A script that allocates a small object per instruction is still bounded only by `scriptInstructionBudget`, so a large instruction budget permits substantial retained heap. Sizing the two together is the operator's job. |
+| 8 | **`String.prototype.localeCompare` ignores its `locales`/`options` arguments** | It always collates with the host's locale (`InterpreterOps.locale()`, i.e. `scriptLocale` under the database binding) rather than the requested one. Honouring the argument means deciding how much of `Intl` to take on, which is a separate call — the host-boundary work only made the *default* host-controlled instead of the JVM's. |
 
 Row 8 (a script transaction being local-only under clustering) is gone: `EnforcingDatabaseAccess`
 now routes through `ClusterRouter`, so cross-owner script transactions run the same 2PC the wire
@@ -941,6 +942,21 @@ was replaced; see *Regex engine* below.
   the same on every cluster node. `String.prototype.localeCompare` still ignores its own `locales`
   argument — only the *default* is host-controlled; honouring the argument belongs with a broader
   `Intl` decision.
+- **The allocation budget bounds bulk allocation, not live heap.** `scriptMaxMemoryBytes` is a
+  per-run **cumulative total of the allocations that are proportional to a script-supplied length or
+  to input size** — a `repeat`/`padStart` result, a dense array, a typed array or `ArrayBuffer`, a
+  `join`, a `JSON.parse`/`stringify` payload, a `structuredClone` node. It is deliberately *not* a
+  live-heap cap, for two reasons: `ThreadMXBean.getThreadAllocatedBytes` cannot be used because
+  coroutine bodies run on virtual threads, which it does not track, and a `Cleaner`-based scheme that
+  credited the counter on collection would make the limit GC-timing dependent, so the same script
+  could pass on one run and fail on the next. The dividing line is that `tick()` already bounds
+  allocation costing at least one instruction per unit, so the budget only has to cover what is O(N)
+  in a single instruction. String `+` is charged its **appended delta**, not the combined result:
+  charging the result would make `s += "x"` cost quadratically and reject ordinary string building,
+  while `s = s + s` — the doubling case `tick()` cannot see — has a delta equal to the whole
+  accumulated string and is still bounded. `OutOfMemoryError`/`StackOverflowError` are caught at the
+  `SimpleJs.run` boundary as a last resort and reported as `ScriptMemoryError`; the budget is what is
+  meant to make that unreachable, so `ScriptOperationHelper` logs it at WARN.
 - **BigInt has two conversions at the boundary.** `EJsonInterop.toEjson` is the spec path shared with
   `JSON.stringify` and throws on a BigInt, as test262 requires. `EJsonInterop.toHostEjson` is the host
   path (the script result contract and everything heading into the database): a BigInt whose absolute
@@ -975,7 +991,8 @@ exposed to the script as `db.name`, so a script need not hardcode its database.
 
 **Sandbox from configuration.** `DatabaseHostBindings.limitsFromConfiguration()` builds the
 `ResourceLimits` from `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`,
-`scriptMaxLogLines`, `scriptMaxLogLineChars` and `scriptTextImportEnabled`; the request cannot
+`scriptMaxMemoryBytes` (exceeding it aborts with `400-12`), `scriptMaxLogLines`,
+`scriptMaxLogLineChars` and `scriptTextImportEnabled`; the request cannot
 influence any of them. `scriptMaxSourceBytes` caps the accepted source (`400-10`) and
 `scriptsEnabled` (default `false`) gates the operation entirely (`403-2`). `fetch` stays unreachable
 from the wire: no `NetworkAccess` is wired, so `HostBindings.network()` is `null`.

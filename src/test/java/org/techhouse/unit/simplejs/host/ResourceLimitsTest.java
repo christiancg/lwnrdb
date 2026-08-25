@@ -90,4 +90,27 @@ public class ResourceLimitsTest {
         assertEquals(7, limits.maxLogLines());
         assertEquals(9, limits.maxLogLineChars());
     }
+
+    // The canonical constructor carries the memory budget, and the short form sets only it
+    @Test
+    public void test_memory_budget_carried_by_canonical_constructor() {
+        final var limits = new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, false, false, 4, 7, 9, 4096);
+        assertEquals(4096, limits.memoryBudget());
+        assertEquals(2048, new ResourceLimits(100, 200, 3, 2048L).memoryBudget());
+    }
+
+    // Every pre-existing constructor leaves memory unlimited, which is what keeps the test262 worker
+    // and every embedding on their previous behaviour
+    @Test
+    public void test_existing_overloads_leave_memory_unlimited() {
+        assertEquals(-1, new ResourceLimits(100, 200, 3).memoryBudget());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true).memoryBudget());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, true).memoryBudget());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1).memoryBudget());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true).memoryBudget());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4).memoryBudget());
+        assertEquals(-1,
+                new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4, 7, 9).memoryBudget());
+        assertEquals(-1, ResourceLimits.unlimited().memoryBudget());
+    }
 }

@@ -158,6 +158,7 @@ public class ConfigurationTest {
         map.put("scriptMaxSourceBytes", "256Kb");
         map.put("scriptMaxLogLines", "1000");
         map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptMaxMemoryBytes", "64Mb");
         map.put("scriptTextImportEnabled", "false");
         return map;
     }
@@ -185,6 +186,7 @@ public class ConfigurationTest {
             assertEquals(256L * 1024L, config.getScriptMaxSourceBytes());
             assertEquals(1000, config.getScriptMaxLogLines());
             assertEquals(4096, config.getScriptMaxLogLineChars());
+            assertEquals(64L * 1024L * 1024L, config.getScriptMaxMemoryBytes());
         }
     }
 

@@ -53,6 +53,7 @@ public class ClusterConfigurationValidatorTest {
         map.put("scriptMaxSourceBytes", "256Kb");
         map.put("scriptMaxLogLines", "1000");
         map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptMaxMemoryBytes", "64Mb");
         map.put("scriptTextImportEnabled", "false");
         return map;
     }

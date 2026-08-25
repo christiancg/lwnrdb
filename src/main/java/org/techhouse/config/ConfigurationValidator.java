@@ -65,6 +65,7 @@ public final class ConfigurationValidator {
         validatePositiveLong(configs, "scriptTimeoutMs", errors);
         validateInt(configs, "scriptMaxDepth", 1, errors);
         validatePositiveSize(configs, "scriptMaxSourceBytes", errors);
+        validatePositiveSize(configs, "scriptMaxMemoryBytes", errors);
         validateInt(configs, "scriptMaxLogLines", 1, errors);
         validateInt(configs, "scriptMaxLogLineChars", 1, errors);
     }

@@ -48,6 +48,14 @@ public class DatabaseHostBindingsTest {
         assertEquals(Locale.getDefault(), InterpreterOps.locale(null));
     }
 
+    // The sandbox's memory budget comes from configuration, never from the caller
+    @Test
+    public void test_reads_the_memory_budget_from_configuration() {
+        final var configuration = Configuration.getInstance();
+        final var limits = DatabaseHostBindings.limitsFromConfiguration();
+        assertEquals(configuration.getScriptMaxMemoryBytes(), limits.memoryBudget());
+    }
+
     // A null id list is normalised to an empty one rather than surfacing as null
     @Test
     public void test_bulk_save_outcome_normalises_nulls() {

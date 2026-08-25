@@ -22,6 +22,7 @@ public final class ScriptOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(ScriptOperationHelper.class);
+    private static final String EXHAUSTED_MESSAGE = "Script exhausted available memory";
 
     private ScriptOperationHelper() {
     }
@@ -52,8 +53,15 @@ public final class ScriptOperationHelper {
 
     private static void logRun(String username, String dbName, long durationMs, ScriptResult result) {
         final var outcome = result.isError() ? result.getErrorName() + ": " + result.getErrorMessage() : "ok";
-        logger.info("RUN_SCRIPT user=" + username + " database=" + dbName + " durationMs=" + durationMs + " outcome="
-                + outcome);
+        final var line = "RUN_SCRIPT user=" + username + " database=" + dbName + " durationMs=" + durationMs
+                + " outcome=" + outcome;
+        // An exhausted heap means the allocation budget failed to bound the script, or that the JVM was
+        // already under pressure from the cache rather than from this script. Either needs an operator.
+        if (EXHAUSTED_MESSAGE.equals(result.getErrorMessage())) {
+            logger.warning(line);
+        } else {
+            logger.info(line);
+        }
     }
 
     private static OperationResponse toResponse(ScriptResult result) {
@@ -69,6 +77,7 @@ public final class ScriptOperationHelper {
         return switch (errorName) {
             case "ScriptTimeoutError" -> ErrorCode.SCRIPT_TIMEOUT;
             case "ScriptLimitError" -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
+            case "ScriptMemoryError" -> ErrorCode.SCRIPT_MEMORY_EXCEEDED;
             default -> ErrorCode.SCRIPT_FAILED;
         };
     }

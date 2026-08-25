@@ -49,16 +49,16 @@ public final class GlobalFunctionsBuiltins {
     public static void install(Environment global, EventLoop eventLoop, Invoker invoker, InterpreterOps ops,
             Intrinsics intrinsics) {
         define(global, "encodeURI", new JsNativeFunction("encodeURI",
-                (_, args) -> new JsString(encode(str(args, ops), URI_UNESCAPED + URI_RESERVED, intrinsics))));
+                (_, args) -> charged(encode(str(args, ops), URI_UNESCAPED + URI_RESERVED, intrinsics), ops)));
         define(global, "encodeURIComponent", new JsNativeFunction("encodeURIComponent",
-                (_, args) -> new JsString(encode(str(args, ops), URI_UNESCAPED, intrinsics))));
+                (_, args) -> charged(encode(str(args, ops), URI_UNESCAPED, intrinsics), ops)));
         define(global, "decodeURI",
-                new JsNativeFunction("decodeURI", (_, args) -> new JsString(decode(str(args, ops), true, intrinsics))));
+                new JsNativeFunction("decodeURI", (_, args) -> charged(decode(str(args, ops), true, intrinsics), ops)));
         define(global, "decodeURIComponent", new JsNativeFunction("decodeURIComponent",
-                (_, args) -> new JsString(decode(str(args, ops), false, intrinsics))));
-        define(global, "escape", new JsNativeFunction("escape", (_, args) -> new JsString(escape(str(args, ops)))));
+                (_, args) -> charged(decode(str(args, ops), false, intrinsics), ops)));
+        define(global, "escape", new JsNativeFunction("escape", (_, args) -> charged(escape(str(args, ops)), ops)));
         define(global, "unescape",
-                new JsNativeFunction("unescape", (_, args) -> new JsString(unescape(str(args, ops)))));
+                new JsNativeFunction("unescape", (_, args) -> charged(unescape(str(args, ops)), ops)));
         define(global, "structuredClone",
                 new JsNativeFunction("structuredClone",
                         (_, args) -> clone(args.isEmpty() ? JsUndefined.getInstance() : args.getFirst(),
@@ -190,6 +190,11 @@ public final class GlobalFunctionsBuiltins {
         return c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
     }
 
+    private static JsString charged(String text, InterpreterOps ops) {
+        InterpreterOps.chargeChars(ops, text.length());
+        return new JsString(text);
+    }
+
     private static String escape(String input) {
         final var out = new StringBuilder();
         for (var i = 0; i < input.length(); i++) {
@@ -238,6 +243,7 @@ public final class GlobalFunctionsBuiltins {
     }
 
     private static JsValue clone(JsValue value, Map<JsValue, JsValue> seen, InterpreterOps ops) {
+        InterpreterOps.chargeElements(ops, 1);
         switch (value) {
             case JsNumber ignored -> {
                 return value;
@@ -283,8 +289,12 @@ public final class GlobalFunctionsBuiltins {
             case JsVector vector -> new JsVector(vector.getComponents());
             case JsDbDateTime dateTime -> new JsDbDateTime(dateTime.getValue());
             case JsDbTime time -> new JsDbTime(time.getValue());
-            case JsArrayBuffer buffer -> new JsArrayBuffer(buffer.getBytes().clone());
+            case JsArrayBuffer buffer -> {
+                InterpreterOps.charge(ops, buffer.getBytes().length);
+                yield new JsArrayBuffer(buffer.getBytes().clone());
+            }
             case JsTypedArray typed -> {
+                InterpreterOps.charge(ops, typed.getBuffer().getBytes().length);
                 final var buffer = new JsArrayBuffer(typed.getBuffer().getBytes().clone());
                 yield new JsTypedArray(typed.kind(), buffer, typed.byteOffset(), typed.length());
             }

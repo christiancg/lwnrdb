@@ -54,6 +54,7 @@ public class ConfigurationValidatorTest {
         map.put("scriptMaxSourceBytes", "256Kb");
         map.put("scriptMaxLogLines", "1000");
         map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptMaxMemoryBytes", "64Mb");
         map.put("scriptTextImportEnabled", "false");
         return map;
     }
@@ -297,6 +298,8 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "scriptMaxSourceBytes", "0", "scriptMaxSourceBytes");
         assertHasError(tempDir, "scriptMaxLogLines", "0", "scriptMaxLogLines");
         assertHasError(tempDir, "scriptMaxLogLineChars", "0", "scriptMaxLogLineChars");
+        assertHasError(tempDir, "scriptMaxMemoryBytes", "nonsense", "scriptMaxMemoryBytes");
+        assertHasError(tempDir, "scriptMaxMemoryBytes", "0", "scriptMaxMemoryBytes");
     }
 
     @Test

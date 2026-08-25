@@ -50,6 +50,7 @@ public final class Configuration {
     private int scriptMaxLogLines;
     private int scriptMaxLogLineChars;
     private boolean scriptTextImportEnabled;
+    private long scriptMaxMemoryBytes;
 
     private Configuration() {
     }
@@ -113,6 +114,7 @@ public final class Configuration {
         scriptMaxLogLines = intOf(configs, "scriptMaxLogLines");
         scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
         scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
+        scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
     }
 
     private static int intOf(Map<String, String> configs, String key) {
@@ -315,5 +317,9 @@ public final class Configuration {
 
     public boolean isScriptTextImportEnabled() {
         return scriptTextImportEnabled;
+    }
+
+    public long getScriptMaxMemoryBytes() {
+        return scriptMaxMemoryBytes;
     }
 }
