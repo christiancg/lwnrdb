@@ -13,6 +13,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -228,6 +229,125 @@ public class FileSystem {
     // Deletes the collection's schema file. Returns true when a file was actually removed.
     public boolean deleteCollectionSchema(String dbName, String collName) {
         final var file = getSchemaFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            return file.exists() && file.delete();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private File getProceduresFolder(String dbName) {
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + Globals.PROCEDURES_FOLDER);
+    }
+
+    // The procedure name becomes a path segment here and nowhere else. RequestValidator has already
+    // matched it against the collection-name rule (3-64 alphanumerics plus '_' and '-'), so a separator,
+    // a dot or a '..' segment is unrepresentable by the time it reaches this method.
+    private File getProcedureFile(String dbName, String name) {
+        return new File(getProceduresFolder(dbName).getPath() + Globals.FILE_SEPARATOR + name
+                + Globals.PROCEDURE_FILE_EXTENSION);
+    }
+
+    // Writes (create-or-replace) one stored procedure atomically, creating the folder on first use.
+    public void writeProcedure(String dbName, String name, String json) throws IOException {
+        final var folder = getProceduresFolder(dbName);
+        if (!folder.exists() && !folder.mkdirs() && !folder.exists()) {
+            throw new IOException("Could not create the procedures folder for database " + dbName);
+        }
+        final var file = getProcedureFile(dbName, name);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            rewriteFileAtomically(file.toPath(), List.of(json));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Reads one stored procedure, or null when the database has no procedure by that name.
+    public String readProcedure(String dbName, String name) throws IOException {
+        final var file = getProcedureFile(dbName, name);
+        if (!file.exists()) {
+            return null;
+        }
+        final var lock = fileLock(file).readLock();
+        lock.lock();
+        try {
+            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Deletes one stored procedure. Returns true when a file was actually removed.
+    public boolean deleteProcedure(String dbName, String name) {
+        final var file = getProcedureFile(dbName, name);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            return file.exists() && file.delete();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Every stored procedure name in the database, or an empty list when the folder does not exist.
+    public List<String> listProcedureNames(String dbName) {
+        final var folder = getProceduresFolder(dbName);
+        final var files = folder.listFiles();
+        if (files == null) {
+            return List.of();
+        }
+        final var names = new ArrayList<String>();
+        for (final var file : files) {
+            final var fileName = file.getName();
+            if (file.isFile() && fileName.endsWith(Globals.PROCEDURE_FILE_EXTENSION)) {
+                names.add(fileName.substring(0, fileName.length() - Globals.PROCEDURE_FILE_EXTENSION.length()));
+            }
+        }
+        Collections.sort(names);
+        return names;
+    }
+
+    private File getTriggersFile(String dbName, String collectionName) {
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.TRIGGERS_FILE_NAME + Globals.TRIGGERS_FILE_EXTENSION);
+    }
+
+    // Writes (create-or-replace) the collection's whole trigger list atomically.
+    public void writeTriggers(String dbName, String collName, String json) throws IOException {
+        final var file = getTriggersFile(dbName, collName);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            rewriteFileAtomically(file.toPath(), List.of(json));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Reads the collection's trigger list, or null when the collection has no triggers.
+    public String readTriggers(String dbName, String collName) throws IOException {
+        final var file = getTriggersFile(dbName, collName);
+        if (!file.exists()) {
+            return null;
+        }
+        final var lock = fileLock(file).readLock();
+        lock.lock();
+        try {
+            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Deletes the collection's trigger file. Returns true when a file was actually removed.
+    public boolean deleteTriggers(String dbName, String collName) {
+        final var file = getTriggersFile(dbName, collName);
         final var lock = fileLock(file).writeLock();
         lock.lock();
         try {

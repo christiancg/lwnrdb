@@ -763,7 +763,7 @@ def test_permissions(conn: Conn):
         {"type": "CHANGE_PERMISSIONS", "username": "script_granted", "admin": False, "globalPermissions": [],
          "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {"admin": True}}),
         "ERROR", "400-1")
-    check_code("a non-boolean grant value is rejected", conn.send(
+    check_code("a grant value that is neither a boolean nor a level name is rejected", conn.send(
         {"type": "CHANGE_PERMISSIONS", "username": "script_granted", "admin": False, "globalPermissions": [],
          "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {DB: "READ"}}),
         "ERROR", "400-1")
@@ -771,7 +771,8 @@ def test_permissions(conn: Conn):
     users = conn.send({"type": "LIST_USERS", "aggregationSteps": [
         {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "script_reader"}}]})
     listed = (users.get("users") or [{}])[0]
-    check("LIST_USERS reports the script grants", listed.get("scriptPermissions") == {DB: True},
+    # The grant is reported as a level; a boolean sent by an older client reads as RUN.
+    check("LIST_USERS reports the script grants", listed.get("scriptPermissions") == {DB: "RUN"},
           f"scriptPermissions={listed.get('scriptPermissions')!r}")
 
 

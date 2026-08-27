@@ -16,6 +16,8 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -43,6 +45,8 @@ public class AdminAntiEntropyService implements MembershipListener {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final org.techhouse.ops.CompiledProcedureCache compiledProcedures = IocContainer
+            .get(org.techhouse.ops.CompiledProcedureCache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
@@ -153,7 +157,15 @@ public class AdminAntiEntropyService implements MembershipListener {
         }
         final var collections = new ArrayList<JsonObject>();
         final var schemas = new JsonObject();
+        final var procedures = new JsonObject();
+        final var triggers = new JsonObject();
         for (final var dbName : cache.getUserDatabaseNames()) {
+            for (final var procedureName : fs.listProcedureNames(dbName)) {
+                final var procedure = cache.getProcedure(dbName, procedureName);
+                if (procedure != null) {
+                    procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
+                }
+            }
             for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
                 final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
                 if (collEntry != null) {
@@ -164,6 +176,10 @@ public class AdminAntiEntropyService implements MembershipListener {
                     if (schema != null) {
                         schemas.add(collEntry.get_id(), schema);
                     }
+                    final var collTriggers = cache.getTriggersFor(dbName, collName);
+                    if (!collTriggers.isEmpty()) {
+                        triggers.add(collEntry.get_id(), TriggerDefinition.toJsonArray(collTriggers));
+                    }
                 }
             }
         }
@@ -171,13 +187,15 @@ public class AdminAntiEntropyService implements MembershipListener {
         for (final var userEntry : cache.getAllAdminUserEntries()) {
             users.add(userEntry.getData());
         }
-        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas);
+        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas, procedures,
+                triggers);
     }
 
     private void conform(AdminSnapshotPayload snapshot) throws Exception {
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
         final var snapshotDbs = conformDatabases(snapshot);
+        conformProcedures(snapshot, snapshotDbs);
         final var snapshotColls = conformCollections(snapshot, snapshotDbs);
         dropAbsentCollections(snapshotDbs, snapshotColls);
         dropAbsentDatabases(snapshotDbs);
@@ -233,13 +251,68 @@ public class AdminAntiEntropyService implements MembershipListener {
             snapshotColls.add(coll.get_id());
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
-            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema);
+            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers());
         }
         return snapshotColls;
     }
 
+    // Converges each database's stored procedures to the snapshot: write when different, delete the ones
+    // the snapshot does not have. No per-record version comparison - the admin epoch is the ordering, the
+    // same rule collection schemas follow.
+    private void conformProcedures(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
+            throws Exception {
+        final var desired = new HashMap<String, JsonObject>();
+        for (final var entry : snapshot.getProcedures().entrySet()) {
+            desired.put(entry.getKey(), entry.getValue().asJsonObject());
+        }
+        for (final var dbName : snapshotDbs.keySet()) {
+            locks.lock(dbName, Globals.PROCEDURES_FOLDER);
+            try {
+                for (final var existingName : new ArrayList<>(fs.listProcedureNames(dbName))) {
+                    if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
+                        fs.deleteProcedure(dbName, existingName);
+                        cache.removeProcedure(dbName, existingName);
+                        compiledProcedures.invalidateProcedure(dbName, existingName);
+                    }
+                }
+                for (final var entry : desired.entrySet()) {
+                    final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+                    if (parts.length < 2 || !parts[0].equals(dbName)) {
+                        continue;
+                    }
+                    final var definition = ProcedureDefinition.fromJsonObject(entry.getValue());
+                    if (!definition.equals(cache.getProcedure(dbName, parts[1]))) {
+                        fs.writeProcedure(dbName, parts[1], eJson.toJson(entry.getValue()));
+                        cache.putProcedure(dbName, definition);
+                    }
+                }
+            } finally {
+                locks.release(dbName, Globals.PROCEDURES_FOLDER);
+            }
+        }
+    }
+
+    // Converges the collection's trigger file/cache to the snapshot, under the collection lock the caller
+    // already holds. Idempotent, so the periodic sweep does not rewrite an already-matching list.
+    private void conformTriggers(String dbName, String collName, JsonObject snapshotTriggers) throws Exception {
+        final var key = Cache.getCollectionIdentifier(dbName, collName);
+        final var desired = snapshotTriggers.has(key) && snapshotTriggers.get(key).isJsonArray()
+                ? TriggerDefinition.fromJsonArray(snapshotTriggers.get(key).asJsonArray())
+                : new ArrayList<TriggerDefinition>();
+        if (desired.equals(cache.getTriggersFor(dbName, collName))) {
+            return;
+        }
+        if (desired.isEmpty()) {
+            fs.deleteTriggers(dbName, collName);
+            cache.removeTriggers(dbName, collName);
+            return;
+        }
+        fs.writeTriggers(dbName, collName, eJson.toJson(TriggerDefinition.toFileJson(desired)));
+        cache.putTriggers(dbName, collName, desired);
+    }
+
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
-            JsonObject desiredSchema) throws Exception {
+            JsonObject desiredSchema, JsonObject snapshotTriggers) throws Exception {
         locks.lock(dbName, collName);
         try {
             if (cache.getAdminCollectionEntry(dbName, collName) == null) {
@@ -261,6 +334,7 @@ public class AdminAntiEntropyService implements MembershipListener {
                 }
             }
             conformSchema(dbName, collName, desiredSchema);
+            conformTriggers(dbName, collName, snapshotTriggers);
         } finally {
             locks.release(dbName, collName);
         }

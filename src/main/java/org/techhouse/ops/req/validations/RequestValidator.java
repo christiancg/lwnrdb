@@ -4,27 +4,34 @@ import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.CallProcedureRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.RunScriptRequest;
+import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
+import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
@@ -68,6 +75,13 @@ public class RequestValidator {
                 ValidationResult.ok();
             case RESOLVE_TRANSACTION -> validateResolveTransaction((ResolveTransactionRequest) request);
             case RUN_SCRIPT -> validateRunScript((RunScriptRequest) request);
+            case SAVE_PROCEDURE -> validateSaveProcedure((SaveProcedureRequest) request);
+            case DELETE_PROCEDURE -> validateDeleteProcedure((DeleteProcedureRequest) request);
+            case LIST_PROCEDURES -> validateDbNameOnly(request.getDatabaseName());
+            case CALL_PROCEDURE -> validateCallProcedure((CallProcedureRequest) request);
+            case SAVE_TRIGGER -> validateSaveTrigger((SaveTriggerRequest) request);
+            case DELETE_TRIGGER -> validateDeleteTrigger((DeleteTriggerRequest) request);
+            case LIST_TRIGGERS -> validateListTriggers((ListTriggersRequest) request);
         };
     }
 
@@ -81,6 +95,88 @@ public class RequestValidator {
             return ValidationResult.fail("RUN_SCRIPT request requires a script");
         }
         return ValidationResult.ok();
+    }
+
+    // The procedure name is matched against the collection-name rule because it becomes a path segment
+    // in FileSystem.getProcedureFile: the rule admits no separator, no dot and no '..' segment.
+    private static ValidationResult validateProcedureName(String name) {
+        if (name == null || name.isBlank()) {
+            return ValidationResult.fail("procedure name is required");
+        }
+        if (!name.matches(NAME_PATTERN)) {
+            return ValidationResult
+                    .fail("procedure name must be 3-64 alphanumeric characters, underscores, or hyphens");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateDbNameOnly(String databaseName) {
+        return validateDbName(databaseName, true);
+    }
+
+    private static ValidationResult validateSaveProcedure(SaveProcedureRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        final var nameResult = validateProcedureName(request.getName());
+        if (!nameResult.isValid()) {
+            return nameResult;
+        }
+        final var script = request.getScript();
+        if (script == null || script.isBlank()) {
+            return ValidationResult.fail("SAVE_PROCEDURE request requires a script");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateDeleteProcedure(DeleteProcedureRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        return validateProcedureName(request.getName());
+    }
+
+    private static ValidationResult validateCallProcedure(CallProcedureRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        return validateProcedureName(request.getProcedureName());
+    }
+
+    private static ValidationResult validateSaveTrigger(SaveTriggerRequest request) {
+        final var namesResult = validateDbAndColl(request, true);
+        if (!namesResult.isValid()) {
+            return namesResult;
+        }
+        final var nameResult = validateProcedureName(request.getName());
+        if (!nameResult.isValid()) {
+            return nameResult;
+        }
+        return validateProcedureName(request.getProcedureName());
+    }
+
+    private static ValidationResult validateDeleteTrigger(DeleteTriggerRequest request) {
+        final var namesResult = validateDbAndColl(request, true);
+        if (!namesResult.isValid()) {
+            return namesResult;
+        }
+        return validateProcedureName(request.getName());
+    }
+
+    // The collection is optional: omitting it lists every trigger in the database.
+    private static ValidationResult validateListTriggers(ListTriggersRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        final var collName = request.getCollectionName();
+        if (collName == null || collName.isBlank()) {
+            return ValidationResult.ok();
+        }
+        return validateCollectionName(collName);
     }
 
     private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {
@@ -395,8 +491,16 @@ public class RequestValidator {
                 return ValidationResult.fail(
                         "database name in script permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
             }
-            if (entry.getValue() == null || entry.getValue().getJsonType() != JsonBaseElement.JsonType.BOOLEAN) {
-                return ValidationResult.fail("script permission for database '" + dbName + "' must be true or false");
+            // A typo'd level name must fail loudly rather than read as NONE: an operator cannot explain a
+            // denial they never asked for. The boolean form is still accepted for backward compatibility.
+            final var value = entry.getValue();
+            if (value == null || value.getJsonType() == JsonBaseElement.JsonType.BOOLEAN) {
+                continue;
+            }
+            if (value.getJsonType() != JsonBaseElement.JsonType.STRING
+                    || !ScriptPermissionLevel.isValidName(value.asJsonString().getValue())) {
+                return ValidationResult.fail("script permission for database '" + dbName
+                        + "' must be one of NONE, RUN, MANAGE (or the legacy true/false)");
             }
         }
         return ValidationResult.ok();

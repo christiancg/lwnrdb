@@ -19,6 +19,7 @@ import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
@@ -45,8 +46,8 @@ public class MessageProcessorRunScriptTest {
         createUser(ADMIN, true, new HashMap<>(), new HashMap<>());
         final var readOnly = new HashMap<String, PermissionLevel>();
         readOnly.put(TestGlobals.DB, PermissionLevel.READ);
-        final var scriptGrant = new HashMap<String, Boolean>();
-        scriptGrant.put(TestGlobals.DB, true);
+        final var scriptGrant = new HashMap<String, ScriptPermissionLevel>();
+        scriptGrant.put(TestGlobals.DB, ScriptPermissionLevel.RUN);
         createUser(READER, false, readOnly, scriptGrant);
         createUser(NOBODY, false, new HashMap<>(), new HashMap<>());
     }
@@ -59,7 +60,7 @@ public class MessageProcessorRunScriptTest {
     }
 
     private static void createUser(String username, boolean admin, HashMap<String, PermissionLevel> databasePermissions,
-            HashMap<String, Boolean> scriptPermissions) {
+            HashMap<String, ScriptPermissionLevel> scriptPermissions) {
         final var request = new CreateUserRequest();
         request.setUsername(username);
         request.setPassword(PASSWORD);

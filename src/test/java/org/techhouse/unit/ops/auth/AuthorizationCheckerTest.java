@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
@@ -265,8 +266,8 @@ public class AuthorizationCheckerTest {
 
     @Test
     public void test_run_script_allowed_with_script_permission_for_that_database() {
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("testDb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("testDb", ScriptPermissionLevel.RUN);
         final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>(),
                 scriptPerms);
         final var request = new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null);
@@ -276,8 +277,8 @@ public class AuthorizationCheckerTest {
     // The grant is per database: it does not carry over to another one
     @Test
     public void test_run_script_denied_for_a_different_database() {
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("testDb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("testDb", ScriptPermissionLevel.RUN);
         final var dbPerms = new HashMap<String, PermissionLevel>();
         dbPerms.put("otherDb", PermissionLevel.READ_WRITE);
         final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), dbPerms, new HashMap<>(),
@@ -289,8 +290,8 @@ public class AuthorizationCheckerTest {
     // An explicit false is a denial, not a grant
     @Test
     public void test_run_script_denied_when_grant_is_false() {
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("testDb", false);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("testDb", ScriptPermissionLevel.NONE);
         final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>(),
                 scriptPerms);
         final var request = new org.techhouse.ops.req.RunScriptRequest("testDb", "return 1;", null);
@@ -300,8 +301,8 @@ public class AuthorizationCheckerTest {
     // The script grant alone starts the script; what it may do is still the database/collection permissions
     @Test
     public void test_run_script_grant_does_not_imply_data_access() {
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("testDb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("testDb", ScriptPermissionLevel.RUN);
         final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>(),
                 scriptPerms);
         assertTrue(AuthorizationChecker

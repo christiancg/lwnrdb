@@ -68,6 +68,12 @@ public final class ConfigurationValidator {
         validatePositiveSize(configs, "scriptMaxMemoryBytes", errors);
         validateInt(configs, "scriptMaxLogLines", 1, errors);
         validateInt(configs, "scriptMaxLogLineChars", 1, errors);
+        validateInt(configs, "procedureCacheSize", 0, errors);
+        validateBoolean(configs, "triggersEnabled", errors);
+        validateInt(configs, "triggerThreads", 1, errors);
+        validateInt(configs, "triggerQueueSize", 1, errors);
+        validateInt(configs, "triggerMaxDepth", 0, errors);
+        validatePositiveLong(configs, "triggerTimeoutMs", errors);
     }
 
     private static void validateCluster(Map<String, String> configs, List<String> errors) {

@@ -20,6 +20,14 @@ public final class Globals {
     // collection (user data, stored in the collection folder). Absent = the collection is unconstrained.
     public static final String SCHEMA_FILE_NAME = "schema";
     public static final String SCHEMA_FILE_EXTENSION = ".json";
+    // Per-database stored procedures live in a folder beside the database's collection folders. The
+    // leading '.' cannot appear in a collection name, so the folder can never collide with one.
+    public static final String PROCEDURES_FOLDER = ".procedures";
+    public static final String PROCEDURE_FILE_EXTENSION = ".json";
+    // Per-collection trigger file infix: {coll}-triggers.json holds every trigger on the collection,
+    // stored in the collection folder beside its schema so a DROP_COLLECTION removes it with the data.
+    public static final String TRIGGERS_FILE_NAME = "triggers";
+    public static final String TRIGGERS_FILE_EXTENSION = ".json";
     public static final String RW_PERMISSIONS = "rwd";
     public static final String R_PERMISSIONS = "r";
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';

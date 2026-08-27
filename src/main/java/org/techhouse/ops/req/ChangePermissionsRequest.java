@@ -7,8 +7,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonArray;
-import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.OperationType;
@@ -88,21 +88,22 @@ public class ChangePermissionsRequest extends OperationRequest {
         perms.forEach((k, v) -> this.collectionPermissions.add(k, new JsonString(v.name())));
     }
 
-    public void setScriptPermissions(Map<String, Boolean> perms) {
+    public void setScriptPermissions(Map<String, ScriptPermissionLevel> perms) {
         this.scriptPermissions = new JsonObject();
-        perms.forEach((k, v) -> this.scriptPermissions.add(k, new JsonBoolean(v)));
+        perms.forEach((k, v) -> this.scriptPermissions.add(k, new JsonString(v.name())));
     }
 
     public JsonObject getRawDatabasePermissions() {
         return databasePermissions;
     }
 
-    public Map<String, Boolean> getScriptPermissions() {
+    // Accepts both the legacy boolean form and a level name, so an existing client keeps working.
+    public Map<String, ScriptPermissionLevel> getScriptPermissions() {
         if (scriptPermissions == null)
             return new HashMap<>();
-        final var result = new HashMap<String, Boolean>();
+        final var result = new HashMap<String, ScriptPermissionLevel>();
         for (var entry : scriptPermissions.entrySet()) {
-            result.put(entry.getKey(), entry.getValue().asJsonBoolean().getValue());
+            result.put(entry.getKey(), ScriptPermissionLevel.fromJson(entry.getValue()));
         }
         return result;
     }

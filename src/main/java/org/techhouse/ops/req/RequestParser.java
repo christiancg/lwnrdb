@@ -84,6 +84,13 @@ public final class RequestParser {
                 case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
                 case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
                 case RUN_SCRIPT -> eJson.fromJson(message, RunScriptRequest.class);
+                case SAVE_PROCEDURE -> eJson.fromJson(message, SaveProcedureRequest.class);
+                case DELETE_PROCEDURE -> eJson.fromJson(message, DeleteProcedureRequest.class);
+                case LIST_PROCEDURES -> eJson.fromJson(message, ListProceduresRequest.class);
+                case CALL_PROCEDURE -> eJson.fromJson(message, CallProcedureRequest.class);
+                case SAVE_TRIGGER -> eJson.fromJson(message, SaveTriggerRequest.class);
+                case DELETE_TRIGGER -> eJson.fromJson(message, DeleteTriggerRequest.class);
+                case LIST_TRIGGERS -> eJson.fromJson(message, ListTriggersRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

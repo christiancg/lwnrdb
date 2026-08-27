@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ClusterRouter;
@@ -117,6 +118,9 @@ public final class TransactionOperationHelper {
                 applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+            // After the durable commit, so a trigger never observes a transaction that later rolled back.
+            // A rollback fires nothing.
+            fireTriggersForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId));
             resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit — the decision is made and the local commit is
             // durable; anti-entropy reconciles the lagging replicas.
@@ -477,6 +481,36 @@ public final class TransactionOperationHelper {
             }
         }
         return result.stream();
+    }
+
+    private static void fireTriggersForCommittedOps(java.util.List<AdminTransactionEntry> ops, String actingUser) {
+        for (final var op : ops) {
+            final var dbName = op.getTargetDb();
+            final var collName = op.getTargetColl();
+            switch (op.getOpType()) {
+                case AdminTransactionEntry.OP_TYPE_SAVE ->
+                    TriggerHelper.afterWriteIds(dbName, collName, EventType.UPDATED,
+                            List.of(op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue()), actingUser, 0);
+                case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
+                    final var ids = new ArrayList<String>();
+                    for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
+                        final var object = element.asJsonObject();
+                        if (object.has(Globals.PK_FIELD)) {
+                            ids.add(object.get(Globals.PK_FIELD).asJsonString().getValue());
+                        }
+                    }
+                    TriggerHelper.afterWriteIds(dbName, collName, EventType.UPDATED, ids, actingUser, 0);
+                }
+                // A buffered delete's document is already gone by the time the commit finishes, so a
+                // DELETED trigger fires with the id only.
+                case AdminTransactionEntry.OP_TYPE_DELETE ->
+                    TriggerHelper.afterWriteIds(dbName, collName, EventType.DELETED,
+                            List.of(op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue()), actingUser, 0);
+                default -> {
+                    // Markers (PREPARED/COMMIT/OUTCOME) are not writes and fire nothing.
+                }
+            }
+        }
     }
 
     private static void applyBufferedOp(AdminTransactionEntry op) throws Exception {

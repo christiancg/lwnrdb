@@ -14,6 +14,8 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
@@ -38,6 +40,7 @@ public class AdminCache {
     // costs at most one disk check. An empty schema object can never be stored (SAVE_SCHEMA rejects it),
     // so reference-identity against this instance is unambiguous.
     private static final JsonObject NO_SCHEMA = new JsonObject();
+    private static final ProcedureDefinition NO_PROCEDURE = new ProcedureDefinition();
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -52,6 +55,8 @@ public class AdminCache {
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, JsonObject> collectionSchemas = new ConcurrentHashMap<>();
+    private final Map<String, ProcedureDefinition> procedures = new ConcurrentHashMap<>();
+    private final Map<String, List<TriggerDefinition>> triggers = new ConcurrentHashMap<>();
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -372,6 +377,88 @@ public class AdminCache {
     public void removeCollectionSchemasForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         collectionSchemas.keySet().removeIf(id -> id.startsWith(prefix));
+    }
+
+    // Returns the database's cached procedure, or null when it has none by that name. Loads lazily from
+    // disk on first access and negatively caches absence (NO_PROCEDURE), so a database with no procedures
+    // - or a misspelled name called in a loop - is only read from disk once. Same contract as
+    // getCollectionSchema, and the reason loadAdminData does not have to load procedures at startup.
+    public ProcedureDefinition getProcedure(String dbName, String name) {
+        final var id = Cache.getCollectionIdentifier(dbName, name);
+        var cached = procedures.get(id);
+        if (cached == null) {
+            cached = loadProcedureFromDisk(dbName, name);
+            procedures.put(id, cached);
+        }
+        return cached == NO_PROCEDURE ? null : cached;
+    }
+
+    private ProcedureDefinition loadProcedureFromDisk(String dbName, String name) {
+        try {
+            final var raw = fs.readProcedure(dbName, name);
+            if (raw == null || raw.isBlank()) {
+                return NO_PROCEDURE;
+            }
+            return ProcedureDefinition.fromJsonObject(eJson.fromJson(raw, JsonObject.class));
+        } catch (Exception e) {
+            logger.warning(
+                    "Failed to load procedure " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
+            return NO_PROCEDURE;
+        }
+    }
+
+    public void putProcedure(String dbName, ProcedureDefinition definition) {
+        procedures.put(Cache.getCollectionIdentifier(dbName, definition.getName()), definition);
+    }
+
+    public void removeProcedure(String dbName, String name) {
+        procedures.remove(Cache.getCollectionIdentifier(dbName, name));
+    }
+
+    public void removeProceduresForDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        procedures.keySet().removeIf(id -> id.startsWith(prefix));
+    }
+
+    // Every trigger on the collection, empty when it has none. The cache key is db|coll, so the write
+    // path's lookup is a single map get and an untriggered collection is read from disk once and then
+    // answered from the negative cache - the hot-path contract SchemaValidationHelper.check already
+    // relies on for every SAVE. An empty list doubles as the negative-cache sentinel.
+    public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
+        final var id = Cache.getCollectionIdentifier(dbName, collName);
+        var cached = triggers.get(id);
+        if (cached == null) {
+            cached = loadTriggersFromDisk(dbName, collName);
+            triggers.put(id, cached);
+        }
+        return cached;
+    }
+
+    private List<TriggerDefinition> loadTriggersFromDisk(String dbName, String collName) {
+        try {
+            final var raw = fs.readTriggers(dbName, collName);
+            if (raw == null || raw.isBlank()) {
+                return List.of();
+            }
+            return List.copyOf(TriggerDefinition.fromFileJson(eJson.fromJson(raw, JsonObject.class)));
+        } catch (Exception e) {
+            logger.warning("Failed to load triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
+                    + e.getMessage());
+            return List.of();
+        }
+    }
+
+    public void putTriggers(String dbName, String collName, List<TriggerDefinition> definitions) {
+        triggers.put(Cache.getCollectionIdentifier(dbName, collName), List.copyOf(definitions));
+    }
+
+    public void removeTriggers(String dbName, String collName) {
+        triggers.remove(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public void removeTriggersForDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        triggers.keySet().removeIf(id -> id.startsWith(prefix));
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {

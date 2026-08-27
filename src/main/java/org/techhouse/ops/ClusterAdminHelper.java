@@ -27,7 +27,9 @@ public final class ClusterAdminHelper {
     private static final Set<OperationType> ADMIN_DDL = Set.of(OperationType.CREATE_DATABASE,
             OperationType.DROP_DATABASE, OperationType.CREATE_COLLECTION, OperationType.DROP_COLLECTION,
             OperationType.CREATE_INDEX, OperationType.DROP_INDEX, OperationType.REINDEX,
-            OperationType.SET_DATABASE_OWNERS, OperationType.SAVE_SCHEMA, OperationType.DELETE_SCHEMA);
+            OperationType.SET_DATABASE_OWNERS, OperationType.SAVE_SCHEMA, OperationType.DELETE_SCHEMA,
+            OperationType.SAVE_PROCEDURE, OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER,
+            OperationType.DELETE_TRIGGER);
     private static final Set<OperationType> USER_OPS = Set.of(OperationType.CREATE_USER, OperationType.DELETE_USER,
             OperationType.SET_PASSWORD, OperationType.CHANGE_PERMISSIONS);
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);

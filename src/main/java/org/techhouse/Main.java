@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cluster.AdminAntiEntropyService;
@@ -31,6 +32,7 @@ import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerDispatcher;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -38,6 +40,7 @@ public class Main {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -72,6 +75,8 @@ public class Main {
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
+        // Its own pool, not the background queue: see TriggerExecutor.
+        triggerExecutor.start(TriggerDispatcher::dispatch);
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();

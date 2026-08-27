@@ -134,6 +134,14 @@ jobs:
             run: |
               python3 test_utils/test_run_script.py
 
+          # Self-contained for the same reason, on port 8996: procedures and triggers need
+          # both scriptsEnabled and triggersEnabled, and the suite restarts its own instance
+          # with each switch off to prove they refuse independently.
+          - name: procedures-triggers
+            start_server: false
+            run: |
+              python3 test_utils/test_procedures_triggers.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench

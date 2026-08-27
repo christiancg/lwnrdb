@@ -52,6 +52,9 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final UUID clientId;
     // Null means unrestricted (an in-process embedding); RUN_SCRIPT pins it to the requested database.
     private final String scopedDatabase;
+    // Stamped onto every request this access issues, so a write a trigger performs is recognisable as
+    // trigger-originated by TriggerHelper - on this node and on any node the write is forwarded to.
+    private final int triggerDepth;
     private JsObject errorPrototype;
     // Held for the transaction's lifetime rather than per dispatch: TransactionOperationHelper keys
     // purely on the client id, so a throwaway forwarded client would be unreachable on the next call.
@@ -64,9 +67,14 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     }
 
     public EnforcingDatabaseAccess(String username, UUID clientId, String scopedDatabase) {
+        this(username, clientId, scopedDatabase, 0);
+    }
+
+    public EnforcingDatabaseAccess(String username, UUID clientId, String scopedDatabase, int triggerDepth) {
         this.username = username;
         this.clientId = clientId;
         this.scopedDatabase = scopedDatabase;
+        this.triggerDepth = triggerDepth;
     }
 
     @Override
@@ -239,6 +247,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     private OperationResponse dispatch(OperationRequest request, String rawJson) {
         assertSessionThread();
+        request.setTriggerDepth(triggerDepth);
         if (scopedDatabase != null) {
             final var targetDatabase = request.getDatabaseName();
             if (targetDatabase != null && !scopedDatabase.equals(targetDatabase)) {

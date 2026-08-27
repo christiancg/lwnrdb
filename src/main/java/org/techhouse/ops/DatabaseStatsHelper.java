@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.lang.management.ManagementFactory;
 import java.util.Set;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
 import org.techhouse.config.Configuration;
@@ -13,6 +14,7 @@ import org.techhouse.ops.resp.OperationResponse;
 
 public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
 
     private DatabaseStatsHelper() {
     }
@@ -22,6 +24,7 @@ public final class DatabaseStatsHelper {
             final var stats = new JsonObject();
             stats.add("memory", buildMemoryStats());
             stats.add("inDoubtTransactions", buildInDoubtTransactions());
+            stats.add("triggers", buildTriggerStats());
 
             final var dbNames = cache.getUserDatabaseNames();
             final var dbArray = new JsonArray();
@@ -41,6 +44,18 @@ public final class DatabaseStatsHelper {
     // In-doubt distributed transactions still holding this node's write locks (a prepared 2PC participant
     // whose coordinator has not yet delivered a decision), so an operator can spot them and, if needed,
     // force a resolution with RESOLVE_TRANSACTION.
+    // A trigger runs asynchronously with no client waiting on it, so these counters are the operator's
+    // only window into whether they are running, failing or being dropped under load.
+    private static JsonObject buildTriggerStats() {
+        final var triggers = new JsonObject();
+        triggers.addProperty("enabled", Configuration.getInstance().isTriggersEnabled());
+        triggers.addProperty("fired", triggerExecutor.getFired());
+        triggers.addProperty("failed", triggerExecutor.getFailed());
+        triggers.addProperty("dropped", triggerExecutor.getDropped());
+        triggers.addProperty("queued", (long) triggerExecutor.getQueued());
+        return triggers;
+    }
+
     private static JsonObject buildInDoubtTransactions() {
         final var inDoubt = new JsonObject();
         final var ids = new JsonArray();

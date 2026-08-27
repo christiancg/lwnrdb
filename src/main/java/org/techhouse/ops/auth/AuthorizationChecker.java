@@ -20,12 +20,18 @@ public final class AuthorizationChecker {
             OperationType.LIST_TRANSACTIONS);
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
             OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
+    private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
+            OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER);
 
     private AuthorizationChecker() {
     }
 
     private static boolean isAdminOnly(OperationType type) {
         return ADMIN_ONLY_OPERATIONS.contains(type);
+    }
+
+    private static boolean isScriptManagementOperation(OperationType type) {
+        return SCRIPT_MANAGEMENT_OPERATIONS.contains(type);
     }
 
     public static AuthorizationResult check(OperationRequest req, AdminUserEntry user) {
@@ -76,8 +82,21 @@ public final class AuthorizationChecker {
         // Admins (allowed above) and owners (just above) may always run a script; anybody else needs the
         // script permission for this specific database. Each operation the script issues is authorized on
         // its own request, so the grant alone never widens what the script may read or write.
-        if (type == OperationType.RUN_SCRIPT) {
+        if (type == OperationType.RUN_SCRIPT || type == OperationType.CALL_PROCEDURE) {
             return user.canRunScripts(dbName)
+                    ? AuthorizationResult.allow()
+                    : AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
+        // Installing is its own level rather than a fall-through to the collection-permission check below.
+        // A procedure called through CALL_PROCEDURE runs with the caller's authority, so whoever installs
+        // one hands every higher-privileged caller code to execute - and a trigger runs with the
+        // installer's authority, which makes installing strictly more powerful than writing. Neither
+        // should follow from a READ_WRITE grant on a collection. These ops are deliberately NOT in
+        // ADMIN_ONLY_OPERATIONS: that set is tested before the ownership short-circuit above, so putting
+        // them there would lock out database owners.
+        if (isScriptManagementOperation(type)) {
+            return user.canManageScripts(dbName)
                     ? AuthorizationResult.allow()
                     : AuthorizationResult.deny("action is forbidden, no permissions");
         }
@@ -123,7 +142,8 @@ public final class AuthorizationChecker {
 
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
-            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN -> PermissionLevel.READ;
+            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS ->
+                PermissionLevel.READ;
             default -> PermissionLevel.READ_WRITE;
         };
     }

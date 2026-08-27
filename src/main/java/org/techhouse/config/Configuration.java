@@ -51,6 +51,12 @@ public final class Configuration {
     private int scriptMaxLogLineChars;
     private boolean scriptTextImportEnabled;
     private long scriptMaxMemoryBytes;
+    private int procedureCacheSize;
+    private boolean triggersEnabled;
+    private int triggerThreads;
+    private int triggerQueueSize;
+    private int triggerMaxDepth;
+    private long triggerTimeoutMs;
 
     private Configuration() {
     }
@@ -115,6 +121,12 @@ public final class Configuration {
         scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
         scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
         scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
+        procedureCacheSize = intOf(configs, "procedureCacheSize");
+        triggersEnabled = booleanOf(configs, "triggersEnabled");
+        triggerThreads = intOf(configs, "triggerThreads");
+        triggerQueueSize = intOf(configs, "triggerQueueSize");
+        triggerMaxDepth = intOf(configs, "triggerMaxDepth");
+        triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
     }
 
     private static int intOf(Map<String, String> configs, String key) {
@@ -321,5 +333,29 @@ public final class Configuration {
 
     public long getScriptMaxMemoryBytes() {
         return scriptMaxMemoryBytes;
+    }
+
+    public int getProcedureCacheSize() {
+        return procedureCacheSize;
+    }
+
+    public boolean isTriggersEnabled() {
+        return triggersEnabled;
+    }
+
+    public int getTriggerThreads() {
+        return triggerThreads;
+    }
+
+    public int getTriggerQueueSize() {
+        return triggerQueueSize;
+    }
+
+    public int getTriggerMaxDepth() {
+        return triggerMaxDepth;
+    }
+
+    public long getTriggerTimeoutMs() {
+        return triggerTimeoutMs;
     }
 }

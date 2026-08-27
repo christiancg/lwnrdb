@@ -159,6 +159,12 @@ public class ConfigurationTest {
         map.put("scriptMaxLogLines", "1000");
         map.put("scriptMaxLogLineChars", "4096");
         map.put("scriptMaxMemoryBytes", "64Mb");
+        map.put("procedureCacheSize", "128");
+        map.put("triggersEnabled", "false");
+        map.put("triggerThreads", "2");
+        map.put("triggerQueueSize", "10000");
+        map.put("triggerMaxDepth", "3");
+        map.put("triggerTimeoutMs", "1000");
         map.put("scriptTextImportEnabled", "false");
         return map;
     }

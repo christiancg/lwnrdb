@@ -1021,6 +1021,83 @@ a deliberate first cut — a future phase should pick the execution node from li
 availability instead of defaulting to the local one. See *Scripts* in
 [clustering.md](clustering.md) for the open questions.
 
+### Stored procedures and triggers
+
+A stored procedure is a named script; a trigger runs one after a committed write. Both live **with their
+data** rather than in an admin collection — a procedure in `{db}/.procedures/{name}.json`, a collection's
+triggers in `{db}/{coll}/{coll}-triggers.json` beside its schema — following the per-collection JSON Schema,
+which is the established precedent for this shape of metadata. That is not merely tidier: it removes the PK
+index, page metadata and entry counts an admin collection would need, it makes `DROP_DATABASE` and
+`DROP_COLLECTION` remove them with no cascade code (`fs.deleteDatabase` deletes each child folder's files,
+`fs.deleteCollectionFiles` every file in the collection folder), and it costs nothing at startup because
+`AdminCache` loads both lazily with negative caching — the same hot-path contract
+`SchemaValidationHelper.check` already relies on for every `SAVE`. The `.procedures` folder cannot collide
+with a user collection: a collection name admits only alphanumerics plus `_` and `-`, so a leading `.` is
+unrepresentable and nothing had to be reserved. Replication is unchanged from schemas: the DDL is
+coordinator-serialized through `ClusterAdminHelper`'s `ADMIN_DDL` and ordered by the admin epoch.
+
+**Compiled once.** `SimpleJs.compile(source, strictScriptGoal)` returns a `CompiledScript` that
+`SimpleJs.run(CompiledScript, HostBindings)` executes, so a repeated `CALL_PROCEDURE` does not re-lex and
+re-parse. Sharing one parse across runs is safe because nothing in the AST is written after parsing (the
+parser is the only writer of `JsNode.sourceText`, and a regex literal holds its pattern *text* — the
+`JsRegExp` with its mutable `lastIndex` is built per evaluation), and every piece of runtime state lives in
+the per-run `Interpreter`/`Environment`/`Intrinsics`. `ops/CompiledProcedureCache` keys entries
+`db|name|version`, which makes the cache correct with no invalidation hook on the write path — a save bumps
+the version, including a save that arrived by replication or an anti-entropy conform. A **delete** is the one
+exception: it resets the version, so `DELETE_PROCEDURE` and `DROP_DATABASE` invalidate explicitly, or
+re-creating a name would be served the deleted procedure's program. `SimpleJs.run(String, HostBindings)`
+keeps its exact contract, so `RUN_SCRIPT` still reports a syntax error as `400-9` rather than throwing;
+`SAVE_PROCEDURE` uses `compile` precisely so a broken body is refused at save time (`400-13`, with the
+parser's line and column) instead of on somebody else's first call.
+
+**Who may install, and whose authority runs.** `scriptPermissions` is a per-database
+`ScriptPermissionLevel` — `NONE`/`RUN`/`MANAGE`, where `RUN` allows `RUN_SCRIPT`/`CALL_PROCEDURE` and
+`MANAGE` additionally allows installing procedures and triggers; admins and database owners have an implicit
+`MANAGE`. A boolean written by an older record or client reads as `RUN`/`NONE`, so nothing had to be
+migrated, but `AdminUserEntry` writes the string form from its next write onward — which is why a mixed
+version cluster must be rolled before granting `MANAGE` (record-shipping replication would hand an old node
+a level string it cannot parse, and it would skip the whole user record). Installing is deliberately its own
+level rather than something a `READ_WRITE` grant confers, and the reason is the split below.
+
+`CALL_PROCEDURE` uses **invoker rights**: the procedure runs as the caller, so the grant to call one never
+widens what it may do — every operation it issues is authorized again on its own request. A **trigger** uses
+**definer rights**: it runs as the user who installed it. That difference is deliberate and load-bearing.
+Under invoker rights a trigger's *effect depends on who wrote*, and an audit trigger then fails for exactly
+the low-privilege users most worth auditing — they have no write access to the audit collection — failing as
+a WARN in the server log that the writer never sees. Definer rights make the trigger behave identically
+regardless of the writer, and the escalation is bounded by the fact that only an admin, owner or `MANAGE`
+user can install one; the definer is stored on the record, returned by `LIST_TRIGGERS`, and named in every
+dispatch log line. Two consequences follow: a definer who no longer exists **disables** the trigger (no
+fallback to the writer, which would silently reinstate invoker rights, and none to an admin, which would let
+deleting a user *widen* a trigger's authority), and a definer whose permissions are later reduced silently
+narrows the trigger — nothing to fix, since `AuthorizationChecker` runs per request, but the symptom is a
+trigger that used to work, with a cause nobody would look for.
+
+**Triggers fire after the commit, asynchronously.** `ops/TriggerHelper.afterWrite` is called from
+`OperationProcessor`'s SAVE/BULK_SAVE/DELETE handlers and from `TransactionOperationHelper.commit` — never
+from the write helpers, because `ReplicatedApplyHelper`/`ReplicatedTxApplyHelper` reach those directly and a
+seam there would fire once per replica instead of once per logical write. It only enqueues (one map lookup
+and a queue offer), so it is safe inside the collection write lock; no script runs on that path.
+`bckg_ops/TriggerExecutor` then runs them on **its own** bounded queue and workers, deliberately not the
+background index queue: a trigger runs arbitrary user code for up to `triggerTimeoutMs`, and sharing that
+queue would let one slow trigger stall field-index maintenance for every collection, turning the index
+layer's documented "eventually consistent" into indefinitely stale. On overflow the oldest queued event is
+dropped and counted — an unbounded queue of retained documents is the heap risk `ConsoleCapture`'s ring
+buffer already guards against, and dropping beats blocking a write.
+
+Because a trigger runs after the fact it **cannot veto or modify** the write — for rejecting a
+non-compliant document use a per-collection JSON Schema, which runs before the commit. A trigger failure
+never reaches the writer either: it is logged at WARN with the captured console output and counted in
+`GET_DATABASE_STATS` (`triggers.fired`/`failed`/`dropped`/`queued`), which is the operator's only window
+into an execution path no client is waiting on.
+
+**Cascades.** A write a trigger performs carries `triggerDepth + 1` on the request itself — a field on
+`ops/req/OperationRequest`, stamped by `EnforcingDatabaseAccess` and zeroed for every client-originated
+request in `conn/MessageProcessor` so a client cannot claim one. It is a request field rather than a
+`ThreadLocal` because a `ThreadLocal` resets to zero on the node a write is forwarded to, which would make a
+cross-node cascade unbounded. `allowCascade` defaults to `false`, so the common configuration cannot cascade
+even once; with it on, a chain terminates at `triggerMaxDepth`.
+
 ### EJson custom types
 
 The four custom types the database stores cross the boundary as real value types rather than

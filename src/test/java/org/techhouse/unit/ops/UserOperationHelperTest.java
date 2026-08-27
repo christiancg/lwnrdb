@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
@@ -157,8 +158,8 @@ public class UserOperationHelperTest {
         request.setGlobalPermissions(new HashSet<>());
         request.setDatabasePermissions(new HashMap<>());
         request.setCollectionPermissions(new HashMap<>());
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("mydb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
         request.setScriptPermissions(scriptPerms);
         assertEquals(OperationStatus.OK, UserOperationHelper.processCreateUser(request).getStatus());
 
@@ -185,8 +186,8 @@ public class UserOperationHelperTest {
         change.setGlobalPermissions(new HashSet<>());
         change.setDatabasePermissions(new HashMap<>());
         change.setCollectionPermissions(new HashMap<>());
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("mydb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
         change.setScriptPermissions(scriptPerms);
         assertEquals(OperationStatus.OK, UserOperationHelper.processChangePermissions(change).getStatus());
         assertTrue(cache.getAdminUserEntry("scriptchanged").canRunScripts("mydb"));
@@ -202,8 +203,8 @@ public class UserOperationHelperTest {
         create.setGlobalPermissions(new HashSet<>());
         create.setDatabasePermissions(new HashMap<>());
         create.setCollectionPermissions(new HashMap<>());
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("mydb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
         create.setScriptPermissions(scriptPerms);
         UserOperationHelper.processCreateUser(create);
 

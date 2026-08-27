@@ -36,8 +36,17 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
+import org.techhouse.utils.JsonUtils;
 
 public final class SimpleJs {
+    // Parses once, so a stored script can be compiled at save time and re-run without re-parsing. Throws
+    // the parse failures run(String, HostBindings) reports as a "SyntaxError" ScriptResult, which is what
+    // lets a caller reject an unparseable procedure before it is ever persisted.
+    public CompiledScript compile(String source, boolean strictScriptGoal) {
+        final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal);
+        return new CompiledScript(program, source, strictScriptGoal, JsonUtils.sha256(source));
+    }
+
     public ScriptResult run(String source, HostBindings host) {
         final var limits = host.limits();
         final var capture = new ConsoleCapture(
@@ -79,6 +88,48 @@ public final class SimpleJs {
             // connection's thread. The budget above is what should make this unreachable; reaching it
             // may also mean the JVM was already under pressure from something other than this script,
             // which is why ScriptOperationHelper logs it at WARN rather than treating it as routine.
+            return failed("ScriptMemoryError", "Script exhausted available memory", capture);
+        }
+    }
+
+    public ScriptResult run(CompiledScript compiled, HostBindings host) {
+        final var limits = host.limits();
+        final var capture = new ConsoleCapture(
+                limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINES : limits.maxLogLines(),
+                limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS : limits.maxLogLineChars());
+        final var capturing = CapturingHostBindings.wrap(host, capture);
+        try {
+            // The two goals differ in which early errors are raised, so a program parsed under the other
+            // one is simply the wrong program - parse again rather than run it.
+            final var program = compiled.strictScriptGoal() == capturing.strictScriptGoal()
+                    ? compiled.program()
+                    : Parser.parse(Lexer.lexWithPositions(compiled.source()), capturing.strictScriptGoal());
+            final var outcome = Interpreter.run(program, capturing);
+            final var value = EJsonInterop.toHostEjson(contractResult(outcome));
+            return ok(value == null ? JsonNull.INSTANCE : value, capture);
+        } catch (ScriptTimeoutException timeout) {
+            return failed("ScriptTimeoutError", timeout.getMessage(), capture);
+        } catch (ScriptMemoryException memory) {
+            return failed("ScriptMemoryError", memory.getMessage(), capture);
+        } catch (ScriptAbortException limit) {
+            return failed("ScriptLimitError", limit.getMessage(), capture);
+        } catch (JsThrowException thrown) {
+            return errorFromThrow(thrown, capture);
+        } catch (TypeErrorException error) {
+            return failed("TypeError", error.getMessage(), capture);
+        } catch (ReferenceErrorException error) {
+            return failed("ReferenceError", error.getMessage(), capture);
+        } catch (RangeErrorException error) {
+            return failed("RangeError", error.getMessage(), capture);
+        } catch (SyntaxErrorException | UnexpectedTokenException | UnexpectedEndOfInputException
+                | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
+                | UnterminatedCommentException | UnterminatedRegexException error) {
+            return failed("SyntaxError", error.getMessage(), capture);
+        } catch (UnsupportedNodeException error) {
+            return failed("SyntaxError", "Unsupported syntax: " + error.getMessage(), capture);
+        } catch (SimpleJsRuntimeException error) {
+            return failed("InternalError", error.getMessage(), capture);
+        } catch (OutOfMemoryError | StackOverflowError exhausted) {
             return failed("ScriptMemoryError", "Script exhausted available memory", capture);
         }
     }

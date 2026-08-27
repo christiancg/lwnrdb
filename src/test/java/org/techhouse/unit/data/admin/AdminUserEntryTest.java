@@ -9,6 +9,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 
 public class AdminUserEntryTest {
     @Test
@@ -89,13 +90,14 @@ public class AdminUserEntryTest {
 
     @Test
     public void test_script_permissions_round_trip() {
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("mydb", true);
-        scriptPerms.put("otherdb", false);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
+        scriptPerms.put("otherdb", ScriptPermissionLevel.NONE);
         final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>(), scriptPerms);
 
-        assertTrue(entry.getData().get("scriptPermissions").asJsonObject().get("mydb").asJsonBoolean().getValue());
+        assertEquals("RUN",
+                entry.getData().get("scriptPermissions").asJsonObject().get("mydb").asJsonString().getValue());
         final var parsed = AdminUserEntry.fromJsonObject(entry.getData());
         assertEquals(scriptPerms, parsed.getScriptPermissions());
         assertTrue(parsed.canRunScripts("mydb"));
@@ -132,18 +134,18 @@ public class AdminUserEntryTest {
 
     @Test
     public void test_response_json_exposes_script_permissions() {
-        final var scriptPerms = new HashMap<String, Boolean>();
-        scriptPerms.put("mydb", true);
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.MANAGE);
         final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>(), scriptPerms);
         final var response = entry.toResponseJson(java.util.List.of());
-        assertTrue(response.get("scriptPermissions").asJsonObject().get("mydb").asJsonBoolean().getValue());
+        assertEquals("MANAGE", response.get("scriptPermissions").asJsonObject().get("mydb").asJsonString().getValue());
     }
 
     @Test
     public void test_script_permissions_participate_in_equality() {
-        final var granted = new HashMap<String, Boolean>();
-        granted.put("mydb", true);
+        final var granted = new HashMap<String, ScriptPermissionLevel>();
+        granted.put("mydb", ScriptPermissionLevel.RUN);
         final var withGrant = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),
                 new HashMap<>(), granted);
         final var without = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),

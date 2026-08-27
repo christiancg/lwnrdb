@@ -15,6 +15,8 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
@@ -147,11 +149,14 @@ public class Cache {
     public void evictDatabase(String dbName) {
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
+        adminCache.removeProceduresForDatabase(dbName);
+        adminCache.removeTriggersForDatabase(dbName);
     }
 
     public void evictCollection(String dbName, String collName) {
         userCache.evictCollection(dbName, collName);
         adminCache.removeCollectionSchema(dbName, collName);
+        adminCache.removeTriggers(dbName, collName);
     }
 
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
@@ -366,6 +371,34 @@ public class Cache {
 
     public void removeCollectionSchema(String dbName, String collName) {
         adminCache.removeCollectionSchema(dbName, collName);
+    }
+
+    public ProcedureDefinition getProcedure(String dbName, String name) {
+        return adminCache.getProcedure(dbName, name);
+    }
+
+    public void putProcedure(String dbName, ProcedureDefinition definition) {
+        adminCache.putProcedure(dbName, definition);
+    }
+
+    public void removeProcedure(String dbName, String name) {
+        adminCache.removeProcedure(dbName, name);
+    }
+
+    public void removeProceduresForDatabase(String dbName) {
+        adminCache.removeProceduresForDatabase(dbName);
+    }
+
+    public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
+        return adminCache.getTriggersFor(dbName, collName);
+    }
+
+    public void putTriggers(String dbName, String collName, List<TriggerDefinition> definitions) {
+        adminCache.putTriggers(dbName, collName, definitions);
+    }
+
+    public void removeTriggers(String dbName, String collName) {
+        adminCache.removeTriggers(dbName, collName);
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {

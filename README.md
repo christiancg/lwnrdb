@@ -36,9 +36,9 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 ## Pending tasks
 
 - [ ] Javascript engine to support additional features 
-  - [ ] Stored procedures
+  - [x] Stored procedures (the [`SAVE_PROCEDURE`](#save_procedure) / [`CALL_PROCEDURE`](#call_procedure) operations)
   - [ ] Jobs
-  - [ ] Triggers
+  - [x] Triggers (the [`SAVE_TRIGGER`](#save_trigger) operation)
   - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
 - [ ] Script node selection under clustering: `RUN_SCRIPT` currently always runs on the node that received it. It should instead check node availability (and prefer a node that owns the collections the script uses) rather than always running locally — see [docs/clustering.md](docs/clustering.md) → *Scripts*
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
@@ -490,11 +490,111 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - `script` (required) is the program source, `args` (optional) is an arbitrary object the script reads through `import args from "args"`, and `db.name` is the scoped database name — so one script can run against any database without hardcoding it.
 - `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles yields `null`.
 - `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
-- **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": true}` on their user record. Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
+- **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
 - The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
 - **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
 - **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `408-1` when it exceeds `scriptTimeoutMs`, and `409-6` if sent while a transaction is open on the connection.
 - Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
+
+#### `SAVE_PROCEDURE`
+Stores a named script in a database so it can be called by name instead of being sent on every request. Requires admin privileges, ownership of the database, or `scriptPermissions: {"mydb": "MANAGE"}`. The source is **parsed at save time**, so a broken procedure is refused here rather than on somebody else's first call. Idempotent upsert: saving an existing name replaces it and bumps its `version`.
+
+```json
+{
+  "type": "SAVE_PROCEDURE",
+  "databaseName": "mydb",
+  "name": "recalcTotals",
+  "script": "import db from \"db\";\nimport args from \"args\";\nconst o = db.findById(db.name, \"orders\", args.id);\nreturn o.qty * o.price;",
+  "description": "optional",
+  "enabled": true,
+  "ifVersion": 3
+}
+```
+```json
+{"type":"SAVE_PROCEDURE","status":"OK","message":"Procedure saved successfully","version":4}
+```
+
+- `enabled` defaults to `true`; a disabled procedure is not callable (`404-8`).
+- `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Absent means an unconditional upsert. Use `0` to require that the procedure does not exist yet.
+- A procedure is stored **with its database**, in `{filePath}/{database}/.procedures/{name}.json`, so dropping the database removes it.
+- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `404-4` unknown database, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`, the same rule as a collection) or a blank script, `400-10` source over `scriptMaxSourceBytes`, `400-13` source that does not parse (the message carries the line and column), `409-8` version conflict.
+
+#### `DELETE_PROCEDURE`
+```json
+{"type":"DELETE_PROCEDURE","databaseName":"mydb","name":"recalcTotals"}
+```
+Idempotent — succeeds whether or not the procedure existed. Refused with `400-14` while a trigger still references it (the message names the trigger).
+
+#### `LIST_PROCEDURES`
+```json
+{"type":"LIST_PROCEDURES","databaseName":"mydb","includeSource":false}
+```
+```json
+{
+  "type": "LIST_PROCEDURES",
+  "status": "OK",
+  "procedures": [
+    {"name":"recalcTotals","sourceHash":"9f2…","version":4,"enabled":true,
+     "createdAt":1756100000000,"updatedAt":1756100500000,"updatedBy":"alice"}
+  ]
+}
+```
+`includeSource: true` adds the `source` field. Requires `READ` on the database.
+
+#### `CALL_PROCEDURE`
+Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_script)'s (`scriptPermissions` of at least `RUN`), the sandbox is the same, and the response shape matches — `result`, `logs`, `logsTruncated`, with the same error codes.
+
+```json
+{"type":"CALL_PROCEDURE","databaseName":"mydb","procedureName":"recalcTotals","args":{"id":"o1"}}
+```
+```json
+{"type":"CALL_PROCEDURE","status":"OK","message":"Procedure executed successfully","result":42,"logs":[],"logsTruncated":false}
+```
+
+- The procedure runs with the **caller's** authority, so calling one never grants more than the caller already had.
+- The parsed program is cached per node keyed by `(database, name, version)`, so a repeated call does not re-parse. `procedureCacheSize` bounds it.
+- **Errors**: as `RUN_SCRIPT`, plus `404-8` when the procedure is absent or disabled.
+
+#### `SAVE_TRIGGER`
+Runs a stored procedure after a committed write to a collection. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
+
+```json
+{
+  "type": "SAVE_TRIGGER",
+  "databaseName": "mydb",
+  "collectionName": "orders",
+  "name": "auditWrites",
+  "events": ["CREATED", "UPDATED", "DELETED"],
+  "procedureName": "recalcTotals",
+  "mode": "document",
+  "allowCascade": false,
+  "enabled": true,
+  "ifVersion": 1
+}
+```
+```json
+{"type":"SAVE_TRIGGER","status":"OK","message":"Trigger saved successfully","version":2,"definer":"alice"}
+```
+
+- **Fires after the write commits**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a [collection schema](#schema-validation) for that — and a trigger failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
+- **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. If the definer is deleted the trigger stops firing (it never falls back to the writer or to an admin).
+- `mode` is `document` (one run per document, the default) or `batch` (one run for a whole `BULK_SAVE`).
+- `allowCascade` defaults to `false`, so writes a trigger itself performs fire nothing. With it on, a chain terminates at `triggerMaxDepth`.
+- The procedure receives `{event, database, collection, id, document, trigger, actingUser, definer, firedAt, depth}` as its `args` — `actingUser` is who wrote, `definer` is whose authority the run has. In `batch` mode `documents` replaces `id`/`document`.
+- Triggers are stored **with their collection**, in `{filePath}/{database}/{collection}/{collection}-triggers.json`, so dropping the collection removes them.
+- **Errors**: `403-1` not permitted, `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `409-8` version conflict.
+
+#### `DELETE_TRIGGER`
+```json
+{"type":"DELETE_TRIGGER","databaseName":"mydb","collectionName":"orders","name":"auditWrites"}
+```
+Idempotent — succeeds whether or not the trigger existed.
+
+#### `LIST_TRIGGERS`
+```json
+{"type":"LIST_TRIGGERS","databaseName":"mydb","collectionName":"orders"}
+```
+Omit `collectionName` to list every trigger in the database. Each entry carries its `collectionName` and `definer`. Requires `READ` on the database.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -527,7 +627,7 @@ Every connection must authenticate before sending any protected operation. `LIST
 ```
 
 #### `CREATE_USER` (admin only)
-`globalPermissions`, `databasePermissions`, `collectionPermissions`, and `scriptPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format; `scriptPermissions` keys are database names and its values must be `true`/`false`.
+`globalPermissions`, `databasePermissions`, `collectionPermissions`, and `scriptPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format; `scriptPermissions` keys are database names and its values are the levels `NONE`, `RUN` or `MANAGE` (the boolean form older clients send is still accepted — `true` reads as `RUN`). See [Permission model](#permission-model).
 ```json
 {
   "type": "CREATE_USER",
@@ -537,7 +637,7 @@ Every connection must authenticate before sending any protected operation. `LIST
   "globalPermissions": ["CREATE_DATABASE"],
   "databasePermissions": {"ordersDb": "READ_WRITE"},
   "collectionPermissions": {"analyticsDb|events": "READ"},
-  "scriptPermissions": {"ordersDb": true}
+  "scriptPermissions": {"ordersDb": "MANAGE"}
 }
 ```
 
@@ -556,7 +656,7 @@ Replaces all permissions for the user in full.
   "globalPermissions": [],
   "databasePermissions": {"ordersDb": "READ"},
   "collectionPermissions": {},
-  "scriptPermissions": {"ordersDb": true}
+  "scriptPermissions": {"ordersDb": "RUN"}
 }
 ```
 
@@ -607,6 +707,13 @@ Response shape:
       "cachingDisabled": false,
       "cacheUnlimited": false
     },
+    "triggers": {
+      "enabled": true,
+      "fired": 128,
+      "failed": 0,
+      "dropped": 0,
+      "queued": 0
+    },
     "totals": {
       "userCount": 3,
       "databaseCount": 1,
@@ -652,7 +759,7 @@ Each user object in the response contains:
 | `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
 | `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
 | `collectionPermissions` | object | e.g. `{"mydb&#124;coll": "READ"}` |
-| `scriptPermissions` | object | Per-database script grants, e.g. `{"mydb": true}` |
+| `scriptPermissions` | object | Per-database script level, e.g. `{"mydb": "MANAGE"}` |
 | `ownedDatabases` | array | Databases where this user is an owner |
 
 ```json
@@ -686,7 +793,7 @@ Example filters:
 | `admin` flag            | Superadmin — bypasses all permission checks                                           |
 | Database ownership      | Full access to the database and all its collections, including the ability to drop it |
 | `globalPermissions`     | `CREATE_DATABASE` — required to create new databases                                  |
-| `scriptPermissions`     | Per database: `true` allows running scripts ([`RUN_SCRIPT`](#run_script)) scoped to it |
+| `scriptPermissions`     | Per database: `NONE` / `RUN` / `MANAGE` — see below                                   |
 | `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
 | `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
@@ -694,9 +801,23 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
-`RUN_SCRIPT` requires admin privileges, ownership of the requested database, or a script grant **for that database** (`scriptPermissions: {"mydb": true}` — an absent entry or an explicit `false` is a denial, and a grant on one database says nothing about another). Being allowed to start a script is separate from what it may do: every operation the script issues is authorized again on its own request against `databasePermissions`/`collectionPermissions`, so a user granted scripting plus `READ` can run a script that reads but not one that writes.
+`scriptPermissions` is a **per-database level**, `{"mydb": "MANAGE"}`:
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
+| Level | Allows |
+|---|---|
+| `NONE` (or absent) | nothing |
+| `RUN` | [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) |
+| `MANAGE` | everything `RUN` allows, plus installing procedures and triggers ([`SAVE_PROCEDURE`](#save_procedure), [`DELETE_PROCEDURE`](#delete_procedure), [`SAVE_TRIGGER`](#save_trigger), [`DELETE_TRIGGER`](#delete_trigger)) |
+
+Admins and database owners have an implicit `MANAGE` on the databases they reach. A grant on one database says nothing about another. The boolean form written by older clients (`{"mydb": true}`) is still accepted and reads as `RUN`; `false` reads as `NONE`. A value that is neither a boolean nor a level name is rejected with `400-1` rather than read as a denial.
+
+Installing is deliberately its own level rather than something a `READ_WRITE` grant confers. A procedure called through `CALL_PROCEDURE` runs with the **caller's** authority, so whoever installs one hands every higher-privileged caller code to execute — and a **trigger** runs with the *installer's* authority, which makes installing strictly more powerful than writing.
+
+Being allowed to start a script is separate from what it may do: every operation a script issues is authorized again on its own request against `databasePermissions`/`collectionPermissions`, so a user granted `RUN` plus `READ` can run a script that reads but not one that writes. The one exception is a trigger, which runs as its `definer` — see [`SAVE_TRIGGER`](#save_trigger).
+
+> **Upgrade note.** Roll every node to this version before granting `MANAGE` or otherwise rewriting a user record in a cluster. User records replicate by shipping the record itself, and a node without `scriptPermissions` levels cannot parse the string form — it would skip the whole user record, not just the grant. Note that any write to a user record converts it (a password change will do), so the ordering matters even if you never touch a script grant.
+
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
 
 ### Authentication errors
@@ -726,6 +847,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-10` | `ERROR` | Script exceeds the maximum allowed size |
 | `400-11` | `ERROR` | Script exceeded a sandbox limit |
 | `400-12` | `ERROR` | Script exceeded its memory budget |
+| `400-13` | `ERROR` | The procedure source could not be parsed |
+| `400-14` | `ERROR` | The trigger definition is not valid |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -738,6 +861,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-5` | `NOT_FOUND` | No users found |
 | `404-6` | `NOT_FOUND` | No index registered for the specified field |
 | `404-7` | `NOT_FOUND` | Listen registration not found |
+| `404-8` | `NOT_FOUND` | Procedure not found |
+| `404-9` | `NOT_FOUND` | Trigger not found |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
@@ -746,6 +871,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-5` | `ERROR` | Could not acquire the collection lock in time; transaction aborted |
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
+| `409-8` | `ERROR` | The procedure or trigger was modified by someone else |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -772,6 +898,10 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-24` | `ERROR` | Error while processing transaction operation |
 | `500-25` | `ERROR` | Error while saving collection schema |
 | `500-26` | `ERROR` | Error while deleting collection schema |
+| `500-27` | `ERROR` | Error while saving the procedure |
+| `500-28` | `ERROR` | Error while deleting the procedure |
+| `500-29` | `ERROR` | Error while saving the trigger |
+| `500-30` | `ERROR` | Error while deleting the trigger |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
@@ -837,6 +967,12 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
+| `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
+| `triggersEnabled` | `true` or `false` (default `false`). Whether committed writes fire triggers. Separate from `scriptsEnabled` because a trigger runs code with no client asking for it; trigger DDL works either way |
+| `triggerThreads` | Workers on the trigger executor (>= 1, default `2`). Its own pool, not the background index queue, so a slow trigger cannot stall field-index maintenance |
+| `triggerQueueSize` | Bounded trigger queue (>= 1, default `10000`). On overflow the oldest queued event is dropped with a warning and counted in `GET_DATABASE_STATS` |
+| `triggerMaxDepth` | How deep a chain of trigger-fired writes may go (>= 0, default `3`). A trigger with `allowCascade=false` (the default) already fires nothing above depth 0 |
+| `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
 
 ```
 # the port the server listens on
@@ -863,6 +999,13 @@ scriptTimeoutMs=5000
 scriptMaxDepth=200
 scriptMaxSourceBytes=256Kb
 scriptMaxMemoryBytes=64Mb
+# stored procedures and triggers; triggers are off by default and gated separately
+procedureCacheSize=128
+triggersEnabled=false
+triggerThreads=2
+triggerQueueSize=10000
+triggerMaxDepth=3
+triggerTimeoutMs=1000
 ```
 
 ### TLS / secure connections

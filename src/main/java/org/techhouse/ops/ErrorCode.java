@@ -13,24 +13,34 @@ public enum ErrorCode {
                                                     "Document does not comply with the collection schema",
                                                     OperationStatus.ERROR), INVALID_SCHEMA("400-8",
                                                             "The provided JSON schema is not valid",
-                                                            OperationStatus.ERROR),
+                                                            OperationStatus.ERROR), SCRIPT_FAILED("400-9",
+                                                                    "Script execution failed",
+                                                                    OperationStatus.ERROR), SCRIPT_TOO_LARGE("400-10",
+                                                                            "Script exceeds the maximum allowed size",
+                                                                            OperationStatus.ERROR), SCRIPT_LIMIT_EXCEEDED(
+                                                                                    "400-11",
+                                                                                    "Script exceeded a sandbox limit",
+                                                                                    OperationStatus.ERROR), SCRIPT_MEMORY_EXCEEDED(
+                                                                                            "400-12",
+                                                                                            "Script exceeded its memory budget",
+                                                                                            OperationStatus.ERROR), INVALID_PROCEDURE(
+                                                                                                    "400-13",
+                                                                                                    "The procedure source could not be parsed",
+                                                                                                    OperationStatus.ERROR), INVALID_TRIGGER(
+                                                                                                            "400-14",
+                                                                                                            "The trigger definition is not valid",
+                                                                                                            OperationStatus.ERROR),
 
-    SCRIPT_FAILED("400-9", "Script execution failed", OperationStatus.ERROR), SCRIPT_TOO_LARGE("400-10",
-            "Script exceeds the maximum allowed size", OperationStatus.ERROR), SCRIPT_LIMIT_EXCEEDED("400-11",
-                    "Script exceeded a sandbox limit", OperationStatus.ERROR), SCRIPT_MEMORY_EXCEEDED("400-12",
-                            "Script exceeded its memory budget", OperationStatus.ERROR),
-
-    // ── 401 Unauthenticated ───────────────────────────────────────────────
+    // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(
             "401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED), WRONG_CREDENTIALS("401-3",
                     "The user doesn't exist or the wrong credentials have been provided", OperationStatus.ERROR),
 
-    // ── 403 Forbidden ─────────────────────────────────────────────────────
-    NO_PERMISSIONS("403-1", "Action is forbidden, no permissions", OperationStatus.FORBIDDEN),
+    // ── 403 Forbidden ─────────────────────────────────────────
+    NO_PERMISSIONS("403-1", "Action is forbidden, no permissions", OperationStatus.FORBIDDEN), SCRIPTS_DISABLED("403-2",
+            "Script execution is disabled on this server", OperationStatus.FORBIDDEN),
 
-    SCRIPTS_DISABLED("403-2", "Script execution is disabled on this server", OperationStatus.FORBIDDEN),
-
-    // ── 404 Not Found ─────────────────────────────────────────────────────
+    // ── 404 Not Found ─────────────────────────────────────────
     USER_NOT_FOUND("404-1", "User not found", OperationStatus.NOT_FOUND), ENTRY_NOT_FOUND("404-2", "Entry not found",
             OperationStatus.NOT_FOUND), NO_RESULTS("404-3", "No results",
                     OperationStatus.NOT_FOUND), DATABASE_NOT_FOUND("404-4", "Database not found",
@@ -38,12 +48,16 @@ public enum ErrorCode {
                                     OperationStatus.NOT_FOUND), INDEX_NOT_FOUND("404-6",
                                             "No index registered for the specified field",
                                             OperationStatus.NOT_FOUND), LISTEN_NOT_FOUND("404-7",
-                                                    "Listen registration not found", OperationStatus.NOT_FOUND),
+                                                    "Listen registration not found",
+                                                    OperationStatus.NOT_FOUND), PROCEDURE_NOT_FOUND("404-8",
+                                                            "Procedure not found",
+                                                            OperationStatus.NOT_FOUND), TRIGGER_NOT_FOUND("404-9",
+                                                                    "Trigger not found", OperationStatus.NOT_FOUND),
 
-    // ── 408 Request Timeout ───────────────────────────────────────────────
+    // ── 408 Request Timeout ───────────────────────────────────
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
 
-    // ── 409 Conflict ──────────────────────────────────────────────────────
+    // ── 409 Conflict ──────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",
             "Database already exists", OperationStatus.ERROR), TRANSACTION_ALREADY_ACTIVE("409-3",
                     "A transaction is already in progress for this connection",
@@ -54,14 +68,16 @@ public enum ErrorCode {
                                             "Operation not allowed while a transaction is open",
                                             OperationStatus.ERROR), TRANSACTION_ABORTED("409-7",
                                                     "Transaction aborted: a participant could not prepare",
-                                                    OperationStatus.ERROR),
+                                                    OperationStatus.ERROR), PROCEDURE_VERSION_CONFLICT("409-8",
+                                                            "The procedure or trigger was modified by someone else",
+                                                            OperationStatus.ERROR),
 
-    // ── 421 Misdirected (cluster routing) ─────────────────────────────────
+    // ── 421 Misdirected (cluster routing) ────────────────────────
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection",
             OperationStatus.ERROR), CROSS_OWNER_TRANSACTION("421-2",
                     "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
 
-    // ── 500 Internal Server Error ─────────────────────────────────────────
+    // ── 500 Internal Server Error ─────────────────────────────
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR), ERROR_CREATING_USER("500-2",
             "Error creating user", OperationStatus.ERROR), ERROR_DELETING_USER("500-3", "Error deleting user",
                     OperationStatus.ERROR), ERROR_CHANGING_PASSWORD("500-4", "Error changing password",
@@ -122,9 +138,21 @@ public enum ErrorCode {
                                                                                                                                                                                                     OperationStatus.ERROR), ERROR_DELETING_SCHEMA(
                                                                                                                                                                                                             "500-26",
                                                                                                                                                                                                             "Error while deleting collection schema",
-                                                                                                                                                                                                            OperationStatus.ERROR),
+                                                                                                                                                                                                            OperationStatus.ERROR), ERROR_SAVING_PROCEDURE(
+                                                                                                                                                                                                                    "500-27",
+                                                                                                                                                                                                                    "Error while saving the procedure",
+                                                                                                                                                                                                                    OperationStatus.ERROR), ERROR_DELETING_PROCEDURE(
+                                                                                                                                                                                                                            "500-28",
+                                                                                                                                                                                                                            "Error while deleting the procedure",
+                                                                                                                                                                                                                            OperationStatus.ERROR), ERROR_SAVING_TRIGGER(
+                                                                                                                                                                                                                                    "500-29",
+                                                                                                                                                                                                                                    "Error while saving the trigger",
+                                                                                                                                                                                                                                    OperationStatus.ERROR), ERROR_DELETING_TRIGGER(
+                                                                                                                                                                                                                                            "500-30",
+                                                                                                                                                                                                                                            "Error while deleting the trigger",
+                                                                                                                                                                                                                                            OperationStatus.ERROR),
 
-    // ── 503 Service Unavailable ───────────────────────────────────────────
+    // ── 503 Service Unavailable ───────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",
             "Cluster does not have a write quorum", OperationStatus.ERROR), REPLICATION_TIMEOUT("503-3",
                     "Timed out waiting for the replication quorum", OperationStatus.ERROR), OWNER_UNREACHABLE("503-4",

@@ -138,6 +138,31 @@ Each operation the script issues is routed normally by `host/EnforcingDatabaseAc
 wire protocol uses). The consequence is one round trip per operation against remote-owned
 collections, so a script doing many small reads is fastest on the owner of the collections it reads.
 
+### Stored procedures and triggers
+
+Procedure and trigger DDL (`SAVE_PROCEDURE`, `DELETE_PROCEDURE`, `SAVE_TRIGGER`, `DELETE_TRIGGER`) is in
+`ClusterAdminHelper`'s `ADMIN_DDL`, so it is serialized by the admin coordinator, quorum-guarded, replicated
+by **re-execution**, and ordered by the admin epoch — exactly like `SAVE_SCHEMA`/`DELETE_SCHEMA`, which it
+now matches in every respect (stored with the data, replicated through the coordinator). They also ride the
+`ADMIN_SNAPSHOT` payload, so a node that was down for a DDL op catches up on rejoin.
+
+Re-execution is only safe because the coordinator **stamps the derived fields onto the request** during its
+own local execution: `version`, `updatedAt`, `updatedBy` and — for a trigger — `definer`. Without that each
+peer would compute its own `System.currentTimeMillis()` and the files would diverge, which the admin
+anti-entropy would then flip-flop on. The `definer` in particular must be stamped rather than re-derived: a
+peer re-executing has no acting user of its own, and two nodes disagreeing about a trigger's definer would
+mean the same write runs under different authority depending on which node owns the collection.
+
+`CALL_PROCEDURE`, like `RUN_SCRIPT`, is **not** in `ClusterRouter`'s routable set: a procedure is scoped to a
+database but may touch collections owned by different nodes, so there is no single owner to route to. It runs
+on the node that received it and each operation it issues is routed normally, `db.transaction` included.
+
+A **trigger fires only on the collection's owner**, because `TriggerHelper` is called from
+`OperationProcessor`'s write handlers and a replica applies a `REPLICATE`/`REPLICATE_TX` through
+`ReplicatedApplyHelper`/`ReplicatedTxApplyHelper`, which bypass it. The cascade bound holds across nodes too:
+`triggerDepth` rides on the request, and `ClusterConnectionHandler`'s forward paths preserve it (they are
+authenticated by `clusterSecret`), while the edge zeroes it for client requests.
+
 > **Future work — node selection for scripts.** Always executing on the receiving node is a
 > deliberate first cut, not the intended end state. The node that happens to accept the connection is
 > not necessarily a good place to run the script: it may be the owner of none of the collections the

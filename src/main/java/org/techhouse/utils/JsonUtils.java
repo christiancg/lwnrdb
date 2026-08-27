@@ -106,6 +106,17 @@ public final class JsonUtils {
         }
     }
 
+    // Hex SHA-256 of a plain string, used to identify a script source (the compiled-program cache key
+    // and a stored procedure's sourceHash). Same digest and hex form as hashElement above.
+    public static String sha256(String value) {
+        try {
+            final var digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
+    }
+
     public static boolean hasInPath(JsonObject obj, String path) {
         var currentPart = obj;
         final var parts = path.split("\\.");

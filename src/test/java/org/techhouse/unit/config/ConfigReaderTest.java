@@ -90,6 +90,12 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptMaxLogLines", "1000");
         expectedConfig.put("scriptMaxLogLineChars", "4096");
         expectedConfig.put("scriptMaxMemoryBytes", "64Mb");
+        expectedConfig.put("procedureCacheSize", "128");
+        expectedConfig.put("triggersEnabled", "false");
+        expectedConfig.put("triggerThreads", "2");
+        expectedConfig.put("triggerQueueSize", "10000");
+        expectedConfig.put("triggerMaxDepth", "3");
+        expectedConfig.put("triggerTimeoutMs", "1000");
         expectedConfig.put("scriptTextImportEnabled", "false");
 
         // Act

@@ -4,11 +4,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.RunScriptResponse;
+import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.DatabaseHostBindings;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
@@ -17,6 +19,8 @@ import org.techhouse.simplejs.host.ScriptResult;
 // Runs a client-supplied script through SimpleJs, scoped to the requested database and bounded by the
 // script* configuration keys. Whether the caller may run a script at all is decided earlier, by
 // AuthorizationChecker; every operation the script itself issues is authorized again on its own request.
+// The sandbox and outcome mapping below are shared with ProcedureCallHelper, which differs only in where
+// the source comes from.
 public final class ScriptOperationHelper {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -40,21 +44,36 @@ public final class ScriptOperationHelper {
         if (source.getBytes(StandardCharsets.UTF_8).length > configuration.getScriptMaxSourceBytes()) {
             return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPT_TOO_LARGE);
         }
+        // Deliberately the source overload, not compile(): a syntax error has to stay a 400-9 response
+        // rather than an exception, which is the contract this operation already had.
+        final var host = hostFor(request.getArgs(), dbName, username, clientId);
+        final var start = System.currentTimeMillis();
+        final var result = simpleJs.run(source, host);
+        logRun("RUN_SCRIPT user=" + username + " database=" + dbName, System.currentTimeMillis() - start, result);
+        return toRunScriptResponse(result);
+    }
+
+    // The shared body: build the configured sandbox, run an already-parsed program, log the outcome.
+    // Callers map the ScriptResult onto their own response subclass.
+    static ScriptResult runCompiled(CompiledScript compiled, JsonObject args, String dbName, String username,
+            UUID clientId, String logPrefix) {
+        final var host = hostFor(args, dbName, username, clientId);
+        final var start = System.currentTimeMillis();
+        final var result = simpleJs.run(compiled, host);
+        logRun(logPrefix, System.currentTimeMillis() - start, result);
+        return result;
+    }
+
+    private static DatabaseHostBindings hostFor(JsonObject args, String dbName, String username, UUID clientId) {
         final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
         // A null console sink leaves CapturingHostBindings capturing only, so the output travels back on
         // the response instead of into the server log.
-        final var host = DatabaseHostBindings.of(request.getArgs(), database, null,
-                DatabaseHostBindings.limitsFromConfiguration());
-        final var start = System.currentTimeMillis();
-        final var result = simpleJs.run(source, host);
-        logRun(username, dbName, System.currentTimeMillis() - start, result);
-        return toResponse(result);
+        return DatabaseHostBindings.of(args, database, null, DatabaseHostBindings.limitsFromConfiguration());
     }
 
-    private static void logRun(String username, String dbName, long durationMs, ScriptResult result) {
+    private static void logRun(String logPrefix, long durationMs, ScriptResult result) {
         final var outcome = result.isError() ? result.getErrorName() + ": " + result.getErrorMessage() : "ok";
-        final var line = "RUN_SCRIPT user=" + username + " database=" + dbName + " durationMs=" + durationMs
-                + " outcome=" + outcome;
+        final var line = logPrefix + " durationMs=" + durationMs + " outcome=" + outcome;
         // An exhausted heap means the allocation budget failed to bound the script, or that the JVM was
         // already under pressure from the cache rather than from this script. Either needs an operator.
         if (EXHAUSTED_MESSAGE.equals(result.getErrorMessage())) {
@@ -64,7 +83,7 @@ public final class ScriptOperationHelper {
         }
     }
 
-    private static OperationResponse toResponse(ScriptResult result) {
+    private static OperationResponse toRunScriptResponse(ScriptResult result) {
         if (!result.isError()) {
             return new RunScriptResponse("Script executed successfully", result.getValue(), result.getLogs(),
                     result.isLogsTruncated());
@@ -73,7 +92,7 @@ public final class ScriptOperationHelper {
                 errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated());
     }
 
-    private static ErrorCode errorCodeFor(String errorName) {
+    static ErrorCode errorCodeFor(String errorName) {
         return switch (errorName) {
             case "ScriptTimeoutError" -> ErrorCode.SCRIPT_TIMEOUT;
             case "ScriptLimitError" -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
