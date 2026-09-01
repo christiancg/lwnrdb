@@ -188,4 +188,21 @@ public class AdminAntiEntropyProcedureTest {
         assertEquals(1L, cache.getProcedure(TestGlobals.DB, "recalc").getVersion());
         assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size());
     }
+    // The regression this guards: buildSnapshot used to pull every procedure and trigger through the cache,
+    // so a clustered node ended up holding all of them regardless of what it actually used.
+    @Test
+    public void test_snapshot_does_not_populate_the_metadata_caches() throws Exception {
+        writeProcedure("snapshotted", 1L, "return 1;");
+        cache.removeProceduresForDatabase(TestGlobals.DB);
+        cache.removeTriggersMatching(_ -> true);
+        final var before = cache.metadataCacheStats();
+
+        service.buildSnapshot();
+
+        final var after = cache.metadataCacheStats();
+        assertEquals(before.procedureEntries(), after.procedureEntries(),
+                "building a snapshot must not warm the procedure cache");
+        assertEquals(before.triggerEntries(), after.triggerEntries(),
+                "building a snapshot must not warm the trigger cache");
+    }
 }

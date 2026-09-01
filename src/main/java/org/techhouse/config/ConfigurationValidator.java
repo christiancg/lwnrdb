@@ -35,6 +35,7 @@ public final class ConfigurationValidator {
         validateAdminPassword(configs, errors);
         validateMaxMemory(configs, errors);
         validatePositiveLong(configs, "transactionLockTimeoutMs", errors);
+        validatePositiveLong(configs, "shutdownTimeoutMs", errors);
         validateTls(configs, errors);
         validateCluster(configs, errors);
         validateScript(configs, errors);
@@ -69,11 +70,17 @@ public final class ConfigurationValidator {
         validateInt(configs, "scriptMaxLogLines", 1, errors);
         validateInt(configs, "scriptMaxLogLineChars", 1, errors);
         validateInt(configs, "procedureCacheSize", 0, errors);
+        validatePositiveSize(configs, "procedureCacheMaxBytes", errors);
+        validatePositiveSize(configs, "schemaCacheMaxBytes", errors);
+        validateInt(configs, "triggerCacheMaxEntries", 0, errors);
+        validateInt(configs, "metadataMissCacheMaxEntries", 0, errors);
         validateBoolean(configs, "triggersEnabled", errors);
         validateInt(configs, "triggerThreads", 1, errors);
         validateInt(configs, "triggerQueueSize", 1, errors);
         validateInt(configs, "triggerMaxDepth", 0, errors);
         validatePositiveLong(configs, "triggerTimeoutMs", errors);
+        validateBoolean(configs, "triggerRunLogEnabled", errors);
+        validatePositiveLong(configs, "triggerRunRetentionMs", errors);
     }
 
     private static void validateCluster(Map<String, String> configs, List<String> errors) {

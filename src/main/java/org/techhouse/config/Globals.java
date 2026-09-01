@@ -49,6 +49,7 @@ public final class Globals {
     public static final String ADMIN_PAGES_PER_COLLECTION_NAME = "%s_%s";
     public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
     public static final String ADMIN_TRANSACTIONS_COLLECTION_NAME = "transactions";
+    public static final String ADMIN_TRIGGER_RUNS_COLLECTION_NAME = "trigger_runs";
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;
     public static final int PASSWORD_MIN_LENGTH = 8;

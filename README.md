@@ -578,6 +578,7 @@ Runs a stored procedure after a committed write to a collection. Requires admin 
 
 - **Fires after the write commits**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a [collection schema](#schema-validation) for that — and a trigger failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
 - **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. If the definer is deleted the trigger stops firing (it never falls back to the writer or to an admin).
+- **A write inside a transaction fires when the transaction commits**, never before, so a rolled-back write fires nothing. The event is the one the write actually performed: a new document fires `CREATED`, an overwrite `UPDATED`, and a delete fires `DELETED` carrying the document as it stood when the delete was buffered.
 - `mode` is `document` (one run per document, the default) or `batch` (one run for a whole `BULK_SAVE`).
 - `allowCascade` defaults to `false`, so writes a trigger itself performs fire nothing. With it on, a chain terminates at `triggerMaxDepth`.
 - The procedure receives `{event, database, collection, id, document, trigger, actingUser, definer, firedAt, depth}` as its `args` — `actingUser` is who wrote, `definer` is whose authority the run has. In `batch` mode `documents` replaces `id`/`document`.
@@ -936,6 +937,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminPassword` | Non-blank string, at least 8 characters |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
+| `shutdownTimeoutMs` | Valid number ≥ 1 (default `15000`). Total budget for a graceful shutdown — refusing new connections, releasing open transactions, draining the trigger and background-index queues. Work still outstanding when it expires is abandoned with a warning naming what was dropped |
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
 | `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true` |
@@ -968,11 +970,17 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
 | `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
+| `procedureCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Memory bound on cached procedure **source**. Separate from `maxMemory`, which bounds the user document/index cache only |
+| `schemaCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Same contract, for cached collection schemas |
+| `triggerCacheMaxEntries` | Collections whose trigger list is kept in memory (>= 0, default `4096`). Bounded by count, not bytes — a trigger list is small and read on every committed write. `0` reads from disk every time |
+| `metadataMissCacheMaxEntries` | Remembered “no such procedure/schema” answers (>= 0, default `4096`). Kept apart from the caches above so a caller naming thousands of nonexistent procedures cannot evict the ones in use |
 | `triggersEnabled` | `true` or `false` (default `false`). Whether committed writes fire triggers. Separate from `scriptsEnabled` because a trigger runs code with no client asking for it; trigger DDL works either way |
 | `triggerThreads` | Workers on the trigger executor (>= 1, default `2`). Its own pool, not the background index queue, so a slow trigger cannot stall field-index maintenance |
 | `triggerQueueSize` | Bounded trigger queue (>= 1, default `10000`). On overflow the oldest queued event is dropped with a warning and counted in `GET_DATABASE_STATS` |
 | `triggerMaxDepth` | How deep a chain of trigger-fired writes may go (>= 0, default `3`). A trigger with `allowCascade=false` (the default) already fires nothing above depth 0 |
 | `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
+| `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. The run's effects and the consumption of its record commit together, so a replay cannot apply it twice; turning this off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
+| `triggerRunRetentionMs` | Valid number ≥ 1 (default `86400000`). How long a pending trigger-run record is kept before it is garbage-collected as stranded — its collection was dropped, or the node that owned it never came back |
 
 ```
 # the port the server listens on
@@ -988,6 +996,7 @@ defaultAdminPassword=administrator
 maxMemory=512Mb
 # ms a transactional write waits for a busy collection lock before aborting (409-5)
 transactionLockTimeoutMs=5000
+shutdownTimeoutMs=15000
 # TLS: when enabled, plaintext clients are rejected at the handshake
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
@@ -1001,12 +1010,39 @@ scriptMaxSourceBytes=256Kb
 scriptMaxMemoryBytes=64Mb
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
+# metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)
+procedureCacheMaxBytes=32Mb
+schemaCacheMaxBytes=32Mb
+triggerCacheMaxEntries=4096
+metadataMissCacheMaxEntries=4096
 triggersEnabled=false
 triggerThreads=2
 triggerQueueSize=10000
 triggerMaxDepth=3
 triggerTimeoutMs=1000
+# durable pending trigger runs, so a run queued when the process dies is replayed at startup
+triggerRunLogEnabled=true
+triggerRunRetentionMs=86400000
 ```
+
+**Graceful shutdown.** On SIGTERM the server runs an ordered shutdown within
+`shutdownTimeoutMs`: it stops accepting new connections, stops the background sweeps,
+rolls back open transactions (releasing their collection locks, but leaving PREPARED
+2PC slices for recovery), drains the trigger queue and then the background index queue,
+stops the listen workers, and finally leaves the cluster. Work still outstanding when
+the budget expires is abandoned with a warning naming what was dropped — an abandoned
+index event means the affected collection's field indexes may be stale, so run `REINDEX`
+on it. Set `shutdownTimeoutMs` below whatever SIGKILL grace period supervises the
+process (Docker's default is 10s, so lower it or raise `--stop-timeout`).
+
+**Two cache budgets, not one.** `maxMemory` bounds the *user* document/index cache
+only. The admin metadata caches — stored procedure sources, per-collection JSON
+Schemas and trigger lists — are bounded separately by `procedureCacheMaxBytes`,
+`schemaCacheMaxBytes` and `triggerCacheMaxEntries`, and sit on top of it. All three
+are LRU-evicted and backed by disk, so lowering them only costs a re-read. Size
+`-Xmx` against the sum: the server logs a warning at startup when the budgets total
+more than the heap. `GET_DATABASE_STATS` reports the live footprint under
+`memory.adminMetadataCache`.
 
 ### TLS / secure connections
 

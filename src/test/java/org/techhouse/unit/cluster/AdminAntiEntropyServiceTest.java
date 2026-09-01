@@ -180,6 +180,10 @@ public class AdminAntiEntropyServiceTest {
         TestUtils.createTestDatabaseAndCollection();
         final var schema = new JsonObject();
         schema.add("type", new org.techhouse.ejson.elements.JsonString("object"));
+        // Written to disk as SAVE_SCHEMA does, not just cached: conform reads the authoritative file, so a
+        // cache-only schema is a state the server never produces.
+        IocContainer.get(org.techhouse.fs.FileSystem.class).writeCollectionSchema(org.techhouse.test.TestGlobals.DB,
+                org.techhouse.test.TestGlobals.COLL, IocContainer.get(org.techhouse.ejson.EJson.class).toJson(schema));
         cache.putCollectionSchema(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, schema);
 
         stubSnapshot(List.of(dbJson(org.techhouse.test.TestGlobals.DB, List.of())),

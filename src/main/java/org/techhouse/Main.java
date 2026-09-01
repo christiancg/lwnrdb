@@ -13,6 +13,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
+import org.techhouse.cluster.MetadataCachePruner;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
@@ -33,6 +34,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
+import org.techhouse.ops.TriggerRunRecovery;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -45,6 +47,9 @@ public class Main {
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
+    private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
+    private static final ShutdownCoordinator shutdownCoordinator = IocContainer.get(ShutdownCoordinator.class);
+    private static ClusterServer clusterServer;
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
@@ -77,17 +82,31 @@ public class Main {
         backgroundTaskManager.startBackgroundWorkers();
         // Its own pool, not the background queue: see TriggerExecutor.
         triggerExecutor.start(TriggerDispatcher::dispatch);
+        // After cleanupOrphanedTransactions above, which finishes any run whose commit was in flight and so
+        // removes its record; whatever records remain are runs that genuinely never applied.
+        TriggerRunRecovery.garbageCollect();
+        TriggerRunRecovery.warnAboutStrandedRuns();
+        TriggerRunRecovery.recoverLocal();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
         warnIfXmxExceedsMaxMemory();
+        warnIfCachesExceedHeap();
         warnIfDefaultAdminPassword();
         startClusterIfEnabled();
         // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
         // not lazily on the first client connection.
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
+        registerShutdownHook(server);
         server.serve();
+    }
+
+    // Registered before serve() blocks, so a SIGTERM (a container stop, a systemctl stop, a rolling restart)
+    // runs the ordered shutdown instead of killing the JVM with queues still full.
+    private static void registerShutdownHook(SocketServer server) {
+        Runtime.getRuntime()
+                .addShutdownHook(new Thread(() -> shutdownCoordinator.shutdown(server, clusterServer), "shutdown"));
     }
 
     private static void startClusterIfEnabled() {
@@ -96,11 +115,13 @@ public class Main {
         }
         try {
             final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
-            final var clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(),
-                    factory);
+            clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(), factory);
             clusterServer.start();
             adminEpoch.load();
             membershipService.addListener(ownershipManager);
+            // Right after the ownership manager: listeners fire in registration order, so the ring this
+            // reads is already the rebuilt one.
+            membershipService.addListener(metadataCachePruner);
             // Register the admin listener before the document one so a rejoining node conforms its structure
             // (databases/collections/indexes/users) before the document reconciliation repopulates them.
             membershipService.addListener(adminAntiEntropyService);
@@ -141,6 +162,20 @@ public class Main {
             logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
                     + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
                     + "unauthorized access.");
+        }
+    }
+
+    // The metadata caps are budgeted separately from maxMemory, so the heap a fully-warm node needs is the
+    // sum of the two. Warned about together because an operator sizing -Xmx from maxMemory alone undercounts.
+    static void warnIfCachesExceedHeap() {
+        final var xmx = Runtime.getRuntime().maxMemory();
+        final var metadataCap = config.getProcedureCacheMaxBytes() + config.getSchemaCacheMaxBytes();
+        final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
+        final var total = userCap + metadataCap;
+        if (total > xmx) {
+            logger.warning("The configured cache budgets total " + total + " bytes (maxMemory " + userCap
+                    + " + procedureCacheMaxBytes/schemaCacheMaxBytes " + metadataCap + ") but JVM -Xmx is only " + xmx
+                    + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
         }
     }
 

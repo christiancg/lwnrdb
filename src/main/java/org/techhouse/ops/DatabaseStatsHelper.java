@@ -53,7 +53,20 @@ public final class DatabaseStatsHelper {
         triggers.addProperty("failed", triggerExecutor.getFailed());
         triggers.addProperty("dropped", triggerExecutor.getDropped());
         triggers.addProperty("queued", (long) triggerExecutor.getQueued());
+        triggers.addProperty("runLogEnabled", Configuration.getInstance().isTriggerRunLogEnabled());
+        // Runs recorded but not yet applied. A number that stays above zero while nothing is queued means
+        // runs are stranded - their node never came back, or their collection was dropped - and they will be
+        // garbage-collected after triggerRunRetentionMs rather than ever running.
+        triggers.addProperty("pendingRuns", (long) pendingRunCount());
         return triggers;
+    }
+
+    private static int pendingRunCount() {
+        try {
+            return TriggerRunLog.pending().size();
+        } catch (Exception e) {
+            return -1;
+        }
     }
 
     private static JsonObject buildInDoubtTransactions() {
@@ -82,7 +95,25 @@ public final class DatabaseStatsHelper {
         memory.addProperty("maxMemoryBytes", config.getMaxMemoryBytes());
         memory.addProperty("cachingDisabled", config.isCachingDisabled());
         memory.addProperty("cacheUnlimited", config.isCacheUnlimited());
+        memory.add("adminMetadataCache", buildAdminMetadataCacheStats(config));
         return memory;
+    }
+
+    private static JsonObject buildAdminMetadataCacheStats(Configuration config) {
+        final var stats = cache.metadataCacheStats();
+        final var json = new JsonObject();
+        json.addProperty("procedureBytes", stats.procedureBytes());
+        json.addProperty("procedureEntries", (long) stats.procedureEntries());
+        json.addProperty("triggerBytes", stats.triggerBytes());
+        json.addProperty("triggerEntries", (long) stats.triggerEntries());
+        json.addProperty("schemaBytes", stats.schemaBytes());
+        json.addProperty("schemaEntries", (long) stats.schemaEntries());
+        json.addProperty("missEntries", (long) stats.missEntries());
+        json.addProperty("procedureCacheMaxBytes", config.getProcedureCacheMaxBytes());
+        json.addProperty("schemaCacheMaxBytes", config.getSchemaCacheMaxBytes());
+        json.addProperty("triggerCacheMaxEntries", (long) config.getTriggerCacheMaxEntries());
+        json.addProperty("metadataMissCacheMaxEntries", (long) config.getMetadataMissCacheMaxEntries());
+        return json;
     }
 
     private static JsonObject buildDatabaseStats(String dbName, Totals totals) {

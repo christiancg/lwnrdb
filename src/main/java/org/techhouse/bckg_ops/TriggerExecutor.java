@@ -4,11 +4,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.config.Configuration;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.TriggerDispatcher;
 
 /**
  * Runs queued triggers on its own workers, deliberately not on {@link BackgroundTaskManager}'s queue: a
@@ -28,6 +30,9 @@ public class TriggerExecutor {
     private final LongAdder fired = new LongAdder();
     private final LongAdder failed = new LongAdder();
     private final LongAdder dropped = new LongAdder();
+    private final AtomicInteger inFlight = new AtomicInteger();
+    private final IdleSignal idleSignal = new IdleSignal();
+    private volatile boolean draining;
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     // Set by start(); a null dispatcher means nothing consumes the queue yet, so submit() is a no-op that
     // does not silently accumulate events.
@@ -38,7 +43,7 @@ public class TriggerExecutor {
     }
 
     public void submit(TriggerEvent event) {
-        if (dispatcher == null) {
+        if (dispatcher == null || draining) {
             return;
         }
         while (!queue.offer(event)) {
@@ -47,6 +52,9 @@ public class TriggerExecutor {
                 continue;
             }
             dropped.increment();
+            // Overflow is deliberate back-pressure, so a dropped event is terminal: its pending record is
+            // consumed too, otherwise a restart would resurrect exactly the work the queue chose to shed.
+            TriggerDispatcher.consumeQuietly(evicted.getRunId(), evicted.getTriggerName());
             logger.warning(
                     "Trigger queue full; dropped the oldest queued trigger '" + evicted.getTriggerName() + "' for "
                             + evicted.getDbName() + "|" + evicted.getCollName() + " (event " + evicted.getType() + ")");
@@ -54,6 +62,7 @@ public class TriggerExecutor {
     }
 
     public void start(Consumer<TriggerEvent> triggerDispatcher) {
+        draining = false;
         this.dispatcher = triggerDispatcher;
         final var threadCount = Math.max(1, Configuration.getInstance().getTriggerThreads());
         for (int i = 0; i < threadCount; i++) {
@@ -64,17 +73,56 @@ public class TriggerExecutor {
 
     private void runWorker() {
         while (!Thread.currentThread().isInterrupted()) {
+            final TriggerEvent event;
             try {
-                final var event = queue.take();
-                dispatcher.accept(event);
-                fired.increment();
+                event = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                return;
+            }
+            inFlight.incrementAndGet();
+            try {
+                dispatcher.accept(event);
+                fired.increment();
             } catch (Exception e) {
                 failed.increment();
                 logger.error("Error while dispatching a trigger: ", e);
+            } finally {
+                inFlight.decrementAndGet();
+                idleSignal.signal();
             }
         }
+    }
+
+    /**
+     * Lets the queued triggers run before stopping, up to {@code timeoutMillis}. A trigger abandoned here is
+     * not lost - its pending run record is on disk and replays at the next startup - but finishing now is far
+     * better than replaying later, and it is the only way a node being decommissioned runs them at all.
+     *
+     * @return true when everything queued ran within the budget
+     */
+    public boolean drain(long timeoutMillis) {
+        draining = true;
+        try {
+            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+                stop();
+                return true;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        logger.warning("Trigger queue did not drain within " + timeoutMillis + "ms; " + pending()
+                + " trigger run(s) left pending. They replay when this node starts again.");
+        stop();
+        return false;
+    }
+
+    private boolean isIdle() {
+        return queue.isEmpty() && inFlight.get() == 0;
+    }
+
+    public int pending() {
+        return queue.size() + inFlight.get();
     }
 
     public void stop() {

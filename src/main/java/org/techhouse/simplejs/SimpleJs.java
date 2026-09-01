@@ -93,6 +93,14 @@ public final class SimpleJs {
     }
 
     public ScriptResult run(CompiledScript compiled, HostBindings host) {
+        return run(compiled, host, null);
+    }
+
+    /**
+     * Runs a compiled program with {@code around} wrapping the module body, so a caller can enclose the whole
+     * script in a transaction that begins and commits on the body's own thread.
+     */
+    public ScriptResult run(CompiledScript compiled, HostBindings host, Interpreter.ModuleBodyWrapper around) {
         final var limits = host.limits();
         final var capture = new ConsoleCapture(
                 limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINES : limits.maxLogLines(),
@@ -104,7 +112,9 @@ public final class SimpleJs {
             final var program = compiled.strictScriptGoal() == capturing.strictScriptGoal()
                     ? compiled.program()
                     : Parser.parse(Lexer.lexWithPositions(compiled.source()), capturing.strictScriptGoal());
-            final var outcome = Interpreter.run(program, capturing);
+            final var outcome = around == null
+                    ? Interpreter.run(program, capturing)
+                    : Interpreter.run(program, capturing, around);
             final var value = EJsonInterop.toHostEjson(contractResult(outcome));
             return ok(value == null ? JsonNull.INSTANCE : value, capture);
         } catch (ScriptTimeoutException timeout) {

@@ -10,6 +10,7 @@ import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -54,15 +55,25 @@ public final class TriggerHelper {
                 continue;
             }
             if (trigger.isBatchMode()) {
-                triggerExecutor.submit(new TriggerEvent(type, dbName, collName, trigger.getName(),
-                        trigger.getProcedureName(), true, entries, actingUser, depth));
+                submitLogged(trigger, type, dbName, collName, entries, actingUser, depth, true);
             } else {
                 for (final var entry : entries) {
-                    triggerExecutor.submit(new TriggerEvent(type, dbName, collName, trigger.getName(),
-                            trigger.getProcedureName(), false, List.of(entry), actingUser, depth));
+                    submitLogged(trigger, type, dbName, collName, List.of(entry), actingUser, depth, false);
                 }
             }
         }
+    }
+
+    // One durable record per queued event, so the event's own transaction consumes exactly the record that
+    // would replay it. A shared record across an expanded batch could not do that: a crash partway through
+    // would leave it behind and replay the events that had already committed.
+    private static void submitLogged(TriggerDefinition trigger, EventType type, String dbName, String collName,
+            List<DbEntry> entries, String actingUser, int depth, boolean batchMode) {
+        final var runId = TriggerRunLog.record(
+                new TriggerRunLog.TriggerRunDescriptor(dbName, collName, trigger.getName(), trigger.getProcedureName(),
+                        type, batchMode, actingUser, depth, System.currentTimeMillis(), entries));
+        triggerExecutor.submit(new TriggerEvent(type, dbName, collName, trigger.getName(), trigger.getProcedureName(),
+                batchMode, entries, actingUser, depth, runId));
     }
 
     public static void afterWrite(String dbName, String collName, EventType type, DbEntry entry, String actingUser,
@@ -100,6 +111,12 @@ public final class TriggerHelper {
                     e);
             return null;
         }
+    }
+
+    // Whether a DELETED trigger would fire for this write. The transactional delete path needs the answer
+    // without the read captureForDelete does: it takes the document from its own overlay.
+    public static boolean firesOnDelete(String dbName, String collName, int depth) {
+        return !hasNotTriggerFor(dbName, collName, EventType.DELETED, depth);
     }
 
     private static boolean hasNotTriggerFor(String dbName, String collName, EventType type, int depth) {

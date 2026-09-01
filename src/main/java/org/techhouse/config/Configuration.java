@@ -20,6 +20,7 @@ public final class Configuration {
     private String defaultAdminPassword;
     private long maxMemoryBytes;
     private long transactionLockTimeoutMs;
+    private long shutdownTimeoutMs;
     private boolean tlsEnabled;
     private String tlsKeystorePath;
     private String tlsKeystorePassword;
@@ -52,11 +53,17 @@ public final class Configuration {
     private boolean scriptTextImportEnabled;
     private long scriptMaxMemoryBytes;
     private int procedureCacheSize;
+    private long procedureCacheMaxBytes;
+    private long schemaCacheMaxBytes;
+    private int triggerCacheMaxEntries;
+    private int metadataMissCacheMaxEntries;
     private boolean triggersEnabled;
     private int triggerThreads;
     private int triggerQueueSize;
     private int triggerMaxDepth;
     private long triggerTimeoutMs;
+    private boolean triggerRunLogEnabled;
+    private long triggerRunRetentionMs;
 
     private Configuration() {
     }
@@ -90,6 +97,7 @@ public final class Configuration {
         defaultAdminPassword = configs.get("defaultAdminPassword");
         maxMemoryBytes = sizeOf(configs, "maxMemory");
         transactionLockTimeoutMs = longOf(configs, "transactionLockTimeoutMs");
+        shutdownTimeoutMs = longOf(configs, "shutdownTimeoutMs");
         tlsEnabled = booleanOf(configs, "tlsEnabled");
         tlsKeystorePath = configs.get("tlsKeystorePath");
         tlsKeystorePassword = configs.get("tlsKeystorePassword");
@@ -122,11 +130,17 @@ public final class Configuration {
         scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
         scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
         procedureCacheSize = intOf(configs, "procedureCacheSize");
+        procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
+        schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
+        triggerCacheMaxEntries = intOf(configs, "triggerCacheMaxEntries");
+        metadataMissCacheMaxEntries = intOf(configs, "metadataMissCacheMaxEntries");
         triggersEnabled = booleanOf(configs, "triggersEnabled");
         triggerThreads = intOf(configs, "triggerThreads");
         triggerQueueSize = intOf(configs, "triggerQueueSize");
         triggerMaxDepth = intOf(configs, "triggerMaxDepth");
         triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
+        triggerRunLogEnabled = booleanOf(configs, "triggerRunLogEnabled");
+        triggerRunRetentionMs = longOf(configs, "triggerRunRetentionMs");
     }
 
     private static int intOf(Map<String, String> configs, String key) {
@@ -209,6 +223,10 @@ public final class Configuration {
 
     public boolean isCacheUnlimited() {
         return maxMemoryBytes == Globals.CACHE_UNLIMITED;
+    }
+
+    public long getShutdownTimeoutMs() {
+        return shutdownTimeoutMs;
     }
 
     public boolean isTlsEnabled() {
@@ -339,6 +357,22 @@ public final class Configuration {
         return procedureCacheSize;
     }
 
+    public long getProcedureCacheMaxBytes() {
+        return procedureCacheMaxBytes;
+    }
+
+    public long getSchemaCacheMaxBytes() {
+        return schemaCacheMaxBytes;
+    }
+
+    public int getTriggerCacheMaxEntries() {
+        return triggerCacheMaxEntries;
+    }
+
+    public int getMetadataMissCacheMaxEntries() {
+        return metadataMissCacheMaxEntries;
+    }
+
     public boolean isTriggersEnabled() {
         return triggersEnabled;
     }
@@ -357,5 +391,13 @@ public final class Configuration {
 
     public long getTriggerTimeoutMs() {
         return triggerTimeoutMs;
+    }
+
+    public boolean isTriggerRunLogEnabled() {
+        return triggerRunLogEnabled;
+    }
+
+    public long getTriggerRunRetentionMs() {
+        return triggerRunRetentionMs;
     }
 }

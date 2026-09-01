@@ -165,6 +165,13 @@ public class ConfigurationTest {
         map.put("triggerQueueSize", "10000");
         map.put("triggerMaxDepth", "3");
         map.put("triggerTimeoutMs", "1000");
+        map.put("shutdownTimeoutMs", "15000");
+        map.put("procedureCacheMaxBytes", "32Mb");
+        map.put("schemaCacheMaxBytes", "32Mb");
+        map.put("triggerCacheMaxEntries", "4096");
+        map.put("metadataMissCacheMaxEntries", "4096");
+        map.put("triggerRunLogEnabled", "true");
+        map.put("triggerRunRetentionMs", "86400000");
         map.put("scriptTextImportEnabled", "false");
         return map;
     }

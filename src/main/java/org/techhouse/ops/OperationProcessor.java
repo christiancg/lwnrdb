@@ -137,7 +137,8 @@ public class OperationProcessor {
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
             case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
-            case START_TRANSACTION -> TransactionOperationHelper.start(clientId);
+            case START_TRANSACTION ->
+                TransactionOperationHelper.start(clientId, UUID.randomUUID(), operationRequest.getTriggerDepth());
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
             case RESOLVE_TRANSACTION -> processResolveTransaction((ResolveTransactionRequest) operationRequest);

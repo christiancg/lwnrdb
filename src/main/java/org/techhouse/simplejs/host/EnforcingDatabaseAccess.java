@@ -16,6 +16,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SchemaValidationHelper;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
@@ -214,6 +215,25 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         } finally {
             clearSession();
         }
+    }
+
+    // Buffers the op that consumes a pending trigger run into this script's open transaction, so the run's
+    // effects and the record that would replay it commit together. Trigger-only: no script reaches this.
+    public void bufferTriggerRunConsume(String runId) {
+        assertSessionThread();
+        final var transaction = clientTracker.getActiveTransaction(sessionClientId);
+        if (transaction == null) {
+            throw jsError("No transaction is active on this script");
+        }
+        try {
+            TransactionOperationHelper.bufferTriggerRunConsume(transaction, runId);
+        } catch (Exception e) {
+            throw jsError("Could not consume the pending trigger run: " + e.getMessage());
+        }
+    }
+
+    public boolean hasActiveTransaction() {
+        return sessionClientId != null;
     }
 
     private void clearSession() {

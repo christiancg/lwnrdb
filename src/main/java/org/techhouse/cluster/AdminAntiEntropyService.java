@@ -161,7 +161,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var triggers = new JsonObject();
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var procedureName : fs.listProcedureNames(dbName)) {
-                final var procedure = cache.getProcedure(dbName, procedureName);
+                final var procedure = cache.loadProcedureUncached(dbName, procedureName);
                 if (procedure != null) {
                     procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
                 }
@@ -172,11 +172,11 @@ public class AdminAntiEntropyService implements MembershipListener {
                     final var json = collEntry.getData().deepCopy();
                     json.addProperty(Globals.PK_FIELD, collEntry.get_id());
                     collections.add(json);
-                    final var schema = cache.getCollectionSchema(dbName, collName);
+                    final var schema = cache.loadSchemaUncached(dbName, collName);
                     if (schema != null) {
                         schemas.add(collEntry.get_id(), schema);
                     }
-                    final var collTriggers = cache.getTriggersFor(dbName, collName);
+                    final var collTriggers = cache.loadTriggersUncached(dbName, collName);
                     if (!collTriggers.isEmpty()) {
                         triggers.add(collEntry.get_id(), TriggerDefinition.toJsonArray(collTriggers));
                     }
@@ -281,9 +281,9 @@ public class AdminAntiEntropyService implements MembershipListener {
                         continue;
                     }
                     final var definition = ProcedureDefinition.fromJsonObject(entry.getValue());
-                    if (!definition.equals(cache.getProcedure(dbName, parts[1]))) {
+                    if (!definition.equals(cache.loadProcedureUncached(dbName, parts[1]))) {
                         fs.writeProcedure(dbName, parts[1], eJson.toJson(entry.getValue()));
-                        cache.putProcedure(dbName, definition);
+                        cache.removeProcedure(dbName, parts[1]);
                     }
                 }
             } finally {
@@ -299,7 +299,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var desired = snapshotTriggers.has(key) && snapshotTriggers.get(key).isJsonArray()
                 ? TriggerDefinition.fromJsonArray(snapshotTriggers.get(key).asJsonArray())
                 : new ArrayList<TriggerDefinition>();
-        if (desired.equals(cache.getTriggersFor(dbName, collName))) {
+        if (desired.equals(cache.loadTriggersUncached(dbName, collName))) {
             return;
         }
         if (desired.isEmpty()) {
@@ -308,7 +308,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             return;
         }
         fs.writeTriggers(dbName, collName, eJson.toJson(TriggerDefinition.toFileJson(desired)));
-        cache.putTriggers(dbName, collName, desired);
+        cache.removeTriggers(dbName, collName);
     }
 
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
@@ -343,11 +343,11 @@ public class AdminAntiEntropyService implements MembershipListener {
     // Converges the collection's schema file/cache to the snapshot: write when different, delete when the
     // snapshot has none. Idempotent, so the periodic sweep does not rewrite an already-matching schema.
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {
-        final var current = cache.getCollectionSchema(dbName, collName);
+        final var current = cache.loadSchemaUncached(dbName, collName);
         if (desiredSchema != null) {
             if (!desiredSchema.equals(current)) {
                 fs.writeCollectionSchema(dbName, collName, eJson.toJson(desiredSchema));
-                cache.putCollectionSchema(dbName, collName, desiredSchema);
+                cache.removeCollectionSchema(dbName, collName);
             }
         } else if (current != null) {
             fs.deleteCollectionSchema(dbName, collName);

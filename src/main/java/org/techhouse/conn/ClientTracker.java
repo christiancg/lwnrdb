@@ -156,6 +156,10 @@ public class ClientTracker {
         return client != null ? client.getWriterLock() : null;
     }
 
+    public java.util.Set<UUID> clientIdsSnapshot() {
+        return java.util.Set.copyOf(clients.keySet());
+    }
+
     public Transaction getActiveTransaction(UUID clientId) {
         if (clientId == null)
             return null;

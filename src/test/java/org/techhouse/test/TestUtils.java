@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.AdminCache;
+import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -55,13 +56,24 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "transactionsPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(adminCache, "collectionSchemas", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(adminCache, "triggerRunsPkIndex", new ConcurrentHashMap<>());
+        // The metadata caches are final BoundedLruCache fields, so they are cleared in place rather than
+        // replaced the way the plain maps above are.
+        clearBoundedCache(adminCache, "collectionSchemas");
+        clearBoundedCache(adminCache, "procedures");
+        clearBoundedCache(adminCache, "triggers");
+        clearBoundedCache(adminCache, "metadataMisses");
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
         // Drop any tracked clients so leaked test connections can't fill the connection limit and make
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
         TestUtils.setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());
+    }
+
+    private static void clearBoundedCache(AdminCache adminCache, String fieldName)
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.getPrivateField(adminCache, fieldName, BoundedLruCache.class).clear();
     }
 
     private static void deleteDir(File file) {

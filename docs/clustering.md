@@ -176,6 +176,46 @@ authenticated by `clusterSecret`), while the edge zeroes it for client requests.
 > signal gossiped with the heartbeat), and how to avoid forwarding loops and thrashing when several
 > nodes each think another is the better host.
 
+### The trigger cache is partitioned by ownership
+
+A trigger only ever fires on its collection's owner — `ops/TriggerHelper.afterWrite` is called from
+`OperationProcessor`'s write handlers, and writes route to the owner — so a node has no use for the
+trigger lists of collections it does not own. `cluster/MetadataCachePruner`, a `MembershipListener`
+registered immediately after `OwnershipManager` (listeners fire in registration order, so it reads
+the rebuilt ring), drops exactly those on every membership change. The cache is derived from
+`{db}/{coll}/{coll}-triggers.json`, which every node has, so handoff costs the new owner one lazy
+re-read and nothing is lost. Entries are **dropped, never blanked**: `TriggerDispatcher` looks the
+list up again when it runs a queued event, and a cached empty list would make an in-flight trigger
+silently not fire.
+
+For the same reason `cluster/AdminAntiEntropyService` no longer reads through the cache.
+`buildSnapshot` and the `conform*` comparisons load procedures, triggers and schemas straight from
+disk (`Cache.loadProcedureUncached`/`loadTriggersUncached`/`loadSchemaUncached`) and a conform write
+*invalidates* the cache rather than populating it — otherwise every sweep would pull every procedure
+source on the node into memory regardless of what anyone had called.
+
+### Shutdown and departure
+
+`ShutdownCoordinator` leaves the cluster last, after the queues have drained, so peers keep routing
+here only while this node can still answer. There is, however, **no graceful LEAVE message**: a
+departing node is detected the same way a crashed one is, by missed heartbeats, so peers wait out
+`deadTimeoutMs` (15s by default) before reassigning its collections. During that window writes to
+those collections fail with `503-4 OWNER_UNREACHABLE` (reads fall back locally when
+`readFallbackToLocal` is on). Adding a LEAVE to `ClusterMessageType` so membership reassigns
+immediately is a worthwhile follow-up; drain the node's traffic at the load balancer first if that
+window matters.
+
+### Pending trigger runs are node-local
+
+`admin/trigger_runs` is not replicated. A node recovers its own pending runs when it restarts, the
+way each participant recovers its own `admin/transactions` markers. A node that never comes back
+keeps its pending runs on its own disk, where no survivor can see them: those runs are lost, not
+double-applied. Extending the exactly-once guarantee across permanent node loss would mean
+quorum-replicating each run record before its events are queued — a network round trip on the write
+path — and is deliberately not implemented. Best-effort replication is **not** an acceptable
+substitute: a lost completion notification would resurrect a consumed run and double-apply it, which
+is the failure the design exists to prevent.
+
 ## Admin / DDL replication
 
 Admin and DDL operations mutate cluster-wide metadata (databases, collections,

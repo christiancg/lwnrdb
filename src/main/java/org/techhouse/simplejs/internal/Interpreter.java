@@ -277,6 +277,7 @@ public final class Interpreter {
     private int depth;
     private int moduleDepth;
     private Environment globalEnv;
+    private ModuleBodyWrapper moduleBodyWrapper;
     // Set once by runModule (one Interpreter per script run/realm). GetBindingValue on a Global
     // Environment Record consults HasProperty/Get on the global object itself, not just its
     // declared var/function bindings - a property added directly on globalThis via
@@ -310,6 +311,23 @@ public final class Interpreter {
 
     public static ProgramOutcome run(Program program, HostBindings host) {
         return new Interpreter(host).runModule(program);
+    }
+
+    /**
+     * Runs the program with {@code around} wrapping the module body. The wrapper is invoked on the thread the
+     * body itself runs on, which is what lets a caller open a transaction around the whole script: the
+     * collection locks a transactional write takes are thread-owned, so beginning or committing from the
+     * calling thread instead would strand them.
+     */
+    public static ProgramOutcome run(Program program, HostBindings host, ModuleBodyWrapper around) {
+        final var interpreter = new Interpreter(host);
+        interpreter.moduleBodyWrapper = around;
+        return interpreter.runModule(program);
+    }
+
+    @FunctionalInterface
+    public interface ModuleBodyWrapper {
+        void around(Runnable body);
     }
 
     public static ProgramOutcome run(String source, HostBindings host) {
@@ -356,7 +374,11 @@ public final class Interpreter {
         try {
             coroutine.startAsync(() -> {
                 currentCoroutine.set(coroutine);
-                evaluateModuleBody(program, env, result);
+                if (moduleBodyWrapper == null) {
+                    evaluateModuleBody(program, env, result);
+                } else {
+                    moduleBodyWrapper.around(() -> evaluateModuleBody(program, env, result));
+                }
                 return JsUndefined.getInstance();
             });
             markContractPromiseHandled(result);

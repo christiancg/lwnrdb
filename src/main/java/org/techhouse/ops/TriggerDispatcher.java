@@ -34,6 +34,7 @@ public final class TriggerDispatcher {
 
     public static void dispatch(TriggerEvent event) {
         if (event.getDepth() >= configuration.getTriggerMaxDepth()) {
+            consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
             logger.warning("Trigger '" + event.getTriggerName() + "' not run: cascade depth " + event.getDepth()
                     + " reached triggerMaxDepth");
@@ -43,10 +44,12 @@ public final class TriggerDispatcher {
         // already guards against for a dropped collection.
         final var trigger = findTrigger(event);
         if (trigger == null || !trigger.isEnabled()) {
+            consumeQuietly(event.getRunId(), event.getTriggerName());
             return;
         }
         final var procedure = cache.getProcedure(event.getDbName(), trigger.getProcedureName());
         if (procedure == null || !procedure.isEnabled()) {
+            consumeQuietly(event.getRunId(), event.getTriggerName());
             return;
         }
         final var definer = trigger.getDefiner();
@@ -54,6 +57,7 @@ public final class TriggerDispatcher {
         // the writer would silently reinstate invoker rights, and falling back to an admin would let
         // deleting a user widen a trigger's authority.
         if (definer == null || cache.getAdminUserEntry(definer) == null) {
+            consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
             logger.warning(
                     "Trigger '" + event.getTriggerName() + "' not run: definer '" + definer + "' no longer exists");
@@ -70,16 +74,75 @@ public final class TriggerDispatcher {
         // server log is the only place a trigger's console output can go.
         final var host = DatabaseHostBindings.of(argsFor(event, definer), database, logger::info, limits());
         final var start = System.currentTimeMillis();
-        final var result = simpleJs.run(compiled, host);
+        final var runId = event.getRunId();
+        // A logged run executes inside a transaction that also consumes its record, so the effects and the
+        // record that would replay them commit together and a replay can never double-apply. Begin and commit
+        // both happen inside the body wrapper because the interpreter runs the module on its own thread and
+        // the collection locks a transactional write takes are owned by the thread that acquired them.
+        final var committed = new java.util.concurrent.atomic.AtomicBoolean(runId == null);
+        final var result = runId == null
+                ? simpleJs.run(compiled, host)
+                : simpleJs.run(compiled, host,
+                        body -> runInTransaction(database, runId, trigger.getName(), body, committed));
         final var line = "TRIGGER name=" + trigger.getName() + " database=" + event.getDbName() + " collection="
                 + event.getCollName() + " event=" + event.getType() + " definer=" + definer + " actingUser="
                 + event.getActingUser() + " durationMs=" + (System.currentTimeMillis() - start);
         if (result.isError()) {
+            consumeQuietly(runId, trigger.getName());
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
-        } else {
-            logger.info(line + " outcome=ok");
+            return;
+        }
+        if (!committed.get()) {
+            consumeQuietly(runId, trigger.getName());
+            triggerExecutor.countFailure();
+            logger.warning(line + " outcome=commit-failed");
+            return;
+        }
+        logger.info(line + " outcome=ok");
+    }
+
+    // Runs the script body between a begin and a commit that also consumes the pending run. A body failure
+    // propagates after the rollback, so SimpleJs reports it as the run's error.
+    private static void runInTransaction(EnforcingDatabaseAccess database, String runId, String triggerName,
+            Runnable body, java.util.concurrent.atomic.AtomicBoolean committed) {
+        database.beginTransaction();
+        try {
+            body.run();
+        } catch (RuntimeException e) {
+            rollbackQuietly(database, triggerName);
+            throw e;
+        }
+        try {
+            database.bufferTriggerRunConsume(runId);
+            database.commitTransaction();
+            committed.set(true);
+        } catch (RuntimeException e) {
+            logger.error("Failed to commit the effects of trigger '" + triggerName + "': " + e.getMessage(), e);
+            rollbackQuietly(database, triggerName);
+        }
+    }
+
+    private static void rollbackQuietly(EnforcingDatabaseAccess database, String triggerName) {
+        try {
+            if (database.hasActiveTransaction()) {
+                database.rollbackTransaction();
+            }
+        } catch (RuntimeException e) {
+            logger.warning("Failed to roll back trigger '" + triggerName + "': " + e.getMessage());
+        }
+    }
+
+    // Consumes a run outside any transaction, for the terminal outcomes that apply no effects at all.
+    public static void consumeQuietly(String runId, String triggerName) {
+        if (runId == null) {
+            return;
+        }
+        try {
+            AdminOperationHelper.deleteTriggerRuns(TriggerRunLog.recordIdsFor(runId));
+        } catch (Exception e) {
+            logger.warning("Failed to consume the pending run of trigger '" + triggerName + "': " + e.getMessage());
         }
     }
 

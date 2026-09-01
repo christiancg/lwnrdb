@@ -96,6 +96,13 @@ public class ConfigReaderTest {
         expectedConfig.put("triggerQueueSize", "10000");
         expectedConfig.put("triggerMaxDepth", "3");
         expectedConfig.put("triggerTimeoutMs", "1000");
+        expectedConfig.put("shutdownTimeoutMs", "15000");
+        expectedConfig.put("procedureCacheMaxBytes", "32Mb");
+        expectedConfig.put("schemaCacheMaxBytes", "32Mb");
+        expectedConfig.put("triggerCacheMaxEntries", "4096");
+        expectedConfig.put("metadataMissCacheMaxEntries", "4096");
+        expectedConfig.put("triggerRunLogEnabled", "true");
+        expectedConfig.put("triggerRunRetentionMs", "86400000");
         expectedConfig.put("scriptTextImportEnabled", "false");
 
         // Act

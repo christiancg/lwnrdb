@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -35,12 +36,8 @@ import org.techhouse.log.Logger;
  */
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
-    // Sentinel meaning "this collection has been checked and has no schema" — lets the schema cache
-    // negatively cache absence (ConcurrentHashMap forbids null values), so an unconstrained collection
-    // costs at most one disk check. An empty schema object can never be stored (SAVE_SCHEMA rejects it),
-    // so reference-identity against this instance is unambiguous.
-    private static final JsonObject NO_SCHEMA = new JsonObject();
-    private static final ProcedureDefinition NO_PROCEDURE = new ProcedureDefinition();
+    private static final String PROCEDURE_MISS_PREFIX = "p" + Globals.COLL_IDENTIFIER_SEPARATOR;
+    private static final String SCHEMA_MISS_PREFIX = "s" + Globals.COLL_IDENTIFIER_SEPARATOR;
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -54,9 +51,19 @@ public class AdminCache {
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
-    private final Map<String, JsonObject> collectionSchemas = new ConcurrentHashMap<>();
-    private final Map<String, ProcedureDefinition> procedures = new ConcurrentHashMap<>();
-    private final Map<String, List<TriggerDefinition>> triggers = new ConcurrentHashMap<>();
+    private final Map<String, PkIndexEntry> triggerRunsPkIndex = new ConcurrentHashMap<>();
+    // Bounded and LRU-evicted, unlike every other map here: their contents are derived from disk and can be
+    // reloaded, while the rest of this cache is the only in-memory copy of the admin records. Misses are kept
+    // apart so a caller naming thousands of nonexistent procedures cannot evict the ones actually in use.
+    private final BoundedLruCache<JsonObject> collectionSchemas = new BoundedLruCache<>(Integer.MAX_VALUE,
+            configuration.getSchemaCacheMaxBytes(), schema -> (long) eJson.toJson(schema).length() * 2L);
+    private final BoundedLruCache<ProcedureDefinition> procedures = new BoundedLruCache<>(Integer.MAX_VALUE,
+            configuration.getProcedureCacheMaxBytes(),
+            definition -> (long) definition.getSource().length() * 2L + 512L);
+    private final BoundedLruCache<List<TriggerDefinition>> triggers = new BoundedLruCache<>(
+            configuration.getTriggerCacheMaxEntries(), 0L, definitions -> definitions.size() * 512L + 128L);
+    private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
+            configuration.getMetadataMissCacheMaxEntries(), 0L, _ -> 1L);
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -64,6 +71,7 @@ public class AdminCache {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         final var pkIndexCollectionUsageEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_COLLECTION_USAGE_NAME);
         final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
@@ -74,6 +82,10 @@ public class AdminCache {
         final var pkIndexTransactionEntriesMap = pkIndexTransactionEntries.stream()
                 .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
         transactionsPkIndex.putAll(pkIndexTransactionEntriesMap);
+        final var pkIndexTriggerRunEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
+                Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
+        triggerRunsPkIndex.putAll(pkIndexTriggerRunEntries.stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry)));
         final var pkIndexAdminDbEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
                 Globals.ADMIN_DATABASES_COLLECTION_NAME);
         final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
@@ -256,6 +268,7 @@ public class AdminCache {
             case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
             case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
             case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> entries = transactionsPkIndex.values();
+            case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> entries = triggerRunsPkIndex.values();
             case null, default -> {
                 final var list = pagesPkIndexes
                         .get(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName));
@@ -344,80 +357,106 @@ public class AdminCache {
     // collection is only read from disk once.
     public JsonObject getCollectionSchema(String dbName, String collName) {
         final var id = Cache.getCollectionIdentifier(dbName, collName);
-        var cached = collectionSchemas.get(id);
-        if (cached == null) {
-            cached = loadSchemaFromDisk(dbName, collName);
-            collectionSchemas.put(id, cached);
+        final var cached = collectionSchemas.get(id);
+        if (cached != null) {
+            return cached;
         }
-        return cached == NO_SCHEMA ? null : cached;
+        if (metadataMisses.get(schemaMissKey(id)) != null) {
+            return null;
+        }
+        final var loaded = loadSchemaUncached(dbName, collName);
+        if (loaded == null) {
+            metadataMisses.put(schemaMissKey(id), Boolean.TRUE);
+        } else {
+            collectionSchemas.put(id, loaded);
+        }
+        return loaded;
     }
 
-    private JsonObject loadSchemaFromDisk(String dbName, String collName) {
+    public JsonObject loadSchemaUncached(String dbName, String collName) {
         try {
             final var raw = fs.readCollectionSchema(dbName, collName);
             if (raw == null || raw.isBlank()) {
-                return NO_SCHEMA;
+                return null;
             }
             return eJson.fromJson(raw, JsonObject.class);
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
-            return NO_SCHEMA;
+            return null;
         }
     }
 
     public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
-        collectionSchemas.put(Cache.getCollectionIdentifier(dbName, collName), schema);
+        final var id = Cache.getCollectionIdentifier(dbName, collName);
+        metadataMisses.remove(schemaMissKey(id));
+        collectionSchemas.put(id, schema);
     }
 
     public void removeCollectionSchema(String dbName, String collName) {
-        collectionSchemas.remove(Cache.getCollectionIdentifier(dbName, collName));
+        final var id = Cache.getCollectionIdentifier(dbName, collName);
+        collectionSchemas.remove(id);
+        metadataMisses.remove(schemaMissKey(id));
     }
 
     public void removeCollectionSchemasForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        collectionSchemas.keySet().removeIf(id -> id.startsWith(prefix));
+        collectionSchemas.removeIf(id -> id.startsWith(prefix));
+        metadataMisses.removeIf(id -> id.startsWith(SCHEMA_MISS_PREFIX + prefix));
     }
 
     // Returns the database's cached procedure, or null when it has none by that name. Loads lazily from
-    // disk on first access and negatively caches absence (NO_PROCEDURE), so a database with no procedures
-    // - or a misspelled name called in a loop - is only read from disk once. Same contract as
+    // disk on first access and remembers absence in the separate miss cache, so a database with no
+    // procedures - or a misspelled name called in a loop - is only read from disk once. Same contract as
     // getCollectionSchema, and the reason loadAdminData does not have to load procedures at startup.
     public ProcedureDefinition getProcedure(String dbName, String name) {
         final var id = Cache.getCollectionIdentifier(dbName, name);
-        var cached = procedures.get(id);
-        if (cached == null) {
-            cached = loadProcedureFromDisk(dbName, name);
-            procedures.put(id, cached);
+        final var cached = procedures.get(id);
+        if (cached != null) {
+            return cached;
         }
-        return cached == NO_PROCEDURE ? null : cached;
+        if (metadataMisses.get(procedureMissKey(id)) != null) {
+            return null;
+        }
+        final var loaded = loadProcedureUncached(dbName, name);
+        if (loaded == null) {
+            metadataMisses.put(procedureMissKey(id), Boolean.TRUE);
+        } else {
+            procedures.put(id, loaded);
+        }
+        return loaded;
     }
 
-    private ProcedureDefinition loadProcedureFromDisk(String dbName, String name) {
+    public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
         try {
             final var raw = fs.readProcedure(dbName, name);
             if (raw == null || raw.isBlank()) {
-                return NO_PROCEDURE;
+                return null;
             }
             return ProcedureDefinition.fromJsonObject(eJson.fromJson(raw, JsonObject.class));
         } catch (Exception e) {
             logger.warning(
                     "Failed to load procedure " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return NO_PROCEDURE;
+            return null;
         }
     }
 
     public void putProcedure(String dbName, ProcedureDefinition definition) {
-        procedures.put(Cache.getCollectionIdentifier(dbName, definition.getName()), definition);
+        final var id = Cache.getCollectionIdentifier(dbName, definition.getName());
+        metadataMisses.remove(procedureMissKey(id));
+        procedures.put(id, definition);
     }
 
     public void removeProcedure(String dbName, String name) {
-        procedures.remove(Cache.getCollectionIdentifier(dbName, name));
+        final var id = Cache.getCollectionIdentifier(dbName, name);
+        procedures.remove(id);
+        metadataMisses.remove(procedureMissKey(id));
     }
 
     public void removeProceduresForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        procedures.keySet().removeIf(id -> id.startsWith(prefix));
+        procedures.removeIf(id -> id.startsWith(prefix));
+        metadataMisses.removeIf(id -> id.startsWith(PROCEDURE_MISS_PREFIX + prefix));
     }
 
     // Every trigger on the collection, empty when it has none. The cache key is db|coll, so the write
@@ -428,13 +467,13 @@ public class AdminCache {
         final var id = Cache.getCollectionIdentifier(dbName, collName);
         var cached = triggers.get(id);
         if (cached == null) {
-            cached = loadTriggersFromDisk(dbName, collName);
+            cached = loadTriggersUncached(dbName, collName);
             triggers.put(id, cached);
         }
         return cached;
     }
 
-    private List<TriggerDefinition> loadTriggersFromDisk(String dbName, String collName) {
+    public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
         try {
             final var raw = fs.readTriggers(dbName, collName);
             if (raw == null || raw.isBlank()) {
@@ -458,7 +497,27 @@ public class AdminCache {
 
     public void removeTriggersForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        triggers.keySet().removeIf(id -> id.startsWith(prefix));
+        triggers.removeIf(id -> id.startsWith(prefix));
+    }
+
+    // Drops the trigger lists whose db|coll key matches, leaving no entry behind: TriggerDispatcher looks the
+    // list up again when it runs a queued event, so a removed key reloads from disk while a cached empty list
+    // would make an already-queued trigger silently not fire.
+    public void removeTriggersMatching(Predicate<String> keyMatches) {
+        triggers.removeIf(keyMatches);
+    }
+
+    public MetadataCacheStats metadataCacheStats() {
+        return new MetadataCacheStats(procedures.bytes(), procedures.size(), triggers.bytes(), triggers.size(),
+                collectionSchemas.bytes(), collectionSchemas.size(), metadataMisses.size());
+    }
+
+    private static String procedureMissKey(String id) {
+        return PROCEDURE_MISS_PREFIX + id;
+    }
+
+    private static String schemaMissKey(String id) {
+        return SCHEMA_MISS_PREFIX + id;
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {
@@ -513,5 +572,21 @@ public class AdminCache {
 
     public Map<String, PkIndexEntry> getTransactionPkIndexes() {
         return transactionsPkIndex;
+    }
+
+    public PkIndexEntry getPkIndexTriggerRun(String recordId) {
+        return triggerRunsPkIndex.get(recordId);
+    }
+
+    public void putPkIndexTriggerRun(PkIndexEntry indexEntry) {
+        triggerRunsPkIndex.put(indexEntry.getValue(), indexEntry);
+    }
+
+    public void removePkIndexTriggerRun(String recordId) {
+        triggerRunsPkIndex.remove(recordId);
+    }
+
+    public Map<String, PkIndexEntry> getTriggerRunPkIndexes() {
+        return triggerRunsPkIndex;
     }
 }

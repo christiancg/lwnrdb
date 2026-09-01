@@ -1073,6 +1073,28 @@ deleting a user *widen* a trigger's authority), and a definer whose permissions 
 narrows the trigger — nothing to fix, since `AuthorizationChecker` runs per request, but the symptom is a
 trigger that used to work, with a cause nobody would look for.
 
+**A trigger runs exactly once, not at least once.** Before a fired trigger is queued,
+`ops/TriggerRunLog` persists a pending-run record in `admin/trigger_runs` (one per queued event, carrying the
+document ids for CREATED/UPDATED and the documents themselves for DELETED, chunked so a record never exceeds
+`maxEntrySize`). `ops/TriggerDispatcher` then runs the procedure **inside a transaction** whose final buffered
+op consumes that record, so the run's effects and the evidence that would replay it commit together: a run
+that landed leaves nothing to replay, and a run that left a record did not land. `ops/TriggerRunRecovery`
+re-queues whatever is still pending at startup, after `cleanupOrphansAtStartup` has finished any commit that
+was in flight. This rests on single-node commits being crash-atomic (`ops/TxCommitLog`), which is why that
+came first — at-least-once would be unusable for the ordinary case of a trigger that increments a counter.
+
+Consequences worth knowing: a trigger run costs a transaction; a trigger whose writes target a collection
+owned by another node becomes a distributed transaction on the existing 2PC path; an explicit
+`db.transaction(...)` inside a trigger is rejected, because the run is already transactional; and the
+guarantee covers **database effects** — a replayed run re-executes the script from the top, so its console
+output can appear twice. Terminal outcomes that apply nothing (a script error, a missing definer or
+procedure, depth beyond `triggerMaxDepth`, an event shed by queue overflow) consume the record instead of
+replaying forever. Because the begin and the commit must happen on the thread the module body runs on — the
+collection locks a transactional write takes are thread-owned — the dispatcher passes a
+`Interpreter.ModuleBodyWrapper` to `SimpleJs.run` rather than opening the transaction around it.
+`triggerRunLogEnabled=false` restores the older in-memory-only behaviour, where a run queued when the process
+dies is simply lost.
+
 **Triggers fire after the commit, asynchronously.** `ops/TriggerHelper.afterWrite` is called from
 `OperationProcessor`'s SAVE/BULK_SAVE/DELETE handlers and from `TransactionOperationHelper.commit` — never
 from the write helpers, because `ReplicatedApplyHelper`/`ReplicatedTxApplyHelper` reach those directly and a

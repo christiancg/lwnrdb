@@ -20,9 +20,15 @@ public class TriggerEvent extends Event {
     private final String actingUser;
     private final int depth;
     private final long firedAt;
+    private final String runId;
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth) {
+        this(type, dbName, collName, triggerName, procedureName, batchMode, entries, actingUser, depth, null);
+    }
+
+    public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
+            boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId) {
         super(type);
         this.dbName = dbName;
         this.collName = collName;
@@ -33,6 +39,7 @@ public class TriggerEvent extends Event {
         this.actingUser = actingUser;
         this.depth = depth;
         this.firedAt = System.currentTimeMillis();
+        this.runId = runId;
     }
 
     public String getDbName() {
@@ -71,6 +78,10 @@ public class TriggerEvent extends Event {
         return firedAt;
     }
 
+    public String getRunId() {
+        return runId;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o)
@@ -82,19 +93,20 @@ public class TriggerEvent extends Event {
         return batchMode == that.batchMode && depth == that.depth && Objects.equals(dbName, that.dbName)
                 && Objects.equals(collName, that.collName) && Objects.equals(triggerName, that.triggerName)
                 && Objects.equals(procedureName, that.procedureName) && Objects.equals(entries, that.entries)
-                && Objects.equals(actingUser, that.actingUser);
+                && Objects.equals(actingUser, that.actingUser) && Objects.equals(runId, that.runId);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(super.hashCode(), dbName, collName, triggerName, procedureName, batchMode, entries,
-                actingUser, depth);
+                actingUser, depth, runId);
     }
 
     @Override
     public String toString() {
         return "TriggerEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName
                 + ", triggerName=" + triggerName + ", procedureName=" + procedureName + ", batchMode=" + batchMode
-                + ", entries=" + entries.size() + ", actingUser=" + actingUser + ", depth=" + depth + ")";
+                + ", entries=" + entries.size() + ", actingUser=" + actingUser + ", depth=" + depth + ", runId=" + runId
+                + ")";
     }
 }

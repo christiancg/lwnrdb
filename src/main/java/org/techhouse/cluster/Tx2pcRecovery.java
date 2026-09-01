@@ -9,6 +9,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.Tx2pcLog;
 
 /**
@@ -56,6 +57,8 @@ public class Tx2pcRecovery implements MembershipListener {
         try {
             recover();
             Tx2pcLog.garbageCollectOutcomes(clusterConfig.tombstoneRetentionMs());
+            TriggerRunRecovery.warnAboutStrandedRuns();
+            TriggerRunRecovery.garbageCollect();
             warnLongInDoubt();
         } catch (Exception e) {
             logger.warning("Transaction recovery sweep failed: " + e.getMessage());

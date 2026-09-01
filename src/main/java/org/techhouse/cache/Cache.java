@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Configuration;
@@ -373,6 +374,14 @@ public class Cache {
         adminCache.removeCollectionSchema(dbName, collName);
     }
 
+    public void removeCollectionSchemasForDatabase(String dbName) {
+        adminCache.removeCollectionSchemasForDatabase(dbName);
+    }
+
+    public JsonObject loadSchemaUncached(String dbName, String collName) {
+        return adminCache.loadSchemaUncached(dbName, collName);
+    }
+
     public ProcedureDefinition getProcedure(String dbName, String name) {
         return adminCache.getProcedure(dbName, name);
     }
@@ -389,6 +398,10 @@ public class Cache {
         adminCache.removeProceduresForDatabase(dbName);
     }
 
+    public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
+        return adminCache.loadProcedureUncached(dbName, name);
+    }
+
     public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
         return adminCache.getTriggersFor(dbName, collName);
     }
@@ -399,6 +412,18 @@ public class Cache {
 
     public void removeTriggers(String dbName, String collName) {
         adminCache.removeTriggers(dbName, collName);
+    }
+
+    public void removeTriggersMatching(Predicate<String> keyMatches) {
+        adminCache.removeTriggersMatching(keyMatches);
+    }
+
+    public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
+        return adminCache.loadTriggersUncached(dbName, collName);
+    }
+
+    public MetadataCacheStats metadataCacheStats() {
+        return adminCache.metadataCacheStats();
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {
@@ -451,5 +476,21 @@ public class Cache {
 
     public Map<String, PkIndexEntry> getTransactionPkIndexes() {
         return adminCache.getTransactionPkIndexes();
+    }
+
+    public PkIndexEntry getPkIndexTriggerRun(String recordId) {
+        return adminCache.getPkIndexTriggerRun(recordId);
+    }
+
+    public void putPkIndexTriggerRun(PkIndexEntry indexEntry) {
+        adminCache.putPkIndexTriggerRun(indexEntry);
+    }
+
+    public void removePkIndexTriggerRun(String recordId) {
+        adminCache.removePkIndexTriggerRun(recordId);
+    }
+
+    public Map<String, PkIndexEntry> getTriggerRunPkIndexes() {
+        return adminCache.getTriggerRunPkIndexes();
     }
 }
