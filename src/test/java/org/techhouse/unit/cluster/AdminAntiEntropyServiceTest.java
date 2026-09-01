@@ -255,6 +255,35 @@ public class AdminAntiEntropyServiceTest {
         assertTrue(service.hasCompletedAdminSync());
     }
 
+    // The gate is gossiped so peers can keep a script off a node that is not caught up yet.
+    @Test
+    public void test_start_marks_this_node_as_admin_syncing_and_stop_clears_it() throws Exception {
+        TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 0L);
+        TestUtils.setPrivateField(service, "started", false);
+        TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(false));
+
+        service.start();
+        assertTrue(syncingFlag());
+
+        service.stop();
+        assertFalse(syncingFlag());
+    }
+
+    @Test
+    public void test_reconcile_publishes_the_caught_up_state_to_membership() throws Exception {
+        membershipService.setAdminSyncing(true);
+        when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(syncingFlag());
+    }
+
+    private boolean syncingFlag() throws Exception {
+        return TestUtils.getPrivateField(membershipService, "adminSyncing", Boolean.class);
+    }
+
     @Test
     public void test_reconcile_is_noop_when_clustering_disabled() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);

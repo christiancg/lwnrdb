@@ -130,13 +130,70 @@ was down when B was created — both implemented; see *Admin / DDL replication* 
 
 ### Scripts (`RUN_SCRIPT`)
 
-A script is **not routed**: it executes on the node that received it. There is no single node to
-route it to — a script is scoped to a database but may touch any number of collections in it, owned
-by different nodes — so `RUN_SCRIPT` is deliberately absent from `ClusterRouter`'s routable set.
-Each operation the script issues is routed normally by `host/EnforcingDatabaseAccess.routeOrProcess`
-(forwarded to its collection's owner, with `db.transaction` spanning owners through the same 2PC the
-wire protocol uses). The consequence is one round trip per operation against remote-owned
-collections, so a script doing many small reads is fastest on the owner of the collections it reads.
+A script is **placed by availability**, not by ownership. There is no owner to route it to — a script is
+scoped to a database but may touch any number of collections in it, owned by different nodes — so
+`ClusterRouter` instead chooses a live node by current script load and forwards the whole run there,
+relaying the target's response JSON verbatim. This is on by default (`scriptRoutingEnabled=true`), so one
+node cannot end up running every script in the cluster just because a load balancer sent it every
+connection; setting it to `false` restores the older behaviour of executing on the node that received the
+request, which is what you want when scripts do many small reads and clients already connect to the node
+that owns the data.
+
+`cluster/ScriptPlacement.choose()` makes the choice by **power of two choices**: sample two distinct
+`ALIVE` members of the local membership view at random and take the one reporting the lower script load
+(ties break on `nodeId`, so two edges sampling the same pair agree). Picking the globally least-loaded
+node would herd — every edge sees the same gossiped view, stale by up to one `gossipIntervalMs`, so they
+would all forward to the same node at once and then all see it saturated. Sampling needs no accurate
+global view, is O(1), and still keeps the maximum load exponentially closer to the mean than random
+placement. `choose()` answering "this node" (or a cluster of one) means the script runs locally.
+
+The load signal is `NodeInfo.scriptLoad`, the number of script runs executing on a node right now
+(`RUN_SCRIPT`, `CALL_PROCEDURE` and trigger dispatch alike — all interpreter CPU), counted by
+`ops/ScriptLoad` around `ScriptOperationHelper`'s run and published on each gossip round alongside the two
+admin-catch-up fields below. All three ride the existing gossip payload with no wire change, and adopting a
+peer's new values (`NodeInfo.copyTelemetryFrom`) deliberately does **not** count as a membership change:
+firing the membership listeners every round would rebuild the ownership ring and re-run anti-entropy for
+nothing. A node running an older version reports `0` load and so attracts traffic — roll every node before
+setting `scriptRoutingEnabled=true`.
+
+A peer is eligible only if all three hold: it is `ALIVE` in the local membership view, it is **not still
+catching up on admin metadata** (`adminSyncing`, gossiped from `AdminAntiEntropyService.hasCompletedAdminSync`),
+and it reports an **`adminEpoch` at least as high as this node's**. The last two matter because admin/DDL and
+user ops are replicated to a *majority* and the rest converge through admin anti-entropy: without them a
+script could land on a node that has not applied the `CREATE_DATABASE`/`SAVE_PROCEDURE` the caller is relying
+on and fail with a transient `404-4`/`404-8` that a local run would never have hit. Both signals ride the
+same gossip round as the heartbeat and the load. Two consequences worth knowing: for up to one
+`gossipIntervalMs` after a DDL every peer looks behind, so scripts run locally until the new epoch
+propagates; and an older node that does not report an epoch at all reads as `0`, so once this node's epoch is
+non-zero it is never chosen — the safe direction, and another reason to roll the whole cluster promptly. This node itself is always a candidate: running locally is the fallback in every other case too, and
+the epoch comparison is against its own epoch.
+
+Quorum is deliberately still not an input: a script that lands on a node lacking quorum fails on its first
+write with the existing `503-2`, which is the correct and already-tested outcome. A forward that fails (unreachable target, timeout, `ERROR` reply)
+**falls back to local execution** rather than erroring: the script would have run here anyway before
+placement existed, so local is always correct and placement can never make a working call fail. The
+fallback is logged at WARNING and counted. Because a forwarded script must be given the whole script
+budget, `forwardScript` waits `scriptTimeoutMs + replicationAckTimeoutMs` rather than the ack timeout
+sized for a single write. No forwarding loop is possible: the target runs the script through
+`ClusterConnectionHandler.executeForwarded` → `OperationProcessor` directly, bypassing
+`MessageProcessor` and therefore `ClusterRouter`.
+
+Authorization stays at the edge (`AuthorizationChecker` runs on the caller's own record before routing),
+and the acting username travels on the `FORWARD_REQUEST` so the target runs the script as the original
+user. `scriptsEnabled` and the `script*` sandbox keys must therefore be **uniform across the cluster**:
+the sandbox comes from the *executing* node's configuration, and a target with `scriptsEnabled=false`
+answers `403-2`, which the edge relays.
+
+**The trade-off is locality.** Placement spreads interpreter CPU; it does not move the script closer to
+its data. Each operation the script issues is still routed normally by `host/EnforcingDatabaseAccess`
+(forwarded to its collection's owner, with `db.transaction` spanning owners through the same 2PC the wire
+protocol uses), so a forwarded script is usually remote from the collections it touches and pays one
+round trip per operation. A script doing many small reads is fastest on the owner of the collections it
+reads; a script that is mostly computation is best spread. `ScriptPlacement` is isolated enough that a
+locality term could be added later without touching the routing, wire or execution paths.
+
+`GET_DATABASE_STATS` reports placement per node under `scripts`: `routingEnabled`, `running` (the live
+count), `forwarded` and `forwardFallbacks`.
 
 ### Stored procedures and triggers
 
@@ -153,28 +210,17 @@ anti-entropy would then flip-flop on. The `definer` in particular must be stampe
 peer re-executing has no acting user of its own, and two nodes disagreeing about a trigger's definer would
 mean the same write runs under different authority depending on which node owns the collection.
 
-`CALL_PROCEDURE`, like `RUN_SCRIPT`, is **not** in `ClusterRouter`'s routable set: a procedure is scoped to a
-database but may touch collections owned by different nodes, so there is no single owner to route to. It runs
-on the node that received it and each operation it issues is routed normally, `db.transaction` included.
+`CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (both are in `ClusterRouter`'s `SCRIPT_OPS`): a
+procedure is scoped to a database but may touch collections owned by different nodes, so there is no single
+owner to route to and it is instead forwarded to a live node chosen by script load when
+`scriptRoutingEnabled` is on (the default), else run on the node that received it. Either way each operation it issues is
+routed normally, `db.transaction` included.
 
 A **trigger fires only on the collection's owner**, because `TriggerHelper` is called from
 `OperationProcessor`'s write handlers and a replica applies a `REPLICATE`/`REPLICATE_TX` through
 `ReplicatedApplyHelper`/`ReplicatedTxApplyHelper`, which bypass it. The cascade bound holds across nodes too:
 `triggerDepth` rides on the request, and `ClusterConnectionHandler`'s forward paths preserve it (they are
 authenticated by `clusterSecret`), while the edge zeroes it for client requests.
-
-> **Future work — node selection for scripts.** Always executing on the receiving node is a
-> deliberate first cut, not the intended end state. The node that happens to accept the connection is
-> not necessarily a good place to run the script: it may be the owner of none of the collections the
-> script touches (paying a round trip per operation), or it may be the busiest node in the cluster
-> while others are idle. A later phase should let `RUN_SCRIPT` **choose** its execution node —
-> consulting live membership and node availability/load, and preferring a node that owns the
-> collections the script will actually use — and forward the whole script there, the way
-> `ClusterRouter` already forwards a per-collection operation to its owner. Open questions to settle
-> then: how to know which collections a script will touch before running it (declare them on the
-> request, or learn them from previous runs), what "available" means (liveness only, or a load/queue
-> signal gossiped with the heartbeat), and how to avoid forwarding loops and thrashing when several
-> nodes each think another is the better host.
 
 ### The trigger cache is partitioned by ownership
 
@@ -440,7 +486,7 @@ See the *Clustering* row of the configuration table in the main
 `clusterPort`, `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`,
 `nodeId`, `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`,
 `deadTimeoutMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`,
-`readFallbackToLocal`, `clusterTlsEnabled`, `clusterSecret`,
+`readFallbackToLocal`, `scriptRoutingEnabled`, `clusterTlsEnabled`, `clusterSecret`,
 `antiEntropyIntervalMs`, `tombstoneRetentionMs`.
 
 ## Operations runbook

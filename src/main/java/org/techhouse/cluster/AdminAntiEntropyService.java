@@ -71,6 +71,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             return;
         }
         started = true;
+        publishSyncState();
         if (clusterConfig.antiEntropyIntervalMs() <= 0) {
             return;
         }
@@ -86,6 +87,7 @@ public class AdminAntiEntropyService implements MembershipListener {
     public void stop() {
         started = false;
         adminSyncCompleted.set(false);
+        publishSyncState();
         if (periodicScheduler != null) {
             periodicScheduler.shutdownNow();
             periodicScheduler = null;
@@ -97,6 +99,13 @@ public class AdminAntiEntropyService implements MembershipListener {
     // manually-wired tests are unaffected.
     public boolean hasCompletedAdminSync() {
         return !started || adminSyncCompleted.get();
+    }
+
+    // Gossiped so peers can keep a script off a node whose admin state is not caught up yet
+    // (cluster/ScriptPlacement). Inert while the service is stopped, which is what keeps the standalone path
+    // and the manually-wired tests eligible.
+    private void publishSyncState() {
+        membershipService.setAdminSyncing(!hasCompletedAdminSync());
     }
 
     @Override
@@ -145,6 +154,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             }
         } finally {
             adminSyncCompleted.set(true);
+            publishSyncState();
         }
     }
 

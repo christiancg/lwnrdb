@@ -856,6 +856,13 @@ public class OperationProcessorTest {
         assertTrue(stats.has("memory"));
         assertTrue(stats.has("totals"));
         assertTrue(stats.has("databases"));
+        assertTrue(stats.has("scripts"));
+
+        final var scripts = stats.get("scripts").asJsonObject();
+        assertTrue(scripts.has("routingEnabled"));
+        assertEquals(0L, scripts.get("running").asJsonNumber().getValue().longValue());
+        assertTrue(scripts.has("forwarded"));
+        assertTrue(scripts.has("forwardFallbacks"));
 
         final var memory = stats.get("memory").asJsonObject();
         assertTrue(memory.has("heapUsedBytes"));

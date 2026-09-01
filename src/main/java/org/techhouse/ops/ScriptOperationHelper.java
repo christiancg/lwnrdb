@@ -24,6 +24,7 @@ import org.techhouse.simplejs.host.ScriptResult;
 public final class ScriptOperationHelper {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(ScriptOperationHelper.class);
     private static final String EXHAUSTED_MESSAGE = "Script exhausted available memory";
@@ -48,7 +49,13 @@ public final class ScriptOperationHelper {
         // rather than an exception, which is the contract this operation already had.
         final var host = hostFor(request.getArgs(), dbName, username, clientId);
         final var start = System.currentTimeMillis();
-        final var result = simpleJs.run(source, host);
+        final ScriptResult result;
+        scriptLoad.enter();
+        try {
+            result = simpleJs.run(source, host);
+        } finally {
+            scriptLoad.exit();
+        }
         logRun("RUN_SCRIPT user=" + username + " database=" + dbName, System.currentTimeMillis() - start, result);
         return toRunScriptResponse(result);
     }
@@ -59,7 +66,13 @@ public final class ScriptOperationHelper {
             UUID clientId, String logPrefix) {
         final var host = hostFor(args, dbName, username, clientId);
         final var start = System.currentTimeMillis();
-        final var result = simpleJs.run(compiled, host);
+        final ScriptResult result;
+        scriptLoad.enter();
+        try {
+            result = simpleJs.run(compiled, host);
+        } finally {
+            scriptLoad.exit();
+        }
         logRun(logPrefix, System.currentTimeMillis() - start, result);
         return result;
     }

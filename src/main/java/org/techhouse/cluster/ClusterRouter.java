@@ -7,6 +7,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
@@ -21,7 +22,9 @@ import org.techhouse.ops.resp.OperationResponse;
 /**
  * Edge-side request routing: forwards a per-collection operation that this node does not own to the
  * collection's owner (the cache home / write coordinator) and relays the owner's response JSON verbatim.
- * Reads may fall back to the local (full) replica when the owner is unreachable.
+ * Reads may fall back to the local (full) replica when the owner is unreachable. A script
+ * (RUN_SCRIPT/CALL_PROCEDURE) has no single owner, so it is instead placed on a live node chosen by current
+ * script load (see {@link ScriptPlacement}) when {@code scriptRoutingEnabled} is on.
  */
 public class ClusterRouter {
     private static final Set<OperationType> ROUTABLE = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
@@ -29,6 +32,7 @@ public class ClusterRouter {
     private static final Set<OperationType> READS = Set.of(OperationType.FIND_BY_ID, OperationType.AGGREGATE);
     private static final Set<OperationType> WRITES = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
             OperationType.DELETE);
+    private static final Set<OperationType> SCRIPT_OPS = Set.of(OperationType.RUN_SCRIPT, OperationType.CALL_PROCEDURE);
     private final Logger logger = Logger.logFor(ClusterRouter.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
@@ -36,6 +40,8 @@ public class ClusterRouter {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Tx2pcCoordinator tx2pcCoordinator = IocContainer.get(Tx2pcCoordinator.class);
+    private final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
+    private final Configuration configuration = Configuration.getInstance();
     private final EJson eJson = IocContainer.get(EJson.class);
 
     /**
@@ -54,6 +60,9 @@ public class ClusterRouter {
         }
         if (ClusterAdminHelper.isCoordinatedAdminOp(type)) {
             return forwardAdmin(type, rawJson, actingUser);
+        }
+        if (SCRIPT_OPS.contains(type)) {
+            return forwardScript(rawJson, actingUser);
         }
         if (!ROUTABLE.contains(type)) {
             return null;
@@ -194,6 +203,37 @@ public class ClusterRouter {
             return null;
         }
         return forwardToOwner(type, rawJson, coordinatorAddress, actingUser);
+    }
+
+    // A script is placed by load rather than by ownership (see ScriptPlacement). A forward that fails falls
+    // back to local execution instead of erroring: the script would have run here before placement existed,
+    // so local is always a correct outcome and placement can never make a working call fail.
+    private String forwardScript(String rawJson, String actingUser) {
+        final var target = scriptPlacement.choose();
+        if (target == null) {
+            return null;
+        }
+        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, clusterConfig.secret(),
+                membershipService.getSelf(), null);
+        message.setForwardBody(ForwardBody.encode(rawJson));
+        message.setActingUser(actingUser);
+        // The whole script budget, not replicationAckTimeoutMs: that is sized for a single write ack and
+        // would report the target unreachable while it is still running the script.
+        final var timeout = configuration.getScriptTimeoutMs() + clusterConfig.replicationAckTimeoutMs();
+        try {
+            final var response = pool.request(target.address(), message, timeout);
+            if (response.getType() == ClusterMessageType.FORWARD_RESPONSE) {
+                scriptPlacement.recordForward();
+                return ForwardBody.decode(response.getForwardBody());
+            }
+            logger.warning("Node " + target.address() + " rejected a forwarded script, running it locally: "
+                    + response.getErrorMessage());
+        } catch (Exception e) {
+            logger.warning(
+                    "Failed to forward a script to " + target.address() + ", running it locally: " + e.getMessage());
+        }
+        scriptPlacement.recordFallback();
+        return null;
     }
 
     private String forwardToOwner(OperationType type, String rawJson, String ownerAddress, String actingUser) {

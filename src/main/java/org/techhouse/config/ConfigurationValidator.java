@@ -103,6 +103,7 @@ public final class ConfigurationValidator {
         validateBoolean(configs, "clusterEnabled", errors);
         validateBoolean(configs, "clusterTlsEnabled", errors);
         validateBoolean(configs, "readFallbackToLocal", errors);
+        validateBoolean(configs, "scriptRoutingEnabled", errors);
         if (notAnInt(configs.get("clusterPort"), port -> port >= 1 && port <= 65535)) {
             errors.add(
                     "clusterPort must be a valid number between 1 and 65535, but was: " + configs.get("clusterPort"));

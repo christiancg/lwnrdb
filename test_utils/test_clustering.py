@@ -24,6 +24,11 @@ point of clustering is that any node serves any request transparently):
   * transactions under clustering: single-node commit/rollback, a multi-collection
     transaction committed atomically and visible cluster-wide, read-your-writes;
   * admin transaction ops (LIST_TRANSACTIONS, in-doubt count in GET_DATABASE_STATS);
+  * script node selection: a RUN_SCRIPT is placed on a live node chosen by script load
+    and its response relayed, the acting user survives the forward, a long script is not
+    cut off by the replication-ack timeout, an unreachable target falls back to local
+    execution, and a node with scriptRoutingEnabled=false never forwards (node-2 turns the
+    on-by-default flag off on purpose, so both behaviours are covered in one cluster);
   * node failure with quorum maintained (kill a node, writes + reads keep working);
   * node rejoin (restart it, the cluster serves consistent data again).
 """
@@ -36,7 +41,9 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Callable
 
 HOST = "127.0.0.1"
 BASE_CLIENT_PORT = int(os.environ.get("CLUSTER_TEST_CLIENT_PORT", "8991"))
@@ -246,11 +253,55 @@ def ids_of(response) -> list:
 
 # ── convergence helpers ──────────────────────────────────────────────────────
 
+def run_script(port, script, db=None, conn=None) -> dict:
+    payload = {"type": "RUN_SCRIPT", "databaseName": db or DB, "script": script}
+    if conn is not None:
+        return send(conn.s, conn.f, payload)
+    return op(port, payload)
+
+
+def burst(port, script, count: int) -> list:
+    """Run the same script `count` times concurrently, each on its own connection."""
+    results: list = [None] * count
+    def worker(index):
+        results[index] = run_script(port, script)
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+
+def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
+    """Repeat attempt(round) until at least one of its runs was forwarded, or time runs out.
+
+    Absorbs both the placement randomness (two random samples per run) and the gossip lag right
+    after a DDL: a peer is skipped until it reports an admin epoch at least as high as this node's,
+    which takes up to one gossipIntervalMs to propagate.
+    """
+    deadline = time.time() + timeout_s
+    round_no = 0
+    while True:
+        before = script_stats(port).get("forwarded", 0)
+        results = attempt(round_no)
+        delta = script_stats(port).get("forwarded", 0) - before
+        round_no += 1
+        if delta > 0 or time.time() >= deadline:
+            return results, delta
+        time.sleep(0.3)
+
+
+def script_stats(port) -> dict:
+    r = op(port, {"type": "GET_DATABASE_STATS"})
+    return ((r.get("stats") or {}).get("scripts") or {})
+
+
 def all_ports() -> list:
     return [n.client_port for n in nodes if n.alive]
 
 
-def wait_until(predicate, timeout_s: float, interval_s: float = 0.4) -> bool:
+def wait_until(predicate: Callable[[], bool], timeout_s: float, interval_s: float = 0.4) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         try:
@@ -351,6 +402,13 @@ class Node:
             "readFallbackToLocal=true\n"
             "antiEntropyIntervalMs=3000\n"
             "tombstoneRetentionMs=86400000\n"
+            "scriptsEnabled=true\n"
+            # Well above replicationAckTimeoutMs, so a script that outlives a write ack proves
+            # the forward is given the script budget rather than the ack timeout.
+            "scriptTimeoutMs=20000\n"
+            # node-2 deliberately turns placement off (it is on by default): the flag governs a node's
+            # own outgoing runs, so the same cluster covers routing on and routing off.
+            f"scriptRoutingEnabled={'false' if self.index == 2 else 'true'}\n"
         )
         with open(os.path.join(self.work_dir, "lwnrdb.cfg"), "w") as fp:
             fp.write(cfg)
@@ -673,6 +731,234 @@ def test_admin_transaction_ops():
     check_field("in-doubt transaction count is zero", r, "stats.inDoubtTransactions.count", 0)
 
 
+def test_script_placement_forwards_runs():
+    section("Script node selection — a run is placed on a node chosen by script load")
+
+    for i in (0, 1):
+        check_true(f"node-{i} reports script routing enabled",
+                   script_stats(nodes[i].client_port).get("routingEnabled") is True,
+                   detail=f"scripts={script_stats(nodes[i].client_port)!r}")
+
+    before = script_stats(nodes[0].client_port)
+
+    def _batch(_round):
+        conn = authed(nodes[0].client_port)
+        try:
+            return [run_script(None, "return 1 + 1;", conn=conn) for _ in range(40)]
+        finally:
+            conn.close()
+
+    results, forwarded = until_forwarded(nodes[0].client_port, _batch)
+    after = script_stats(nodes[0].client_port)
+
+    check_true("every placed run returned OK", all(r.get("status") == "OK" for r in results),
+               detail=f"statuses={sorted({r.get('status') for r in results})}")
+    check_true("every placed run returned the script's value",
+               all(r.get("result") == 2 for r in results),
+               detail=f"results={sorted({repr(r.get('result')) for r in results})}")
+    # A forward means that run's interpreter CPU was spent on another node. Which node ran a given
+    # script is deliberately not observable from a client (nothing exposes node identity to a
+    # script), so the edge's own counter is the assertion.
+    check_true("placement moved runs off the receiving node", forwarded > 0,
+               detail=f"forwarded delta={forwarded}")
+    fallbacks = after.get("forwardFallbacks", 0) - before.get("forwardFallbacks", 0)
+    check_true("no forward failed while every node was up", fallbacks == 0,
+               detail=f"forwardFallbacks delta={fallbacks}")
+    check_true("the edge is idle again once the runs are done",
+               after.get("running") == 0, detail=f"running={after.get('running')!r}")
+
+
+def test_forwarded_script_reads_and_writes():
+    section("Script node selection — a forwarded script still reads and writes correctly")
+
+    check("CREATE_COLLECTION for the script data", create_coll(nodes[0].client_port, DB, "scripted"), "OK")
+    script = ('import db from "db";\n'
+              'import args from "args";\n'
+              'db.save(db.name, "scripted", { _id: args.id, v: 7 });\n'
+              'return db.findById(db.name, "scripted", args.id).v;')
+
+    written = []
+
+    def _batch(round_no):
+        written.clear()
+        conn = authed(nodes[0].client_port)
+        try:
+            out = []
+            for i in range(8):
+                doc_id = f"scripted-{round_no}-{i}"
+                out.append(send(conn.s, conn.f, {"type": "RUN_SCRIPT", "databaseName": DB,
+                                                 "script": script, "args": {"id": doc_id}}))
+                written.append(doc_id)
+            return out
+        finally:
+            conn.close()
+
+    results, forwarded = until_forwarded(nodes[0].client_port, _batch)
+
+    for doc_id, r in zip(written, results):
+        check(f"a placed script writes and reads back {doc_id}", r, "OK")
+        check_true(f"{doc_id} read back its own write", r.get("result") == 7,
+                   detail=f"result={r.get('result')!r}")
+    check_true("at least one of those runs was forwarded", forwarded > 0)
+    for doc_id in written:
+        check_true(f"{doc_id} is visible from every node",
+                   all_nodes_see(DB, "scripted", doc_id, 7, ports=all_ports(), timeout_s=15.0))
+
+
+def test_forwarded_script_preserves_the_acting_user():
+    section("Script node selection — the acting user survives the forward")
+
+    granted = {"type": "CREATE_USER", "username": "cluster_script_user", "password": "cluster_script1234",
+               "admin": False, "globalPermissions": [], "databasePermissions": {DB: "READ_WRITE"},
+               "collectionPermissions": {}, "scriptPermissions": {DB: True}}
+    denied = {"type": "CREATE_USER", "username": "cluster_script_denied", "password": "cluster_script1234",
+              "admin": False, "globalPermissions": [], "databasePermissions": {DB: "READ_WRITE"},
+              "collectionPermissions": {}, "scriptPermissions": {}}
+    check("CREATE_USER with a per-database RUN grant", op(nodes[0].client_port, granted), "OK")
+    check("CREATE_USER without a grant", op(nodes[0].client_port, denied), "OK")
+
+    def _granted_can_run():
+        c = Conn(nodes[0].client_port)
+        try:
+            a = send(c.s, c.f, {"type": "AUTHENTICATE", "username": "cluster_script_user",
+                                "password": "cluster_script1234"})
+            if a.get("status") != "OK":
+                return False
+            return send(c.s, c.f, {"type": "RUN_SCRIPT", "databaseName": DB,
+                                   "script": "return 1;"}).get("status") == "OK"
+        finally:
+            c.close()
+
+    check_true("the granted user's script runs (the record replicated)",
+               wait_until(_granted_can_run, timeout_s=15.0))
+
+    script = ('import db from "db";\n'
+              'db.save(db.name, "scripted", { _id: "as-user", v: 7 });\n'
+              'return db.findById(db.name, "scripted", "as-user").v;')
+
+    def _batch(_round):
+        c = Conn(nodes[0].client_port)
+        try:
+            send(c.s, c.f, {"type": "AUTHENTICATE", "username": "cluster_script_user",
+                            "password": "cluster_script1234"})
+            return [send(c.s, c.f, {"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
+                    for _ in range(12)]
+        finally:
+            c.close()
+
+    results, forwarded = until_forwarded(nodes[0].client_port, _batch)
+
+    check_true("a non-admin's forwarded script runs with its own authority",
+               all(r.get("status") == "OK" and r.get("result") == 7 for r in results),
+               detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in results][:3]}")
+    check_true("at least one of those runs was forwarded", forwarded > 0)
+
+    # A caller without the grant is refused at the edge, before any placement happens.
+    before = script_stats(nodes[0].client_port)
+    c = Conn(nodes[0].client_port)
+    try:
+        send(c.s, c.f, {"type": "AUTHENTICATE", "username": "cluster_script_denied",
+                        "password": "cluster_script1234"})
+        for _ in range(5):
+            check_code("a caller without the grant is refused",
+                       send(c.s, c.f, {"type": "RUN_SCRIPT", "databaseName": DB, "script": "return 1;"}),
+                       "FORBIDDEN", "403-1")
+    finally:
+        c.close()
+    after = script_stats(nodes[0].client_port)
+    check_true("a refused call is never forwarded",
+               after.get("forwarded", 0) == before.get("forwarded", 0),
+               detail=f"forwarded {before.get('forwarded')} -> {after.get('forwarded')}")
+
+    op(nodes[0].client_port, {"type": "DELETE_USER", "username": "cluster_script_user"})
+    op(nodes[0].client_port, {"type": "DELETE_USER", "username": "cluster_script_denied"})
+
+
+def test_long_forwarded_script_is_not_cut_off():
+    section("Script node selection — a long forwarded script is not cut off by the ack timeout")
+
+    # 6s is past replicationAckTimeoutMs (5s) and well inside scriptTimeoutMs (20s), so a forward
+    # waiting only the ack timeout would answer 503-4 while the target was still running. Placement
+    # is random (two samples), so the runs are fired as a concurrent burst and the burst is retried
+    # until at least one of them was actually forwarded.
+    script = 'export default new Promise(r => setTimeout(() => r("slept"), 6000));'
+
+    def _batch(_round):
+        out = burst(nodes[0].client_port, script, 9)
+        check_true("every long script returned its result",
+                   all(r.get("status") == "OK" and r.get("result") == "slept" for r in out),
+                   detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in out][:3]}")
+        return out
+
+    _, forwarded = until_forwarded(nodes[0].client_port, _batch, timeout_s=30.0)
+    check_true("a long script outliving the ack timeout was forwarded and still answered",
+               forwarded > 0, detail="no concurrent long run was forwarded")
+
+
+def test_script_placement_falls_back_when_the_target_dies():
+    section("Script node selection — an unreachable target falls back to local execution")
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} (hard crash) ...")
+    victim.kill()
+
+    before = script_stats(nodes[0].client_port)
+    deadline = time.time() + 8.0
+    statuses = set()
+    fallbacks = 0
+    conn = authed(nodes[0].client_port)
+    try:
+        while time.time() < deadline:
+            statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
+            fallbacks = script_stats(nodes[0].client_port).get("forwardFallbacks", 0) \
+                - before.get("forwardFallbacks", 0)
+            if fallbacks > 0:
+                break
+    finally:
+        conn.close()
+
+    check_true("scripts keep succeeding while a placement target is down", statuses == {"OK"},
+               detail=f"statuses={sorted(statuses)}")
+    check_true("a failed forward is counted and the run stays local", fallbacks > 0,
+               detail=f"forwardFallbacks delta={fallbacks}")
+
+    # Whatever the timing, the calls after the node is declared dead must all succeed.
+    def _all_ok():
+        return all(run_script(nodes[0].client_port, "return 1 + 1;").get("status") == "OK"
+                   for _ in range(5))
+
+    check_true("scripts still succeed once the dead node leaves the view",
+               wait_until(_all_ok, timeout_s=20.0, interval_s=1.0))
+
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+    wait_for_cluster()
+
+
+def test_script_routing_disabled_stays_local():
+    section("Script node selection — routing off keeps every run on the receiving node")
+
+    stats = script_stats(nodes[2].client_port)
+    check_true("node-2 reports script routing disabled", stats.get("routingEnabled") is False,
+               detail=f"scripts={stats!r}")
+
+    before = script_stats(nodes[2].client_port)
+    conn = authed(nodes[2].client_port)
+    try:
+        results = [run_script(None, "return 1 + 1;", conn=conn) for _ in range(20)]
+    finally:
+        conn.close()
+    after = script_stats(nodes[2].client_port)
+
+    check_true("every run on the routing-disabled node returned OK",
+               all(r.get("status") == "OK" and r.get("result") == 2 for r in results),
+               detail=f"statuses={sorted({r.get('status') for r in results})}")
+    check_true("nothing was forwarded", after.get("forwarded", 0) == before.get("forwarded", 0),
+               detail=f"forwarded {before.get('forwarded')} -> {after.get('forwarded')}")
+    check_true("nothing fell back either (no forward was attempted)",
+               after.get("forwardFallbacks", 0) == before.get("forwardFallbacks", 0))
+
+
 def test_node_failure_quorum_maintained():
     section("Node failure — quorum (2 of 3) maintained, writes + reads keep working")
 
@@ -758,6 +1044,12 @@ def main():
         test_single_node_transaction()
         test_multi_collection_transaction()
         test_admin_transaction_ops()
+        test_script_placement_forwards_runs()
+        test_forwarded_script_reads_and_writes()
+        test_forwarded_script_preserves_the_acting_user()
+        test_long_forwarded_script_is_not_cut_off()
+        test_script_routing_disabled_stays_local()
+        test_script_placement_falls_back_when_the_target_dies()
         # Failure / rejoin last: they degrade then restore the cluster.
         test_node_failure_quorum_maintained()
         test_node_rejoin()

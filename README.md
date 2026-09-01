@@ -40,7 +40,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [ ] Jobs
   - [x] Triggers (the [`SAVE_TRIGGER`](#save_trigger) operation)
   - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
-- [ ] Script node selection under clustering: `RUN_SCRIPT` currently always runs on the node that received it. It should instead check node availability (and prefer a node that owns the collections the script uses) rather than always running locally — see [docs/clustering.md](docs/clustering.md) → *Scripts*
+  - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
+    - [ ] Locality-aware placement: selection is by load only, so the chosen node is usually not the owner of the collections the script touches and every operation the script issues still costs a round trip
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
 - [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
@@ -728,6 +729,12 @@ Response shape:
       "dropped": 0,
       "queued": 0
     },
+    "scripts": {
+      "routingEnabled": true,
+      "running": 2,
+      "forwarded": 118,
+      "forwardFallbacks": 3
+    },
     "totals": {
       "userCount": 3,
       "databaseCount": 1,
@@ -968,6 +975,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
 | `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
 | `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
+| `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](#run_script), `CALL_PROCEDURE`) may be forwarded to a live node chosen by current script load instead of running on the node that received it. Set `false` to keep every script on the receiving node. Only a node that is alive **and** caught up on admin metadata is chosen, so a script never lands on a node that has not applied the DDL it depends on. Placement spreads interpreter CPU, not data locality: the chosen node is usually not the owner of the collections the script touches, so each operation still costs a round trip. `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node must be rolled before the first script runs on an upgraded cluster |
 | `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
 | `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
 | `antiEntropyIntervalMs` | Valid number ≥ 1. How often each node runs a background anti-entropy sweep reconciling its collections against live peers |

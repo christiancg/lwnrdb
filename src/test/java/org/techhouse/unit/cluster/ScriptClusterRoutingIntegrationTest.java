@@ -14,11 +14,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cluster.AdminEpoch;
+import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
+import org.techhouse.cluster.ScriptPlacement;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
@@ -40,6 +43,7 @@ import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
@@ -58,6 +62,8 @@ public class ScriptClusterRoutingIntegrationTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final ClusterRouter router = IocContainer.get(ClusterRouter.class);
+    private final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
     private ClusterServer server;
     private int serverPort;
     private boolean origEnabled;
@@ -65,9 +71,17 @@ public class ScriptClusterRoutingIntegrationTest {
     private boolean origTls;
     private long origAck;
     private int origExpected;
+    private boolean origScripts;
+    private boolean origScriptRouting;
 
     private static NodeInfo node(String id, int port) {
         return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
+    }
+
+    private static NodeInfo node(String id, int port, int scriptLoad) {
+        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad);
+        node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
+        return node;
     }
 
     @BeforeEach
@@ -81,6 +95,8 @@ public class ScriptClusterRoutingIntegrationTest {
         origTls = config.isClusterTlsEnabled();
         origAck = config.getReplicationAckTimeoutMs();
         origExpected = config.getClusterExpectedSize();
+        origScripts = config.isScriptsEnabled();
+        origScriptRouting = config.isScriptRoutingEnabled();
         TestUtils.setPrivateField(config, "clusterSecret", SECRET);
         TestUtils.setPrivateField(config, "clusterTlsEnabled", false);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 1000L);
@@ -98,6 +114,8 @@ public class ScriptClusterRoutingIntegrationTest {
         TestUtils.setPrivateField(config, "clusterTlsEnabled", origTls);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAck);
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
+        TestUtils.setPrivateField(config, "scriptsEnabled", origScripts);
+        TestUtils.setPrivateField(config, "scriptRoutingEnabled", origScriptRouting);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
@@ -146,6 +164,16 @@ public class ScriptClusterRoutingIntegrationTest {
             }
         }
         throw new IllegalStateException("no collection owned by the other node");
+    }
+
+    private String collectionOwnedBySelf() {
+        for (var i = 0; i < 500; i++) {
+            final var coll = "script-local-" + i;
+            if (ownership.isOwner(TestGlobals.DB, coll)) {
+                return coll;
+            }
+        }
+        throw new IllegalStateException("no collection owned by this node");
     }
 
     private void createCollection(String coll) throws Exception {
@@ -367,6 +395,58 @@ public class ScriptClusterRoutingIntegrationTest {
         final var results = db.aggregate(TestGlobals.DB, coll, pipeline);
         assertEquals(1, results.size());
         assertEquals("geo-1", results.getFirst().get("_id").asJsonString().getValue());
+    }
+
+    // A whole RUN_SCRIPT is placed on the less loaded node and the target's response JSON is relayed
+    // verbatim. The peer here is this same JVM's cluster server, which runs the script through
+    // handleForward -> OperationProcessor, bypassing the router, so no forwarding loop is possible.
+    @Test
+    public void test_run_script_is_forwarded_to_the_chosen_node_and_the_response_relayed() throws Exception {
+        enableScriptRouting();
+        final var raw = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"script\":\"return 41 + 1;\"}";
+        final var forwardedBefore = scriptPlacement.getForwarded();
+        final var response = router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null);
+        assertNotNull(response, "the script should have been forwarded, not run locally");
+        assertTrue(response.contains("\"result\":42"), response);
+        assertEquals(forwardedBefore + 1, scriptPlacement.getForwarded());
+    }
+
+    // The acting user travels with the forward: a script running with no user could not read at all,
+    // since EnforcingDatabaseAccess resolves the caller's record on every operation.
+    @Test
+    public void test_forwarded_script_runs_as_the_acting_user() throws Exception {
+        enableScriptRouting();
+        // A collection the receiving node owns, so the script's own read stays local on the target: in a
+        // single JVM both "nodes" share one connection pool, and a nested hop back would wait on the
+        // connection the outer forward is already using.
+        final var coll = collectionOwnedBySelf();
+        createCollection(coll);
+        seed(coll, "forwarded-read");
+        final var script = "import db from \\\"db\\\"; return db.findById(db.name, \\\"" + coll
+                + "\\\", \\\"forwarded-read\\\").value;";
+        final var raw = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB + "\",\"script\":\"" + script
+                + "\"}";
+        final var response = router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null);
+        assertNotNull(response, "the script should have been forwarded, not run locally");
+        assertTrue(response.contains("hello"), response);
+    }
+
+    // Routing off keeps the pre-existing behaviour: the script runs on the node that received it.
+    @Test
+    public void test_run_script_stays_local_when_routing_is_disabled() throws Exception {
+        enableScriptRouting();
+        TestUtils.setPrivateField(config, "scriptRoutingEnabled", false);
+        final var raw = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"script\":\"return 1;\"}";
+        assertNull(router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null));
+    }
+
+    // Self carries a load the peer does not, so placement always prefers the peer.
+    private void enableScriptRouting() throws Exception {
+        configureMembership(2, node("self", 19990, 9), node("other", serverPort, 0));
+        TestUtils.setPrivateField(config, "scriptsEnabled", true);
+        TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
     }
 
     // An unreadable response from the owner becomes a script-visible error, not a raw exception

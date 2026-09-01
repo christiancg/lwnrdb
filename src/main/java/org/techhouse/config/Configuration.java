@@ -37,6 +37,7 @@ public final class Configuration {
     private long replicationAckTimeoutMs;
     private int virtualNodesPerNode;
     private boolean readFallbackToLocal;
+    private boolean scriptRoutingEnabled;
     private boolean clusterTlsEnabled;
     private String clusterSecret;
     private long antiEntropyIntervalMs;
@@ -117,6 +118,7 @@ public final class Configuration {
         replicationAckTimeoutMs = longOf(configs, "replicationAckTimeoutMs");
         virtualNodesPerNode = intOf(configs, "virtualNodesPerNode");
         readFallbackToLocal = booleanOf(configs, "readFallbackToLocal");
+        scriptRoutingEnabled = booleanOf(configs, "scriptRoutingEnabled");
         clusterTlsEnabled = booleanOf(configs, "clusterTlsEnabled");
         clusterSecret = configs.get("clusterSecret");
         antiEntropyIntervalMs = longOf(configs, "antiEntropyIntervalMs");
@@ -297,6 +299,10 @@ public final class Configuration {
 
     public boolean isReadFallbackToLocal() {
         return readFallbackToLocal;
+    }
+
+    public boolean isScriptRoutingEnabled() {
+        return scriptRoutingEnabled;
     }
 
     public boolean isClusterTlsEnabled() {

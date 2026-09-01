@@ -9,9 +9,11 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.ScriptLoad;
 import org.techhouse.ops.ScriptOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -68,6 +70,34 @@ public class ScriptOperationHelperTest {
                 null);
         assertInstanceOf(RunScriptResponse.class, response);
         return (RunScriptResponse) response;
+    }
+
+    // The gossiped placement signal counts a run for exactly as long as it is executing
+    @Test
+    public void test_counts_a_run_while_it_executes() throws Exception {
+        final var scriptLoad = IocContainer.get(ScriptLoad.class);
+        assertEquals(0, scriptLoad.current());
+        final var observed = new java.util.concurrent.atomic.AtomicInteger();
+        final var result = new java.util.concurrent.atomic.AtomicReference<RunScriptResponse>();
+        final var runner = new Thread(
+                () -> result.set(run("export default new Promise(r => setTimeout(() => r(7), 700));")));
+        runner.start();
+        final var deadline = System.currentTimeMillis() + 5_000L;
+        while (System.currentTimeMillis() < deadline && observed.get() == 0) {
+            observed.set(scriptLoad.current());
+            Thread.onSpinWait();
+        }
+        runner.join(30_000L);
+        assertEquals(1, observed.get(), "the run was never counted while it was executing");
+        assertEquals(0, scriptLoad.current());
+        assertEquals(OperationStatus.OK, result.get().getStatus(), result.get().getMessage());
+    }
+
+    @Test
+    public void test_decrements_on_a_failed_run() {
+        final var scriptLoad = IocContainer.get(ScriptLoad.class);
+        assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), run("throw new Error('nope');").getErrorCode());
+        assertEquals(0, scriptLoad.current());
     }
 
     // Scripts are off by default: the operation is refused before anything is parsed

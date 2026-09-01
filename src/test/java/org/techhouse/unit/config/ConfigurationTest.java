@@ -145,6 +145,7 @@ public class ConfigurationTest {
         map.put("replicationAckTimeoutMs", "5000");
         map.put("virtualNodesPerNode", "128");
         map.put("readFallbackToLocal", "true");
+        map.put("scriptRoutingEnabled", "true");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");

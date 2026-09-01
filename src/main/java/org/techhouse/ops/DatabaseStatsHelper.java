@@ -5,6 +5,7 @@ import java.util.Set;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
+import org.techhouse.cluster.ScriptPlacement;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -15,6 +16,8 @@ import org.techhouse.ops.resp.OperationResponse;
 public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
+    private static final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
 
     private DatabaseStatsHelper() {
     }
@@ -25,6 +28,7 @@ public final class DatabaseStatsHelper {
             stats.add("memory", buildMemoryStats());
             stats.add("inDoubtTransactions", buildInDoubtTransactions());
             stats.add("triggers", buildTriggerStats());
+            stats.add("scripts", buildScriptStats());
 
             final var dbNames = cache.getUserDatabaseNames();
             final var dbArray = new JsonArray();
@@ -59,6 +63,17 @@ public final class DatabaseStatsHelper {
         // garbage-collected after triggerRunRetentionMs rather than ever running.
         triggers.addProperty("pendingRuns", (long) pendingRunCount());
         return triggers;
+    }
+
+    // Where scripts are running: this node's live count plus how often placement forwarded a run elsewhere
+    // and how often that forward failed and the run stayed here.
+    private static JsonObject buildScriptStats() {
+        final var scripts = new JsonObject();
+        scripts.addProperty("routingEnabled", Configuration.getInstance().isScriptRoutingEnabled());
+        scripts.addProperty("running", (long) scriptLoad.current());
+        scripts.addProperty("forwarded", scriptPlacement.getForwarded());
+        scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
+        return scripts;
     }
 
     private static int pendingRunCount() {
