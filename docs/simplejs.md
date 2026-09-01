@@ -956,7 +956,15 @@ was replaced; see *Regex engine* below.
   while `s = s + s` — the doubling case `tick()` cannot see — has a delta equal to the whole
   accumulated string and is still bounded. `OutOfMemoryError`/`StackOverflowError` are caught at the
   `SimpleJs.run` boundary as a last resort and reported as `ScriptMemoryError`; the budget is what is
-  meant to make that unreachable, so `ScriptOperationHelper` logs it at WARN.
+  meant to make that unreachable, so `ScriptOperationHelper` logs it at WARN. **What the script pulls
+  out of the database is charged too**: `builtins/DbModule` charges the estimated size of every
+  document a host call materialises — `findById`'s document, each `aggregate` result *inside* the
+  conversion loop (so a runaway read aborts partway rather than after the whole JS copy exists), the
+  document `save` returns and `bulkSave`'s outcome arrays. What the script *passed in* is never
+  charged, because it was already charged when the script allocated it. A `db.cursor` batch is the one
+  charge that is credited back (`InterpreterOps.release`) when the batch is drained and replaced: the
+  release point is fixed and deterministic, so it does not reintroduce the GC-timing dependence the
+  budget deliberately avoids.
 - **BigInt has two conversions at the boundary.** `EJsonInterop.toEjson` is the spec path shared with
   `JSON.stringify` and throws on a BigInt, as test262 requires. `EJsonInterop.toHostEjson` is the host
   path (the script result contract and everything heading into the database): a BigInt whose absolute
@@ -1012,8 +1020,17 @@ unreachable owner saw no error at all.
 top-level promise), with the message `"<ErrorName>: <message>"`. Captured `console` output rides
 along on **every** outcome, so a failed run is still debuggable.
 
-**Not capped.** The response carries the script's result verbatim, so a script returning a very large
-value produces a very large response line — there is no `maxEntrySize`-style guard on `result` yet.
+**The result is capped.** `SimpleJs` estimates the converted result with
+`EJsonInterop.estimatedBytes` and fails the run with `ScriptResultTooLargeError` → `400-15` when it
+exceeds `ResourceLimits.maxResultBytes` (`scriptMaxResultBytes`, default `16Mb`), so a script cannot
+turn one request into an arbitrarily large response line. The cap lives with the other sandbox
+limits rather than in `ScriptOperationHelper`, which is what makes `CALL_PROCEDURE` inherit it with
+no second implementation; a **trigger** run passes `-1` instead, since `TriggerDispatcher` discards
+the result and capping it would fail a run for a value nobody reads. The failure path is the ordinary
+one, so the `console` output still comes back. An embedding that builds its `ResourceLimits` through
+any of the delegating constructors gets `-1` and skips the estimation walk entirely — which is what
+keeps the test262 worker on its previous behaviour. To *process* more data than can be returned, use
+`db.cursor` and return a summary.
 
 **Runs where it lands (for now).** Under clustering the script always executes on the node that
 received the request; only its individual operations are routed to their collections' owners. That is
@@ -1179,6 +1196,31 @@ Three documented limitations:
   database or collection to authorize and are absent from `ALWAYS_ALLOWED_OPERATIONS`, so checking
   them would deny every non-admin. Each buffered write inside the transaction is still authorized on
   its own request. Wire behaviour for socket clients is unchanged.
+
+### `db.cursor`
+
+`db.cursor(database, collection, pipeline, options)` returns a built-in iterator that walks a
+pipeline one page at a time, so a script can read a collection larger than `scriptMaxMemoryBytes`
+without ever holding it. Each batch is an ordinary `AGGREGATE` with `{"type":"SKIP"}` and
+`{"type":"LIMIT"}` appended to a **copy** of the caller's pipeline — so it is authorized per request,
+schema-checked where applicable and routed by `ClusterRouter` exactly like a hand-written
+`db.aggregate`, and the cursor adds no cluster surface at all. A batch shorter than `batchSize` ends
+the walk. `options.batchSize` defaults to `scriptCursorBatchSize` and is clamped to
+`scriptCursorMaxBatchSize` (both from `ResourceLimits`, never from the request); a value below 1 or
+one that does not coerce to a number is a `RangeError`. The iterator is a `JsIterators.of` instance
+linked to a realm prototype (`Intrinsics.dbCursorProto`) that inherits `%IteratorPrototype%`, so
+`for-of`, spread and the iterator helpers (`.map`/`.take`/…) all work.
+
+Three things it is deliberately not:
+
+- **Not a snapshot.** Paging is `SKIP`/`LIMIT` over a live collection, so a concurrent insert or
+  delete between two batches can make a document be seen twice or not at all.
+- **Not self-ordering.** Without a `SORT` step the pipeline's order is unspecified and the paging is
+  meaningless, but `db.cursor` does not inject one: silently changing the pipeline would change the
+  results of one already ending in `GROUP_BY`/`COUNT`. Such a pipeline still works — it pages the
+  *step output*, which is rarely what the author means.
+- **Not stateful server-side.** Abandoning a cursor mid-walk (a `break` out of the `for-of`) holds
+  nothing to release; there is no cursor handle, no open read, and nothing to time out.
 
 ### Script operations under clustering
 

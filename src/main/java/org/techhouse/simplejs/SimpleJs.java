@@ -56,8 +56,7 @@ public final class SimpleJs {
         try {
             final var program = Parser.parse(Lexer.lexWithPositions(source), capturing.strictScriptGoal());
             final var outcome = Interpreter.run(program, capturing);
-            final var value = EJsonInterop.toHostEjson(contractResult(outcome));
-            return ok(value == null ? JsonNull.INSTANCE : value, capture);
+            return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
         } catch (ScriptTimeoutException timeout) {
             return failed("ScriptTimeoutError", timeout.getMessage(), capture);
         } catch (ScriptMemoryException memory) {
@@ -115,8 +114,7 @@ public final class SimpleJs {
             final var outcome = around == null
                     ? Interpreter.run(program, capturing)
                     : Interpreter.run(program, capturing, around);
-            final var value = EJsonInterop.toHostEjson(contractResult(outcome));
-            return ok(value == null ? JsonNull.INSTANCE : value, capture);
+            return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
         } catch (ScriptTimeoutException timeout) {
             return failed("ScriptTimeoutError", timeout.getMessage(), capture);
         } catch (ScriptMemoryException memory) {
@@ -142,6 +140,21 @@ public final class SimpleJs {
         } catch (OutOfMemoryError | StackOverflowError exhausted) {
             return failed("ScriptMemoryError", "Script exhausted available memory", capture);
         }
+    }
+
+    // The cap belongs with the other sandbox limits rather than with the caller, so CALL_PROCEDURE
+    // inherits it; an unlimited budget skips the estimation walk entirely.
+    private ScriptResult resultOf(JsonBaseElement value, ConsoleCapture capture, ResourceLimits limits) {
+        final var element = value == null ? JsonNull.INSTANCE : value;
+        final var max = limits == null ? -1 : limits.maxResultBytes();
+        if (max >= 0) {
+            final var size = EJsonInterop.estimatedBytes(element);
+            if (size > max) {
+                return failed("ScriptResultTooLargeError",
+                        "Script result of about " + size + " bytes exceeds the maximum of " + max + " bytes", capture);
+            }
+        }
+        return ok(element, capture);
     }
 
     private ScriptResult ok(JsonBaseElement value, ConsoleCapture capture) {

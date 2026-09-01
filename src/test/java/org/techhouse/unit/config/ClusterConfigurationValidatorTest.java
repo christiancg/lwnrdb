@@ -54,6 +54,9 @@ public class ClusterConfigurationValidatorTest {
         map.put("scriptMaxLogLines", "1000");
         map.put("scriptMaxLogLineChars", "4096");
         map.put("scriptMaxMemoryBytes", "64Mb");
+        map.put("scriptMaxResultBytes", "16Mb");
+        map.put("scriptCursorBatchSize", "500");
+        map.put("scriptCursorMaxBatchSize", "5000");
         map.put("procedureCacheSize", "128");
         map.put("triggersEnabled", "false");
         map.put("triggerThreads", "2");

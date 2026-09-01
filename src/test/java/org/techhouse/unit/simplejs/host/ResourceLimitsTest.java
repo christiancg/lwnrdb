@@ -113,4 +113,34 @@ public class ResourceLimitsTest {
                 new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4, 7, 9).memoryBudget());
         assertEquals(-1, ResourceLimits.unlimited().memoryBudget());
     }
+
+    // The same treatment for the result cap: only a host that asks for one gets one, so no embedding
+    // starts rejecting the value it used to return
+    @Test
+    public void test_delegating_constructors_leave_result_unbounded() {
+        assertEquals(-1, new ResourceLimits(100, 200, 3).maxResultBytes());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true).maxResultBytes());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, true).maxResultBytes());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1).maxResultBytes());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true).maxResultBytes());
+        assertEquals(-1,
+                new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4).maxResultBytes());
+        assertEquals(-1,
+                new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4, 7, 9).maxResultBytes());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, true, true, 4, 7, 9, 4096)
+                .maxResultBytes());
+        assertEquals(-1, new ResourceLimits(100, 200, 3, 2048L).maxResultBytes());
+        assertEquals(-1, ResourceLimits.unlimited().maxResultBytes());
+    }
+
+    @Test
+    public void test_cursor_defaults_are_carried() {
+        final var limits = new ResourceLimits(100, 200, 3, true, false, List.of(), -1, -1, false, false, 4, 7, 9, 4096,
+                1024, 50, 500);
+        assertEquals(1024, limits.maxResultBytes());
+        assertEquals(50, limits.cursorBatchSize());
+        assertEquals(500, limits.cursorMaxBatchSize());
+        assertEquals(-1, new ResourceLimits(100, 200, 3).cursorBatchSize());
+        assertEquals(-1, new ResourceLimits(100, 200, 3).cursorMaxBatchSize());
+    }
 }

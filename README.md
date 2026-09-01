@@ -491,9 +491,22 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles yields `null`.
 - `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
 - **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
-- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
+- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
+- **`db.cursor(database, collection, pipeline, options)`** is the memory-safe way to read more than fits in one result: it returns an iterator that runs the pipeline one page at a time (`SKIP`/`LIMIT` appended per batch), so only one batch is ever in memory and only that batch counts against `scriptMaxMemoryBytes`. `options.batchSize` defaults to `scriptCursorBatchSize` and is clamped to `scriptCursorMaxBatchSize`; a non-positive value is a `RangeError`. It works with `for-of`, spread and the iterator helpers (`.map`/`.take`/…).
+
+  ```js
+  import db from "db";
+  let total = 0;
+  for (const order of db.cursor(db.name, "orders",
+          [{ type: "SORT", fieldName: "_id", ascending: true }], { batchSize: 500 })) {
+      total += order.amount;
+  }
+  return total;
+  ```
+
+  It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
 - **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
-- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `408-1` when it exceeds `scriptTimeoutMs`, and `409-6` if sent while a transaction is open on the connection.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `408-1` when it exceeds `scriptTimeoutMs`, and `409-6` if sent while a transaction is open on the connection.
 - Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -850,6 +863,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-12` | `ERROR` | Script exceeded its memory budget |
 | `400-13` | `ERROR` | The procedure source could not be parsed |
 | `400-14` | `ERROR` | The trigger definition is not valid |
+| `400-15` | `ERROR` | Script result exceeds the maximum allowed size |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -966,6 +980,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxDepth` | Valid number ≥ 1. Max nested call depth per script run; exceeding it aborts with `400-11` |
 | `scriptMaxSourceBytes` | Human-readable size > 0. Max accepted script source; larger is rejected with `400-10` |
 | `scriptMaxMemoryBytes` | Human-readable size > 0. Max bulk memory a script run may allocate; exceeding it aborts with `400-12`. Bounds the allocations that are proportional to a script-supplied length (a huge `repeat`/`padStart`, a dense array, a typed array, a `join`); ordinary small allocations are bounded by `scriptInstructionBudget` instead |
+| `scriptMaxResultBytes` | Human-readable size > 0 (default `16Mb`). Max size of the value a script returns; a larger result fails the run with `400-15` (the `console` output still comes back). Use `db.cursor` to process more data than can be returned |
+| `scriptCursorBatchSize` | Valid number ≥ 1 (default `500`). Default number of documents `db.cursor` fetches per batch |
+| `scriptCursorMaxBatchSize` | Valid number ≥ 1 (default `5000`), and ≥ `scriptCursorBatchSize`. Upper clamp for a caller-supplied `batchSize`, so one call cannot materialise an unbounded batch |
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
@@ -1008,6 +1025,9 @@ scriptTimeoutMs=5000
 scriptMaxDepth=200
 scriptMaxSourceBytes=256Kb
 scriptMaxMemoryBytes=64Mb
+scriptMaxResultBytes=16Mb
+scriptCursorBatchSize=500
+scriptCursorMaxBatchSize=5000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
 # metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)

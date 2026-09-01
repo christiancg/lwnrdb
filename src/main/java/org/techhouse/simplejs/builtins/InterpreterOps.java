@@ -57,6 +57,11 @@ public interface InterpreterOps {
     default void charge(long bytes) {
     }
 
+    // Credits back a charge whose allocation the engine knows has been discarded (a db.cursor batch
+    // replaced by the next one), so streaming a collection costs one batch of budget rather than all of it.
+    default void release(long bytes) {
+    }
+
     // A native loop bounded by a script-supplied length allocates little but can run to 2^53, which
     // neither the instruction budget (no tick inside a builtin) nor the memory budget can see.
     default void tick() {
@@ -71,6 +76,12 @@ public interface InterpreterOps {
     static void charge(InterpreterOps ops, long bytes) {
         if (ops != null) {
             ops.charge(bytes);
+        }
+    }
+
+    static void release(InterpreterOps ops, long bytes) {
+        if (ops != null) {
+            ops.release(bytes);
         }
     }
 

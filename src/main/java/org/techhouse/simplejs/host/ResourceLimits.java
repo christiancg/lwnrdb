@@ -8,13 +8,16 @@ import java.util.List;
 public record ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth,
         boolean reportUnhandledRejections, boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes,
         long fetchTimeoutMillis, boolean strictScriptGoal, boolean textImportEnabled, int maxModuleDepth,
-        int maxLogLines, int maxLogLineChars, long memoryBudget) {
+        int maxLogLines, int maxLogLineChars, long memoryBudget, long maxResultBytes, int cursorBatchSize,
+        int cursorMaxBatchSize) {
 
     // Not the cycle mechanism (the module registry detects cycles); a bound on genuine Java recursion,
     // since each nested module evaluation nests the interpreter's own stack.
     public static final int DEFAULT_MAX_MODULE_DEPTH = 16;
     public static final int DEFAULT_MAX_LOG_LINES = 1000;
     public static final int DEFAULT_MAX_LOG_LINE_CHARS = 4096;
+    public static final int DEFAULT_CURSOR_BATCH_SIZE = 500;
+    public static final int DEFAULT_CURSOR_MAX_BATCH_SIZE = 5000;
 
     public ResourceLimits {
         fetchHostAllowlist = fetchHostAllowlist == null ? List.of() : List.copyOf(fetchHostAllowlist);
@@ -27,6 +30,15 @@ public record ResourceLimits(long instructionBudget, long wallClockMillis, int m
         this(instructionBudget, wallClockMillis, maxDepth, reportUnhandledRejections, fetchEnabled, fetchHostAllowlist,
                 maxResponseBytes, fetchTimeoutMillis, strictScriptGoal, textImportEnabled, maxModuleDepth, maxLogLines,
                 maxLogLineChars, -1);
+    }
+
+    public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,
+            boolean fetchEnabled, List<String> fetchHostAllowlist, long maxResponseBytes, long fetchTimeoutMillis,
+            boolean strictScriptGoal, boolean textImportEnabled, int maxModuleDepth, int maxLogLines,
+            int maxLogLineChars, long memoryBudget) {
+        this(instructionBudget, wallClockMillis, maxDepth, reportUnhandledRejections, fetchEnabled, fetchHostAllowlist,
+                maxResponseBytes, fetchTimeoutMillis, strictScriptGoal, textImportEnabled, maxModuleDepth, maxLogLines,
+                maxLogLineChars, memoryBudget, -1, -1, -1);
     }
 
     public ResourceLimits(long instructionBudget, long wallClockMillis, int maxDepth, boolean reportUnhandledRejections,

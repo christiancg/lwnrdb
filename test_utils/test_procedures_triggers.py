@@ -67,6 +67,7 @@ TIMEOUT_MS = 5_000
 MAX_DEPTH = 64
 MAX_SOURCE_BYTES = 8 * 1024
 MAX_MEMORY_BYTES = 4 * 1024 * 1024
+MAX_RESULT_BYTES = 64 * 1024
 TRIGGER_MAX_DEPTH = 2
 TRIGGER_TIMEOUT_MS = 4_000
 
@@ -216,6 +217,7 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool):
         "scriptMaxLogLines=50\n"
         "scriptMaxLogLineChars=500\n"
         f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
+        f"scriptMaxResultBytes={MAX_RESULT_BYTES}\n"
         "scriptTextImportEnabled=false\n"
         "scriptTimeZone=UTC\n"
         "scriptLocale=en-US\n"
@@ -496,6 +498,32 @@ def test_triggers(conn: Conn):
     check_status("re-enable it", conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
 
 
+BIG_RESULT_PROCEDURE = (
+    "import db from 'db'; import args from 'args';"
+    "db.save(db.name, '" + AUDIT + "', { _id: 'big-' + (args.id ?? 'called'),"
+    " event: args.event ?? 'CALL', by: args.actingUser ?? 'caller' });"
+    "return new Array(5000).fill('0123456789');"
+)
+
+
+def test_result_cap(conn: Conn):
+    section("Result cap (shared by RUN_SCRIPT and CALL_PROCEDURE)")
+    check_status("install a procedure returning an oversized value",
+                 conn.save_procedure("bigresult", BIG_RESULT_PROCEDURE), "OK")
+    check_code("calling it reports the shared 400-15", conn.call("bigresult", {"id": "call"}), "ERROR", "400-15")
+    check("the write it made still committed", conn.find("big-call", coll=AUDIT).get("status") == "OK")
+
+    # A trigger's result is discarded, so the cap must not fail a run for a value nobody reads
+    check_status("point a trigger at the same procedure",
+                 conn.save_trigger("big_result_trigger", ["CREATED", "UPDATED"], "bigresult"), "OK")
+    check_status("write a document", conn.save_doc({"_id": "cap1", "n": 1}), "OK")
+    row = await_doc(conn, "big-cap1")
+    check("the trigger completed despite its oversized result", row.get("status") == "OK", f"got {row}")
+    check_status("remove the trigger again",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "big_result_trigger"}), "OK")
+
+
 def test_trigger_validation(conn: Conn):
     section("Trigger validation")
     check_code("unknown collection",
@@ -659,6 +687,7 @@ def main():
         with admin_conn() as conn:
             test_triggers(conn)
             test_trigger_validation(conn)
+            test_result_cap(conn)
         test_definer_rights()
         with admin_conn() as conn:
             test_batch_mode(conn)

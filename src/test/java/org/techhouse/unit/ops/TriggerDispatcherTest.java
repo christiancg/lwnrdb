@@ -123,6 +123,15 @@ public class TriggerDispatcherTest {
                 OWNER);
     }
 
+    // Same audit row, but the procedure also returns a value far larger than any result cap
+    private void storeBigResultProcedure() throws Exception {
+        ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "audit",
+                "import db from 'db'; import args from 'args';" + "db.save(db.name, '" + AUDIT_COLL
+                        + "', { _id: args.id, by: args.actingUser," + " definer: args.definer, event: args.event });"
+                        + " return new Array(5000).fill('0123456789');"),
+                OWNER);
+    }
+
     private void installTrigger(String definer, boolean enabled, boolean allowCascade) {
         cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
                 List.of(new TriggerDefinition("audit", new LinkedHashSet<>(Set.of(EventType.CREATED)), "audit",
@@ -153,6 +162,20 @@ public class TriggerDispatcherTest {
             return found.getObject();
         }
         return null;
+    }
+
+    // A trigger's result is discarded, so the result cap must not fail a run for a value nobody reads
+    @Test
+    public void test_trigger_runs_are_not_result_capped() throws Exception {
+        TestUtils.setPrivateField(configuration, "scriptMaxResultBytes", 256L);
+        try {
+            storeBigResultProcedure();
+            installTrigger(OWNER, true, false);
+            TriggerDispatcher.dispatch(event("big-result", OWNER, 0));
+            assertNotNull(auditRow("big-result"), "the trigger must complete despite its oversized result");
+        } finally {
+            TestUtils.setPrivateField(configuration, "scriptMaxResultBytes", 16_777_216L);
+        }
     }
 
     // The whole point of definer rights: a writer with no access to the audit collection still produces

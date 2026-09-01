@@ -29,7 +29,10 @@ public enum ErrorCode {
                                                                                                     OperationStatus.ERROR), INVALID_TRIGGER(
                                                                                                             "400-14",
                                                                                                             "The trigger definition is not valid",
-                                                                                                            OperationStatus.ERROR),
+                                                                                                            OperationStatus.ERROR), SCRIPT_RESULT_TOO_LARGE(
+                                                                                                                    "400-15",
+                                                                                                                    "Script result exceeds the maximum allowed size",
+                                                                                                                    OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(

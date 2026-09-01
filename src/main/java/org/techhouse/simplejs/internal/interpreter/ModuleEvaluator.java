@@ -83,7 +83,7 @@ public final class ModuleEvaluator {
             throw new JsThrowException(interp.intrinsics().makeError("Error", "Database access is not available"));
         }
         database.useErrorPrototype(interp.intrinsics().errorProto("Error"));
-        return DbModule.create(database, interp.ops());
+        return DbModule.create(database, interp.ops(), interp.intrinsics(), host.limits());
     }
 
     private JsValue resolveHostModule(String source) {

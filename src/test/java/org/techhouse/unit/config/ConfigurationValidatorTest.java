@@ -55,6 +55,9 @@ public class ConfigurationValidatorTest {
         map.put("scriptMaxLogLines", "1000");
         map.put("scriptMaxLogLineChars", "4096");
         map.put("scriptMaxMemoryBytes", "64Mb");
+        map.put("scriptMaxResultBytes", "16Mb");
+        map.put("scriptCursorBatchSize", "500");
+        map.put("scriptCursorMaxBatchSize", "5000");
         map.put("procedureCacheSize", "128");
         map.put("triggersEnabled", "false");
         map.put("triggerThreads", "2");
@@ -313,6 +316,22 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "scriptMaxLogLineChars", "0", "scriptMaxLogLineChars");
         assertHasError(tempDir, "scriptMaxMemoryBytes", "nonsense", "scriptMaxMemoryBytes");
         assertHasError(tempDir, "scriptMaxMemoryBytes", "0", "scriptMaxMemoryBytes");
+    }
+
+    @Test
+    public void test_invalid_script_result_and_cursor_bounds(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptMaxResultBytes", "nonsense", "scriptMaxResultBytes");
+        assertHasError(tempDir, "scriptMaxResultBytes", "0", "scriptMaxResultBytes");
+        assertHasError(tempDir, "scriptCursorBatchSize", "0", "scriptCursorBatchSize");
+        assertHasError(tempDir, "scriptCursorMaxBatchSize", "0", "scriptCursorMaxBatchSize");
+    }
+
+    @Test
+    public void test_cursor_batch_size_must_not_exceed_the_maximum(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("scriptCursorBatchSize", "5001");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("must not be greater than scriptCursorMaxBatchSize")));
     }
 
     @Test

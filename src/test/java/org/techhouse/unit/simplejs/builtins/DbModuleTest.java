@@ -39,7 +39,7 @@ public class DbModuleTest {
         final var stored = new JsonObject();
         stored.add("_id", new JsonString("x1"));
         fake.nextFindResult = stored;
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var result = call(db, "findById", new JsString("mydb"), new JsString("users"), new JsString("x1"));
         assertInstanceOf(JsObject.class, result);
         assertEquals("x1", ((JsString) ((JsObject) result).get("_id")).getValue());
@@ -50,7 +50,7 @@ public class DbModuleTest {
     @Test
     public void test_find_by_id_missing() {
         final var fake = new FakeDatabaseAccess();
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var result = call(db, "findById", new JsString("d"), new JsString("c"), new JsString("nope"));
         assertInstanceOf(JsNull.class, result);
     }
@@ -59,7 +59,7 @@ public class DbModuleTest {
     @Test
     public void test_aggregate() {
         final var fake = new FakeDatabaseAccess();
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var pipeline = new JsArray();
         pipeline.push(new JsObject());
         final var result = call(db, "aggregate", new JsString("d"), new JsString("c"), pipeline);
@@ -72,7 +72,7 @@ public class DbModuleTest {
     @Test
     public void test_save() {
         final var fake = new FakeDatabaseAccess();
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var document = new JsObject();
         document.set("_id", new JsString("s1"));
         final var result = call(db, "save", new JsString("d"), new JsString("c"), document);
@@ -84,7 +84,7 @@ public class DbModuleTest {
     @Test
     public void test_delete() {
         final var fake = new FakeDatabaseAccess();
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var result = call(db, "delete", new JsString("d"), new JsString("c"), new JsString("s1"));
         assertInstanceOf(JsUndefined.class, result);
         assertEquals("delete:d/c/s1", fake.calls.getFirst());
@@ -94,7 +94,7 @@ public class DbModuleTest {
     @Test
     public void test_list_operations() {
         final var fake = new FakeDatabaseAccess();
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var collections = call(db, "listCollections", new JsString("d"));
         assertInstanceOf(JsArray.class, collections);
         assertEquals(2, ((JsArray) collections).length());
@@ -116,7 +116,7 @@ public class DbModuleTest {
     @Test
     public void test_bulk_save() {
         final var fake = new FakeDatabaseAccess();
-        final var db = DbModule.create(fake, null);
+        final var db = DbModule.create(fake, null, null, null);
         final var documents = new JsArray();
         documents.push(new JsObject());
         documents.push(new JsObject());
@@ -129,7 +129,7 @@ public class DbModuleTest {
     // bulkSave rejects anything that is not an array of documents
     @Test
     public void test_bulk_save_requires_documents() {
-        final var db = DbModule.create(new FakeDatabaseAccess(), null);
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertThrows(TypeErrorException.class,
                 () -> call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsString("nope")));
     }
@@ -137,7 +137,7 @@ public class DbModuleTest {
     // Both new members appear on the module object, so `import * as db` picks them up automatically
     @Test
     public void test_module_exposes_new_members() {
-        final var db = DbModule.create(new FakeDatabaseAccess(), null);
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertInstanceOf(JsNativeFunction.class, db.get("bulkSave"));
         assertInstanceOf(JsNativeFunction.class, db.get("transaction"));
     }

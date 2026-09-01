@@ -146,12 +146,15 @@ public final class TriggerDispatcher {
         }
     }
 
+    // maxResultBytes stays -1: a trigger's result is discarded, so capping it would fail a run for a
+    // value nobody reads.
     private static ResourceLimits limits() {
         final var base = DatabaseHostBindings.limitsFromConfiguration();
         return new ResourceLimits(base.instructionBudget(), configuration.getTriggerTimeoutMs(), base.maxDepth(),
                 base.reportUnhandledRejections(), base.fetchEnabled(), base.fetchHostAllowlist(),
                 base.maxResponseBytes(), base.fetchTimeoutMillis(), base.strictScriptGoal(), base.textImportEnabled(),
-                base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget());
+                base.maxModuleDepth(), base.maxLogLines(), base.maxLogLineChars(), base.memoryBudget(), -1,
+                base.cursorBatchSize(), base.cursorMaxBatchSize());
     }
 
     private static JsonObject argsFor(TriggerEvent event, String definer) {

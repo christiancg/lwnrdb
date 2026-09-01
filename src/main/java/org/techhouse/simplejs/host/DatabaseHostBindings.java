@@ -31,6 +31,7 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
                 configuration.getScriptMaxDepth(), true, false, List.of(), -1, -1, false,
                 configuration.isScriptTextImportEnabled(), ResourceLimits.DEFAULT_MAX_MODULE_DEPTH,
                 configuration.getScriptMaxLogLines(), configuration.getScriptMaxLogLineChars(),
-                configuration.getScriptMaxMemoryBytes());
+                configuration.getScriptMaxMemoryBytes(), configuration.getScriptMaxResultBytes(),
+                configuration.getScriptCursorBatchSize(), configuration.getScriptCursorMaxBatchSize());
     }
 }

@@ -52,6 +52,9 @@ public final class Configuration {
     private int scriptMaxLogLineChars;
     private boolean scriptTextImportEnabled;
     private long scriptMaxMemoryBytes;
+    private long scriptMaxResultBytes;
+    private int scriptCursorBatchSize;
+    private int scriptCursorMaxBatchSize;
     private int procedureCacheSize;
     private long procedureCacheMaxBytes;
     private long schemaCacheMaxBytes;
@@ -129,6 +132,9 @@ public final class Configuration {
         scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
         scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
         scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
+        scriptMaxResultBytes = sizeOf(configs, "scriptMaxResultBytes");
+        scriptCursorBatchSize = intOf(configs, "scriptCursorBatchSize");
+        scriptCursorMaxBatchSize = intOf(configs, "scriptCursorMaxBatchSize");
         procedureCacheSize = intOf(configs, "procedureCacheSize");
         procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
         schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
@@ -351,6 +357,18 @@ public final class Configuration {
 
     public long getScriptMaxMemoryBytes() {
         return scriptMaxMemoryBytes;
+    }
+
+    public long getScriptMaxResultBytes() {
+        return scriptMaxResultBytes;
+    }
+
+    public int getScriptCursorBatchSize() {
+        return scriptCursorBatchSize;
+    }
+
+    public int getScriptCursorMaxBatchSize() {
+        return scriptCursorMaxBatchSize;
     }
 
     public int getProcedureCacheSize() {

@@ -97,6 +97,7 @@ public final class ScriptOperationHelper {
             case "ScriptTimeoutError" -> ErrorCode.SCRIPT_TIMEOUT;
             case "ScriptLimitError" -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
             case "ScriptMemoryError" -> ErrorCode.SCRIPT_MEMORY_EXCEEDED;
+            case "ScriptResultTooLargeError" -> ErrorCode.SCRIPT_RESULT_TOO_LARGE;
             default -> ErrorCode.SCRIPT_FAILED;
         };
     }

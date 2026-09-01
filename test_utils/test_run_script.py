@@ -64,6 +64,16 @@ MAX_SOURCE_BYTES = 8 * 1024
 MAX_LOG_LINES = 5
 MAX_LOG_LINE_CHARS = 200
 MAX_MEMORY_BYTES = 4 * 1024 * 1024
+MAX_RESULT_BYTES = 64 * 1024
+CURSOR_BATCH_SIZE = 100
+CURSOR_MAX_BATCH_SIZE = 500
+
+# The paged-read collection: big enough that materialising it at once costs more than
+# MAX_MEMORY_BYTES, so the cursor is the only way a script can walk it.
+BIG_COLL = "big"
+EMPTY_COLL = "empty"
+BIG_DOCS = 300
+BIG_PAYLOAD_CHARS = 8 * 1024
 
 failures = 0
 
@@ -179,6 +189,9 @@ def write_config(work_dir: str, scripts_enabled: bool):
         f"scriptMaxLogLines={MAX_LOG_LINES}\n"
         f"scriptMaxLogLineChars={MAX_LOG_LINE_CHARS}\n"
         f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
+        f"scriptMaxResultBytes={MAX_RESULT_BYTES}\n"
+        f"scriptCursorBatchSize={CURSOR_BATCH_SIZE}\n"
+        f"scriptCursorMaxBatchSize={CURSOR_MAX_BATCH_SIZE}\n"
         "scriptTextImportEnabled=false\n"
         "scriptTimeZone=UTC\n"
         "scriptLocale=en-US\n"
@@ -241,7 +254,7 @@ def setup_data(conn: Conn):
     for db in (DB, OTHER_DB):
         conn.send({"type": "DROP_DATABASE", "databaseName": db})
         check_status(f"create database {db}", conn.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
-    for coll in (COLL, COLL2):
+    for coll in (COLL, COLL2, BIG_COLL, EMPTY_COLL):
         check_status(f"create collection {coll}",
                      conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
     check_status("create collection in the other database",
@@ -253,6 +266,13 @@ def setup_data(conn: Conn):
     ]
     check_status("seed documents",
                  conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": docs}), "OK")
+    payload = "x" * BIG_PAYLOAD_CHARS
+    seeded = True
+    for start in range(0, BIG_DOCS, 50):
+        batch = [{"_id": f"big{i:04d}", "payload": payload} for i in range(start, start + 50)]
+        response = conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BIG_COLL, "objects": batch})
+        seeded = seeded and response.get("status") == "OK"
+    check(f"seed {BIG_DOCS} large documents into {BIG_COLL}", seeded)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -368,7 +388,8 @@ def test_host_reads(conn: Conn):
                           "{ fieldOperatorType: 'EQUALS', field: 'name', value: 'nobody' } }];\n"
                           f'return db.aggregate(db.name, "{COLL}", pipeline).length;'), 0)
     check_result("listCollections lists the scoped database",
-                 conn.run('import db from "db";\nreturn db.listCollections(db.name).sort();'), [COLL, COLL2])
+                 conn.run('import db from "db";\nreturn db.listCollections(db.name).sort();'),
+                 sorted([COLL, COLL2, BIG_COLL, EMPTY_COLL]))
     check_result("listDatabases answers only the scope",
                  conn.run('import db from "db";\nreturn db.listDatabases();'), [DB])
 
@@ -696,6 +717,77 @@ def test_language_surface(conn: Conn):
         check_result(label, conn.run(script), expected)
 
 
+def test_result_cap(conn: Conn):
+    section("Result cap")
+    big = conn.run("console.log('ran before returning');\nreturn new Array(5000).fill('0123456789');")
+    check_code("an oversized result is refused", big, "ERROR", "400-15")
+    check("… and the console output still comes back", big.get("logs") == ["ran before returning"],
+          f"logs={big.get('logs')!r}")
+    check("… and the message names the error", "ScriptResultTooLargeError" in (big.get("message") or ""),
+          f"message={big.get('message')!r}")
+    check_result("the same script returning a small value succeeds",
+                 conn.run("return new Array(5).fill('0123456789').length;"), 5)
+    check_result("a whole-collection read cannot be returned, but its count can",
+                 conn.run('import db from "db";\n'
+                          f'let n = 0;\nfor (const doc of db.cursor(db.name, "{BIG_COLL}", '
+                          "[{ type: 'SORT', fieldName: '_id', ascending: true }], { batchSize: 20 })) n++;\n"
+                          "return n;"), BIG_DOCS)
+
+
+def test_cursor(conn: Conn):
+    section("db.cursor — paged reads")
+    sort = "[{ type: 'SORT', fieldName: '_id', ascending: true }]"
+    walk = ('import db from "db";\n'
+            "const seen = new Set();\n"
+            f'for (const doc of db.cursor(db.name, "{BIG_COLL}", {sort}, {{ batchSize: 20 }})) '
+            "seen.add(doc._id);\n"
+            "return seen.size;")
+    check_result("a walk visits every document exactly once", conn.run(walk), BIG_DOCS)
+
+    counted = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BIG_COLL,
+                         "aggregationSteps": [{"type": "COUNT"}]})
+    wire_count = (counted.get("results") or [{}])[0].get("count")
+    check("… and the total matches a plain AGGREGATE count", wire_count == BIG_DOCS,
+          f"AGGREGATE count={wire_count!r}")
+
+    # The premise of the whole feature: the same work, one batch at a time, fits a budget the
+    # all-at-once read cannot.
+    check_code("db.aggregate of the whole collection exceeds the memory budget",
+               conn.run('import db from "db";\n'
+                        f'return db.aggregate(db.name, "{BIG_COLL}", []).length;'), "ERROR", "400-12")
+    check_result("… while the same walk through db.cursor succeeds", conn.run(walk), BIG_DOCS)
+
+    check_result("an absent options object walks with the configured batch size",
+                 conn.run('import db from "db";\n'
+                          f'let n = 0;\nfor (const doc of db.cursor(db.name, "{BIG_COLL}", {sort})) n++;\n'
+                          "return n;"), BIG_DOCS)
+    check_result("a batchSize above the maximum is clamped, not refused",
+                 conn.run('import db from "db";\n'
+                          f'let n = 0;\nfor (const doc of db.cursor(db.name, "{COLL}", {sort}, '
+                          "{ batchSize: 100000 })) n++;\nreturn n > 0;"), True)
+    check_failed_script("a non-positive batchSize is refused",
+                        conn.run('import db from "db";\n'
+                                 f'db.cursor(db.name, "{COLL}", {sort}, {{ batchSize: 0 }}).next();'),
+                        "400-9", "RangeError")
+    check_result("spread and the iterator helpers work on a cursor",
+                 conn.run('import db from "db";\n'
+                          f'const cursor = db.cursor(db.name, "{BIG_COLL}", {sort}, {{ batchSize: 20 }});\n'
+                          "return cursor.take(3).toArray().map(d => d._id);"),
+                 ["big0000", "big0001", "big0002"])
+    check_result("a cursor over a collection with no documents yields nothing",
+                 conn.run('import db from "db";\n'
+                          f'return [...db.cursor(db.name, "{EMPTY_COLL}", {sort})].length;'), 0)
+    # Absence stays a value on this surface: an empty batch simply ends the walk, exactly as
+    # db.aggregate answers [] for a collection with no results.
+    check_result("a cursor over an unknown collection ends the walk instead of throwing",
+                 conn.run('import db from "db";\n'
+                          f'return [...db.cursor(db.name, "neverCreated", {sort})].length;'), 0)
+    check_result("abandoning a cursor mid-walk leaves nothing to release",
+                 conn.run('import db from "db";\n'
+                          f'for (const doc of db.cursor(db.name, "{BIG_COLL}", {sort}, {{ batchSize: 20 }})) '
+                          "break;\nreturn 'released';"), "released")
+
+
 def test_permissions(conn: Conn):
     section("Permissions")
     granted = {"type": "CREATE_USER", "username": "script_granted", "password": "password1234", "admin": False,
@@ -851,6 +943,8 @@ def main():
             test_custom_types(conn)
             test_capabilities(conn)
             test_language_surface(conn)
+            test_result_cap(conn)
+            test_cursor(conn)
             test_permissions(conn)
             test_admin_is_unrestricted(conn)
 

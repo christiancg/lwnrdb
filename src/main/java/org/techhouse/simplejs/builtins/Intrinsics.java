@@ -107,6 +107,7 @@ public final class Intrinsics {
     private final JsObject stringIteratorProto;
     private final JsObject mapIteratorProto;
     private final JsObject setIteratorProto;
+    private final JsObject dbCursorProto;
     private final JsObject generatorFunctionProto;
     private final JsObject asyncGeneratorFunctionProto;
     private final JsObject asyncFunctionProto;
@@ -281,6 +282,7 @@ public final class Intrinsics {
         stringIteratorProto = JsIterators.prototype("String Iterator", objectProto);
         mapIteratorProto = JsIterators.prototype("Map Iterator", objectProto);
         setIteratorProto = JsIterators.prototype("Set Iterator", objectProto);
+        dbCursorProto = JsIterators.prototype("Database Cursor", objectProto);
         generatorFunctionProto = functionKindPrototype("GeneratorFunction", iteratorProto);
         asyncGeneratorFunctionProto = functionKindPrototype("AsyncGeneratorFunction", asyncIteratorProto);
         asyncFunctionProto = functionKindPrototype("AsyncFunction", null);
@@ -378,6 +380,7 @@ public final class Intrinsics {
             stringIteratorProto.setProto(iteratorPrototype);
             mapIteratorProto.setProto(iteratorPrototype);
             setIteratorProto.setProto(iteratorPrototype);
+            dbCursorProto.setProto(iteratorPrototype);
         }
         if (asyncIteratorPrototype != null) {
             asyncIteratorPrototype.setProto(objectProto);
@@ -890,6 +893,10 @@ public final class Intrinsics {
 
     public JsObject iteratorProto() {
         return iteratorProto;
+    }
+
+    public JsObject dbCursorProto() {
+        return dbCursorProto;
     }
 
     public JsObject asyncIteratorProto() {

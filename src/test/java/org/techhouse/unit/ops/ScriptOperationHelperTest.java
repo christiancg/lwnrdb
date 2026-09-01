@@ -55,6 +55,7 @@ public class ScriptOperationHelperTest {
         setConfig("scriptMaxLogLines", 1_000);
         setConfig("scriptMaxLogLineChars", 4_096);
         setConfig("scriptMaxMemoryBytes", 67_108_864L);
+        setConfig("scriptMaxResultBytes", 16_777_216L);
         setConfig("scriptTextImportEnabled", false);
     }
 
@@ -178,6 +179,15 @@ public class ScriptOperationHelperTest {
         setConfig("scriptMaxMemoryBytes", 1024L);
         final var response = run("return \"x\".repeat(100000000);");
         assertEquals(ErrorCode.SCRIPT_MEMORY_EXCEEDED.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_maps_oversized_result_to_400_15() throws Exception {
+        setConfig("scriptMaxResultBytes", 256L);
+        final var response = run("console.log('ran'); return new Array(2000).fill('0123456789');");
+        assertEquals(ErrorCode.SCRIPT_RESULT_TOO_LARGE.getCode(), response.getErrorCode());
+        assertTrue(response.getMessage().startsWith("ScriptResultTooLargeError"), response.getMessage());
+        assertEquals(java.util.List.of("ran"), response.getLogs());
     }
 
     @Test

@@ -254,6 +254,11 @@ public final class Interpreter {
         }
 
         @Override
+        public void release(long bytes) {
+            Interpreter.this.release(bytes);
+        }
+
+        @Override
         public void tick() {
             Interpreter.this.tick();
         }
@@ -273,6 +278,7 @@ public final class Interpreter {
     private final int maxModuleDepth;
     private long instructionsRemaining;
     private long bytesRemaining;
+    private final long memoryBudget;
     private final long deadlineNanos;
     private int depth;
     private int moduleDepth;
@@ -296,6 +302,7 @@ public final class Interpreter {
         this.maxModuleDepth = limits.maxModuleDepth();
         this.instructionsRemaining = limits.instructionBudget();
         this.bytesRemaining = limits.memoryBudget();
+        this.memoryBudget = limits.memoryBudget();
         this.deadlineNanos = limits.wallClockMillis() > 0
                 ? System.nanoTime() + limits.wallClockMillis() * 1_000_000L
                 : -1;
@@ -354,6 +361,16 @@ public final class Interpreter {
             throw new ScriptMemoryException("Script exceeded its memory budget");
         }
         bytesRemaining -= bytes;
+    }
+
+    // The counterpart of charge(), for a host allocation the engine knows is discarded at a fixed
+    // point - a db.cursor batch replaced by the next one. Deterministic, so it does not reintroduce the
+    // GC-timing dependence the budget deliberately avoids.
+    public void release(long bytes) {
+        if (bytesRemaining < 0 || bytes <= 0) {
+            return;
+        }
+        bytesRemaining = Math.min(memoryBudget, bytesRemaining + bytes);
     }
 
     private JsValue evalProgram(Program program) {

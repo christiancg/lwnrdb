@@ -19,6 +19,12 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 
 public final class EJsonInterop {
     private static final BigInteger MAX_EXACT_INTEGER = BigInteger.valueOf(9007199254740991L);
+    // Mirrors InterpreterOps.BYTES_PER_ELEMENT / STRING_BYTES_PER_CHAR: the same cost model as the
+    // allocation budget, restated here because values/ does not depend on builtins/.
+    private static final long BYTES_PER_ELEMENT = 32L;
+    private static final long BYTES_PER_CHAR = 2L;
+    private static final long BYTES_PER_NUMBER = 8L;
+    private static final long BYTES_PER_LITERAL = 4L;
 
     private EJsonInterop() {
     }
@@ -142,6 +148,45 @@ public final class EJsonInterop {
         if (visited.put(value, Boolean.TRUE) != null) {
             throw new TypeErrorException("Converting circular structure to JSON");
         }
+    }
+
+    // What a converted value costs, used both by the script result cap and by the charging the host
+    // boundary does before it materialises a database result as JS values.
+    public static long estimatedBytes(JsonBaseElement element) {
+        if (element == null) {
+            return 0;
+        }
+        if (element instanceof JsonCustom<?> custom) {
+            return stringBytes(custom.getValue());
+        }
+        return switch (element.getJsonType()) {
+            case NUMBER -> BYTES_PER_NUMBER;
+            case BOOLEAN, NULL -> BYTES_PER_LITERAL;
+            case STRING -> stringBytes(element.asJsonString().getValue());
+            case ARRAY -> arrayBytes(element.asJsonArray());
+            case OBJECT -> objectBytes(element.asJsonObject());
+            default -> BYTES_PER_ELEMENT;
+        };
+    }
+
+    private static long stringBytes(String value) {
+        return BYTES_PER_ELEMENT + (value == null ? 0 : value.length() * BYTES_PER_CHAR);
+    }
+
+    private static long arrayBytes(JsonArray array) {
+        var total = BYTES_PER_ELEMENT;
+        for (final var element : array) {
+            total += estimatedBytes(element);
+        }
+        return total;
+    }
+
+    private static long objectBytes(JsonObject object) {
+        var total = BYTES_PER_ELEMENT;
+        for (final var entry : object.entrySet()) {
+            total += entry.getKey().length() * BYTES_PER_CHAR + estimatedBytes(entry.getValue());
+        }
+        return total;
     }
 
     public static JsValue fromEjson(JsonBaseElement element) {

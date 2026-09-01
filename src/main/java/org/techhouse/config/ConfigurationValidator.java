@@ -67,6 +67,10 @@ public final class ConfigurationValidator {
         validateInt(configs, "scriptMaxDepth", 1, errors);
         validatePositiveSize(configs, "scriptMaxSourceBytes", errors);
         validatePositiveSize(configs, "scriptMaxMemoryBytes", errors);
+        validatePositiveSize(configs, "scriptMaxResultBytes", errors);
+        validateInt(configs, "scriptCursorBatchSize", 1, errors);
+        validateInt(configs, "scriptCursorMaxBatchSize", 1, errors);
+        validateCursorBatchSizes(configs, errors);
         validateInt(configs, "scriptMaxLogLines", 1, errors);
         validateInt(configs, "scriptMaxLogLineChars", 1, errors);
         validateInt(configs, "procedureCacheSize", 0, errors);
@@ -81,6 +85,18 @@ public final class ConfigurationValidator {
         validatePositiveLong(configs, "triggerTimeoutMs", errors);
         validateBoolean(configs, "triggerRunLogEnabled", errors);
         validatePositiveLong(configs, "triggerRunRetentionMs", errors);
+    }
+
+    private static void validateCursorBatchSizes(Map<String, String> configs, List<String> errors) {
+        final var batchSize = configs.get("scriptCursorBatchSize");
+        final var maxBatchSize = configs.get("scriptCursorMaxBatchSize");
+        if (notAnInt(batchSize, parsed -> parsed >= 1) || notAnInt(maxBatchSize, parsed -> parsed >= 1)) {
+            return;
+        }
+        if (Integer.parseInt(batchSize.trim()) > Integer.parseInt(maxBatchSize.trim())) {
+            errors.add("scriptCursorBatchSize (" + batchSize + ") must not be greater than scriptCursorMaxBatchSize ("
+                    + maxBatchSize + ")");
+        }
     }
 
     private static void validateCluster(Map<String, String> configs, List<String> errors) {
