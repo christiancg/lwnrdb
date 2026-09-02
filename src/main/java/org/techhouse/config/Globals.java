@@ -24,6 +24,10 @@ public final class Globals {
     // leading '.' cannot appear in a collection name, so the folder can never collide with one.
     public static final String PROCEDURES_FOLDER = ".procedures";
     public static final String PROCEDURE_FILE_EXTENSION = ".json";
+    // Per-database schedules live beside the procedures folder, and cannot collide with a collection name
+    // for the same reason: a leading '.' is unrepresentable in one.
+    public static final String SCHEDULES_FOLDER = ".schedules";
+    public static final String SCHEDULE_FILE_EXTENSION = ".json";
     // Per-collection trigger file infix: {coll}-triggers.json holds every trigger on the collection,
     // stored in the collection folder beside its schema so a DROP_COLLECTION removes it with the data.
     public static final String TRIGGERS_FILE_NAME = "triggers";

@@ -91,6 +91,9 @@ public final class RequestParser {
                 case SAVE_TRIGGER -> eJson.fromJson(message, SaveTriggerRequest.class);
                 case DELETE_TRIGGER -> eJson.fromJson(message, DeleteTriggerRequest.class);
                 case LIST_TRIGGERS -> eJson.fromJson(message, ListTriggersRequest.class);
+                case SAVE_SCHEDULE -> eJson.fromJson(message, SaveScheduleRequest.class);
+                case DELETE_SCHEDULE -> eJson.fromJson(message, DeleteScheduleRequest.class);
+                case LIST_SCHEDULES -> eJson.fromJson(message, ListSchedulesRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);

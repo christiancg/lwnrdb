@@ -176,6 +176,14 @@ public class ConfigurationTest {
         map.put("metadataMissCacheMaxEntries", "4096");
         map.put("triggerRunLogEnabled", "true");
         map.put("triggerRunRetentionMs", "86400000");
+        map.put("schedulesEnabled", "false");
+        map.put("scheduleThreads", "2");
+        map.put("scheduleQueueSize", "100");
+        map.put("scheduleTickMs", "1000");
+        map.put("scheduleRefreshMs", "60000");
+        map.put("scheduleTimeoutMs", "30000");
+        map.put("scheduleMaxPerDatabase", "100");
+        map.put("scheduleCacheMaxBytes", "8Mb");
         map.put("scriptTextImportEnabled", "false");
         return map;
     }

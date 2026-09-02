@@ -222,6 +222,35 @@ A **trigger fires only on the collection's owner**, because `TriggerHelper` is c
 `triggerDepth` rides on the request, and `ClusterConnectionHandler`'s forward paths preserve it (they are
 authenticated by `clusterSecret`), while the edge zeroes it for client requests.
 
+### Scheduled procedures
+
+A schedule is hashed onto the **existing** ring under the key `{db}|.schedules|{name}`, so
+`OwnershipManager.isOwner` answers whether this node should fire it — no new ring key kind, no new
+coordinator role. That spreads schedules across the cluster (a database with ten schedules will usually fire
+them from several nodes) and hands them off automatically on a membership change, exactly as a collection's
+ownership does. When clustering is off there is no ring, so the scheduler runs everything locally.
+
+`SAVE_SCHEDULE`/`DELETE_SCHEDULE` are in `ADMIN_DDL` alongside the procedure and trigger DDL: coordinator-
+serialized, quorum-guarded, replicated by re-execution, ordered by the admin epoch, and carried on the
+`ADMIN_SNAPSHOT` payload so a node that was down for the save catches up on rejoin (`conformSchedules`, which
+also reloads that database's registry so the scheduler picks the change up without waiting for
+`scheduleRefreshMs`). Re-execution is safe for the same reason it is for a trigger: the coordinator stamps
+`version`, `updatedAt`, `updatedBy` and `definer` onto the request, and the `definer` in particular must be
+stamped rather than re-derived, since two nodes disagreeing about it would mean the job runs under different
+authority depending on which node owns the schedule.
+
+**Handoff skips a tick rather than duplicating one.** A new owner computes `nextAfter(now)` — the next
+*future* occurrence — so an instant the previous owner may already have run is never replayed. That is the
+whole at-most-once guarantee, and it is why `nextRunAt` lives only in memory: persisting a `lastRunAt` would
+mean an admin write per run and would churn the admin epoch for no benefit. The cost is the other side of the
+same coin: a membership change during a tick can drop that tick, and **missed runs while a node was down are
+skipped, not caught up**.
+
+The schedule cache is partitioned by ownership on the same terms as the trigger cache below —
+`MetadataCachePruner` drops the schedules this node no longer owns, asking the ring the same question the
+scheduler's tick asks — and `AdminAntiEntropyService` reads schedules straight from disk
+(`Cache.loadScheduleUncached`) rather than through the cache.
+
 ### The trigger cache is partitioned by ownership
 
 A trigger only ever fires on its collection's owner — `ops/TriggerHelper.afterWrite` is called from

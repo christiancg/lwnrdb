@@ -62,6 +62,7 @@ public class TestUtils {
         clearBoundedCache(adminCache, "collectionSchemas");
         clearBoundedCache(adminCache, "procedures");
         clearBoundedCache(adminCache, "triggers");
+        clearBoundedCache(adminCache, "schedules");
         clearBoundedCache(adminCache, "metadataMisses");
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());

@@ -17,6 +17,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -151,6 +152,7 @@ public class Cache {
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
         adminCache.removeProceduresForDatabase(dbName);
+        adminCache.removeSchedulesForDatabase(dbName);
         adminCache.removeTriggersForDatabase(dbName);
     }
 
@@ -420,6 +422,30 @@ public class Cache {
 
     public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
         return adminCache.loadTriggersUncached(dbName, collName);
+    }
+
+    public ScheduleDefinition getSchedule(String dbName, String name) {
+        return adminCache.getSchedule(dbName, name);
+    }
+
+    public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
+        return adminCache.loadScheduleUncached(dbName, name);
+    }
+
+    public void putSchedule(String dbName, ScheduleDefinition definition) {
+        adminCache.putSchedule(dbName, definition);
+    }
+
+    public void removeSchedule(String dbName, String name) {
+        adminCache.removeSchedule(dbName, name);
+    }
+
+    public void removeSchedulesForDatabase(String dbName) {
+        adminCache.removeSchedulesForDatabase(dbName);
+    }
+
+    public void removeSchedulesMatching(Predicate<String> keyMatches) {
+        adminCache.removeSchedulesMatching(keyMatches);
     }
 
     public MetadataCacheStats metadataCacheStats() {

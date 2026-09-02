@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.function.Consumer;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
@@ -14,6 +15,7 @@ import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.DatabaseHostBindings;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
+import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
 
 // Runs a client-supplied script through SimpleJs, scoped to the requested database and bounded by the
@@ -64,7 +66,15 @@ public final class ScriptOperationHelper {
     // Callers map the ScriptResult onto their own response subclass.
     static ScriptResult runCompiled(CompiledScript compiled, JsonObject args, String dbName, String username,
             UUID clientId, String logPrefix) {
-        final var host = hostFor(args, dbName, username, clientId);
+        return runCompiled(compiled, args, dbName, username, clientId, logPrefix,
+                DatabaseHostBindings.limitsFromConfiguration(), null);
+    }
+
+    // The overload a scheduled run uses: the sandbox is the configured one with its wall clock replaced,
+    // and the console is teed to the server log because nobody is waiting on a response to carry it.
+    static ScriptResult runCompiled(CompiledScript compiled, JsonObject args, String dbName, String username,
+            UUID clientId, String logPrefix, ResourceLimits limits, Consumer<String> console) {
+        final var host = hostFor(args, dbName, username, clientId, limits, console);
         final var start = System.currentTimeMillis();
         final ScriptResult result;
         scriptLoad.enter();
@@ -78,10 +88,15 @@ public final class ScriptOperationHelper {
     }
 
     private static DatabaseHostBindings hostFor(JsonObject args, String dbName, String username, UUID clientId) {
+        return hostFor(args, dbName, username, clientId, DatabaseHostBindings.limitsFromConfiguration(), null);
+    }
+
+    // A null console sink leaves the capture capturing only, so the output travels back on the response
+    // instead of into the server log.
+    private static DatabaseHostBindings hostFor(JsonObject args, String dbName, String username, UUID clientId,
+            ResourceLimits limits, Consumer<String> console) {
         final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
-        // A null console sink leaves CapturingHostBindings capturing only, so the output travels back on
-        // the response instead of into the server log.
-        return DatabaseHostBindings.of(args, database, null, DatabaseHostBindings.limitsFromConfiguration());
+        return DatabaseHostBindings.of(args, database, console, limits);
     }
 
     private static void logRun(String logPrefix, long durationMs, ScriptResult result) {

@@ -121,6 +121,12 @@ public final class ProcedureOperationHelper {
                         "Procedure '" + request.getName() + "' is still referenced by trigger '" + referencing + "'",
                         ErrorCode.INVALID_TRIGGER);
             }
+            final var scheduled = ScheduleOperationHelper.scheduleReferencing(dbName, request.getName());
+            if (scheduled != null) {
+                return new OperationResponse(OperationType.DELETE_PROCEDURE,
+                        "Procedure '" + request.getName() + "' is still referenced by schedule '" + scheduled + "'",
+                        ErrorCode.INVALID_SCHEDULE);
+            }
             fs.deleteProcedure(dbName, request.getName());
             cache.removeProcedure(dbName, request.getName());
             // Version-keying alone is not enough here: a delete resets the version, so re-creating the

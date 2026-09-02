@@ -68,6 +68,14 @@ public final class Configuration {
     private long triggerTimeoutMs;
     private boolean triggerRunLogEnabled;
     private long triggerRunRetentionMs;
+    private boolean schedulesEnabled;
+    private int scheduleThreads;
+    private int scheduleQueueSize;
+    private long scheduleTickMs;
+    private long scheduleRefreshMs;
+    private long scheduleTimeoutMs;
+    private int scheduleMaxPerDatabase;
+    private long scheduleCacheMaxBytes;
 
     private Configuration() {
     }
@@ -149,6 +157,14 @@ public final class Configuration {
         triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
         triggerRunLogEnabled = booleanOf(configs, "triggerRunLogEnabled");
         triggerRunRetentionMs = longOf(configs, "triggerRunRetentionMs");
+        schedulesEnabled = booleanOf(configs, "schedulesEnabled");
+        scheduleThreads = intOf(configs, "scheduleThreads");
+        scheduleQueueSize = intOf(configs, "scheduleQueueSize");
+        scheduleTickMs = longOf(configs, "scheduleTickMs");
+        scheduleRefreshMs = longOf(configs, "scheduleRefreshMs");
+        scheduleTimeoutMs = longOf(configs, "scheduleTimeoutMs");
+        scheduleMaxPerDatabase = intOf(configs, "scheduleMaxPerDatabase");
+        scheduleCacheMaxBytes = sizeOf(configs, "scheduleCacheMaxBytes");
     }
 
     private static int intOf(Map<String, String> configs, String key) {
@@ -423,5 +439,37 @@ public final class Configuration {
 
     public long getTriggerRunRetentionMs() {
         return triggerRunRetentionMs;
+    }
+
+    public boolean isSchedulesEnabled() {
+        return schedulesEnabled;
+    }
+
+    public int getScheduleThreads() {
+        return scheduleThreads;
+    }
+
+    public int getScheduleQueueSize() {
+        return scheduleQueueSize;
+    }
+
+    public long getScheduleTickMs() {
+        return scheduleTickMs;
+    }
+
+    public long getScheduleRefreshMs() {
+        return scheduleRefreshMs;
+    }
+
+    public long getScheduleTimeoutMs() {
+        return scheduleTimeoutMs;
+    }
+
+    public int getScheduleMaxPerDatabase() {
+        return scheduleMaxPerDatabase;
+    }
+
+    public long getScheduleCacheMaxBytes() {
+        return scheduleCacheMaxBytes;
     }
 }

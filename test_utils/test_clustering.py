@@ -409,6 +409,12 @@ class Node:
             # node-2 deliberately turns placement off (it is on by default): the flag governs a node's
             # own outgoing runs, so the same cluster covers routing on and routing off.
             f"scriptRoutingEnabled={'false' if self.index == 2 else 'true'}\n"
+            # Schedules: a short tick so an interval schedule is observable inside a test, and a short
+            # refresh so a rejoining node's registry picks up what anti-entropy brought in promptly.
+            "schedulesEnabled=true\n"
+            "scheduleTickMs=200\n"
+            "scheduleRefreshMs=2000\n"
+            "scheduleTimeoutMs=10000\n"
         )
         with open(os.path.join(self.work_dir, "lwnrdb.cfg"), "w") as fp:
             fp.write(cfg)
@@ -1008,6 +1014,117 @@ def test_node_rejoin():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Scheduled procedures
+# ══════════════════════════════════════════════════════════════════════════
+
+SCHEDULE_DB = DB
+SCHEDULE_PROC = "sched_marker"
+# Each run inserts a document with a fresh uuid, so counting the collection counts firings exactly.
+# A read-modify-write counter would hide a double fire as a lost update, which is the one thing
+# these tests exist to detect.
+SCHEDULE_SOURCE = (
+    "import db from 'db'; import args from 'args';"
+    " db.save(db.name, args.coll, { _id: crypto.randomUUID(), at: Date.now() });"
+    " return 1;"
+)
+
+
+def save_schedule(port, name, coll, interval_ms=1000, db=SCHEDULE_DB):
+    return op(port, {"type": "SAVE_SCHEDULE", "databaseName": db, "name": name,
+                     "procedureName": SCHEDULE_PROC, "intervalMs": interval_ms,
+                     "args": {"coll": coll}})
+
+
+def delete_schedule(port, name, db=SCHEDULE_DB):
+    return op(port, {"type": "DELETE_SCHEDULE", "databaseName": db, "name": name})
+
+
+def list_schedules(port, db=SCHEDULE_DB):
+    return op(port, {"type": "LIST_SCHEDULES", "databaseName": db})
+
+
+def schedule_names(port, db=SCHEDULE_DB) -> list:
+    return sorted(s.get("name") for s in (list_schedules(port, db).get("schedules") or []))
+
+
+def fire_count(port, coll, db=SCHEDULE_DB) -> int:
+    r = aggregate(port, db, coll, [{"type": "COUNT"}])
+    value = _dig(r, "results.0.count")
+    return int(value) if value is not None else 0
+
+
+def test_schedule_replication_and_single_firing():
+    section("Scheduled procedures — DDL replicates, and a schedule fires on exactly one node")
+
+    check("store the marker procedure", op(nodes[0].client_port, {
+        "type": "SAVE_PROCEDURE", "databaseName": SCHEDULE_DB, "name": SCHEDULE_PROC,
+        "script": SCHEDULE_SOURCE}), "OK")
+    create_coll(nodes[0].client_port, SCHEDULE_DB, "sched_marks")
+    check("save a schedule via node-0", save_schedule(nodes[0].client_port, "clustered", "sched_marks"), "OK")
+
+    check_true("the schedule is listed on every node",
+               wait_until(lambda: all("clustered" in schedule_names(n.client_port) for n in nodes if n.alive),
+                          timeout_s=20.0),
+               detail=str([schedule_names(n.client_port) for n in nodes if n.alive]))
+
+    # One owner means roughly one firing per interval. Three would mean the ring guard is not working,
+    # so the assertion is deliberately about the rate, not about an exact count.
+    check_true("the schedule starts firing",
+               wait_until(lambda: fire_count(nodes[0].client_port, "sched_marks") >= 1, timeout_s=20.0))
+    before = fire_count(nodes[0].client_port, "sched_marks")
+    window = 6.0
+    time.sleep(window)
+    delta = fire_count(nodes[0].client_port, "sched_marks") - before
+    expected = window / 1.0
+    check_true("it fires at the single-owner rate, not once per node",
+               1 <= delta <= expected * 1.7,
+               detail=f"{delta} firings in {window}s (one owner would be about {expected:.0f}, "
+                      f"three would be about {expected * 3:.0f})")
+
+    check("delete the schedule", delete_schedule(nodes[0].client_port, "clustered"), "OK")
+    check_true("the deletion replicates to every node",
+               wait_until(lambda: all("clustered" not in schedule_names(n.client_port)
+                                      for n in nodes if n.alive), timeout_s=20.0))
+
+
+def test_schedule_failover():
+    section("Scheduled procedures — a schedule owned by the dead node fails over")
+
+    # Enough schedules that the ring gives at least one of them to the node the failure test killed;
+    # after the failover every one of them must be firing again, whoever owned it before.
+    names = [f"failover{i}" for i in range(6)]
+    for name in names:
+        create_coll(nodes[0].client_port, SCHEDULE_DB, name)
+        check(f"save {name}", save_schedule(nodes[0].client_port, name, name), "OK")
+
+    def _all_firing():
+        return all(fire_count(nodes[0].client_port, name) >= 1 for name in names)
+
+    check_true("every schedule fires from a surviving node after the owner died",
+               wait_until(_all_firing, timeout_s=60.0, interval_s=1.0),
+               detail=str({name: fire_count(nodes[0].client_port, name) for name in names}))
+
+    for name in names:
+        delete_schedule(nodes[0].client_port, name)
+
+    # Installed while node-2 is down, so the rejoin test can prove the admin snapshot carries it.
+    create_coll(nodes[0].client_port, SCHEDULE_DB, "while_down")
+    check("save a schedule while one node is down",
+          save_schedule(nodes[0].client_port, "whileDown", "while_down"), "OK")
+
+
+def test_schedule_rejoin_catch_up():
+    section("Scheduled procedures — a rejoining node picks up what it missed")
+
+    rejoiner = nodes[2]
+    check_true("the rejoined node knows the schedule saved while it was down",
+               wait_until(lambda: "whileDown" in schedule_names(rejoiner.client_port), timeout_s=60.0,
+                          interval_s=1.0),
+               detail=str(schedule_names(rejoiner.client_port)))
+    delete_schedule(nodes[0].client_port, "whileDown")
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -1050,9 +1167,12 @@ def main():
         test_long_forwarded_script_is_not_cut_off()
         test_script_routing_disabled_stays_local()
         test_script_placement_falls_back_when_the_target_dies()
+        test_schedule_replication_and_single_firing()
         # Failure / rejoin last: they degrade then restore the cluster.
         test_node_failure_quorum_maintained()
+        test_schedule_failover()
         test_node_rejoin()
+        test_schedule_rejoin_catch_up()
 
         # Cleanup (best-effort).
         drop_db(nodes[0].client_port, DB)

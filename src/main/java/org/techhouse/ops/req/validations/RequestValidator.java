@@ -17,6 +17,7 @@ import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.DropIndexRequest;
@@ -30,6 +31,7 @@ import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
@@ -82,6 +84,9 @@ public class RequestValidator {
             case SAVE_TRIGGER -> validateSaveTrigger((SaveTriggerRequest) request);
             case DELETE_TRIGGER -> validateDeleteTrigger((DeleteTriggerRequest) request);
             case LIST_TRIGGERS -> validateListTriggers((ListTriggersRequest) request);
+            case SAVE_SCHEDULE -> validateSaveSchedule((SaveScheduleRequest) request);
+            case DELETE_SCHEDULE -> validateDeleteSchedule((DeleteScheduleRequest) request);
+            case LIST_SCHEDULES -> validateDbNameOnly(request.getDatabaseName());
         };
     }
 
@@ -177,6 +182,26 @@ public class RequestValidator {
             return ValidationResult.ok();
         }
         return validateCollectionName(collName);
+    }
+
+    private static ValidationResult validateSaveSchedule(SaveScheduleRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        final var nameResult = validateProcedureName(request.getName());
+        if (!nameResult.isValid()) {
+            return nameResult;
+        }
+        return validateProcedureName(request.getProcedureName());
+    }
+
+    private static ValidationResult validateDeleteSchedule(DeleteScheduleRequest request) {
+        final var dbResult = validateDbName(request.getDatabaseName(), true);
+        if (!dbResult.isValid()) {
+            return dbResult;
+        }
+        return validateProcedureName(request.getName());
     }
 
     private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {

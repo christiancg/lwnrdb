@@ -1,6 +1,7 @@
 package org.techhouse;
 
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cluster.AdminAntiEntropyService;
@@ -35,6 +36,7 @@ public class ShutdownCoordinator {
     private final Configuration configuration = Configuration.getInstance();
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
@@ -69,6 +71,9 @@ public class ShutdownCoordinator {
         });
         step("roll back open transactions", TransactionOperationHelper::rollbackOpenTransactionsAtShutdown);
         step("drain triggers", () -> triggerExecutor.drain(remaining(deadline)));
+        // After the triggers and before the background queue: a scheduled run can enqueue both trigger and
+        // index work, so draining it later would leave events nothing consumes.
+        step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
         step("stop listen workers", listenManager::stopWorkers);
         step("leave the cluster", () -> {

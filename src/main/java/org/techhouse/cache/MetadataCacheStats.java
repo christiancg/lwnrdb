@@ -6,5 +6,5 @@ package org.techhouse.cache;
  * operator sizing a node needs both numbers.
  */
 public record MetadataCacheStats(long procedureBytes, int procedureEntries, long triggerBytes, int triggerEntries,
-        long schemaBytes, int schemaEntries, int missEntries) {
+        long schemaBytes, int schemaEntries, long scheduleBytes, int scheduleEntries, int missEntries) {
 }

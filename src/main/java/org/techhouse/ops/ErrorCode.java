@@ -32,7 +32,13 @@ public enum ErrorCode {
                                                                                                             OperationStatus.ERROR), SCRIPT_RESULT_TOO_LARGE(
                                                                                                                     "400-15",
                                                                                                                     "Script result exceeds the maximum allowed size",
-                                                                                                                    OperationStatus.ERROR),
+                                                                                                                    OperationStatus.ERROR), INVALID_SCHEDULE(
+                                                                                                                            "400-16",
+                                                                                                                            "The schedule definition is not valid",
+                                                                                                                            OperationStatus.ERROR), TOO_MANY_SCHEDULES(
+                                                                                                                                    "400-17",
+                                                                                                                                    "The database already has the maximum number of schedules",
+                                                                                                                                    OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(
@@ -55,7 +61,10 @@ public enum ErrorCode {
                                                     OperationStatus.NOT_FOUND), PROCEDURE_NOT_FOUND("404-8",
                                                             "Procedure not found",
                                                             OperationStatus.NOT_FOUND), TRIGGER_NOT_FOUND("404-9",
-                                                                    "Trigger not found", OperationStatus.NOT_FOUND),
+                                                                    "Trigger not found",
+                                                                    OperationStatus.NOT_FOUND), SCHEDULE_NOT_FOUND(
+                                                                            "404-10", "Schedule not found",
+                                                                            OperationStatus.NOT_FOUND),
 
     // ── 408 Request Timeout ───────────────────────────────────
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
@@ -153,7 +162,13 @@ public enum ErrorCode {
                                                                                                                                                                                                                                     OperationStatus.ERROR), ERROR_DELETING_TRIGGER(
                                                                                                                                                                                                                                             "500-30",
                                                                                                                                                                                                                                             "Error while deleting the trigger",
-                                                                                                                                                                                                                                            OperationStatus.ERROR),
+                                                                                                                                                                                                                                            OperationStatus.ERROR), ERROR_SAVING_SCHEDULE(
+                                                                                                                                                                                                                                                    "500-31",
+                                                                                                                                                                                                                                                    "Error while saving the schedule",
+                                                                                                                                                                                                                                                    OperationStatus.ERROR), ERROR_DELETING_SCHEDULE(
+                                                                                                                                                                                                                                                            "500-32",
+                                                                                                                                                                                                                                                            "Error while deleting the schedule",
+                                                                                                                                                                                                                                                            OperationStatus.ERROR),
 
     // ── 503 Service Unavailable ───────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",

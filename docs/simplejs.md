@@ -1002,7 +1002,7 @@ exposed to the script as `db.name`, so a script need not hardcode its database.
 `scriptMaxMemoryBytes` (exceeding it aborts with `400-12`), `scriptMaxLogLines`,
 `scriptMaxLogLineChars` and `scriptTextImportEnabled`; the request cannot
 influence any of them. `scriptMaxSourceBytes` caps the accepted source (`400-10`) and
-`scriptsEnabled` (default `false`) gates the operation entirely (`403-2`). `fetch` stays unreachable
+`scriptsEnabled` (default `true`) gates the operation entirely (`403-2`). `fetch` stays unreachable
 from the wire: no `NetworkAccess` is wired, so `HostBindings.network()` is `null`.
 
 **Failure contract of the `db` surface.** Every method throws a catchable JS `Error` (built with the
@@ -1136,6 +1136,53 @@ request in `conn/MessageProcessor` so a client cannot claim one. It is a request
 `ThreadLocal` because a `ThreadLocal` resets to zero on the node a write is forwarded to, which would make a
 cross-node cascade unbounded. `allowCascade` defaults to `false`, so the common configuration cannot cascade
 even once; with it on, a chain terminates at `triggerMaxDepth`.
+
+### Scheduled procedures
+
+A schedule is a named, persisted binding of `{cron | intervalMs} -> procedure + args`, stored with its
+database in `{db}/.schedules/{name}.json` for the same reason a procedure is — `fs.deleteDatabase` removes it
+with everything else, so `DROP_DATABASE` needs no cascade code — and replicated by the same
+coordinator-serialized `ADMIN_DDL` path, with the derived fields (`version`, `updatedAt`, `updatedBy`,
+`definer`) stamped onto the request during the coordinator's local execution so re-execution on a peer writes
+a byte-identical file.
+
+Because the project carries no runtime dependencies the cron parser is ours: `ops/schedule/CronExpression`,
+standard five fields, advancing **field-wise** (next candidate month, then day, then hour, then minute) rather
+than minute by minute, and giving up after a four-year horizon so an unsatisfiable expression such as
+`0 0 30 2 *` answers `null` instead of spinning. Candidates are walked as *local* date-times and only then
+resolved against the zone, which is what makes a daily schedule fire once across a DST transition: a local
+time inside a spring-forward gap resolves to the instant just after it, and a local time inside a fall-back
+overlap resolves to the earlier of its two instants. Evaluation uses the configured `scriptTimeZone`, not the
+JVM default, for the same reason `DatabaseHostBindings` pins it — `0 3 * * *` must mean the same instant on
+every node.
+
+**Definer rights**, like a trigger and for the same reason: a scheduled job has no caller, so running it as
+its installer makes it behave identically regardless of who happens to be connected. A definer who no longer
+exists disables the schedule; there is deliberately no fallback to an admin, which would let deleting a user
+widen a job's authority.
+
+**A scheduled run is not transactional.** A trigger runs inside a transaction because its pending-run record
+must be consumed atomically with its effects; a schedule has no run record, so wrapping it would only hold
+collection write locks for the whole job. A scheduled procedure that wants atomicity opens its own
+`db.transaction(...)` — which, unlike inside a trigger, is permitted. `triggerDepth` is 0 and `allowCascade`
+follows the existing trigger rules, so a scheduled write fires triggers normally.
+
+**Why there is no durable run log.** Delivery is deliberately **at-most-once per due instant**: a node taking
+a schedule over computes the *next future* occurrence, so a past instant is never replayed, and a membership
+change during a tick can drop that tick rather than run it on two nodes. That falls out of the design at no
+cost — the registry (`bckg_ops/ScheduleRegistry`) keeps `nextRunAt` in memory and never persists it, because
+a persisted `lastRunAt` would mean a DDL write per run and would churn the admin epoch. Exactly-once would
+need the `TriggerRunLog` machinery (a pending record consumed inside the run's own transaction) and is
+explicitly not built here; missed runs while a node was down are skipped, not caught up, so a job that must
+not miss an occurrence should be idempotent and driven off data rather than off the clock.
+
+`bckg_ops/ScheduleExecutor` owns the clock — one ticker thread plus its own bounded queue and workers,
+deliberately not `TriggerExecutor`'s and not the background index queue, for the reason already documented
+for triggers. A run still executing when the next occurrence is due is skipped and counted rather than queued
+twice (the in-flight set lives on the executor, not the registry, because the periodic refresh rebuilds the
+registry). Outcomes go to the log and to `GET_DATABASE_STATS` (`schedules.registered`/`fired`/`failed`/
+`skipped`/`dropped`/`queued`), which is the operator's only window into an execution path no client is
+waiting on.
 
 ### EJson custom types
 

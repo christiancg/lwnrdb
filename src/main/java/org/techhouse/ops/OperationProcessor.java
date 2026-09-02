@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.analyze.AnalyzeContext;
+import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -29,6 +30,7 @@ import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -38,6 +40,7 @@ import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
+import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
@@ -47,6 +50,7 @@ import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
@@ -82,6 +86,7 @@ public class OperationProcessor {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
+    private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private final org.techhouse.cluster.Tx2pcCoordinator tx2pcCoordinator = IocContainer
             .get(org.techhouse.cluster.Tx2pcCoordinator.class);
     private final org.techhouse.cluster.Tx2pcDirectory tx2pcDirectory = IocContainer
@@ -151,6 +156,9 @@ public class OperationProcessor {
             case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
             case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest);
             case LIST_TRIGGERS -> processListTriggers((ListTriggersRequest) operationRequest);
+            case SAVE_SCHEDULE -> processSaveSchedule((SaveScheduleRequest) operationRequest, actingUser);
+            case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest);
+            case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
@@ -223,6 +231,26 @@ public class OperationProcessor {
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
         return TriggerOperationHelper.executeList(request);
+    }
+
+    private OperationResponse processSaveSchedule(SaveScheduleRequest request, String actingUser) {
+        try {
+            return ScheduleOperationHelper.executeSave(request, actingUser);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE);
+        }
+    }
+
+    private OperationResponse processDeleteSchedule(DeleteScheduleRequest request) {
+        try {
+            return ScheduleOperationHelper.executeDelete(request);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.DELETE_SCHEDULE, ErrorCode.ERROR_DELETING_SCHEDULE);
+        }
+    }
+
+    private OperationResponse processListSchedules(ListSchedulesRequest request) {
+        return ScheduleOperationHelper.executeList(request);
     }
 
     private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction,
@@ -465,6 +493,9 @@ public class OperationProcessor {
                 // The procedure files went with the folder; drop their compiled programs too, since a
                 // re-created database would restart its procedure versions at 1.
                 compiledProcedures.invalidateDatabase(dbName);
+                // The schedule files went with the folder too; drop the registry entries now rather than
+                // letting the periodic refresh notice, so nothing keeps firing against a gone database.
+                scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
                 return new DropDatabaseResponse("Database dropped successfully");
             }

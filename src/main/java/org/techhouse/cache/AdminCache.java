@@ -16,6 +16,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -38,6 +39,7 @@ public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
     private static final String PROCEDURE_MISS_PREFIX = "p" + Globals.COLL_IDENTIFIER_SEPARATOR;
     private static final String SCHEMA_MISS_PREFIX = "s" + Globals.COLL_IDENTIFIER_SEPARATOR;
+    private static final String SCHEDULE_MISS_PREFIX = "k" + Globals.COLL_IDENTIFIER_SEPARATOR;
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -62,6 +64,9 @@ public class AdminCache {
             definition -> (long) definition.getSource().length() * 2L + 512L);
     private final BoundedLruCache<List<TriggerDefinition>> triggers = new BoundedLruCache<>(
             configuration.getTriggerCacheMaxEntries(), 0L, definitions -> definitions.size() * 512L + 128L);
+    private final BoundedLruCache<ScheduleDefinition> schedules = new BoundedLruCache<>(Integer.MAX_VALUE,
+            configuration.getScheduleCacheMaxBytes(),
+            definition -> (long) eJson.toJson(definition.toJsonObject()).length() * 2L);
     private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
             configuration.getMetadataMissCacheMaxEntries(), 0L, _ -> 1L);
 
@@ -459,6 +464,63 @@ public class AdminCache {
         metadataMisses.removeIf(id -> id.startsWith(PROCEDURE_MISS_PREFIX + prefix));
     }
 
+    // Returns the database's cached schedule, or null when it has none by that name. Same lazy-load and
+    // negative-caching contract as getProcedure, which is why loadAdminData does not read schedules at
+    // startup either - ScheduleRegistry walks them once when the feature is on.
+    public ScheduleDefinition getSchedule(String dbName, String name) {
+        final var id = Cache.getCollectionIdentifier(dbName, name);
+        final var cached = schedules.get(id);
+        if (cached != null) {
+            return cached;
+        }
+        if (metadataMisses.get(scheduleMissKey(id)) != null) {
+            return null;
+        }
+        final var loaded = loadScheduleUncached(dbName, name);
+        if (loaded == null) {
+            metadataMisses.put(scheduleMissKey(id), Boolean.TRUE);
+        } else {
+            schedules.put(id, loaded);
+        }
+        return loaded;
+    }
+
+    public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
+        try {
+            final var raw = fs.readSchedule(dbName, name);
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            return ScheduleDefinition.fromJsonObject(eJson.fromJson(raw, JsonObject.class));
+        } catch (Exception e) {
+            logger.warning(
+                    "Failed to load schedule " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    public void putSchedule(String dbName, ScheduleDefinition definition) {
+        final var id = Cache.getCollectionIdentifier(dbName, definition.getName());
+        metadataMisses.remove(scheduleMissKey(id));
+        schedules.put(id, definition);
+    }
+
+    public void removeSchedule(String dbName, String name) {
+        final var id = Cache.getCollectionIdentifier(dbName, name);
+        schedules.remove(id);
+        metadataMisses.remove(scheduleMissKey(id));
+    }
+
+    public void removeSchedulesForDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        schedules.removeIf(id -> id.startsWith(prefix));
+        metadataMisses.removeIf(id -> id.startsWith(SCHEDULE_MISS_PREFIX + prefix));
+    }
+
+    public void removeSchedulesMatching(Predicate<String> keyMatches) {
+        schedules.removeIf(keyMatches);
+    }
+
     // Every trigger on the collection, empty when it has none. The cache key is db|coll, so the write
     // path's lookup is a single map get and an untriggered collection is read from disk once and then
     // answered from the negative cache - the hot-path contract SchemaValidationHelper.check already
@@ -509,7 +571,8 @@ public class AdminCache {
 
     public MetadataCacheStats metadataCacheStats() {
         return new MetadataCacheStats(procedures.bytes(), procedures.size(), triggers.bytes(), triggers.size(),
-                collectionSchemas.bytes(), collectionSchemas.size(), metadataMisses.size());
+                collectionSchemas.bytes(), collectionSchemas.size(), schedules.bytes(), schedules.size(),
+                metadataMisses.size());
     }
 
     private static String procedureMissKey(String id) {
@@ -518,6 +581,10 @@ public class AdminCache {
 
     private static String schemaMissKey(String id) {
         return SCHEMA_MISS_PREFIX + id;
+    }
+
+    private static String scheduleMissKey(String id) {
+        return SCHEDULE_MISS_PREFIX + id;
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {

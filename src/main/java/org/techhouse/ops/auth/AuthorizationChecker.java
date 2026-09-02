@@ -21,7 +21,8 @@ public final class AuthorizationChecker {
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
             OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
     private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
-            OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER);
+            OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER,
+            OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE);
 
     private AuthorizationChecker() {
     }
@@ -142,7 +143,7 @@ public final class AuthorizationChecker {
 
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
-            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS ->
+            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS, LIST_SCHEDULES ->
                 PermissionLevel.READ;
             default -> PermissionLevel.READ_WRITE;
         };

@@ -142,6 +142,14 @@ jobs:
             run: |
               python3 test_utils/test_procedures_triggers.py
 
+          # Self-contained for the same reason, on port 8995: schedules need both
+          # scriptsEnabled and schedulesEnabled, and the suite restarts its own instance
+          # with the switch off to prove it refuses independently.
+          - name: schedules
+            start_server: false
+            run: |
+              python3 test_utils/test_schedules.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench

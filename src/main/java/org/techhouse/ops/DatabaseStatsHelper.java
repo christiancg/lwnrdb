@@ -2,6 +2,8 @@ package org.techhouse.ops;
 
 import java.lang.management.ManagementFactory;
 import java.util.Set;
+import org.techhouse.bckg_ops.ScheduleExecutor;
+import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
@@ -16,6 +18,8 @@ import org.techhouse.ops.resp.OperationResponse;
 public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
+    private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
     private static final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
 
@@ -28,6 +32,7 @@ public final class DatabaseStatsHelper {
             stats.add("memory", buildMemoryStats());
             stats.add("inDoubtTransactions", buildInDoubtTransactions());
             stats.add("triggers", buildTriggerStats());
+            stats.add("schedules", buildScheduleStats());
             stats.add("scripts", buildScriptStats());
 
             final var dbNames = cache.getUserDatabaseNames();
@@ -63,6 +68,20 @@ public final class DatabaseStatsHelper {
         // garbage-collected after triggerRunRetentionMs rather than ever running.
         triggers.addProperty("pendingRuns", (long) pendingRunCount());
         return triggers;
+    }
+
+    // Like a trigger, a scheduled run has no client waiting on it, so these counters are the operator's only
+    // window into whether jobs are firing, failing, being skipped or being dropped under load.
+    private static JsonObject buildScheduleStats() {
+        final var schedules = new JsonObject();
+        schedules.addProperty("enabled", Configuration.getInstance().isSchedulesEnabled());
+        schedules.addProperty("registered", (long) scheduleRegistry.size());
+        schedules.addProperty("fired", scheduleExecutor.getFired());
+        schedules.addProperty("failed", scheduleExecutor.getFailed());
+        schedules.addProperty("skipped", scheduleExecutor.getSkipped());
+        schedules.addProperty("dropped", scheduleExecutor.getDropped());
+        schedules.addProperty("queued", (long) scheduleExecutor.getQueued());
+        return schedules;
     }
 
     // Where scripts are running: this node's live count plus how often placement forwarded a run elsewhere
@@ -123,10 +142,13 @@ public final class DatabaseStatsHelper {
         json.addProperty("triggerEntries", (long) stats.triggerEntries());
         json.addProperty("schemaBytes", stats.schemaBytes());
         json.addProperty("schemaEntries", (long) stats.schemaEntries());
+        json.addProperty("scheduleBytes", stats.scheduleBytes());
+        json.addProperty("scheduleEntries", (long) stats.scheduleEntries());
         json.addProperty("missEntries", (long) stats.missEntries());
         json.addProperty("procedureCacheMaxBytes", config.getProcedureCacheMaxBytes());
         json.addProperty("schemaCacheMaxBytes", config.getSchemaCacheMaxBytes());
         json.addProperty("triggerCacheMaxEntries", (long) config.getTriggerCacheMaxEntries());
+        json.addProperty("scheduleCacheMaxBytes", config.getScheduleCacheMaxBytes());
         json.addProperty("metadataMissCacheMaxEntries", (long) config.getMetadataMissCacheMaxEntries());
         return json;
     }

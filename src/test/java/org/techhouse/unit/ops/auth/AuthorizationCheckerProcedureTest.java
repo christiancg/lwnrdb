@@ -16,11 +16,14 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.CallProcedureRequest;
 import org.techhouse.ops.req.DeleteProcedureRequest;
+import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
+import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -69,9 +72,18 @@ public class AuthorizationCheckerProcedureTest {
         return new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t", List.of("CREATED"), "p");
     }
 
+    private static SaveScheduleRequest saveSchedule() {
+        final var request = new SaveScheduleRequest(TestGlobals.DB, "sch", "p");
+        request.setIntervalMs(1000L);
+        return request;
+    }
+
+    // A schedule runs with its installer's authority, so installing one carries the same privilege as
+    // installing a trigger and belongs on the same list.
     private static List<OperationRequest> managementRequests() {
         return List.of(saveProcedure(), new DeleteProcedureRequest(TestGlobals.DB, "p"), saveTrigger(),
-                new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t"));
+                new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t"), saveSchedule(),
+                new DeleteScheduleRequest(TestGlobals.DB, "sch"));
     }
 
     @Test
@@ -156,7 +168,9 @@ public class AuthorizationCheckerProcedureTest {
         assertTrue(AuthorizationChecker.check(new ListProceduresRequest(TestGlobals.DB), reader).isAllowed());
         assertTrue(AuthorizationChecker.check(new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL), reader)
                 .isAllowed());
+        assertTrue(AuthorizationChecker.check(new ListSchedulesRequest(TestGlobals.DB), reader).isAllowed());
         final var nobody = userWith(null, null);
+        assertFalse(AuthorizationChecker.check(new ListSchedulesRequest(TestGlobals.DB), nobody).isAllowed());
         assertFalse(AuthorizationChecker.check(new ListProceduresRequest(TestGlobals.DB), nobody).isAllowed());
         assertFalse(AuthorizationChecker.check(new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL), nobody)
                 .isAllowed());
@@ -167,7 +181,8 @@ public class AuthorizationCheckerProcedureTest {
         final var nobody = userWith(null, null);
         for (final var type : List.of(OperationType.SAVE_PROCEDURE, OperationType.DELETE_PROCEDURE,
                 OperationType.LIST_PROCEDURES, OperationType.CALL_PROCEDURE, OperationType.SAVE_TRIGGER,
-                OperationType.DELETE_TRIGGER, OperationType.LIST_TRIGGERS)) {
+                OperationType.DELETE_TRIGGER, OperationType.LIST_TRIGGERS, OperationType.SAVE_SCHEDULE,
+                OperationType.DELETE_SCHEDULE, OperationType.LIST_SCHEDULES)) {
             final var request = switch (type) {
                 case SAVE_PROCEDURE -> saveProcedure();
                 case DELETE_PROCEDURE -> new DeleteProcedureRequest(TestGlobals.DB, "p");
@@ -175,6 +190,9 @@ public class AuthorizationCheckerProcedureTest {
                 case CALL_PROCEDURE -> new CallProcedureRequest(TestGlobals.DB, "p", null);
                 case SAVE_TRIGGER -> saveTrigger();
                 case DELETE_TRIGGER -> new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t");
+                case SAVE_SCHEDULE -> saveSchedule();
+                case DELETE_SCHEDULE -> new DeleteScheduleRequest(TestGlobals.DB, "sch");
+                case LIST_SCHEDULES -> new ListSchedulesRequest(TestGlobals.DB);
                 default -> new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL);
             };
             assertFalse(AuthorizationChecker.check(request, nobody).isAllowed(), type.name());

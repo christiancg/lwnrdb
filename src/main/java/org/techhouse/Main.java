@@ -5,6 +5,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.ScheduleExecutor;
+import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
@@ -32,6 +34,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ScheduleDispatcher;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
@@ -43,6 +46,8 @@ public class Main {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -87,6 +92,7 @@ public class Main {
         TriggerRunRecovery.garbageCollect();
         TriggerRunRecovery.warnAboutStrandedRuns();
         TriggerRunRecovery.recoverLocal();
+        startSchedulerIfEnabled();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
@@ -100,6 +106,16 @@ public class Main {
         final var server = new SocketServer(port, sslServerSocketFactory);
         registerShutdownHook(server);
         server.serve();
+    }
+
+    // The registry walks the filesystem, so it is only built when the feature is on: a node with schedules
+    // disabled must not pay a per-database directory listing at startup.
+    private static void startSchedulerIfEnabled() {
+        if (!config.isSchedulesEnabled()) {
+            return;
+        }
+        scheduleRegistry.loadAll();
+        scheduleExecutor.start(ScheduleDispatcher::dispatch);
     }
 
     // Registered before serve() blocks, so a SIGTERM (a container stop, a systemctl stop, a rolling restart)
@@ -169,12 +185,14 @@ public class Main {
     // sum of the two. Warned about together because an operator sizing -Xmx from maxMemory alone undercounts.
     static void warnIfCachesExceedHeap() {
         final var xmx = Runtime.getRuntime().maxMemory();
-        final var metadataCap = config.getProcedureCacheMaxBytes() + config.getSchemaCacheMaxBytes();
+        final var metadataCap = config.getProcedureCacheMaxBytes() + config.getSchemaCacheMaxBytes()
+                + config.getScheduleCacheMaxBytes();
         final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
         final var total = userCap + metadataCap;
         if (total > xmx) {
             logger.warning("The configured cache budgets total " + total + " bytes (maxMemory " + userCap
-                    + " + procedureCacheMaxBytes/schemaCacheMaxBytes " + metadataCap + ") but JVM -Xmx is only " + xmx
+                    + " + procedureCacheMaxBytes/schemaCacheMaxBytes/scheduleCacheMaxBytes " + metadataCap
+                    + ") but JVM -Xmx is only " + xmx
                     + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
         }
     }

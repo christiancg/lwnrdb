@@ -37,8 +37,8 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 - [ ] Javascript engine to support additional features 
   - [x] Stored procedures (the [`SAVE_PROCEDURE`](#save_procedure) / [`CALL_PROCEDURE`](#call_procedure) operations)
-  - [ ] Jobs
   - [x] Triggers (the [`SAVE_TRIGGER`](#save_trigger) operation)
+  - [x] Scheduled procedures (the [`SAVE_SCHEDULE`](#save_schedule) operation)
   - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
   - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
     - [ ] Locality-aware placement: selection is by load only, so the chosen node is usually not the owner of the collections the script touches and every operation the script issues still costs a round trip
@@ -467,7 +467,7 @@ Manually forces the outcome of an in-doubt distributed transaction identified by
 Returns `400-1` if `dtxId` is missing or `decision` is not `commit`/`abort`.
 
 #### `RUN_SCRIPT`
-Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simplejs.md) for the engine). The script is **scoped to one database** — the `databaseName` of the request — and may use any collection in it. Disabled by default: set `scriptsEnabled=true` to accept the operation.
+Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simplejs.md) for the engine). The script is **scoped to one database** — the `databaseName` of the request — and may use any collection in it. Enabled by default; set `scriptsEnabled=false` to refuse the operation with `403-2`. Being allowed to run one still requires admin privileges, database ownership, or `scriptPermissions` on that database.
 
 ```json
 {
@@ -610,6 +610,61 @@ Idempotent — succeeds whether or not the trigger existed.
 {"type":"LIST_TRIGGERS","databaseName":"mydb","collectionName":"orders"}
 ```
 Omit `collectionName` to list every trigger in the database. Each entry carries its `collectionName` and `definer`. Requires `READ` on the database.
+
+#### `SAVE_SCHEDULE`
+Runs a stored procedure **on a clock**. Requires admin privileges, ownership, or `MANAGE` — the same bar as installing a trigger, and for the same reason: a scheduled run executes with its installer's authority. On by default; set `schedulesEnabled=false` to refuse the three schedule operations (`403-2`) and stop anything already installed from firing. Installing one still requires `scriptsEnabled`, since a schedule can only name a stored procedure. Idempotent upsert: saving an existing name replaces it and bumps its `version`.
+
+```json
+{
+  "type": "SAVE_SCHEDULE",
+  "databaseName": "mydb",
+  "name": "nightlyRollup",
+  "procedureName": "rollup",
+  "cron": "0 3 * * *",
+  "args": {"days": 1},
+  "timeoutMs": 60000,
+  "description": "optional",
+  "enabled": true,
+  "ifVersion": 2
+}
+```
+```json
+{"type":"SAVE_SCHEDULE","status":"OK","message":"Schedule saved successfully","version":3}
+```
+
+- **Exactly one of `cron` and `intervalMs`.** `intervalMs` fires every so many milliseconds; `cron` fires on the standard five-field expression `minute hour day-of-month month day-of-week`, supporting the wildcard, a single value, `a-b` ranges, `*/n` and `a-b/n` steps, comma lists, and three-letter month/day names (`JAN`, `MON`; `7` is Sunday). When both day fields are restricted they are OR-ed, the conventional cron rule. The expression is evaluated in the configured `scriptTimeZone`, not the JVM default, so `0 3 * * *` means the same instant on every node.
+- **Runs with the installer's authority** (`definer`), like a trigger and for the same reason: a scheduled run has no caller, so running it as the installer makes it behave identically regardless of who happens to be connected. Re-saving re-stamps the definer to the saving user. If the definer is deleted the schedule stops firing (it never falls back to an admin).
+- **Not transactional.** A trigger runs inside a transaction because its pending-run record must be consumed atomically with its effects; a schedule has no run record, so a scheduled procedure that wants atomicity opens its own `db.transaction(...)` — which, unlike inside a trigger, is permitted.
+- `args` is the object handed to the procedure as its `args` module, exactly as with [`CALL_PROCEDURE`](#call_procedure). Because a schedule is a separate record from the procedure, one procedure can carry several schedules with different arguments.
+- `timeoutMs` bounds one run's wall clock; omit it (or `0`) to use `scheduleTimeoutMs`. Everything else — instruction budget, depth, memory, log caps — comes from the `script*` keys.
+- `enabled` defaults to `true`. `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Use `0` to require that the schedule does not exist yet.
+- **Delivery is at-most-once per due instant.** Firing is never finer-grained than `scheduleTickMs`, a run still executing when the next occurrence is due is skipped rather than queued twice, and **missed runs while a node was down are skipped, not caught up** — a job that must not miss an occurrence should be idempotent and driven off data, not off the clock. Under clustering each schedule is owned by exactly one node through the consistent-hash ring, so a schedule fires once per due instant across the cluster and fails over automatically; a membership change during a tick may drop that tick rather than run it twice (see [docs/clustering.md](docs/clustering.md) → *Scheduled procedures*).
+- A schedule is stored **with its database**, in `{filePath}/{database}/.schedules/{name}.json`, so dropping the database removes it.
+- **Errors**: `403-2` schedules disabled, `403-1` not permitted, `404-4` unknown database, `404-8` unknown procedure, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`), `400-16` neither or both of `cron`/`intervalMs`, a malformed cron, or a negative `timeoutMs`, `400-17` past `scheduleMaxPerDatabase`, `409-8` version conflict.
+
+#### `DELETE_SCHEDULE`
+```json
+{"type":"DELETE_SCHEDULE","databaseName":"mydb","name":"nightlyRollup"}
+```
+Idempotent — succeeds whether or not the schedule existed. A [`DELETE_PROCEDURE`](#delete_procedure) is refused with `400-16` while a schedule still references it (the message names the schedule).
+
+#### `LIST_SCHEDULES`
+```json
+{"type":"LIST_SCHEDULES","databaseName":"mydb"}
+```
+```json
+{
+  "type": "LIST_SCHEDULES",
+  "status": "OK",
+  "schedules": [
+    {"name":"nightlyRollup","procedureName":"rollup","cron":"0 3 * * *","intervalMs":0,
+     "timeoutMs":60000,"enabled":true,"definer":"ops","version":3,
+     "createdAt":1756000000000,"updatedAt":1756600000000,"updatedBy":"ops",
+     "nextRunAt":1756699200000,"owner":"node-2"}
+  ]
+}
+```
+`args` is omitted from a listing. `nextRunAt` and `owner` are computed by the answering node — the schedule registry is in-memory and per-node, so both describe that node's view rather than a cluster-wide fact (`owner` is absent when clustering is off). Requires `READ` on the database.
 
 #### `CLOSE_CONNECTION`
 ```json
@@ -828,17 +883,17 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 |---|---|
 | `NONE` (or absent) | nothing |
 | `RUN` | [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) |
-| `MANAGE` | everything `RUN` allows, plus installing procedures and triggers ([`SAVE_PROCEDURE`](#save_procedure), [`DELETE_PROCEDURE`](#delete_procedure), [`SAVE_TRIGGER`](#save_trigger), [`DELETE_TRIGGER`](#delete_trigger)) |
+| `MANAGE` | everything `RUN` allows, plus installing procedures, triggers and schedules ([`SAVE_PROCEDURE`](#save_procedure), [`DELETE_PROCEDURE`](#delete_procedure), [`SAVE_TRIGGER`](#save_trigger), [`DELETE_TRIGGER`](#delete_trigger), [`SAVE_SCHEDULE`](#save_schedule), [`DELETE_SCHEDULE`](#delete_schedule)) |
 
 Admins and database owners have an implicit `MANAGE` on the databases they reach. A grant on one database says nothing about another. The boolean form written by older clients (`{"mydb": true}`) is still accepted and reads as `RUN`; `false` reads as `NONE`. A value that is neither a boolean nor a level name is rejected with `400-1` rather than read as a denial.
 
-Installing is deliberately its own level rather than something a `READ_WRITE` grant confers. A procedure called through `CALL_PROCEDURE` runs with the **caller's** authority, so whoever installs one hands every higher-privileged caller code to execute — and a **trigger** runs with the *installer's* authority, which makes installing strictly more powerful than writing.
+Installing is deliberately its own level rather than something a `READ_WRITE` grant confers. A procedure called through `CALL_PROCEDURE` runs with the **caller's** authority, so whoever installs one hands every higher-privileged caller code to execute — and a **trigger** or a **schedule** runs with the *installer's* authority, which makes installing strictly more powerful than writing.
 
 Being allowed to start a script is separate from what it may do: every operation a script issues is authorized again on its own request against `databasePermissions`/`collectionPermissions`, so a user granted `RUN` plus `READ` can run a script that reads but not one that writes. The one exception is a trigger, which runs as its `definer` — see [`SAVE_TRIGGER`](#save_trigger).
 
 > **Upgrade note.** Roll every node to this version before granting `MANAGE` or otherwise rewriting a user record in a cluster. User records replicate by shipping the record itself, and a node without `scriptPermissions` levels cannot parse the string form — it would skip the whole user record, not just the grant. Note that any write to a user record converts it (a password change will do), so the ordering matters even if you never touch a script grant.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
 
 ### Authentication errors
@@ -871,6 +926,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-13` | `ERROR` | The procedure source could not be parsed |
 | `400-14` | `ERROR` | The trigger definition is not valid |
 | `400-15` | `ERROR` | Script result exceeds the maximum allowed size |
+| `400-16` | `ERROR` | The schedule definition is not valid |
+| `400-17` | `ERROR` | The database already has the maximum number of schedules |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -885,6 +942,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-7` | `NOT_FOUND` | Listen registration not found |
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
+| `404-10` | `NOT_FOUND` | Schedule not found |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
@@ -893,7 +951,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-5` | `ERROR` | Could not acquire the collection lock in time; transaction aborted |
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
-| `409-8` | `ERROR` | The procedure or trigger was modified by someone else |
+| `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -924,6 +982,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-28` | `ERROR` | Error while deleting the procedure |
 | `500-29` | `ERROR` | Error while saving the trigger |
 | `500-30` | `ERROR` | Error while deleting the trigger |
+| `500-31` | `ERROR` | Error while saving the schedule |
+| `500-32` | `ERROR` | Error while deleting the schedule |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
@@ -982,7 +1042,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `tombstoneRetentionMs` | Valid number ≥ 1. How long delete tombstones are kept before anti-entropy GC; must exceed the longest expected node downtime |
 | `scriptTimeZone` | A valid IANA time zone id (e.g. `UTC`, `Europe/Madrid`) or fixed offset. The zone a stored script's `Date`/`Temporal`/`toLocaleString` answers in, so the same script returns the same answer on every node |
 | `scriptLocale` | A valid BCP 47 language tag (e.g. `en-US`). The locale a stored script's locale-sensitive formatting and collation use |
-| `scriptsEnabled` | `true` or `false` (default `false`). Whether clients may run scripts at all ([`RUN_SCRIPT`](#run_script)); when `false` the operation is refused with `403-2` |
+| `scriptsEnabled` | `true` or `false` (default `true`). Whether clients may run scripts at all ([`RUN_SCRIPT`](#run_script)), and whether stored procedures may be installed or called. On by default: a script is bounded by the server-fixed sandbox below and by permissions — only an admin, a database owner, or a user holding `scriptPermissions` for that database may start one, and every operation the script issues is authorized again on its own request. When `false` the operations are refused with `403-2` |
 | `scriptInstructionBudget` | Valid number ≥ 1. Max interpreter instructions per script run; exceeding it aborts with `400-11` |
 | `scriptTimeoutMs` | Valid number ≥ 1. Max wall-clock time per script run; exceeding it aborts with `408-1` |
 | `scriptMaxDepth` | Valid number ≥ 1. Max nested call depth per script run; exceeding it aborts with `400-11` |
@@ -1006,6 +1066,14 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
 | `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. The run's effects and the consumption of its record commit together, so a replay cannot apply it twice; turning this off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
 | `triggerRunRetentionMs` | Valid number ≥ 1 (default `86400000`). How long a pending trigger-run record is kept before it is garbage-collected as stranded — its collection was dropped, or the node that owned it never came back |
+| `schedulesEnabled` | `true` or `false` (default `true`). Whether schedules fire. Separate from `scriptsEnabled`/`triggersEnabled`: a scheduled run executes code on a clock, with no client asking for it and with its installer's authority. Leaving it on costs a ticker thread and nothing else until somebody installs a schedule — and installing one requires `scriptsEnabled`, since a schedule can only name a stored procedure. While it is off the three schedule operations answer `403-2` |
+| `scheduleThreads` | Valid number ≥ 1 (default `2`). Workers running scheduled procedures. Its own pool rather than the trigger executor's, because a scheduled job may hold a worker for its whole timeout |
+| `scheduleQueueSize` | Valid number ≥ 1 (default `100`). Bounded queue of due runs; on overflow the oldest is dropped with a warning and counted, since no client is waiting and the schedule fires again at its next occurrence |
+| `scheduleTickMs` | Valid number ≥ 1 (default `1000`). How often the scheduler looks for due schedules. Firing is never finer-grained than this, so a schedule whose `intervalMs` is below the tick fires once per tick |
+| `scheduleRefreshMs` | Valid number ≥ 1 (default `60000`). How often the whole schedule registry is rebuilt from disk. The DDL path updates it directly; this is the safety net for schedules that arrived through cluster replication or admin anti-entropy |
+| `scheduleTimeoutMs` | Valid number ≥ 1 (default `30000`). Default wall clock for one scheduled run; a schedule may override it with its own `timeoutMs` |
+| `scheduleMaxPerDatabase` | Valid number ≥ 1 (default `100`). Cap on schedules per database, so a `SAVE_SCHEDULE` loop cannot make the per-tick scan unbounded |
+| `scheduleCacheMaxBytes` | Human-readable size > 0 (default `8Mb`). Memory bound on the cached schedule definitions. Same contract as `procedureCacheMaxBytes`: derived from disk, LRU-evicted, and budgeted **separately** from `maxMemory` |
 
 ```
 # the port the server listens on
@@ -1026,8 +1094,8 @@ shutdownTimeoutMs=15000
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
 tlsKeystorePassword=change_it
-# scripts (RUN_SCRIPT) are off by default; the sandbox is server-fixed, never client-supplied
-scriptsEnabled=false
+# scripts (RUN_SCRIPT) are on by default; the sandbox is server-fixed, never client-supplied
+scriptsEnabled=true
 scriptInstructionBudget=10000000
 scriptTimeoutMs=5000
 scriptMaxDepth=200

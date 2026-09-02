@@ -22,20 +22,29 @@ public class AdminSnapshotPayload {
     // version that omits the field must deserialize to empty rather than null.
     private JsonObject procedures;
     private JsonObject triggers;
+    // Schedules keyed "db|name" -> the definition JSON. Defaulted for the same older-peer reason.
+    private JsonObject schedules;
 
     public AdminSnapshotPayload() {
         this.schemas = new JsonObject();
         this.procedures = new JsonObject();
         this.triggers = new JsonObject();
+        this.schedules = new JsonObject();
     }
 
     public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
             List<JsonObject> users, JsonObject schemas) {
-        this(epoch, databases, collections, users, schemas, new JsonObject(), new JsonObject());
+        this(epoch, databases, collections, users, schemas, new JsonObject(), new JsonObject(), new JsonObject());
     }
 
     public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
             List<JsonObject> users, JsonObject schemas, JsonObject procedures, JsonObject triggers) {
+        this(epoch, databases, collections, users, schemas, procedures, triggers, new JsonObject());
+    }
+
+    public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
+            List<JsonObject> users, JsonObject schemas, JsonObject procedures, JsonObject triggers,
+            JsonObject schedules) {
         this.epoch = epoch;
         this.databases = databases == null ? List.of() : databases;
         this.collections = collections == null ? List.of() : collections;
@@ -43,6 +52,7 @@ public class AdminSnapshotPayload {
         this.schemas = schemas == null ? new JsonObject() : schemas;
         this.procedures = procedures == null ? new JsonObject() : procedures;
         this.triggers = triggers == null ? new JsonObject() : triggers;
+        this.schedules = schedules == null ? new JsonObject() : schedules;
     }
 
     public long getEpoch() {
@@ -99,5 +109,13 @@ public class AdminSnapshotPayload {
 
     public void setTriggers(JsonObject triggers) {
         this.triggers = triggers == null ? new JsonObject() : triggers;
+    }
+
+    public JsonObject getSchedules() {
+        return schedules;
+    }
+
+    public void setSchedules(JsonObject schedules) {
+        this.schedules = schedules == null ? new JsonObject() : schedules;
     }
 }

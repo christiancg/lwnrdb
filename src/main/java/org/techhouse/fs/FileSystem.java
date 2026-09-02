@@ -316,6 +316,79 @@ public class FileSystem {
         return names;
     }
 
+    private File getSchedulesFolder(String dbName) {
+        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
+                + Globals.SCHEDULES_FOLDER);
+    }
+
+    // Same contract as getProcedureFile: the schedule name has already been matched against the
+    // collection-name rule, so it cannot contain a separator, a dot or a '..' segment.
+    private File getScheduleFile(String dbName, String name) {
+        return new File(
+                getSchedulesFolder(dbName).getPath() + Globals.FILE_SEPARATOR + name + Globals.SCHEDULE_FILE_EXTENSION);
+    }
+
+    // Writes (create-or-replace) one schedule atomically, creating the folder on first use.
+    public void writeSchedule(String dbName, String name, String json) throws IOException {
+        final var folder = getSchedulesFolder(dbName);
+        if (!folder.exists() && !folder.mkdirs() && !folder.exists()) {
+            throw new IOException("Could not create the schedules folder for database " + dbName);
+        }
+        final var file = getScheduleFile(dbName, name);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            rewriteFileAtomically(file.toPath(), List.of(json));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Reads one schedule, or null when the database has no schedule by that name.
+    public String readSchedule(String dbName, String name) throws IOException {
+        final var file = getScheduleFile(dbName, name);
+        if (!file.exists()) {
+            return null;
+        }
+        final var lock = fileLock(file).readLock();
+        lock.lock();
+        try {
+            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Deletes one schedule. Returns true when a file was actually removed.
+    public boolean deleteSchedule(String dbName, String name) {
+        final var file = getScheduleFile(dbName, name);
+        final var lock = fileLock(file).writeLock();
+        lock.lock();
+        try {
+            return file.exists() && file.delete();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // Every schedule name in the database, or an empty list when the folder does not exist.
+    public List<String> listScheduleNames(String dbName) {
+        final var folder = getSchedulesFolder(dbName);
+        final var files = folder.listFiles();
+        if (files == null) {
+            return List.of();
+        }
+        final var names = new ArrayList<String>();
+        for (final var file : files) {
+            final var fileName = file.getName();
+            if (file.isFile() && fileName.endsWith(Globals.SCHEDULE_FILE_EXTENSION)) {
+                names.add(fileName.substring(0, fileName.length() - Globals.SCHEDULE_FILE_EXTENSION.length()));
+            }
+        }
+        Collections.sort(names);
+        return names;
+    }
+
     private File getTriggersFile(String dbName, String collectionName) {
         return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
                 + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR

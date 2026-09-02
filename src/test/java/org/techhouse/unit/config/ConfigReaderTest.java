@@ -83,7 +83,7 @@ public class ConfigReaderTest {
         expectedConfig.put("tombstoneRetentionMs", "86400000");
         expectedConfig.put("scriptTimeZone", "UTC");
         expectedConfig.put("scriptLocale", "en-US");
-        expectedConfig.put("scriptsEnabled", "false");
+        expectedConfig.put("scriptsEnabled", "true");
         expectedConfig.put("scriptInstructionBudget", "10000000");
         expectedConfig.put("scriptTimeoutMs", "5000");
         expectedConfig.put("scriptMaxDepth", "200");
@@ -107,6 +107,14 @@ public class ConfigReaderTest {
         expectedConfig.put("metadataMissCacheMaxEntries", "4096");
         expectedConfig.put("triggerRunLogEnabled", "true");
         expectedConfig.put("triggerRunRetentionMs", "86400000");
+        expectedConfig.put("schedulesEnabled", "true");
+        expectedConfig.put("scheduleThreads", "2");
+        expectedConfig.put("scheduleQueueSize", "100");
+        expectedConfig.put("scheduleTickMs", "1000");
+        expectedConfig.put("scheduleRefreshMs", "60000");
+        expectedConfig.put("scheduleTimeoutMs", "30000");
+        expectedConfig.put("scheduleMaxPerDatabase", "100");
+        expectedConfig.put("scheduleCacheMaxBytes", "8Mb");
         expectedConfig.put("scriptTextImportEnabled", "false");
 
         // Act
